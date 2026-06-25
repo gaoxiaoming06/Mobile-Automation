@@ -1,0 +1,48 @@
+.DS_Store
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+.vite/
+*.tsbuildinfo
+
+# Local runtime data
+platform/data/artifacts/*
+!platform/data/artifacts/README.md
+platform/data/*.db
+platform/data/*.sqlite
+platform/data/*.sqlite-*
+platform/data/*.sqlite3
+*.db
+*.sqlite
+*.sqlite-*
+*.sqlite3
+platform/apps/dashboard/dist/
+*.tmp
+.tmp-*
+*.part
+*.partial
+*.download
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.*
+!.env.example
+.venv*/
+
+# Python/cache artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/

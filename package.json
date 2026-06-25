@@ -1,0 +1,29 @@
+{
+  "name": "mobile-automation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22.7.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,dashboard -c cyan,green \"pnpm --filter @mobile-automation/server dev\" \"pnpm --filter @mobile-automation/dashboard dev\"",
+    "build": "pnpm -r typecheck && pnpm --filter @mobile-automation/dashboard build",
+    "check:tools": "node scripts/check-scrcpy-server.mjs",
+    "cli": "tsx platform/packages/cli/src/index.ts",
+    "install:scrcpy-server": "node scripts/install-scrcpy-server.mjs",
+    "lint": "pnpm -r typecheck",
+    "test": "pnpm lint && vitest run",
+    "test:unit": "vitest run",
+    "test:e2e": "echo \"E2E placeholder: run dashboard manually with a connected Android device\""
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.14"
+  }
+}

@@ -1,0 +1,1608 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { MockDriver, type MockVideoRecording } from "@mobile-automation/test-support";
+import {
+  type ActionStep,
+  type ArtifactRef,
+  type DeviceEvent,
+  type MetricSample,
+  nowIso,
+  type SemanticDeviceActionRequest,
+  type StepExpectation,
+  type StepResult,
+  type TestCase,
+  type TestRun
+} from "@mobile-automation/shared";
+import { AutomationRunner, DeviceBusyError, type RunnerStorage } from "./automation-runner.js";
+import type { DeviceEventWatcher, ObservedDeviceEvent } from "./mobile-driver.js";
+import type { OcrInput, OcrResult, OcrService } from "./ocr.js";
+import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
+
+describe("AutomationRunner regression flow", () => {
+  it("replays recorded steps, captures evidence, and skips unsupported video recording", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const step = driver.createTapStep(120, 240);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Regression Flow",
+      steps: [step],
+      repeatCount: 1,
+      stepIntervalMs: 0,
+      recordVideo: true
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 120, y: 240 }]);
+    expect(driver.recordings).toHaveLength(0);
+    expect(run.stepResults).toHaveLength(1);
+    expect(run.stepResults[0]?.status).toBe("passed");
+    expect(run.stepResults[0]?.metadata).toEqual(
+      expect.objectContaining({
+        actionBackend: expect.objectContaining({
+          driverChannel: "mock"
+        })
+      })
+    );
+    expect(run.stepResults[0]?.afterScreenshotId).toBeTruthy();
+    expect(run.artifacts.some((artifact) => artifact.type === "screenshot")).toBe(true);
+    expect(run.artifacts.some((artifact) => artifact.type === "report_html")).toBe(true);
+    expect(run.reportHtmlPath).toBeTruthy();
+    expect(run.metrics.length).toBeGreaterThanOrEqual(2);
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "video_unavailable",
+          summary: "Video recording skipped"
+        })
+      ])
+    );
+  });
+
+  it("replays tap_on_element by resolving the current Android UI hierarchy", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new UiHierarchyMockDriver(hierarchy("com.demo:id/join_class"));
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Semantic Element Flow",
+      steps: [createElementTapStep("com.demo:id/join_class", 140, 210)],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 240, y: 240 }]);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        type: "tap_on_element",
+        status: "passed",
+        metadata: expect.objectContaining({
+          semantic: expect.objectContaining({
+            type: "element",
+            action: "tap"
+          })
+        })
+      })
+    );
+  });
+
+  it("records semantic Android backend channel when element actions use a semantic backend", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new SemanticBackendMockDriver(hierarchy("com.demo:id/join_class"));
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Semantic Backend Flow",
+      steps: [createElementTapStep("com.demo:id/join_class", 140, 210)],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([]);
+    expect(driver.semanticActions).toEqual([
+      expect.objectContaining({
+        type: "tap_on_element",
+        locator: expect.objectContaining({
+          resourceId: "com.demo:id/join_class"
+        }),
+        fallbackTap: {
+          x: 240,
+          y: 240
+        }
+      })
+    ]);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        type: "tap_on_element",
+        status: "passed",
+        metadata: expect.objectContaining({
+          semantic: expect.objectContaining({
+            type: "element",
+            action: "tap",
+            driverChannel: "uiautomator2"
+          }),
+          actionBackend: expect.objectContaining({
+            driverChannel: "uiautomator2"
+          })
+        })
+      })
+    );
+  });
+
+  it("fails tap_on_element without falling back to stale recorded coordinates", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new UiHierarchyMockDriver(hierarchy("com.demo:id/other"));
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Missing Semantic Element",
+      steps: [createElementTapStep("com.demo:id/join_class", 140, 210, { timeoutMs: 1, intervalMs: 1 })],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        type: "tap_on_element",
+        status: "failed",
+        errorCode: "SEMANTIC_TARGET_NOT_FOUND",
+        errorMessage: "Element target id=com.demo:id/join_class was not found."
+      })
+    );
+  });
+
+  it("inputs text into a semantic element during replay", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new UiHierarchyMockDriver(hierarchy("com.demo:id/search_box"));
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new FakeOcrService("hello class"));
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Semantic Input Flow",
+      steps: [createInputTextToElementStep("com.demo:id/search_box", "hello class")],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "tap", x: 240, y: 240 },
+      { type: "clear_text" },
+      { type: "input_text", text: "hello class" }
+    ]);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        type: "input_text_to_element",
+        status: "passed",
+        metadata: expect.objectContaining({
+          semantic: expect.objectContaining({
+            type: "element_input",
+            action: "input_text"
+          })
+        })
+      })
+    );
+  });
+
+  it("scrolls until a semantic target is visible during replay", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/other"), hierarchy("com.demo:id/other"), hierarchy("com.demo:id/target")]);
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Semantic Scroll Flow",
+      steps: [createSemanticLocatorStep("scroll_until_visible", "com.demo:id/target", { direction: "down", maxSwipes: 3, intervalMs: 1 })],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "swipe", startX: 540, startY: 1800, endX: 540, endY: 600, durationMs: 450 }]);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        type: "scroll_until_visible",
+        status: "passed",
+        metadata: expect.objectContaining({
+          semantic: expect.objectContaining({
+            type: "scroll",
+            action: "visible",
+            swipes: 1
+          })
+        })
+      })
+    );
+  });
+
+  it("waits for semantic state before continuing replay", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/loading"), hierarchy("com.demo:id/loading"), hierarchy("com.demo:id/ready")]);
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Semantic Wait Flow",
+      steps: [
+        createSemanticLocatorStep("wait_until_state", "com.demo:id/ready", { timeoutMs: 200, intervalMs: 1 }),
+        driver.createTapStep(120, 240)
+      ],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 120, y: 240 }]);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        type: "wait_until_state",
+        status: "passed",
+        metadata: expect.objectContaining({
+          semantic: expect.objectContaining({
+            type: "state_wait",
+            action: "matched",
+            attempts: 2
+          })
+        })
+      })
+    );
+  });
+
+  it("keeps successful run video by default as test evidence", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "mobile-automation-video-"));
+    try {
+      const storage = new MemoryRunnerStorage();
+      const driver = new VideoMockDriver(tempDir);
+      const runner = new AutomationRunner(storage, driver);
+
+      const started = runner.start({
+        deviceSerial: driver.device.serial,
+        caseName: "Successful Video",
+        steps: [driver.createTapStep(120, 240)],
+        stepIntervalMs: 0,
+        recordVideo: true
+      });
+      const run = await waitForRun(runner, storage, started.id);
+
+      expect(run.status).toBe("passed");
+      expect(driver.videoKeepRequests).toEqual([true]);
+      expect(run.artifacts.some((artifact) => artifact.type === "video")).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("can drop successful run video only when explicitly requested by API", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "mobile-automation-video-"));
+    try {
+      const storage = new MemoryRunnerStorage();
+      const driver = new VideoMockDriver(tempDir);
+      const runner = new AutomationRunner(storage, driver);
+
+      const started = runner.start({
+        deviceSerial: driver.device.serial,
+        caseName: "Successful Video",
+        steps: [driver.createTapStep(120, 240)],
+        stepIntervalMs: 0,
+        recordVideo: true,
+        keepVideoOnSuccess: false
+      });
+      const run = await waitForRun(runner, storage, started.id);
+
+      expect(run.status).toBe("passed");
+      expect(driver.videoKeepRequests).toEqual([false]);
+      expect(run.artifacts.some((artifact) => artifact.type === "video")).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps failed run video as failure evidence", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "mobile-automation-video-"));
+    try {
+      const storage = new MemoryRunnerStorage();
+      const driver = new VideoMockDriver(tempDir);
+      driver.failActions = true;
+      const runner = new AutomationRunner(storage, driver);
+
+      const started = runner.start({
+        deviceSerial: driver.device.serial,
+        caseName: "Failed Video",
+        steps: [driver.createTapStep(120, 240)],
+        stepIntervalMs: 0,
+        recordVideo: true
+      });
+      const run = await waitForRun(runner, storage, started.id);
+
+      expect(run.status).toBe("failed");
+      expect(driver.videoKeepRequests).toEqual([true]);
+      expect(run.artifacts.some((artifact) => artifact.type === "video")).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("pauses after each step and can advance one step at a time", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const firstStep = driver.createTapStep(120, 240);
+    const secondStep = {
+      ...driver.createTapStep(220, 340),
+      id: "step-2",
+      order: 2
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Paused Flow",
+      steps: [firstStep, secondStep],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      pauseAfterEachStep: true
+    });
+
+    await waitForRunStatus(storage, started.id, "paused");
+    expect(driver.actions).toHaveLength(1);
+
+    runner.step(started.id);
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "tap", x: 120, y: 240 },
+      { type: "tap", x: 220, y: 340 }
+    ]);
+  });
+
+  it("runs loop mode until stopped", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Loop Flow",
+      steps: [driver.createTapStep(120, 240)],
+      mode: "loop_until_stop",
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+
+    await waitForActionCount(driver, 3);
+    await runner.stop(started.id);
+    const run = storage.getRun(started.id);
+
+    expect(run?.status).toBe("stopped");
+    expect(driver.actions.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("rejects starting another run on a busy device", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Busy Flow",
+      steps: [driver.createTapStep(120, 240)],
+      mode: "loop_until_stop",
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+
+    await waitForActionCount(driver, 1);
+    expect(runner.getActiveRunForDevice(driver.device.serial)?.runId).toBe(started.id);
+    expect(() =>
+      runner.start({
+        deviceSerial: driver.device.serial,
+        caseName: "Second Flow",
+        steps: [driver.createTapStep(220, 340)],
+        stepIntervalMs: 0,
+        recordVideo: false
+      })
+    ).toThrow(DeviceBusyError);
+
+    await runner.stop(started.id);
+  });
+
+  it("records watched Android crash events and fails the run", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new EventMockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Crash Flow",
+      steps: [
+        driver.createTapStep(120, 240),
+        {
+          ...driver.createTapStep(220, 340),
+          id: "step-2",
+          order: 2
+        }
+      ],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(run.stepResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "failed",
+          errorCode: "DEVICE_EVENT_FAILED",
+          errorMessage: "Run stopped after Android crash or ANR event."
+        })
+      ])
+    );
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "crash",
+          summary: "Android crash detected"
+        })
+      ])
+    );
+    expect(run.events.some((event) => event.summary === "Runner execution failed")).toBe(false);
+    expect(run.artifacts.some((artifact) => artifact.type === "log" && artifact.name.includes("device-event-crash"))).toBe(true);
+    expect(run.artifacts.some((artifact) => artifact.type === "screenshot" && artifact.name.includes("crash"))).toBe(true);
+  });
+
+  it("passes no_crash and app_alive expectations after a successful step", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const step = withExpectations(driver.createTapStep(120, 240), [
+      createExpectation("no_crash"),
+      createExpectation("app_alive")
+    ]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Expectation Pass",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(run.stepResults[0]?.expectationResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "no_crash", status: "passed" }),
+        expect.objectContaining({ type: "app_alive", status: "passed" })
+      ])
+    );
+  });
+
+  it("fails the run when a metric_below expectation is not met", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const step = withExpectations(driver.createTapStep(120, 240), [createExpectation("metric_below", { metric: "cpuPercent", threshold: 0 })]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Metric Expectation Fail",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        errorCode: "EXPECTATION_FAILED"
+      })
+    );
+    expect(run.stepResults[0]?.expectationResults).toEqual([
+      expect.objectContaining({
+        type: "metric_below",
+        status: "failed",
+        expected: "cpuPercent <= 0",
+        actual: "cpuPercent = 1"
+      })
+    ]);
+  });
+
+  it("evaluates log_not_contains expectations against collected logs", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    driver.logs.push("Activity resumed", "Frame rendered");
+    const runner = new AutomationRunner(storage, driver);
+    const step = withExpectations(driver.createTapStep(120, 240), [createExpectation("log_not_contains", { text: "FATAL EXCEPTION" })]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Log Expectation Pass",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(run.stepResults[0]?.expectationResults).toEqual([expect.objectContaining({ type: "log_not_contains", status: "passed" })]);
+    expect(run.artifacts.some((artifact) => artifact.type === "log" && artifact.name.includes("expectation-log"))).toBe(true);
+  });
+
+  it("passes text expectations when OCR contains the expected text", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new FakeOcrService("欢迎进入课堂 已开始"));
+    const step = withExpectations(driver.createTapStep(120, 240), [createExpectation("text", { expected: "课堂 已开始", mode: "contains" })]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Text Expectation Pass",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(run.stepResults[0]?.expectationResults).toEqual([
+      expect.objectContaining({
+        type: "text",
+        status: "passed",
+        expected: 'OCR text contains "课堂 已开始".',
+        actual: "欢迎进入课堂 已开始"
+      })
+    ]);
+  });
+
+  it("waits for text expectations until the target text appears after loading", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new ChangingScreenshotMockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const ocr = new SequenceOcrService(["Classin empower education online", "全部班级 我是教师 我是学生"]);
+    const runner = new AutomationRunner(storage, driver, ocr);
+    const step = withExpectations(driver.createTapStep(120, 240), [
+      createExpectation("text", {
+        expected: "全部班级",
+        mode: "contains",
+        timeoutMs: 200,
+        intervalMs: 1
+      })
+    ]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Text Expectation Wait",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(ocr.calls).toBe(2);
+    expect(run.stepResults[0]?.expectationResults).toEqual([
+      expect.objectContaining({
+        type: "text",
+        status: "passed",
+        actual: "全部班级 我是教师 我是学生",
+        reason: expect.stringContaining("Matched after 2 observation attempts")
+      })
+    ]);
+    expect(run.artifacts.filter((artifact) => artifact.type === "screenshot")).toHaveLength(2);
+  });
+
+  it("waits for text preconditions before performing the action", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new ChangingScreenshotMockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const ocr = new SequenceOcrService(["登录页", "进入课堂"]);
+    const runner = new AutomationRunner(storage, driver, ocr);
+    const step = withPreconditions(driver.createTapStep(120, 240), [
+      createExpectation("text", {
+        expected: "进入课堂",
+        mode: "contains",
+        timeoutMs: 200,
+        intervalMs: 1
+      })
+    ]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Precondition Wait",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 120, y: 240 }]);
+    expect(ocr.calls).toBe(2);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        status: "passed",
+        metadata: expect.objectContaining({
+          preconditions: expect.objectContaining({
+            status: "passed",
+            results: [expect.objectContaining({ type: "text", status: "passed", actual: "进入课堂" })]
+          })
+        })
+      })
+    );
+  });
+
+  it("fails without performing the action when text preconditions are not satisfied", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new FakeOcrService("登录页"));
+    const step = withPreconditions(driver.createTapStep(120, 240), [
+      createExpectation("text", {
+        expected: "进入课堂",
+        mode: "contains",
+        timeoutMs: 1,
+        intervalMs: 1
+      })
+    ]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Precondition Fail",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        errorCode: "PRECONDITION_FAILED",
+        metadata: expect.objectContaining({
+          preconditions: expect.objectContaining({
+            status: "failed",
+            results: [expect.objectContaining({ type: "text", status: "failed", actual: "登录页" })]
+          })
+        })
+      })
+    );
+  });
+
+  it("fails text expectations when OCR text does not match", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new FakeOcrService("登录页"));
+    const step = withExpectations(driver.createTapStep(120, 240), [
+      createExpectation("text", { expected: "课堂已开始", mode: "contains", timeoutMs: 1, intervalMs: 1 })
+    ]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Text Expectation Fail",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(run.stepResults[0]?.expectationResults).toEqual([
+      expect.objectContaining({
+        type: "text",
+        status: "failed",
+        actual: "登录页"
+      })
+    ]);
+    expect(run.stepResults[0]?.errorCode).toBe("EXPECTATION_FAILED");
+  });
+
+  it("marks text expectations unsupported when OCR is unavailable", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new FailingOcrService());
+    const step = withExpectations(driver.createTapStep(120, 240), [createExpectation("text", { expected: "课堂已开始" })]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Text Expectation Unsupported",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(run.stepResults[0]?.expectationResults).toEqual([
+      expect.objectContaining({
+        type: "text",
+        status: "unsupported",
+        actual: "OCR could not be executed.",
+        reason: "OCR engine unavailable"
+      })
+    ]);
+    expect(run.stepResults[0]?.errorCode).toBe("EXPECTATION_FAILED");
+  });
+
+  it("can verify that a step changed the screen", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new ChangingScreenshotMockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const step = withExpectations(driver.createTapStep(120, 240), [createExpectation("screen_changed")]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Screen Changed",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(run.stepResults[0]?.expectationResults).toEqual([expect.objectContaining({ type: "screen_changed", status: "passed" })]);
+    expect(run.stepResults[0]?.artifacts.filter((artifact) => artifact.type === "screenshot")).toHaveLength(2);
+  });
+
+  it("waits for post-action screen expectations before deciding the step result", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new SequenceScreenshotMockDriver([Buffer.from("before"), Buffer.from("before"), Buffer.from("after")]);
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const step = withExpectations(driver.createTapStep(120, 240), [
+      createExpectation("screen_changed", {
+        timeoutMs: 100,
+        intervalMs: 1
+      })
+    ]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Delayed Screen Changed",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.screenshotCount).toBeGreaterThanOrEqual(3);
+    expect(run.stepResults[0]?.expectationResults).toEqual([
+      expect.objectContaining({
+        type: "screen_changed",
+        status: "passed",
+        reason: expect.stringContaining("Matched after")
+      })
+    ]);
+  });
+
+  it("keeps non-blocking automatic visual expectations from failing the run", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const step = withExpectations(driver.createTapStep(120, 240), [
+      createExpectation("screen_changed", {
+        autoGenerated: true,
+        reliability: "P1",
+        blocking: false
+      })
+    ]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Non Blocking Screen Changed",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        status: "passed"
+      })
+    );
+    expect(run.stepResults[0]?.errorCode).toBeUndefined();
+    expect(run.stepResults[0]?.expectationResults).toEqual([
+      expect.objectContaining({
+        type: "screen_changed",
+        status: "failed",
+        blocking: false,
+        reason: expect.stringContaining("Non-blocking expectation")
+      })
+    ]);
+  });
+
+  it("executes tap_if_text when the optional text condition is visible", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new FakeOcrService("允许 通知权限"));
+    const step = createConditionalTapStep("允许", 320, 880);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Optional Popup Hit",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 320, y: 880 }]);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        type: "tap_if_text",
+        status: "passed",
+        metadata: expect.objectContaining({
+          condition: expect.objectContaining({
+            matched: true,
+            action: "tap",
+            actual: "允许 通知权限"
+          })
+        })
+      })
+    );
+  });
+
+  it("skips tap_if_text when the optional text condition is absent and continues replay", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new FakeOcrService("首页"));
+    const optionalStep = createConditionalTapStep("允许", 320, 880);
+    const nextStep = {
+      ...driver.createTapStep(120, 240),
+      id: "next-step",
+      order: 2
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Optional Popup Miss",
+      steps: [optionalStep, nextStep],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      stopOnFailure: true
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 120, y: 240 }]);
+    expect(run.stepResults.map((stepResult) => stepResult.status)).toEqual(["skipped", "passed"]);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        errorCode: "CONDITION_NOT_MET",
+        metadata: expect.objectContaining({
+          condition: expect.objectContaining({
+            matched: false,
+            action: "skip",
+            actual: "首页"
+          })
+        })
+      })
+    );
+  });
+
+  it("handles common blocking popups before resolving the structured step action", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new SequenceUiHierarchyMockDriver([permissionHierarchy("允许"), hierarchy("com.demo:id/join_class")]);
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Runtime Interceptor Flow",
+      steps: [createElementTapStep("com.demo:id/join_class", 140, 210)],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "tap", x: 540, y: 1820 },
+      { type: "tap", x: 240, y: 240 }
+    ]);
+    expect(run.stepResults[0]?.metadata).toEqual(
+      expect.objectContaining({
+        runtimeInterceptors: [
+          expect.objectContaining({
+            phase: "precondition",
+            ruleName: "Android 权限允许",
+            matchedText: "允许"
+          })
+        ]
+      })
+    );
+  });
+
+  it("loads custom runtime interceptor rules before resolving the structured step action", async () => {
+    const storage = new MemoryRunnerStorage();
+    storage.runtimeInterceptorRules.push({
+      id: "rule-subject-picker",
+      name: "选择学科临时页",
+      enabled: true,
+      platformScope: "android",
+      appPackageName: "com.example.app",
+      matchers: [{ type: "text", value: "选择学科" }],
+      action: {
+        type: "tap_text",
+        text: "关闭"
+      },
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+    const driver = new SequenceUiHierarchyMockDriver([subjectPickerHierarchy(), hierarchy("com.demo:id/join_class")]);
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Runtime Interceptor Custom Rule Flow",
+      steps: [createElementTapStep("com.demo:id/join_class", 140, 210)],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "tap", x: 960, y: 160 },
+      { type: "tap", x: 240, y: 240 }
+    ]);
+    expect(run.stepResults[0]?.metadata).toEqual(
+      expect.objectContaining({
+        runtimeInterceptors: [
+          expect.objectContaining({
+            phase: "precondition",
+            ruleName: "选择学科临时页",
+            matchedText: "选择学科"
+          })
+        ]
+      })
+    );
+  });
+
+  it("applies go_home start strategy before replaying steps", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Start From Home",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startStrategy: "go_home"
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "home" },
+      { type: "tap", x: 120, y: 240 }
+    ]);
+    expect(run.config.startStrategy).toBe("go_home");
+  });
+
+  it("applies restart_app start strategy before replaying steps", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Restart App",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startStrategy: "restart_app",
+      startAppPackageName: "demo.app"
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "close_app", packageName: "demo.app" },
+      { type: "launch_app", packageName: "demo.app" },
+      { type: "tap", x: 120, y: 240 }
+    ]);
+  });
+
+  it("applies clear_data_and_launch start strategy before replaying steps", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Clear Data And Launch",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startStrategy: "clear_data_and_launch",
+      startAppPackageName: "demo.app"
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.clearedAppData).toEqual(["demo.app"]);
+    expect(driver.setupActions).toEqual([
+      { type: "close_app", packageName: "demo.app" },
+      { type: "clear_app_data", packageName: "demo.app" },
+      { type: "launch_app", packageName: "demo.app" }
+    ]);
+    expect(driver.actions).toEqual([
+      { type: "close_app", packageName: "demo.app" },
+      { type: "launch_app", packageName: "demo.app" },
+      { type: "tap", x: 120, y: 240 }
+    ]);
+    expect(run.config.startSetupScope).toBe("before_run");
+  });
+
+  it("can apply start setup before each repeat iteration", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Setup Per Iteration",
+      steps: [driver.createTapStep(120, 240)],
+      mode: "repeat_n",
+      repeatCount: 2,
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startStrategy: "clear_data_and_launch",
+      startAppPackageName: "demo.app",
+      startSetupScope: "before_each_iteration"
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.clearedAppData).toEqual(["demo.app", "demo.app"]);
+    expect(driver.setupActions).toEqual([
+      { type: "close_app", packageName: "demo.app" },
+      { type: "clear_app_data", packageName: "demo.app" },
+      { type: "launch_app", packageName: "demo.app" },
+      { type: "close_app", packageName: "demo.app" },
+      { type: "clear_app_data", packageName: "demo.app" },
+      { type: "launch_app", packageName: "demo.app" }
+    ]);
+    expect(driver.actions).toEqual([
+      { type: "close_app", packageName: "demo.app" },
+      { type: "launch_app", packageName: "demo.app" },
+      { type: "tap", x: 120, y: 240 },
+      { type: "close_app", packageName: "demo.app" },
+      { type: "launch_app", packageName: "demo.app" },
+      { type: "tap", x: 120, y: 240 }
+    ]);
+  });
+
+  it("fails before replaying steps when start strategy is invalid", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Invalid Start Strategy",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startStrategy: "launch_app"
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(run.stepResults).toEqual([]);
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "start_state_failed",
+          summary: "Flow start state failed"
+        })
+      ])
+    );
+  });
+});
+
+function createExpectation(type: StepExpectation["type"], params: Record<string, unknown> = {}): StepExpectation {
+  return {
+    id: `expectation-${type}-${Math.random().toString(16).slice(2)}`,
+    type,
+    enabled: true,
+    params,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function withExpectations(step: ActionStep, expectations: StepExpectation[]): ActionStep {
+  return {
+    ...step,
+    expectations
+  };
+}
+
+function withPreconditions(step: ActionStep, preconditions: StepExpectation[]): ActionStep {
+  return {
+    ...step,
+    preconditions
+  };
+}
+
+function createConditionalTapStep(text: string, x: number, y: number): ActionStep {
+  return {
+    id: `conditional-${Math.random().toString(16).slice(2)}`,
+    order: 1,
+    type: "tap_if_text",
+    enabled: true,
+    params: {
+      text,
+      mode: "contains",
+      timeoutMs: 1,
+      intervalMs: 1
+    },
+    coordinate: {
+      x,
+      y,
+      xRatio: x / 1080,
+      yRatio: y / 2400,
+      deviceWidth: 1080,
+      deviceHeight: 2400
+    },
+    createdAt: new Date().toISOString()
+  };
+}
+
+function createElementTapStep(resourceId: string, x: number, y: number, params: Record<string, unknown> = {}): ActionStep {
+  return {
+    id: `element-${Math.random().toString(16).slice(2)}`,
+    order: 1,
+    type: "tap_on_element",
+    enabled: true,
+    params: {
+      locator: {
+        strategy: "android_uiautomator",
+        resourceId,
+        packageName: "com.demo"
+      },
+      selector: `id=${resourceId}`,
+      ...params
+    },
+    coordinate: {
+      x,
+      y,
+      xRatio: x / 1080,
+      yRatio: y / 2400,
+      deviceWidth: 1080,
+      deviceHeight: 2400
+    },
+    createdAt: new Date().toISOString()
+  };
+}
+
+function createInputTextToElementStep(resourceId: string, text: string): ActionStep {
+  return {
+    ...createSemanticLocatorStep("input_text_to_element", resourceId, {
+      text,
+      clearFirst: true
+    }),
+    title: "输入文字"
+  };
+}
+
+function createSemanticLocatorStep(type: ActionStep["type"], resourceId: string, params: Record<string, unknown> = {}): ActionStep {
+  return {
+    id: `${type}-${Math.random().toString(16).slice(2)}`,
+    order: 1,
+    type,
+    enabled: true,
+    params: {
+      locator: {
+        strategy: "android_uiautomator",
+        resourceId,
+        packageName: "com.demo"
+      },
+      selector: `id=${resourceId}`,
+      ...params
+    },
+    createdAt: new Date().toISOString()
+  };
+}
+
+function hierarchy(resourceId: string): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2400]">
+    <node index="0" text="进入课堂" resource-id="${resourceId}" class="android.widget.Button" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[120,200][360,280]" />
+  </node>
+</hierarchy>`;
+}
+
+function permissionHierarchy(text: string): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.android.permissioncontroller" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2400]">
+    <node index="0" text="${text}" resource-id="android:id/button1" class="android.widget.Button" package="com.android.permissioncontroller" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[420,1780][660,1860]" />
+  </node>
+</hierarchy>`;
+}
+
+function subjectPickerHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2400]">
+    <node index="0" text="选择学科" resource-id="com.demo:id/title" class="android.widget.TextView" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[120,90][420,160]" />
+    <node index="1" text="关闭" resource-id="com.demo:id/close" class="android.widget.Button" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[900,120][1020,200]" />
+  </node>
+</hierarchy>`;
+}
+
+class MemoryRunnerStorage implements RunnerStorage {
+  private readonly cases = new Map<string, TestCase>();
+  private readonly runs = new Map<string, TestRun>();
+  readonly runtimeInterceptorRules: RuntimeInterceptorRule[] = [];
+
+  createRun(input: { caseId?: string; caseName: string; deviceSerial: string; configJson: string; caseSnapshotJson: string; steps: ActionStep[] }): TestRun {
+    const now = new Date().toISOString();
+    const run: TestRun = {
+      id: `run-${this.runs.size + 1}`,
+      caseId: input.caseId,
+      caseName: input.caseName,
+      deviceSerial: input.deviceSerial,
+      status: "running",
+      config: JSON.parse(input.configJson) as TestRun["config"],
+      steps: input.steps,
+      stepResults: [],
+      metrics: [],
+      events: [],
+      artifacts: [],
+      startedAt: now
+    };
+    this.runs.set(run.id, run);
+    return run;
+  }
+
+  getCase(id: string): TestCase | undefined {
+    return this.cases.get(id);
+  }
+
+  getRun(id: string): TestRun | undefined {
+    return this.runs.get(id);
+  }
+
+  updateRunStatus(runId: string, status: TestRun["status"], endedAt?: string): void {
+    const run = this.mustGetRun(runId);
+    run.status = status;
+    if (["pending", "running", "paused"].includes(status)) {
+      run.endedAt = undefined;
+      return;
+    }
+    run.endedAt = endedAt ?? new Date().toISOString();
+  }
+
+  updateRunReport(runId: string, relativePath: string): void {
+    this.mustGetRun(runId).reportHtmlPath = relativePath;
+  }
+
+  addStepResult(result: StepResult): void {
+    this.mustGetRun(result.runId).stepResults.push({ ...result, artifacts: result.artifacts.slice() });
+  }
+
+  addArtifact(artifact: ArtifactRef): void {
+    const run = artifact.runId ? this.mustGetRun(artifact.runId) : undefined;
+    if (!run) {
+      return;
+    }
+    run.artifacts.push(artifact);
+    if (artifact.stepResultId) {
+      const stepResult = run.stepResults.find((result) => result.id === artifact.stepResultId);
+      stepResult?.artifacts.push(artifact);
+    }
+  }
+
+  addMetricSample(sample: MetricSample): void {
+    this.mustGetRun(sample.runId).metrics.push(sample);
+  }
+
+  addDeviceEvent(event: DeviceEvent): void {
+    this.mustGetRun(event.runId).events.push(event);
+  }
+
+  listRunIdsByStatus(status: TestRun["status"]): string[] {
+    return Array.from(this.runs.values())
+      .filter((run) => run.status === status)
+      .map((run) => run.id);
+  }
+
+  async writeArtifact(relativePath: string, bytes: Buffer | string): Promise<{ absolutePath: string; sizeBytes: number }> {
+    return {
+      absolutePath: `/memory/${relativePath}`,
+      sizeBytes: Buffer.byteLength(bytes)
+    };
+  }
+
+  listRuntimeInterceptorRules(filter: { enabledOnly?: boolean; platform?: "android" | "ios"; appPackageName?: string } = {}): RuntimeInterceptorRule[] {
+    return this.runtimeInterceptorRules.filter((rule) => {
+      if (filter.enabledOnly && !rule.enabled) {
+        return false;
+      }
+      if (filter.platform && rule.platformScope && rule.platformScope !== "mobile-both" && rule.platformScope !== filter.platform) {
+        return false;
+      }
+      if (filter.appPackageName && rule.appPackageName && rule.appPackageName !== filter.appPackageName) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  private mustGetRun(runId: string): TestRun {
+    const run = this.runs.get(runId);
+    if (!run) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    return run;
+  }
+}
+
+class VideoMockDriver extends MockDriver {
+  readonly videoKeepRequests: boolean[] = [];
+  failActions = false;
+
+  constructor(private readonly tempDir: string) {
+    super();
+    this.device.capabilities.recordVideo = true;
+  }
+
+  override async startVideoRecording(serial: string, runId: string, _localDir: string): Promise<MockVideoRecording> {
+    this.assertKnownMockDevice(serial);
+    const localPath = path.join(this.tempDir, `${runId}.mp4`);
+    await mkdir(path.dirname(localPath), { recursive: true });
+    await writeFile(localPath, "mock-video");
+    const recording = {
+      id: runId,
+      serial,
+      localPath,
+      startedAt: new Date().toISOString()
+    };
+    this.recordings.push(recording);
+    return recording;
+  }
+
+  override async stopVideoRecording(recording: MockVideoRecording, keep: boolean): Promise<string | undefined> {
+    this.videoKeepRequests.push(keep);
+    return keep ? recording.localPath : undefined;
+  }
+
+  override async performAction(serial: string, action: Parameters<MockDriver["performAction"]>[1]): ReturnType<MockDriver["performAction"]> {
+    if (this.failActions) {
+      throw new Error("mock action failed");
+    }
+    return super.performAction(serial, action);
+  }
+
+  private assertKnownMockDevice(serial: string): void {
+    if (serial !== this.device.serial) {
+      throw new Error(`Mock device not found: ${serial}`);
+    }
+  }
+}
+
+class UiHierarchyMockDriver extends MockDriver {
+  constructor(private readonly xml: string) {
+    super();
+  }
+
+  async dumpUiHierarchy(serial: string): Promise<string> {
+    await this.getDeviceInfo(serial);
+    return this.xml;
+  }
+}
+
+class SemanticBackendMockDriver extends UiHierarchyMockDriver {
+  readonly semanticActions: SemanticDeviceActionRequest[] = [];
+
+  async performSemanticAction(serial: string, action: SemanticDeviceActionRequest): Promise<{ driverChannel: "uiautomator2"; details: { selector?: string } }> {
+    await this.getDeviceInfo(serial);
+    this.semanticActions.push(action);
+    return {
+      driverChannel: "uiautomator2",
+      details: {
+        selector: action.locator.resourceId ?? action.locator.contentDesc ?? action.locator.text
+      }
+    };
+  }
+}
+
+class SequenceUiHierarchyMockDriver extends MockDriver {
+  private dumpCount = 0;
+
+  constructor(private readonly xmlSequence: string[]) {
+    super();
+  }
+
+  async dumpUiHierarchy(serial: string): Promise<string> {
+    await this.getDeviceInfo(serial);
+    const index = Math.min(this.dumpCount, this.xmlSequence.length - 1);
+    this.dumpCount += 1;
+    return this.xmlSequence[index] ?? hierarchy("com.demo:id/join_class");
+  }
+}
+
+class EventMockDriver extends MockDriver {
+  private eventListener?: (event: ObservedDeviceEvent) => void;
+  private emittedCrash = false;
+
+  async watchDeviceEvents(_serial: string, onEvent: (event: ObservedDeviceEvent) => void): Promise<DeviceEventWatcher> {
+    this.eventListener = onEvent;
+    return {
+      stop: async () => undefined
+    };
+  }
+
+  override async performAction(serial: string, action: Parameters<MockDriver["performAction"]>[1]): ReturnType<MockDriver["performAction"]> {
+    const result = await super.performAction(serial, action);
+    if (!this.emittedCrash) {
+      this.emittedCrash = true;
+      this.eventListener?.({
+        type: "crash",
+        severity: "error",
+        occurredAt: new Date().toISOString(),
+        summary: "Android crash detected",
+        detail: "FATAL EXCEPTION: main\nProcess: demo.app"
+      });
+    }
+    return result;
+  }
+}
+
+class ChangingScreenshotMockDriver extends MockDriver {
+  private screenshotCount = 0;
+
+  override async screenshot(serial: string): Promise<Buffer> {
+    await this.getDeviceInfo(serial);
+    this.screenshotCount += 1;
+    return Buffer.from(`mock-screenshot-${this.screenshotCount}`);
+  }
+}
+
+class SequenceScreenshotMockDriver extends MockDriver {
+  screenshotCount = 0;
+
+  constructor(private readonly screenshots: Buffer[]) {
+    super();
+  }
+
+  override async screenshot(serial: string): Promise<Buffer> {
+    await this.getDeviceInfo(serial);
+    const screenshot = this.screenshots[Math.min(this.screenshotCount, this.screenshots.length - 1)] ?? Buffer.from("fallback");
+    this.screenshotCount += 1;
+    return screenshot;
+  }
+}
+
+class FakeOcrService implements OcrService {
+  constructor(private readonly text: string) {}
+
+  async recognize(input: OcrInput): Promise<OcrResult> {
+    return {
+      text: this.text,
+      engine: "fake",
+      lang: input.lang ?? "test"
+    };
+  }
+}
+
+class SequenceOcrService implements OcrService {
+  calls = 0;
+
+  constructor(private readonly texts: string[]) {}
+
+  async recognize(input: OcrInput): Promise<OcrResult> {
+    const text = this.texts[Math.min(this.calls, this.texts.length - 1)] ?? "";
+    this.calls += 1;
+    return {
+      text,
+      engine: "fake",
+      lang: input.lang ?? "test"
+    };
+  }
+}
+
+class FailingOcrService implements OcrService {
+  async recognize(_input: OcrInput): Promise<OcrResult> {
+    throw new Error("OCR engine unavailable");
+  }
+}
+
+async function waitForRun(runner: AutomationRunner, storage: MemoryRunnerStorage, runId: string): Promise<TestRun> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (!runner.isRunning(runId)) {
+      const run = storage.getRun(runId);
+      if (!run) {
+        throw new Error(`Run not found: ${runId}`);
+      }
+      return run;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  throw new Error(`Run did not finish: ${runId}`);
+}
+
+async function waitForRunStatus(storage: MemoryRunnerStorage, runId: string, status: TestRun["status"]): Promise<TestRun> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const run = storage.getRun(runId);
+    if (run?.status === status) {
+      return run;
+    }
+    await delay(10);
+  }
+  throw new Error(`Run did not reach ${status}: ${runId}`);
+}
+
+async function waitForActionCount(driver: MockDriver, count: number): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (driver.actions.length >= count) {
+      return;
+    }
+    await delay(10);
+  }
+  throw new Error(`Expected at least ${count} actions, got ${driver.actions.length}`);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}

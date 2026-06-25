@@ -1,0 +1,2769 @@
+import { DatabaseZap, Save } from "lucide-react";
+import { useRef, useState } from "react";
+import type { FormEvent, PointerEvent, ReactNode } from "react";
+
+export type AssetRecordingPageElement = {
+  id?: string;
+  label: string;
+  locator: string;
+  semanticArea?: VisualSemanticArea;
+  coordinateSpace?: "screen" | "app_viewport" | "region";
+  action: string;
+  abilityType?: AssetRecordingAbilityType;
+  actionKind?: "tap" | "scroll" | "long_press" | "input" | "unknown";
+  availability?: "visible" | "after_scroll" | "conditional";
+  region?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  previewCrop?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  viewport?: {
+    width: number;
+    height: number;
+  };
+  source?: "manual" | "candidate";
+  scrollProfile?: AssetRecordingScrollProfile;
+  outcomeType?: AssetRecordingElementOutcomeType;
+  outcomeLabel?: string;
+  targetNodeId?: string;
+  targetLabel?: string;
+  targetText?: string;
+  compoundSteps?: AssetRecordingCompoundStepDraft[];
+};
+
+export type AssetRecordingScrollProfile = {
+  containerKind: "list" | "grid_list" | "tab_bar" | "carousel" | "scroll_area";
+  direction: "vertical" | "horizontal";
+  columns?: number;
+  targetKind: "item_text" | "ocr_text" | "semantic_label" | "nth_item" | "image_region";
+  targetQuery?: string;
+  afterFoundAction: "tap_item" | "tap_child" | "verify_visible";
+  candidateItemHeightPercent?: number;
+  clickSafePoint?: {
+    xPercent: number;
+    yPercent: number;
+  };
+  scrollStepPercent?: number;
+  failureStrategy?: "none" | "try_next_candidate" | "back_and_try_next_candidate";
+};
+
+export type AssetRecordingPageTransition = {
+  id: string;
+  name: string;
+  status: string;
+  source?: string;
+  actionSummary?: string;
+  targetName?: string;
+  targetKey?: string;
+  expectationSummary?: string;
+  reliabilityScore?: number;
+  actionLocator?: string;
+  actionKind?: "tap" | "scroll" | "long_press" | "input" | "unknown";
+};
+
+export type AssetRecordingPageTaskFieldType = "text_input" | "picker_select" | "toggle_set" | "subpage_edit" | "submit" | "tap" | "wait";
+
+export type AssetRecordingPageTaskStep = {
+  id?: string;
+  order: number;
+  elementId?: string;
+  fieldType: AssetRecordingPageTaskFieldType;
+  label?: string;
+  valueParamKey?: string;
+  desiredStateParamKey?: string;
+  text?: string;
+};
+
+export type AssetRecordingPageTask = {
+  id: string;
+  name: string;
+  status: "active" | "draft" | "deprecated";
+  steps: AssetRecordingPageTaskStep[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AssetRecordingPageTaskDraft = {
+  sourceNodeId?: string;
+  taskId?: string;
+  name: string;
+  status?: "active" | "draft" | "deprecated";
+  steps: AssetRecordingPageTaskStep[];
+};
+
+export type AssetRecordingPageTaskTransitionDraft = {
+  sourceNodeId?: string;
+  targetNodeId: string;
+  taskId: string;
+  taskName?: string;
+};
+
+export type AssetRecordingAutoExploreCandidate = {
+  id: string;
+  label: string;
+  actionKind: "tap" | "scroll" | "long_press" | "input";
+  locator: string;
+  semanticArea?: VisualSemanticArea;
+  source?: "manual_element" | "ocr_text";
+  riskLevel?: "safe" | "dangerous";
+  status?: "ready" | "skipped";
+  skipReason?: string;
+  targetNodeName?: string;
+  outcomeType?: string;
+};
+
+export type AssetRecordingAutoExplorePlanStep = {
+  id: string;
+  depth: number;
+  sourceNodeName: string;
+  candidateLabel: string;
+  targetNodeName?: string;
+};
+
+export type AssetRecordingAutoExploreResult = {
+  candidateId?: string;
+  candidateLabel?: string;
+  status: "passed" | "skipped" | "failed";
+  resultType: "existing_page" | "new_page_candidate" | "local_state_change" | "no_change" | "dangerous_skipped" | "failed";
+  targetNodeName?: string;
+  message?: string;
+};
+
+export type AssetRecordingAutoExploreReport = {
+  status: "ready" | "blocked";
+  version: "v1" | "v2";
+  sourceNodeName?: string;
+  message?: string;
+  candidates: AssetRecordingAutoExploreCandidate[];
+  plan: {
+    version: "v1" | "v2";
+    maxDepth: number;
+    maxActions: number;
+    steps: AssetRecordingAutoExplorePlanStep[];
+  };
+  results: AssetRecordingAutoExploreResult[];
+};
+
+export type AssetRecordingSavedAsset = {
+  id: string;
+  key: string;
+  name: string;
+  status: string;
+  platformScope?: string;
+  matcherCount?: number;
+  elementCount?: number;
+  updatedAt?: string;
+};
+
+export type AssetRecordingOperationTransitionDraft = {
+  sourceNodeId?: string;
+  targetNodeId?: string;
+  abilityType?: AssetRecordingAbilityType;
+  actionKind: "tap" | "scroll" | "long_press" | "input";
+  availability: "visible" | "after_scroll" | "conditional";
+  outcomeType: AssetRecordingElementOutcomeType;
+  locator: string;
+  semanticArea?: VisualSemanticArea;
+  coordinateSpace?: "screen" | "app_viewport" | "region";
+  elementLabel: string;
+  targetText?: string;
+  targetLabel?: string;
+  scrollProfile?: AssetRecordingScrollProfile;
+  compoundSteps?: AssetRecordingCompoundStepDraft[];
+};
+
+export type AssetRecordingElementOutcomeType = "navigate" | "compound_navigation" | "show_inline_state" | "local_state_change" | "no_visible_change";
+export type AssetRecordingAbilityType = "fixed_tap" | "scroll_candidate" | "grid_candidate" | "conditional_tap";
+
+export type AssetRecordingPageElementDraft = {
+  elementId?: string;
+  sourceNodeId?: string;
+  abilityType?: AssetRecordingAbilityType;
+  actionKind: "tap" | "scroll" | "long_press" | "input";
+  availability: "visible" | "after_scroll" | "conditional";
+  locator: string;
+  semanticArea?: VisualSemanticArea;
+  coordinateSpace?: "screen" | "app_viewport" | "region";
+  elementLabel: string;
+  targetText?: string;
+  outcomeType?: AssetRecordingElementOutcomeType;
+  outcomeLabel?: string;
+  targetNodeId?: string;
+  targetLabel?: string;
+  scrollProfile?: AssetRecordingScrollProfile;
+  compoundSteps?: AssetRecordingCompoundStepDraft[];
+};
+
+export type AssetRecordingCompoundStepDraft = {
+  type: "wait_until_state" | "tap_on_text";
+  text: string;
+  label?: string;
+  timeoutMs?: number;
+};
+
+export type AssetRecordingScreenshotRegion = {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  semanticArea?: VisualSemanticArea;
+  coordinateSpace?: "screen" | "app_viewport" | "region";
+  ignoreRegions?: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>;
+};
+
+type VisualSemanticArea = "top" | "content" | "bottom" | "unknown";
+
+export type AssetRecordingCurrentPage = {
+  status: "idle" | "matched" | "draft_created" | "draft_reused" | "draft_candidate" | "unknown" | "error";
+  assetKind?: "page" | "overlay";
+  parentPageId?: string;
+  parentPageName?: string;
+  overlayType?: string;
+  overlayBehavior?: "blocking" | "non_blocking" | "page_state";
+  closeAction?: string;
+  graphVersionId?: string;
+  nodeId?: string;
+  observation?: unknown;
+  match?: unknown;
+  pageName?: string;
+  visualPageName?: string;
+  matchedAssetName?: string;
+  matchedAssetKey?: string;
+  targetRef?: string;
+  aliasText?: string;
+  intentTagsText?: string;
+  matchScore?: number;
+  packageName?: string;
+  activityName?: string;
+  screenshotUrl?: string;
+  screenshotRegions?: AssetRecordingScreenshotRegion[];
+  matchedMatchers?: string[];
+  missedMatchers?: string[];
+  confirmedMatchers?: string[];
+  confirmedUiTexts?: string[];
+  confirmedOcrTexts?: string[];
+  uiTexts?: string[];
+  ocrTexts?: string[];
+  elements?: AssetRecordingPageElement[];
+  transitions?: AssetRecordingPageTransition[];
+  tasks?: AssetRecordingPageTask[];
+  aiDescription?: string;
+  savedAssets?: AssetRecordingSavedAsset[];
+  message?: string;
+};
+
+export type AssetRecordingPanelProps = {
+  selectedSerial: string;
+  selectedDeviceName?: string;
+  busy: boolean;
+  identifying?: boolean;
+  initialDetailTab?: AssetDetailTab;
+  currentPage?: AssetRecordingCurrentPage;
+  previewSlot?: ReactNode;
+  onPageDraftChange: (patch: Partial<AssetRecordingCurrentPage>) => void;
+  onIdentifyCurrentPage: () => void | Promise<void>;
+  onSaveCurrentPageAsset: (mode: "create" | "update") => void | Promise<void>;
+  onConfirmOperationTransition?: (draft: AssetRecordingOperationTransitionDraft) => void | Promise<void>;
+  onConfirmPageTaskTransition?: (draft: AssetRecordingPageTaskTransitionDraft) => void | Promise<void>;
+  onDeleteOperationTransition?: (transition: AssetRecordingPageTransition) => void | Promise<void>;
+  onSavePageElement?: (draft: AssetRecordingPageElementDraft) => void | Promise<void>;
+  onDeletePageElement?: (element: AssetRecordingPageElement) => void | Promise<void>;
+  onSavePageTask?: (draft: AssetRecordingPageTaskDraft) => void | Promise<void>;
+  onDeletePageTask?: (task: AssetRecordingPageTask) => void | Promise<void>;
+  autoExploreReport?: AssetRecordingAutoExploreReport;
+  onPreviewAutoExplore?: (options: { maxDepth: number; maxCandidates: number; maxActions: number }) => void | Promise<void>;
+  onRunAutoExplore?: (options: { maxDepth: number; maxCandidates: number; maxActions: number }) => void | Promise<void>;
+  onResizePointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
+};
+
+type AssetDetailTab = "match" | "actions" | "transitions" | "tasks" | "explorer";
+type AssetEvidenceKind = "matcher" | "页面文字" | "OCR 文字";
+type AssetEvidenceItem = {
+  kind: AssetEvidenceKind;
+  value: string;
+};
+type RegionBoundEvidence = {
+  value: string;
+  region?: string;
+  prefix?: string;
+};
+type AssetEvidenceGroup = {
+  title: string;
+  items: AssetEvidenceItem[];
+};
+type AssetOperationGroup = {
+  title: string;
+  items: AssetRecordingPageElement[];
+};
+type EditingEvidence = {
+  item: AssetEvidenceItem;
+  source: "confirmed" | "candidate";
+};
+type OperationOutcomeFields = {
+  requiresTargetPage: boolean;
+  targetLabel: string;
+  targetPlaceholder: string;
+  resultLabel: string;
+  resultPlaceholder: string;
+};
+type ManualActionKind = "tap" | "scroll" | "long_press" | "input";
+type PercentPoint = { x: number; y: number };
+type RegionResizeHandle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+type EditableRegionOperation =
+  | { type: "draw"; start: PercentPoint; region: AssetRecordingScreenshotRegion }
+  | { type: "move"; start: PercentPoint; region: AssetRecordingScreenshotRegion }
+  | { type: "resize"; handle: RegionResizeHandle; start: PercentPoint; region: AssetRecordingScreenshotRegion };
+
+const semanticAreaOptions: Array<{ value: VisualSemanticArea; label: string }> = [
+  { value: "top", label: "顶部标题栏区域" },
+  { value: "content", label: "中间内容区域" },
+  { value: "bottom", label: "底部固定区域" },
+  { value: "unknown", label: "未知区域" }
+];
+
+export type ApplyEditedEvidenceValueInput = {
+  item: AssetEvidenceItem;
+  nextValue: string;
+  confirmedMatchers: string[];
+  confirmedUiTexts: string[];
+  confirmedOcrTexts: string[];
+};
+
+export function AssetRecordingPanel({
+  selectedSerial,
+  selectedDeviceName,
+  busy,
+  identifying = false,
+  initialDetailTab = "match",
+  currentPage,
+  previewSlot,
+  onPageDraftChange,
+  onIdentifyCurrentPage,
+  onSaveCurrentPageAsset,
+  onConfirmOperationTransition,
+  onConfirmPageTaskTransition,
+  onDeleteOperationTransition,
+  onSavePageElement,
+  onDeletePageElement,
+  onSavePageTask,
+  onDeletePageTask,
+  autoExploreReport,
+  onPreviewAutoExplore,
+  onRunAutoExplore,
+  onResizePointerDown
+}: AssetRecordingPanelProps) {
+  const page = currentPage ?? { status: "idle" as const };
+  const elements = page.elements ?? [];
+  const transitions = page.transitions ?? [];
+  const tasks = page.tasks ?? [];
+  const savedManualElements = elements.filter((element) => element.source === "manual");
+  const savedAssets = page.savedAssets ?? [];
+  const screenshotRegions = page.screenshotRegions ?? [];
+  const [regionStart, setRegionStart] = useState<{ x: number; y: number }>();
+  const [draftRegion, setDraftRegion] = useState<AssetRecordingScreenshotRegion>();
+  const [activeDetailTab, setActiveDetailTab] = useState<AssetDetailTab>(initialDetailTab);
+  const [isRenamingPage, setIsRenamingPage] = useState(false);
+  const [draftPageName, setDraftPageName] = useState("");
+  const [editingEvidence, setEditingEvidence] = useState<EditingEvidence>();
+  const [draftEvidenceValue, setDraftEvidenceValue] = useState("");
+  const [hiddenCandidateEvidenceKeys, setHiddenCandidateEvidenceKeys] = useState<string[]>([]);
+  const [screenshotNaturalSize, setScreenshotNaturalSize] = useState<{ width: number; height: number }>();
+  const [manualAbilityType, setManualAbilityType] = useState<AssetRecordingAbilityType>("fixed_tap");
+  const [manualActionKind, setManualActionKind] = useState<ManualActionKind>("tap");
+  const [manualOutcomeType, setManualOutcomeType] = useState<AssetRecordingElementOutcomeType>("navigate");
+  const [manualTargetQuery, setManualTargetQuery] = useState("");
+  const [manualActionEdit, setManualActionEdit] = useState<EditableRegionOperation>();
+  const [manualActionRegion, setManualActionRegion] = useState<AssetRecordingScreenshotRegion>();
+  const [manualActionNaturalSize, setManualActionNaturalSize] = useState<{ width: number; height: number }>();
+  const [isAddingPageElement, setIsAddingPageElement] = useState(false);
+  const [editingPageElement, setEditingPageElement] = useState<AssetRecordingPageElement>();
+  const [isAddingPageTask, setIsAddingPageTask] = useState(false);
+  const [editingPageTask, setEditingPageTask] = useState<AssetRecordingPageTask>();
+  const [autoExploreDepth, setAutoExploreDepth] = useState(1);
+  const [autoExploreMaxCandidates, setAutoExploreMaxCandidates] = useState(8);
+  const screenshotImageLayerRef = useRef<HTMLDivElement>(null);
+  const manualActionImageLayerRef = useRef<HTMLDivElement>(null);
+  const hasSavedAsset = savedAssets.some((asset) => asset.id === page.nodeId || asset.key === page.targetRef);
+  const saveMode: "create" | "update" = hasSavedAsset ? "update" : "create";
+  const canSave = page.status !== "idle" && page.status !== "error";
+  const showPageElementForm = isAddingPageElement || Boolean(editingPageElement);
+  const showPageTaskForm = isAddingPageTask || Boolean(editingPageTask);
+  const title = page.pageName || page.visualPageName || "未知页面";
+  const matchedAssetName = page.matchedAssetName;
+  const scoreLabel = page.status === "draft_candidate" || !page.nodeId ? "待建立基准" : `匹配度 ${formatScore(page.matchScore)}`;
+  const scoreTitle = page.status === "draft_candidate" || !page.nodeId ? "当前页面还没有保存为页面资产，保存后才会建立可复用的页面匹配基准。" : "当前页面采集信号和页面识别规则的加权匹配度，不是截图相似度。";
+  const confirmedMatchers = page.confirmedMatchers ?? [];
+  const confirmedUiTexts = page.confirmedUiTexts ?? [];
+  const confirmedOcrTexts = page.confirmedOcrTexts ?? [];
+  const confirmedEvidence = [
+    ...confirmedMatchers.map((value) => evidence("matcher", value)),
+    ...confirmedUiTexts.map((value) => evidence("页面文字", value)),
+    ...confirmedOcrTexts.map((value) => evidence("OCR 文字", value))
+  ];
+  const candidateEvidence = [
+    ...(page.matchedMatchers ?? []).map((value) => evidence("matcher", value)),
+    ...(page.uiTexts ?? []).map((value) => evidence("页面文字", value)),
+    ...(page.ocrTexts ?? []).map((value) => evidence("OCR 文字", value))
+  ].filter((item) => !isConfirmedEvidence(item, confirmedMatchers, confirmedUiTexts, confirmedOcrTexts) && !hiddenCandidateEvidenceKeys.includes(evidenceKey(item)));
+  const candidateEvidenceGroups = groupCandidateEvidence(candidateEvidence);
+  const manualOutcomeFields = operationOutcomeFields(manualOutcomeType);
+  const filteredManualTargetAssets = savedAssets.filter((asset) => matchesTargetAsset(asset, manualTargetQuery)).slice(0, 20);
+  const autoExploreOptions = {
+    maxDepth: autoExploreDepth,
+    maxCandidates: autoExploreMaxCandidates,
+    maxActions: autoExploreMaxCandidates
+  };
+
+  function startScreenshotRegion(event: PointerEvent<HTMLDivElement>) {
+    if (!page.screenshotUrl) {
+      return;
+    }
+    const point = pointerToPercent(event, screenshotImageLayerRef.current);
+    setRegionStart(point);
+    setDraftRegion({ id: "draft-region", label: "新重点区域", x: point.x, y: point.y, width: 0, height: 0 });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function updateScreenshotRegion(event: PointerEvent<HTMLDivElement>) {
+    if (!regionStart) {
+      return;
+    }
+    const point = pointerToPercent(event, screenshotImageLayerRef.current);
+    setDraftRegion(normalizeRegion({ id: "draft-region", label: "新重点区域", x: regionStart.x, y: regionStart.y, width: point.x - regionStart.x, height: point.y - regionStart.y }));
+  }
+
+  function finishScreenshotRegion() {
+    if (draftRegion && draftRegion.width >= 2 && draftRegion.height >= 2) {
+      onPageDraftChange({
+        screenshotRegions: [
+          ...screenshotRegions,
+          {
+            ...draftRegion,
+            id: `region-${Date.now()}`,
+            label: `重点区域 ${screenshotRegions.length + 1}`,
+            semanticArea: semanticAreaForRegion(draftRegion),
+            coordinateSpace: "screen"
+          }
+        ]
+      });
+    }
+    setRegionStart(undefined);
+    setDraftRegion(undefined);
+  }
+
+  function removeScreenshotRegion(regionId: string) {
+    onPageDraftChange({
+      screenshotRegions: screenshotRegions.filter((region) => region.id !== regionId)
+    });
+  }
+
+  function updateScreenshotRegionSemanticArea(regionId: string, semanticArea: VisualSemanticArea) {
+    onPageDraftChange({
+      screenshotRegions: screenshotRegions.map((region) => (region.id === regionId ? applySemanticAreaOverrideToRegion(region, semanticArea) : region))
+    });
+  }
+
+  function confirmEvidence(item: AssetEvidenceItem) {
+    updateEvidence(item, "confirm");
+  }
+
+  function removeEvidence(item: AssetEvidenceItem) {
+    updateEvidence(item, "remove");
+  }
+
+  function startEditEvidence(item: AssetEvidenceItem, source: "confirmed" | "candidate") {
+    setEditingEvidence({ item, source });
+    setDraftEvidenceValue(evidenceDisplayValue(item));
+  }
+
+  function cancelEditEvidence() {
+    setEditingEvidence(undefined);
+    setDraftEvidenceValue("");
+  }
+
+  function confirmEditEvidence() {
+    if (!editingEvidence) {
+      return;
+    }
+    const nextValue = draftEvidenceValue.trim();
+    if (!nextValue) {
+      return;
+    }
+    const patch = applyEditedEvidenceValue({
+      item: editingEvidence.item,
+      nextValue,
+      confirmedMatchers,
+      confirmedUiTexts,
+      confirmedOcrTexts
+    });
+    onPageDraftChange(patch);
+    if (editingEvidence.source === "candidate") {
+      setHiddenCandidateEvidenceKeys(addUnique(hiddenCandidateEvidenceKeys, evidenceKey(editingEvidence.item)));
+    }
+    cancelEditEvidence();
+  }
+
+  function updateEvidence(item: AssetEvidenceItem, action: "confirm" | "remove") {
+    const field = evidenceField(item);
+    const currentValues = field === "confirmedMatchers" ? confirmedMatchers : field === "confirmedUiTexts" ? confirmedUiTexts : confirmedOcrTexts;
+    const nextValues = action === "confirm" ? addUnique(currentValues, item.value) : currentValues.filter((value) => value !== item.value);
+    onPageDraftChange({ [field]: nextValues });
+  }
+
+  function startRenamePage() {
+    setDraftPageName(title);
+    setIsRenamingPage(true);
+  }
+
+  function cancelRenamePage() {
+    setDraftPageName("");
+    setIsRenamingPage(false);
+  }
+
+  function confirmRenamePage() {
+    const patch = pageNameDraftPatch(draftPageName);
+    if (!patch) {
+      return;
+    }
+    onPageDraftChange(patch);
+    setIsRenamingPage(false);
+  }
+
+  function startManualActionRegion(event: PointerEvent<HTMLDivElement>) {
+    if (!page.screenshotUrl) {
+      return;
+    }
+    const point = pointerToPercent(event, manualActionImageLayerRef.current);
+    const region = { id: "manual-action-region", label: "动作区域", x: point.x, y: point.y, width: 0, height: 0, coordinateSpace: "screen" as const };
+    setManualActionEdit({ type: "draw", start: point, region });
+    setManualActionRegion(region);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function startMoveManualActionRegion(event: PointerEvent<HTMLSpanElement>) {
+    if (!manualActionRegion) {
+      return;
+    }
+    event.stopPropagation();
+    const point = pointerToPercent(event as unknown as PointerEvent<HTMLDivElement>, manualActionImageLayerRef.current);
+    setManualActionEdit({ type: "move", start: point, region: manualActionRegion });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function startResizeManualActionRegion(handle: RegionResizeHandle, event: PointerEvent<HTMLSpanElement>) {
+    if (!manualActionRegion) {
+      return;
+    }
+    event.stopPropagation();
+    const point = pointerToPercent(event as unknown as PointerEvent<HTMLDivElement>, manualActionImageLayerRef.current);
+    setManualActionEdit({ type: "resize", handle, start: point, region: manualActionRegion });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function updateManualActionRegion(event: PointerEvent<HTMLDivElement>) {
+    if (!manualActionEdit) {
+      return;
+    }
+    const point = pointerToPercent(event, manualActionImageLayerRef.current);
+    setManualActionRegion(updateEditableScreenshotRegion(manualActionEdit, point));
+  }
+
+  function finishManualActionRegion() {
+    setManualActionEdit(undefined);
+  }
+
+  function startAddPageElement() {
+    setEditingPageElement(undefined);
+    setManualAbilityType("fixed_tap");
+    setManualActionKind("tap");
+    setManualOutcomeType("navigate");
+    setManualTargetQuery("");
+    setManualActionRegion(undefined);
+    setIsAddingPageElement(true);
+  }
+
+  function startEditPageElement(element: AssetRecordingPageElement) {
+    setEditingPageElement(element);
+    setManualAbilityType(element.abilityType ?? abilityTypeFromElement(element));
+    const actionKind = normalizeActionKind(element);
+    setManualActionKind(actionKind === "unknown" ? "tap" : actionKind);
+    setManualOutcomeType(element.outcomeType ?? "navigate");
+    setManualTargetQuery(element.targetLabel ?? "");
+    setManualActionRegion(
+      element.region
+        ? {
+            id: "manual-action-region",
+            label: "动作区域",
+            ...element.region,
+            semanticArea: element.semanticArea,
+            coordinateSpace: element.coordinateSpace ?? "screen"
+          }
+        : undefined
+    );
+    setIsAddingPageElement(true);
+  }
+
+  function cancelManualPageElementEdit() {
+    setEditingPageElement(undefined);
+    setManualActionRegion(undefined);
+    setManualActionEdit(undefined);
+    setManualOutcomeType("navigate");
+    setManualTargetQuery("");
+    setManualAbilityType("fixed_tap");
+    setIsAddingPageElement(false);
+  }
+
+  function submitManualPageElement(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!manualActionRegion || manualActionRegion.width < 1 || manualActionRegion.height < 1) {
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const draft = manualOperationDraftFromForm(form, {
+      sourceNodeId: page.nodeId,
+      region: manualActionRegion
+    });
+    void onSavePageElement?.(draft);
+    setEditingPageElement(undefined);
+    setManualActionRegion(undefined);
+    setManualActionEdit(undefined);
+    setIsAddingPageElement(false);
+  }
+
+  function startAddPageTask() {
+    setEditingPageTask(undefined);
+    setIsAddingPageTask(true);
+  }
+
+  function startEditPageTask(task: AssetRecordingPageTask) {
+    setEditingPageTask(task);
+    setIsAddingPageTask(true);
+  }
+
+  function cancelPageTaskEdit() {
+    setEditingPageTask(undefined);
+    setIsAddingPageTask(false);
+  }
+
+  function submitPageTask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const draft = pageTaskDraftFromForm(new FormData(event.currentTarget), {
+      sourceNodeId: page.nodeId,
+      task: editingPageTask,
+      elements: savedManualElements
+    });
+    if (!draft.steps.length) {
+      return;
+    }
+    void onSavePageTask?.(draft);
+    setEditingPageTask(undefined);
+    setIsAddingPageTask(false);
+  }
+
+  function renderManualPageElementEditor() {
+    return (
+      <div className="asset-manual-action-card">
+        <div className="asset-manual-action-head">
+          <div>
+            <strong>{editingPageElement ? "编辑可操作元素" : "待编辑可操作元素"}</strong>
+          </div>
+          <button className="asset-page-name-action" type="button" disabled={busy} onClick={cancelManualPageElementEdit}>
+            取消
+          </button>
+        </div>
+        <div className="asset-manual-action-layout">
+          <div className="asset-manual-action-region-pane">
+            {page.screenshotUrl ? (
+              <div
+                className="asset-manual-action-frame"
+                onPointerCancel={finishManualActionRegion}
+                onPointerDown={startManualActionRegion}
+                onPointerMove={updateManualActionRegion}
+                onPointerUp={finishManualActionRegion}
+              >
+                <div className="asset-manual-action-image-layer" ref={manualActionImageLayerRef} style={screenshotImageLayerStyle(manualActionNaturalSize, 680)}>
+                  <img
+                    draggable={false}
+                    src={page.screenshotUrl}
+                    alt="当前页面操作标注截图"
+                    onLoad={(event) => {
+                      const image = event.currentTarget;
+                      setManualActionNaturalSize({ width: image.naturalWidth, height: image.naturalHeight });
+                    }}
+                  />
+                  {manualActionRegion ? (
+                    <span
+                      className="asset-manual-action-region"
+                      onPointerDown={startMoveManualActionRegion}
+                      style={{
+                        left: `${manualActionRegion.x}%`,
+                        top: `${manualActionRegion.y}%`,
+                        width: `${manualActionRegion.width}%`,
+                        height: `${manualActionRegion.height}%`
+                      }}
+                    >
+                      <em>{manualActionLabel(manualActionKind)}</em>
+                      {regionResizeHandles.map((handle) => (
+                        <span
+                          aria-label={`调整动作区域 ${handle}`}
+                          className={`asset-manual-action-handle ${handle}`}
+                          key={handle}
+                          onPointerDown={(event) => startResizeManualActionRegion(handle, event)}
+                        />
+                      ))}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <div className="empty">识别当前页面后，先在截图上圈选操作区域，再在右侧选择动作方式。</div>
+            )}
+          </div>
+          <div className="asset-manual-action-fields-pane">
+            <form className="asset-element-actions asset-operation-editor asset-manual-action-form" key={editingPageElement?.id ?? editingPageElement?.locator ?? "new-page-element"} onSubmit={submitManualPageElement}>
+              {editingPageElement?.id ? <input type="hidden" name="elementId" value={editingPageElement.id} /> : null}
+              <label>
+                能力类型
+                <select name="abilityType" value={manualAbilityType} onChange={(event) => setManualAbilityType(readAbilityType(event.target.value))}>
+                  <option value="fixed_tap">固定点击能力</option>
+                  <option value="scroll_candidate">滚动查找目标</option>
+                  <option value="grid_candidate">网格候选入口</option>
+                  <option value="conditional_tap">条件点击能力</option>
+                </select>
+              </label>
+              <label>
+                动作方式
+                <select name="actionKind" value={manualActionKind} onChange={(event) => setManualActionKind(readActionKind(event.target.value))}>
+                  <option value="tap">点击</option>
+                  <option value="scroll">滑动</option>
+                  <option value="long_press">长按</option>
+                  <option value="input">输入</option>
+                </select>
+              </label>
+              <label>
+                区域语义
+                <select
+                  aria-label="动作区域语义"
+                  name="semanticArea"
+                  disabled={!manualActionRegion}
+                  value={manualActionRegion?.semanticArea ?? (manualActionRegion ? semanticAreaForRegion(manualActionRegion) : "unknown")}
+                  onChange={(event) => {
+                    if (!manualActionRegion) {
+                      return;
+                    }
+                    setManualActionRegion(applySemanticAreaOverrideToRegion(manualActionRegion, readVisualSemanticArea(event.target.value) ?? "unknown"));
+                  }}
+                >
+                  {semanticAreaOptions.map((option) => (
+                    <option value={option.value} key={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                动作名称
+                <input name="elementLabel" placeholder="例如：搜索按钮 / 列表区域" defaultValue={editingPageElement?.label ?? manualActionLabel(manualActionKind)} />
+              </label>
+              <label>
+                执行识别文字
+                <input name="targetText" placeholder="可选，例如：学习方案" defaultValue={editingPageElement?.targetText ?? ""} />
+              </label>
+              <label>
+                出现条件
+                <select name="availability" defaultValue={editingPageElement?.availability ?? "visible"}>
+                  <option value="visible">当前可见</option>
+                  <option value="after_scroll">滚动后出现</option>
+                  <option value="conditional">条件出现</option>
+                </select>
+              </label>
+              <label>
+                结果类型
+                <select name="outcomeType" value={manualOutcomeType} onChange={(event) => setManualOutcomeType(readElementOutcomeType(event.target.value) ?? "navigate")}>
+                  <option value="navigate">跳转页面</option>
+                  <option value="compound_navigation">复合跳转</option>
+                  <option value="show_inline_state">出现页面内状态</option>
+                  <option value="local_state_change">页面局部变化</option>
+                  <option value="no_visible_change">无明显变化</option>
+                </select>
+              </label>
+              {manualOutcomeFields.requiresTargetPage ? (
+                <label>
+                  {manualOutcomeFields.targetLabel}
+                  <input value={manualTargetQuery} onChange={(event) => setManualTargetQuery(event.target.value)} placeholder={manualOutcomeFields.targetPlaceholder} />
+                  <select className="asset-operation-target-options" name="targetNodeId" defaultValue={editingPageElement?.targetNodeId ?? ""} key={`${editingPageElement?.id ?? "new"}-${manualTargetQuery || "all-targets"}`}>
+                    <option value="">暂不绑定目标页面</option>
+                    {filteredManualTargetAssets.map((asset) => (
+                      <option value={asset.id} key={asset.id}>{asset.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <input name="targetNodeId" type="hidden" value="" />
+              )}
+              {manualAbilityType === "conditional_tap" ? <ConditionClickEditor /> : null}
+              {manualOutcomeType === "compound_navigation" ? <CompoundNavigationEditor /> : null}
+              <label className="asset-operation-target">
+                {manualOutcomeFields.resultLabel}
+                <input name="targetLabel" placeholder={manualOutcomeFields.resultPlaceholder} defaultValue={editingPageElement?.targetLabel ?? ""} />
+              </label>
+              <label className="asset-operation-target">
+                结果说明
+                <input name="outcomeLabel" placeholder="例如：弹出更多菜单 / 进入新建公开课 / 确认后弹窗消失" defaultValue={editingPageElement?.outcomeLabel ?? ""} />
+              </label>
+              {manualActionKind === "scroll" || manualAbilityType === "grid_candidate" || manualAbilityType === "scroll_candidate" ? (
+                <ScrollContainerEditor
+                  abilityType={manualAbilityType}
+                  profile={
+                    editingPageElement?.scrollProfile ??
+                    (manualAbilityType === "grid_candidate"
+                      ? { containerKind: "grid_list", direction: "vertical", columns: 2, targetKind: "item_text", targetQuery: "{{className}}", afterFoundAction: "tap_item", failureStrategy: "try_next_candidate" }
+                      : manualAbilityType === "scroll_candidate"
+                        ? { containerKind: "list", direction: "vertical", targetKind: "image_region", targetQuery: manualActionRegion ? imageRegionLocator(manualActionRegion) : undefined, afterFoundAction: "tap_child", failureStrategy: "try_next_candidate" }
+                      : { containerKind: "scroll_area", direction: "vertical", targetKind: "ocr_text", afterFoundAction: "verify_visible" })
+                  }
+                />
+              ) : null}
+              <button type="submit" disabled={!manualActionRegion || !onSavePageElement}>
+                保存可操作元素
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <section className="asset-recording-module module-page">
+      <div className="asset-preview-column">
+        {previewSlot ?? <div className="asset-preview-placeholder">选择设备后显示实时预览</div>}
+        {identifying ? <div className="asset-preview-blocker">识别中</div> : null}
+      </div>
+
+      <div className="recording-resizer asset-recording-resizer" onPointerDown={onResizePointerDown} role="separator" aria-orientation="vertical" aria-label="调整预览和页面信息区域宽度" title="拖动调整左右区域宽度" />
+
+      <div className="asset-editor-column">
+        <div className="panel asset-page-card asset-page-card-shell">
+          {page.status === "idle" ? (
+            <div className="empty">切到资产录制页后会自动识别当前页面；也可以切换设备或操作页面后等待刷新。</div>
+          ) : (
+            <>
+              <div className="asset-page-title">
+                {isRenamingPage ? (
+                  <div className="asset-page-name-edit">
+                    <input aria-label="新的页面名称" className="asset-page-name-input" value={draftPageName} onChange={(event) => setDraftPageName(event.target.value)} autoFocus />
+                    <button className="asset-page-name-action primary" type="button" disabled={busy || !draftPageName.trim()} onClick={() => void confirmRenamePage()}>
+                      确认修改
+                    </button>
+                    <button className="asset-page-name-action" type="button" disabled={busy} onClick={cancelRenamePage}>
+                      取消
+                    </button>
+                  </div>
+                ) : (
+                  <div className="asset-page-name-display">
+                    <strong>{title}</strong>
+                    <button className="asset-page-name-action" type="button" disabled={busy} onClick={startRenamePage}>
+                      修改名称
+                    </button>
+                  </div>
+                )}
+                <div className="asset-title-status">
+                  <span className={`asset-status ${page.status}`}>{statusLabel(page.status)}</span>
+                  <b title={scoreTitle}>{scoreLabel}</b>
+                </div>
+              </div>
+              {matchedAssetName ? (
+                <div className="asset-match-summary">
+                  <span>匹配资产/状态</span>
+                  <strong>{matchedAssetName}</strong>
+                </div>
+              ) : null}
+              {identifying ? <div className="asset-identifying-banner">识别中：正在识别当前页面，完成后可继续操作。</div> : null}
+            </>
+          )}
+
+          {page.status !== "idle" ? (
+            <>
+              <div className="asset-detail-tabs" role="tablist" aria-label="页面资产详情">
+                <button className={detailTabClass(activeDetailTab, "match")} type="button" role="tab" aria-selected={activeDetailTab === "match"} onClick={() => setActiveDetailTab("match")}>
+                  页面匹配
+                </button>
+                <button className={detailTabClass(activeDetailTab, "actions")} type="button" role="tab" aria-selected={activeDetailTab === "actions"} onClick={() => setActiveDetailTab("actions")}>
+                  页面能力
+                </button>
+                <button className={detailTabClass(activeDetailTab, "transitions")} type="button" role="tab" aria-selected={activeDetailTab === "transitions"} onClick={() => setActiveDetailTab("transitions")}>
+                  连接边
+                </button>
+                <button className={detailTabClass(activeDetailTab, "tasks")} type="button" role="tab" aria-selected={activeDetailTab === "tasks"} onClick={() => setActiveDetailTab("tasks")}>
+                  页面任务
+                </button>
+                <button className={detailTabClass(activeDetailTab, "explorer")} type="button" role="tab" aria-selected={activeDetailTab === "explorer"} onClick={() => setActiveDetailTab("explorer")}>
+                  自动探索
+                </button>
+              </div>
+
+              <div className="asset-detail-scroll asset-editor-scroll">
+                {activeDetailTab === "match" ? (
+                  <div className="asset-detail-section asset-identity-card">
+                    <div className="panel-head">
+                      <div>
+                        <h2>页面身份依据</h2>
+                      </div>
+                    </div>
+                    <div className="asset-screenshot-card">
+                      <div className="asset-screenshot-head">
+                        <strong>页面截图</strong>
+                      </div>
+                      {page.screenshotUrl ? (
+                        <>
+                          <div
+                            className="asset-screenshot-frame"
+                            onPointerCancel={finishScreenshotRegion}
+                            onPointerDown={startScreenshotRegion}
+                            onPointerLeave={finishScreenshotRegion}
+                            onPointerMove={updateScreenshotRegion}
+                            onPointerUp={finishScreenshotRegion}
+                          >
+                            <div className="asset-screenshot-image-layer" ref={screenshotImageLayerRef} style={screenshotImageLayerStyle(screenshotNaturalSize)}>
+                              <img
+                                draggable={false}
+                                src={page.screenshotUrl}
+                                alt="当前页面截图"
+                                onLoad={(event) => {
+                                  const image = event.currentTarget;
+                                  setScreenshotNaturalSize({ width: image.naturalWidth, height: image.naturalHeight });
+                                }}
+                              />
+                              {[...screenshotRegions, ...(draftRegion ? [draftRegion] : [])].map((region) => (
+                                <span
+                                  className={region.id === "draft-region" ? "asset-screenshot-region draft" : "asset-screenshot-region"}
+                                  key={region.id}
+                                  style={{
+                                    left: `${region.x}%`,
+                                    top: `${region.y}%`,
+                                    width: `${region.width}%`,
+                                    height: `${region.height}%`
+                                  }}
+                                >
+                                  <em>{region.label}</em>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="asset-region-list">
+                            <strong>截图重点区域</strong>
+                            {screenshotRegions.length ? (
+                              screenshotRegions.map((region) => (
+                                <span key={region.id}>
+                                  {region.label}
+                                  <button type="button" onClick={() => removeScreenshotRegion(region.id)}>
+                                    移除
+                                  </button>
+                                  <select
+                                    aria-label={`${region.label}语义区域`}
+                                    value={region.semanticArea ?? semanticAreaForRegion(region)}
+                                    onChange={(event) => updateScreenshotRegionSemanticArea(region.id, readVisualSemanticArea(event.target.value) ?? "unknown")}
+                                  >
+                                    {semanticAreaOptions.map((option) => (
+                                      <option value={option.value} key={option.value}>{option.label}</option>
+                                    ))}
+                                  </select>
+                                </span>
+                              ))
+                            ) : (
+                              <small>暂无重点区域；在截图上拖拽即可添加。</small>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <small>暂未拿到截图证据</small>
+                      )}
+                    </div>
+                    <EvidenceList
+                      title="已确认匹配依据"
+                      items={confirmedEvidence}
+                      actionLabel="移除"
+                      emptyText="还没有确认依据；请从候选信息中选择稳定信号。"
+                      editingEvidence={editingEvidence}
+                      draftEvidenceValue={draftEvidenceValue}
+                      onAction={removeEvidence}
+                      onCancelEdit={cancelEditEvidence}
+                      onConfirmEdit={confirmEditEvidence}
+                      onDraftEvidenceValueChange={setDraftEvidenceValue}
+                      onEdit={(item) => startEditEvidence(item, "confirmed")}
+                    />
+                    <EvidenceGroupList
+                      title="候选信息"
+                      groups={candidateEvidenceGroups}
+                      actionLabel="设为依据"
+                      emptyText="暂无候选信息"
+                      editingEvidence={editingEvidence}
+                      draftEvidenceValue={draftEvidenceValue}
+                      onAction={confirmEvidence}
+                      onCancelEdit={cancelEditEvidence}
+                      onConfirmEdit={confirmEditEvidence}
+                      onDraftEvidenceValueChange={setDraftEvidenceValue}
+                      onEdit={(item) => startEditEvidence(item, "candidate")}
+                    />
+                    <div className="asset-facts compact">
+                      <div>
+                        <span>资产 ID</span>
+                        <strong>{page.nodeId || "待确认"}</strong>
+                      </div>
+                      <div>
+                        <span>资产版本</span>
+                        <strong>{page.graphVersionId || "待确认"}</strong>
+                      </div>
+                      <div>
+                        <span>App 包</span>
+                        <strong>{page.packageName || "未知"}</strong>
+                      </div>
+                      <div>
+                        <span>Activity</span>
+                        <strong>{page.activityName || "未知"}</strong>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {activeDetailTab === "actions" ? (
+                  <div className="asset-detail-section asset-elements-card">
+                    <section className="asset-saved-actions">
+                      <div className="asset-action-summary">
+                        <strong>已录入可操作元素</strong>
+                        <span>{savedManualElements.length} 个元素</span>
+                      </div>
+                      {savedManualElements.length ? (
+                        <div className="asset-element-list">
+                          {savedManualElements.map((element, index) => (
+                            <div className="asset-saved-action-item" key={`manual-${element.id ?? element.locator}-${index}`}>
+                              <div className="asset-element-row asset-saved-action-row asset-saved-action-main">
+                                <div className="asset-element-summary">
+                                  <OperationRegionPreview element={element} screenshotUrl={page.screenshotUrl} />
+                                  <div className="asset-operation-preview-info">
+                                    <strong>{element.label}</strong>
+                                    <span>{element.locator}</span>
+                                    <small>{abilityTypeLabel(element.abilityType ?? abilityTypeFromElement(element))} · {operationKindLabel(normalizeActionKind(element))} · {availabilityLabel(element.availability)}</small>
+                                    <CompoundStepsSummary steps={element.compoundSteps} />
+                                  </div>
+                                </div>
+                                <div className="asset-saved-action-controls">
+                                  <button className="asset-action-button edit" type="button" disabled={busy} onClick={() => startEditPageElement(element)}>
+                                    编辑
+                                  </button>
+                                  <button className="asset-action-button delete" type="button" disabled={busy || !element.id || !onDeletePageElement} onClick={() => void onDeletePageElement?.(element)}>
+                                    删除
+                                  </button>
+                                </div>
+                              </div>
+                              {editingPageElement === element ? renderManualPageElementEditor() : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="empty">暂无可操作元素；点击下方按钮后会新增一个编辑态条目。</div>
+                      )}
+                    </section>
+                    <button className="asset-add-element-button" type="button" disabled={busy} onClick={startAddPageElement}>
+                      + 添加可操作元素
+                    </button>
+                    {showPageElementForm && !editingPageElement ? renderManualPageElementEditor() : null}
+                  </div>
+                ) : null}
+
+                {activeDetailTab === "transitions" ? (
+                  <div className="asset-detail-section asset-transition-connection-card">
+                    <section className="asset-saved-actions">
+                      <div className="asset-action-summary">
+                        <strong>通过页面任务连接</strong>
+                        <span>{tasks.filter((task) => task.status !== "deprecated").length} 个任务</span>
+                      </div>
+                      {tasks.filter((task) => task.status !== "deprecated").length ? (
+                        <PageTaskTransitionEditor
+                          busy={busy}
+                          pageNodeId={page.nodeId}
+                          tasks={tasks.filter((task) => task.status !== "deprecated")}
+                          targetAssets={savedAssets}
+                          canConfirm={Boolean(onConfirmPageTaskTransition)}
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            const form = new FormData(event.currentTarget);
+                            const taskId = readFormString(form.get("taskId"));
+                            const task = tasks.find((item) => item.id === taskId);
+                            const targetNodeId = readFormString(form.get("targetNodeId"));
+                            if (!taskId || !targetNodeId) {
+                              return;
+                            }
+                            void onConfirmPageTaskTransition?.({
+                              sourceNodeId: page.nodeId,
+                              targetNodeId,
+                              taskId,
+                              taskName: task?.name
+                            });
+                          }}
+                        />
+                      ) : (
+                        <div className="empty">登录、表单提交这类多步跳转，先在“页面任务”里编排任务，再在这里连接到目标页面。</div>
+                      )}
+                    </section>
+                    <section className="asset-saved-actions">
+                      <div className="asset-action-summary">
+                        <strong>连接边编辑</strong>
+                        <span>{savedManualElements.length} 个可连接元素</span>
+                      </div>
+                      {savedManualElements.length ? (
+                        <div className="asset-element-list">
+                          {savedManualElements.map((element, index) => (
+                            <div className="asset-saved-action-item asset-connection-item" key={`connect-${element.id ?? element.locator}-${index}`}>
+                              <div className="asset-element-row asset-saved-action-row">
+                                <div className="asset-element-summary">
+                                  <OperationRegionPreview element={element} screenshotUrl={page.screenshotUrl} />
+                                  <div className="asset-operation-preview-info">
+                                    <strong>{element.label}</strong>
+                                    <span>{element.locator}</span>
+                                    <small>{abilityTypeLabel(element.abilityType ?? abilityTypeFromElement(element))} · {operationKindLabel(normalizeActionKind(element))} · {semanticAreaLabel(element.semanticArea ?? semanticAreaForLocator(element.locator) ?? "unknown")}</small>
+                                    <CompoundStepsSummary steps={element.compoundSteps} />
+                                  </div>
+                                </div>
+                              </div>
+                              <OperationEditor
+                                element={element}
+                                pageNodeId={page.nodeId}
+                                targetAssets={savedAssets}
+                                canConfirm={Boolean(onConfirmOperationTransition)}
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  const form = new FormData(event.currentTarget);
+                                  const draft = operationTransitionDraftFromForm(form, {
+                                    sourceNodeId: page.nodeId,
+                                    locator: element.locator,
+                                    elementLabel: element.label,
+                                    targetText: element.targetText,
+                                    abilityType: element.abilityType ?? abilityTypeFromElement(element),
+                                    semanticArea: element.semanticArea,
+                                    coordinateSpace: element.coordinateSpace,
+                                    scrollProfile: element.scrollProfile
+                                  });
+                                  void onConfirmOperationTransition?.(draft);
+                                }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="empty">先在“页面能力”里录入当前页可操作元素，再到这里把元素连接到目标页面。</div>
+                      )}
+                    </section>
+                    <section className="asset-saved-actions">
+                      <div className="asset-action-summary">
+                        <strong>已录入连接边</strong>
+                        <span>{transitions.length} 条</span>
+                      </div>
+                      {transitions.length ? (
+                        <div className="asset-transition-list">
+                          {transitions.map((transition) => (
+                            <div className="asset-transition-row" key={transition.id}>
+                              <div>
+                                <strong>{transition.name}</strong>
+                                <span>{transition.actionSummary || transition.actionLocator || "未记录动作说明"}</span>
+                                <small>{transition.targetName ? `目标：${transition.targetName}` : "目标待确认"}</small>
+                              </div>
+                              <div className="asset-transition-meta">
+                                <code>{transitionStatusLabel(transition.status)}</code>
+                                {typeof transition.reliabilityScore === "number" ? <code>可靠度 {Math.round(transition.reliabilityScore * 100)}%</code> : null}
+                                {onDeleteOperationTransition ? (
+                                  <button className="asset-action-button delete" type="button" disabled={busy} onClick={() => void onDeleteOperationTransition(transition)}>
+                                    删除
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="empty">暂无连接边；从上方选择可操作元素并确认目标页面后会进入路径规划。</div>
+                      )}
+                    </section>
+                  </div>
+                ) : null}
+
+                {activeDetailTab === "tasks" ? (
+                  <div className="asset-detail-section asset-page-task-card">
+                    <section className="asset-saved-actions">
+                      <div className="asset-action-summary">
+                        <strong>页面任务</strong>
+                        <span>{tasks.filter((task) => task.status !== "deprecated").length} 个任务</span>
+                      </div>
+                      <p className="asset-page-task-hint">一期可执行：输入文本、点击、选择器、开关、进入子页面、提交、等待文字。</p>
+                      {tasks.filter((task) => task.status !== "deprecated").length ? (
+                        <div className="asset-element-list">
+                          {tasks.filter((task) => task.status !== "deprecated").map((task) => (
+                            <div className="asset-saved-action-item" key={task.id}>
+                              <div className="asset-element-row asset-saved-action-row asset-saved-action-main">
+                                <div className="asset-operation-preview-info">
+                                  <strong>{task.name}</strong>
+                                  <span>{task.steps.length} 个步骤</span>
+                                  <small>{task.steps.map((step) => pageTaskStepSummary(step, savedManualElements)).join(" → ")}</small>
+                                </div>
+                                <div className="asset-saved-action-controls">
+                                  <button className="asset-action-button edit" type="button" disabled={busy} onClick={() => startEditPageTask(task)}>
+                                    编辑
+                                  </button>
+                                  <button className="asset-action-button delete" type="button" disabled={busy || !onDeletePageTask} onClick={() => void onDeletePageTask?.(task)}>
+                                    删除
+                                  </button>
+                                </div>
+                              </div>
+                              {editingPageTask === task ? (
+                                <PageTaskEditor
+                                  busy={busy}
+                                  elements={savedManualElements}
+                                  task={editingPageTask}
+                                  onCancel={cancelPageTaskEdit}
+                                  onSubmit={submitPageTask}
+                                />
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="empty">暂无页面任务；先在“页面能力”录入输入框、按钮等元素，再把它们编排成页内任务。</div>
+                      )}
+                    </section>
+                    <button className="asset-add-element-button" type="button" disabled={busy || !savedManualElements.length} onClick={startAddPageTask}>
+                      + 添加页面任务
+                    </button>
+                    {showPageTaskForm && !editingPageTask ? (
+                      <PageTaskEditor
+                        busy={busy}
+                        elements={savedManualElements}
+                        task={editingPageTask}
+                        onCancel={cancelPageTaskEdit}
+                        onSubmit={submitPageTask}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {activeDetailTab === "explorer" ? (
+                  <div className="asset-detail-section asset-auto-explorer-card">
+                    <section className="asset-saved-actions">
+                      <div className="asset-action-summary">
+                        <strong>自动探索</strong>
+                        <span>{autoExploreReport?.status === "ready" ? `${autoExploreReport.candidates.filter((candidate) => candidate.status !== "skipped").length} 个安全候选` : "未生成"}</span>
+                      </div>
+                      <div className="asset-auto-explorer-controls">
+                        <label>
+                          深度
+                          <select value={autoExploreDepth} onChange={(event) => setAutoExploreDepth(Number(event.target.value))}>
+                            <option value={1}>V1 当前页一跳</option>
+                            <option value={2}>V2 两层探索</option>
+                          </select>
+                        </label>
+                        <label>
+                          候选上限
+                          <input
+                            min={1}
+                            max={20}
+                            type="number"
+                            value={autoExploreMaxCandidates}
+                            onChange={(event) => setAutoExploreMaxCandidates(Math.min(20, Math.max(1, Number(event.target.value) || 1)))}
+                          />
+                        </label>
+                        <button className="asset-action-button edit" type="button" disabled={busy || !onPreviewAutoExplore} onClick={() => void onPreviewAutoExplore?.(autoExploreOptions)}>
+                          预览候选
+                        </button>
+                        <button className="asset-action-button" type="button" disabled={busy || !onRunAutoExplore} onClick={() => void onRunAutoExplore?.(autoExploreOptions)}>
+                          开始探索
+                        </button>
+                      </div>
+                    </section>
+                    <AutoExploreReportView report={autoExploreReport} />
+                  </div>
+                ) : null}
+
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="asset-floating-actions">
+          <div>
+            <strong>{selectedSerial ? selectedDeviceName || selectedSerial : "未选择设备"}</strong>
+            <span>{hasSavedAsset ? "库中已有对应页面资产" : "库中暂无对应页面资产"}</span>
+          </div>
+          <button className="icon-button primary" type="button" disabled={busy || !selectedSerial || !canSave} onClick={() => void onSaveCurrentPageAsset(saveMode)}>
+            {saveMode === "update" ? <DatabaseZap size={16} /> : <Save size={16} />}
+            {saveMode === "update" ? "更新页面" : "保存页面"}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function pointerToPercent(event: PointerEvent<HTMLDivElement>, imageLayer: HTMLElement | null): { x: number; y: number } {
+  const rect = (imageLayer ?? event.currentTarget).getBoundingClientRect();
+  return clientPointToImagePercent(event, rect);
+}
+
+function AutoExploreReportView({ report }: { report?: AssetRecordingAutoExploreReport }) {
+  if (!report) {
+    return <div className="empty">还没有自动探索报告。</div>;
+  }
+  if (report.status === "blocked") {
+    return <div className="empty">{report.message || "当前页面暂不能自动探索。"}</div>;
+  }
+  return (
+    <div className="asset-auto-explorer-report">
+      <section className="asset-saved-actions">
+        <div className="asset-action-summary">
+          <strong>候选操作</strong>
+          <span>{report.version.toUpperCase()}</span>
+        </div>
+        {report.candidates.length ? (
+          <div className="asset-auto-explorer-list">
+            {report.candidates.map((candidate) => (
+              <div className={`asset-auto-explorer-row ${candidate.status === "skipped" ? "skipped" : "ready"}`} key={candidate.id}>
+                <div>
+                  <strong>{candidate.label}</strong>
+                  <span>{operationKindLabel(candidate.actionKind)} · {semanticAreaLabel(candidate.semanticArea ?? "unknown")} · {candidateSourceLabel(candidate.source)}</span>
+                  <small>{candidate.locator}</small>
+                </div>
+                <code>{candidate.status === "skipped" ? "已跳过" : candidate.targetNodeName ? `目标 ${candidate.targetNodeName}` : "待观察"}</code>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">当前页暂无可探索候选。</div>
+        )}
+      </section>
+      <section className="asset-saved-actions">
+        <div className="asset-action-summary">
+          <strong>探索计划</strong>
+          <span>{report.plan.steps.length} 步</span>
+        </div>
+        {report.plan.steps.length ? (
+          <div className="asset-auto-explorer-list">
+            {report.plan.steps.map((step) => (
+              <div className="asset-auto-explorer-row" key={step.id}>
+                <div>
+                  <strong>{step.sourceNodeName} / {step.candidateLabel}</strong>
+                  <span>深度 {step.depth}{step.targetNodeName ? ` · 预计到 ${step.targetNodeName}` : ""}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">暂无可执行计划。</div>
+        )}
+      </section>
+      {report.results.length ? (
+        <section className="asset-saved-actions">
+          <div className="asset-action-summary">
+            <strong>执行结果</strong>
+            <span>{report.results.length} 条</span>
+          </div>
+          <div className="asset-auto-explorer-list">
+            {report.results.map((result, index) => (
+              <div className={`asset-auto-explorer-row ${result.status}`} key={`${result.candidateId ?? index}-${result.resultType}`}>
+                <div>
+                  <strong>{result.candidateLabel ?? "候选动作"}</strong>
+                  <span>{exploreResultTypeLabel(result.resultType)}{result.targetNodeName ? ` · ${result.targetNodeName}` : ""}</span>
+                  {result.message ? <small>{result.message}</small> : null}
+                </div>
+                <code>{exploreResultStatusLabel(result.status)}</code>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+export function clientPointToImagePercent(
+  point: { clientX: number; clientY: number },
+  imageRect: { left: number; top: number; width: number; height: number }
+): { x: number; y: number } {
+  return {
+    x: roundPercent(clamp(((point.clientX - imageRect.left) / Math.max(imageRect.width, 1)) * 100)),
+    y: roundPercent(clamp(((point.clientY - imageRect.top) / Math.max(imageRect.height, 1)) * 100))
+  };
+}
+
+const regionResizeHandles: RegionResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+
+function screenshotImageLayerStyle(imageSize?: { width: number; height: number }, maxHeight = 520): { width?: string; aspectRatio?: string } {
+  if (!imageSize?.width || !imageSize.height) {
+    return {};
+  }
+  return {
+    width: `min(100%, ${(maxHeight * imageSize.width) / imageSize.height}px)`,
+    aspectRatio: `${imageSize.width} / ${imageSize.height}`
+  };
+}
+
+function roundPercent(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function normalizeRegion(region: AssetRecordingScreenshotRegion): AssetRecordingScreenshotRegion {
+  const x = region.width < 0 ? region.x + region.width : region.x;
+  const y = region.height < 0 ? region.y + region.height : region.y;
+  const normalized = {
+    ...region,
+    x: clamp(x),
+    y: clamp(y),
+    width: clamp(Math.abs(region.width), 0, 100 - clamp(x)),
+    height: clamp(Math.abs(region.height), 0, 100 - clamp(y))
+  };
+  return {
+    ...normalized,
+    semanticArea: semanticAreaForRegion(normalized),
+    coordinateSpace: normalized.coordinateSpace ?? "screen"
+  };
+}
+
+export function applySemanticAreaOverrideToRegion(region: AssetRecordingScreenshotRegion, semanticArea: VisualSemanticArea): AssetRecordingScreenshotRegion {
+  return {
+    ...region,
+    semanticArea,
+    coordinateSpace: region.coordinateSpace ?? "screen"
+  };
+}
+
+export function updateEditableScreenshotRegion(operation: EditableRegionOperation, point: PercentPoint): AssetRecordingScreenshotRegion {
+  if (operation.type === "draw") {
+    return normalizeRegion({
+      ...operation.region,
+      x: operation.start.x,
+      y: operation.start.y,
+      width: point.x - operation.start.x,
+      height: point.y - operation.start.y
+    });
+  }
+  if (operation.type === "move") {
+    const deltaX = point.x - operation.start.x;
+    const deltaY = point.y - operation.start.y;
+    const moved = {
+      ...operation.region,
+      x: roundPercent(clamp(operation.region.x + deltaX, 0, 100 - operation.region.width)),
+      y: roundPercent(clamp(operation.region.y + deltaY, 0, 100 - operation.region.height))
+    };
+    return {
+      ...moved,
+      semanticArea: semanticAreaForRegion(moved),
+      coordinateSpace: moved.coordinateSpace ?? "screen"
+    };
+  }
+  return resizeEditableRegion(operation.region, operation.handle, point);
+}
+
+function resizeEditableRegion(region: AssetRecordingScreenshotRegion, handle: RegionResizeHandle, point: PercentPoint): AssetRecordingScreenshotRegion {
+  const minSize = 1;
+  let left = region.x;
+  let top = region.y;
+  let right = region.x + region.width;
+  let bottom = region.y + region.height;
+  if (handle.includes("w")) {
+    left = clamp(point.x, 0, right - minSize);
+  }
+  if (handle.includes("e")) {
+    right = clamp(point.x, left + minSize, 100);
+  }
+  if (handle.includes("n")) {
+    top = clamp(point.y, 0, bottom - minSize);
+  }
+  if (handle.includes("s")) {
+    bottom = clamp(point.y, top + minSize, 100);
+  }
+  const resized = {
+    ...region,
+    x: roundPercent(left),
+    y: roundPercent(top),
+    width: roundPercent(right - left),
+    height: roundPercent(bottom - top)
+  };
+  return {
+    ...resized,
+    semanticArea: semanticAreaForRegion(resized),
+    coordinateSpace: resized.coordinateSpace ?? "screen"
+  };
+}
+
+function OperationRegionPreview({ element, screenshotUrl }: { element: AssetRecordingPageElement; screenshotUrl?: string }) {
+  if (screenshotUrl && element.region) {
+    const frame = operationPreviewFrame(element.region, element.previewCrop, element.viewport);
+    return (
+      <div className="asset-operation-preview" aria-label={`${element.label} 当前操作区域`}>
+        <div className="asset-operation-preview-stage" style={{ aspectRatio: frame.aspectRatio }}>
+          <img className="asset-operation-preview-image" draggable={false} src={screenshotUrl} alt={`${element.label} 当前操作区域`} style={frame.imageStyle} />
+          <span className="asset-operation-preview-region" style={frame.regionStyle} />
+        </div>
+        <b>当前操作区域</b>
+      </div>
+    );
+  }
+  return <small className="asset-operation-preview-missing">未采集到控件位置</small>;
+}
+
+export function operationPreviewFrame(
+  region: NonNullable<AssetRecordingPageElement["region"]>,
+  crop?: AssetRecordingPageElement["previewCrop"],
+  viewport?: AssetRecordingPageElement["viewport"]
+) {
+  const previewCrop = crop ?? autoPreviewCrop(region, viewport);
+  const cropX = clamp(previewCrop.x);
+  const cropY = clamp(previewCrop.y);
+  const cropWidth = clamp(previewCrop.width, 1, 100 - cropX);
+  const cropHeight = clamp(previewCrop.height, 1, 100 - cropY);
+  const frameWidth = viewport?.width ? (cropWidth / 100) * viewport.width : cropWidth;
+  const frameHeight = viewport?.height ? (cropHeight / 100) * viewport.height : cropHeight;
+  return {
+    aspectRatio: `${formatStyleNumber(frameWidth)} / ${formatStyleNumber(frameHeight)}`,
+    imageStyle: {
+      left: `${formatStyleNumber((-cropX / cropWidth) * 100)}%`,
+      top: `${formatStyleNumber((-cropY / cropHeight) * 100)}%`,
+      width: `${formatStyleNumber((100 / cropWidth) * 100)}%`,
+      height: `${formatStyleNumber((100 / cropHeight) * 100)}%`
+    },
+    regionStyle: {
+      left: `${formatStyleNumber(((region.x - cropX) / cropWidth) * 100)}%`,
+      top: `${formatStyleNumber(((region.y - cropY) / cropHeight) * 100)}%`,
+      width: `${formatStyleNumber((region.width / cropWidth) * 100)}%`,
+      height: `${formatStyleNumber((region.height / cropHeight) * 100)}%`
+    }
+  };
+}
+
+function autoPreviewCrop(
+  region: NonNullable<AssetRecordingPageElement["region"]>,
+  viewport?: AssetRecordingPageElement["viewport"]
+): NonNullable<AssetRecordingPageElement["previewCrop"]> {
+  const minWidth = 38;
+  const minHeight = 17;
+  const width = Math.min(100, Math.max(minWidth, region.width * 3));
+  const height = Math.min(100, Math.max(minHeight, region.height * 3));
+  const x = clamp(region.x + region.width / 2 - width / 2, 0, 100 - width);
+  const y = clamp(region.y + region.height / 2 - height / 2, 0, 100 - height);
+  if (!viewport?.width || !viewport.height) {
+    return { x, y, width, height };
+  }
+  return { x, y, width, height };
+}
+
+function formatStyleNumber(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function CompoundStepsSummary({ steps }: { steps?: AssetRecordingCompoundStepDraft[] }) {
+  if (!steps?.length) {
+    return null;
+  }
+  return (
+    <small>
+      复合步骤：{steps.map((step) => step.label || `${step.type}:${step.text}`).join(" → ")}
+    </small>
+  );
+}
+
+function OperationEditor({
+  element,
+  pageNodeId,
+  targetAssets,
+  canConfirm,
+  onSubmit
+}: {
+  element: AssetRecordingPageElement;
+  pageNodeId?: string;
+  targetAssets: AssetRecordingSavedAsset[];
+  canConfirm: boolean;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const [outcomeType, setOutcomeType] = useState<AssetRecordingOperationTransitionDraft["outcomeType"]>("navigate");
+  const [targetQuery, setTargetQuery] = useState("");
+  const fields = operationOutcomeFields(outcomeType);
+  const filteredTargetAssets = targetAssets.filter((asset) => matchesTargetAsset(asset, targetQuery)).slice(0, 20);
+  const defaultTargetNodeId = "";
+
+  return (
+    <form className="asset-element-actions asset-operation-editor" onSubmit={onSubmit}>
+      <label>
+        动作方式
+        <select name="actionKind" defaultValue={normalizeActionKind(element)}>
+          <option value="tap">点击</option>
+          <option value="scroll">滑动</option>
+          <option value="long_press">长按</option>
+          <option value="input">输入</option>
+        </select>
+      </label>
+      <label>
+        出现条件
+        <select name="availability" defaultValue={element.availability ?? "visible"}>
+          <option value="visible">当前可见</option>
+          <option value="after_scroll">滚动后出现</option>
+          <option value="conditional">条件出现</option>
+        </select>
+      </label>
+      <label>
+        结果类型
+        <select name="outcomeType" value={outcomeType} onChange={(event) => setOutcomeType(readOutcomeType(event.target.value))}>
+          <option value="navigate">跳转页面</option>
+          <option value="compound_navigation">复合跳转</option>
+          <option value="show_inline_state">出现页面内状态</option>
+          <option value="local_state_change">页面局部变化</option>
+          <option value="no_visible_change">无明显变化</option>
+        </select>
+      </label>
+      {normalizeActionKind(element) === "scroll" ? <ScrollContainerEditor profile={element.scrollProfile} /> : null}
+      {outcomeType === "compound_navigation" ? <CompoundNavigationEditor /> : null}
+      {fields.requiresTargetPage ? (
+        <label>
+          {fields.targetLabel}
+          <input value={targetQuery} onChange={(event) => setTargetQuery(event.target.value)} placeholder={fields.targetPlaceholder} />
+          <select className="asset-operation-target-options" name="targetNodeId" defaultValue={defaultTargetNodeId} key={targetQuery || "all-targets"}>
+            <option value="">选择已保存页面</option>
+            {filteredTargetAssets.map((asset) => (
+              <option value={asset.id} key={asset.id}>{asset.name}</option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <label>
+          {fields.targetLabel}
+          <input name="targetNodeId" type="hidden" value="" />
+          <input name="targetLabel" placeholder={fields.targetPlaceholder} />
+        </label>
+      )}
+      {fields.requiresTargetPage ? (
+        <label className="asset-operation-target">
+          {fields.resultLabel}
+          <input name="targetLabel" placeholder={fields.resultPlaceholder} />
+        </label>
+      ) : null}
+      <label className="asset-operation-target">
+        执行识别文字
+        <input name="targetText" placeholder="可选，例如：学习方案 / 课堂" defaultValue={element.targetText ?? ""} />
+      </label>
+      <button type="submit" disabled={!pageNodeId || (fields.requiresTargetPage && !targetAssets.length) || !canConfirm}>确认连接</button>
+    </form>
+  );
+}
+
+function PageTaskTransitionEditor({
+  busy,
+  pageNodeId,
+  tasks,
+  targetAssets,
+  canConfirm,
+  onSubmit
+}: {
+  busy: boolean;
+  pageNodeId?: string;
+  tasks: AssetRecordingPageTask[];
+  targetAssets: AssetRecordingSavedAsset[];
+  canConfirm: boolean;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const [targetQuery, setTargetQuery] = useState("");
+  const filteredTargetAssets = targetAssets.filter((asset) => matchesTargetAsset(asset, targetQuery)).slice(0, 20);
+  return (
+    <form className="asset-element-actions asset-operation-editor" onSubmit={onSubmit}>
+      <label>
+        页面任务
+        <select name="taskId" defaultValue={tasks[0]?.id ?? ""}>
+          {tasks.map((task) => (
+            <option value={task.id} key={task.id}>{task.name}</option>
+          ))}
+        </select>
+      </label>
+      <label>
+        目标页面
+        <input value={targetQuery} onChange={(event) => setTargetQuery(event.target.value)} placeholder="搜索已保存页面" />
+        <select className="asset-operation-target-options" name="targetNodeId" defaultValue="" key={targetQuery || "all-task-targets"}>
+          <option value="">选择已保存页面</option>
+          {filteredTargetAssets.map((asset) => (
+            <option value={asset.id} key={asset.id}>{asset.name}</option>
+          ))}
+        </select>
+      </label>
+      <button type="submit" disabled={busy || !pageNodeId || !tasks.length || !targetAssets.length || !canConfirm}>确认任务连接</button>
+    </form>
+  );
+}
+
+function ConditionClickEditor() {
+  return (
+    <fieldset className="asset-scroll-editor">
+      <legend>执行条件</legend>
+      <label className="asset-operation-target">
+        条件说明
+        <input name="conditionLabel" placeholder="例如：右下角 add 按钮可见" />
+      </label>
+    </fieldset>
+  );
+}
+
+function CompoundNavigationEditor() {
+  return (
+    <fieldset className="asset-scroll-editor">
+      <legend>复合步骤</legend>
+      <label className="asset-operation-target">
+        等待出现
+        <input name="compoundWaitText" placeholder="例如：添加好友" />
+      </label>
+      <label className="asset-operation-target">
+        再点击文字
+        <input name="compoundTapText" placeholder="例如：添加好友" />
+      </label>
+      <label className="asset-operation-target">
+        等待超时 ms
+        <input name="compoundTimeoutMs" type="number" min="200" step="100" placeholder="3000" />
+      </label>
+    </fieldset>
+  );
+}
+
+function ScrollContainerEditor({ abilityType, profile }: { abilityType?: AssetRecordingAbilityType; profile?: AssetRecordingScrollProfile }) {
+  const isGridCandidate = abilityType === "grid_candidate";
+  return (
+    <fieldset className="asset-scroll-editor">
+      <legend>{isGridCandidate ? "网格候选入口" : "滚动容器"}</legend>
+      <label>
+        容器类型
+        <select name="containerKind" defaultValue={profile?.containerKind ?? (isGridCandidate ? "grid_list" : "list")}>
+          <option value="list">单列列表</option>
+          <option value="grid_list">两列网格列表</option>
+          <option value="tab_bar">横向 TabBar</option>
+          <option value="carousel">横向卡片 / 轮播</option>
+          <option value="scroll_area">普通滚动区域</option>
+        </select>
+      </label>
+      <label>
+        滚动方向
+        <select name="scrollDirection" defaultValue={profile?.direction ?? "vertical"}>
+          <option value="vertical">纵向</option>
+          <option value="horizontal">横向</option>
+        </select>
+      </label>
+      <label>
+        布局列数
+        <input name="layoutColumns" type="number" min="1" max="6" defaultValue={profile?.columns ?? (isGridCandidate ? 2 : 1)} />
+      </label>
+      {isGridCandidate ? (
+        <>
+          <label>
+            候选高度占容器百分比
+            <input name="candidateItemHeightPercent" type="number" min="1" max="100" step="0.1" defaultValue={profile?.candidateItemHeightPercent ?? ""} placeholder="例如：24.5" />
+          </label>
+          <label>
+            点击安全点 X%
+            <input name="clickSafeXPercent" type="number" min="0" max="100" step="0.1" defaultValue={profile?.clickSafePoint?.xPercent ?? 50} />
+          </label>
+          <label>
+            点击安全点 Y%
+            <input name="clickSafeYPercent" type="number" min="0" max="100" step="0.1" defaultValue={profile?.clickSafePoint?.yPercent ?? 28} />
+          </label>
+          <label>
+            滑动步长%
+            <input name="scrollStepPercent" type="number" min="10" max="100" step="1" defaultValue={profile?.scrollStepPercent ?? 65} />
+          </label>
+          <label>
+            失败策略
+            <select name="candidateFailureStrategy" defaultValue={profile?.failureStrategy ?? "try_next_candidate"}>
+              <option value="try_next_candidate">尝试下一个候选</option>
+              <option value="back_and_try_next_candidate">返回后尝试下一个候选</option>
+              <option value="none">不自动重试</option>
+            </select>
+          </label>
+        </>
+      ) : null}
+      <label>
+        目标匹配
+        <select name="targetKind" defaultValue={profile?.targetKind ?? "item_text"}>
+          <option value="item_text">item 文案</option>
+          <option value="ocr_text">OCR 文案</option>
+          <option value="semantic_label">语义名称</option>
+          <option value="nth_item">第 N 个 item</option>
+          <option value="image_region">图像区域</option>
+        </select>
+      </label>
+      <label className="asset-operation-target">
+        目标 item 文案 / OCR / 语义名
+        <input name="targetQuery" defaultValue={profile?.targetQuery ?? ""} placeholder={isGridCandidate ? "例如：{{className}} / 班级四十一号" : "例如：班级四十一号 / 我是学生 / 第 3 个"} />
+      </label>
+      <label>
+        找到后动作
+        <select name="afterFoundAction" defaultValue={profile?.afterFoundAction ?? (isGridCandidate ? "tap_item" : "tap_item")}>
+          <option value="tap_item">点击列表项</option>
+          <option value="tap_child">点击 item 内控件</option>
+          <option value="verify_visible">只验证出现</option>
+        </select>
+      </label>
+    </fieldset>
+  );
+}
+
+function PageTaskEditor({
+  busy,
+  elements,
+  task,
+  onCancel,
+  onSubmit
+}: {
+  busy: boolean;
+  elements: AssetRecordingPageElement[];
+  task?: AssetRecordingPageTask;
+  onCancel: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const sortedSteps = (task?.steps ?? []).slice().sort((left, right) => left.order - right.order);
+  const rowCount = Math.max(3, Math.min(8, Math.max(sortedSteps.length + 1, elements.length || 1)));
+  const rows = Array.from({ length: rowCount }, (_, index) => sortedSteps[index]);
+  return (
+    <form className="asset-element-actions asset-operation-editor asset-page-task-editor" onSubmit={onSubmit}>
+      {task?.id ? <input type="hidden" name="taskId" value={task.id} /> : null}
+      <label>
+        任务名称
+        <input name="taskName" defaultValue={task?.name ?? ""} placeholder="例如：创建课堂 / 发布公开课" />
+      </label>
+      <label>
+        任务状态
+        <select name="taskStatus" defaultValue={task?.status ?? "active"}>
+          <option value="active">可执行</option>
+          <option value="draft">草稿</option>
+        </select>
+      </label>
+      <div className="asset-page-task-step-list">
+        {rows.map((step, index) => (
+          <div className="asset-page-task-step" key={step?.id ?? `new-step-${index}`}>
+            {step?.id ? <input type="hidden" name={`step_${index}_id`} value={step.id} /> : null}
+            <strong>步骤 {index + 1}</strong>
+            <label>
+              页面元素
+              <select name={`step_${index}_elementId`} defaultValue={step?.elementId ?? ""}>
+                <option value="">不使用元素</option>
+                {elements.map((element) => (
+                  <option value={element.id ?? ""} key={element.id ?? element.locator} disabled={!element.id}>
+                    {element.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              字段类型
+              <select name={`step_${index}_fieldType`} defaultValue={step?.fieldType ?? "tap"}>
+                <option value="tap">点击</option>
+                <option value="text_input">输入文本</option>
+                <option value="picker_select">选择器</option>
+                <option value="toggle_set">开关/勾选</option>
+                <option value="subpage_edit">进入子页面编辑</option>
+                <option value="submit">提交</option>
+                <option value="wait">等待文字</option>
+              </select>
+            </label>
+            <label>
+              步骤名称
+              <input name={`step_${index}_label`} defaultValue={step?.label ?? ""} placeholder="例如：输入课堂标题" />
+            </label>
+            <label>
+              参数 key
+              <input name={`step_${index}_valueParamKey`} defaultValue={step?.valueParamKey ?? ""} placeholder="例如：lessonName" />
+            </label>
+            <label>
+              期望状态 key
+              <input name={`step_${index}_desiredStateParamKey`} defaultValue={step?.desiredStateParamKey ?? ""} placeholder="例如：recordClassroom" />
+            </label>
+            <label>
+              固定文字 / 等待文字
+              <input name={`step_${index}_text`} defaultValue={step?.text ?? ""} placeholder="例如：发布成功" />
+            </label>
+          </div>
+        ))}
+      </div>
+      <div className="asset-page-task-editor-actions">
+        <button type="submit" disabled={busy || !elements.length}>
+          保存页面任务
+        </button>
+        <button type="button" disabled={busy} onClick={onCancel}>
+          取消
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function operationOutcomeFields(outcomeType: AssetRecordingElementOutcomeType): OperationOutcomeFields {
+  if (outcomeType === "navigate") {
+    return {
+      requiresTargetPage: true,
+      targetLabel: "目标页面",
+      targetPlaceholder: "搜索已保存页面",
+      resultLabel: "目标页面补充说明",
+      resultPlaceholder: "例如：进入新建公开课页面"
+    };
+  }
+  if (outcomeType === "compound_navigation") {
+    return {
+      requiresTargetPage: true,
+      targetLabel: "最终目标页面",
+      targetPlaceholder: "搜索最终到达的已保存页面",
+      resultLabel: "复合步骤说明",
+      resultPlaceholder: "例如：先点右上角更多，再点添加好友进入添加好友页"
+    };
+  }
+  if (outcomeType === "show_inline_state") {
+    return {
+      requiresTargetPage: false,
+      targetLabel: "出现内容",
+      targetPlaceholder: "例如：出现添加好友、加入班级、扫一扫菜单",
+      resultLabel: "出现内容",
+      resultPlaceholder: "例如：出现添加好友、加入班级、扫一扫菜单"
+    };
+  }
+  if (outcomeType === "no_visible_change") {
+    return {
+      requiresTargetPage: false,
+      targetLabel: "执行结果",
+      targetPlaceholder: "例如：无明显变化，仅触发后台刷新",
+      resultLabel: "执行结果",
+      resultPlaceholder: "例如：无明显变化，仅触发后台刷新"
+    };
+  }
+  return {
+    requiresTargetPage: false,
+    targetLabel: "变化描述",
+    targetPlaceholder: "例如：出现添加好友/加入班级菜单",
+    resultLabel: "变化描述",
+    resultPlaceholder: "例如：右上角展开更多操作菜单"
+  };
+}
+
+function readElementOutcomeType(value: FormDataEntryValue | null): AssetRecordingElementOutcomeType | undefined {
+  if (value === "navigate" || value === "compound_navigation" || value === "show_inline_state" || value === "local_state_change" || value === "no_visible_change") {
+    return value;
+  }
+  return undefined;
+}
+
+function matchesTargetAsset(asset: AssetRecordingSavedAsset, query: string): boolean {
+  const keyword = query.trim().toLowerCase();
+  if (!keyword) {
+    return true;
+  }
+  return [asset.name, asset.key, asset.platformScope]
+    .filter(Boolean)
+    .some((value) => value!.toLowerCase().includes(keyword));
+}
+
+function clamp(value: number, min = 0, max = 100): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function detailTabClass(activeTab: AssetDetailTab, tab: AssetDetailTab): string {
+  return activeTab === tab ? "asset-detail-tab active" : "asset-detail-tab";
+}
+
+function evidence(kind: AssetEvidenceKind, value: string): AssetEvidenceItem {
+  return { kind, value };
+}
+
+function evidenceKey(item: AssetEvidenceItem): string {
+  return `${item.kind}:${item.value}`;
+}
+
+function evidenceField(item: AssetEvidenceItem): "confirmedMatchers" | "confirmedUiTexts" | "confirmedOcrTexts" {
+  if (item.kind === "页面文字") {
+    return "confirmedUiTexts";
+  }
+  if (item.kind === "OCR 文字") {
+    return "confirmedOcrTexts";
+  }
+  return "confirmedMatchers";
+}
+
+function isConfirmedEvidence(item: AssetEvidenceItem, matchers: string[], uiTexts: string[], ocrTexts: string[]): boolean {
+  if (item.kind === "页面文字") {
+    return uiTexts.includes(item.value);
+  }
+  if (item.kind === "OCR 文字") {
+    return ocrTexts.includes(item.value);
+  }
+  return matchers.includes(item.value);
+}
+
+function canEditEvidence(item: AssetEvidenceItem): boolean {
+  return item.kind === "OCR 文字" || item.kind === "页面文字";
+}
+
+export function applyEditedEvidenceValue({
+  item,
+  nextValue,
+  confirmedMatchers,
+  confirmedUiTexts,
+  confirmedOcrTexts
+}: ApplyEditedEvidenceValueInput): Partial<AssetRecordingCurrentPage> {
+  const trimmedValue = nextValue.trim();
+  const field = evidenceField(item);
+  const storedValue = encodeEditedEvidenceValue(item, trimmedValue);
+  const currentValues = field === "confirmedMatchers" ? confirmedMatchers : field === "confirmedUiTexts" ? confirmedUiTexts : confirmedOcrTexts;
+  const nextValues = replaceOrAddEvidenceValue(currentValues, item.value, storedValue);
+  return { [field]: nextValues };
+}
+
+function evidenceDisplayValue(item: AssetEvidenceItem): string {
+  if (item.kind !== "OCR 文字" && item.kind !== "页面文字") {
+    return item.value;
+  }
+  return parseRegionBoundEvidence(item.value).value;
+}
+
+function encodeEditedEvidenceValue(item: AssetEvidenceItem, nextValue: string): string {
+  if (item.kind !== "OCR 文字" && item.kind !== "页面文字") {
+    return nextValue;
+  }
+  const parsed = parseRegionBoundEvidence(item.value);
+  if (!parsed.region) {
+    return nextValue;
+  }
+  const prefix = parsed.prefix ?? (item.kind === "OCR 文字" ? "ocr_text" : "text");
+  return `${prefix}:${nextValue}@region(${parsed.region})`;
+}
+
+function parseRegionBoundEvidence(value: string): RegionBoundEvidence {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(?:(text|ocr_text|ocr):)?(.+?)@region\(([^)]+)\)$/);
+  if (!match) {
+    return { value: trimmed };
+  }
+  return {
+    value: match[2].trim(),
+    region: match[3].trim(),
+    prefix: match[1]
+  };
+}
+
+function replaceOrAddEvidenceValue(items: string[], oldValue: string, nextValue: string): string[] {
+  if (oldValue === nextValue) {
+    return items;
+  }
+  const existingIndex = items.indexOf(oldValue);
+  const withoutNextValue = items.filter((item) => item !== nextValue);
+  if (existingIndex < 0) {
+    return addUnique(items, nextValue);
+  }
+  return withoutNextValue.map((item) => (item === oldValue ? nextValue : item));
+}
+
+function groupCandidateEvidence(items: AssetEvidenceItem[]): AssetEvidenceGroup[] {
+  const generalItems = items.filter((item) => item.kind === "OCR 文字");
+  const platformItems = items.filter((item) => item.kind === "页面文字" || item.kind === "matcher");
+  return [
+    { title: "通用候选", items: generalItems },
+    { title: "平台候选", items: platformItems }
+  ].filter((group) => group.items.length > 0);
+}
+
+function groupOperationCandidates(items: AssetRecordingPageElement[]): AssetOperationGroup[] {
+  const conditionalItems = items.filter((item) => item.availability === "after_scroll" || item.availability === "conditional");
+  const tapItems = items.filter((item) => !conditionalItems.includes(item) && normalizeActionKind(item) !== "scroll");
+  const scrollItems = items.filter((item) => !conditionalItems.includes(item) && normalizeActionKind(item) === "scroll");
+  return [
+    { title: "点击候选", items: tapItems },
+    { title: "滑动候选", items: scrollItems },
+    { title: "条件候选", items: conditionalItems }
+  ].filter((group) => group.items.length > 0);
+}
+
+function findTransitionForElement(transitions: AssetRecordingPageTransition[], element: AssetRecordingPageElement): AssetRecordingPageTransition | undefined {
+  return transitions.find((transition) => transition.actionLocator === element.locator && (!transition.actionKind || transition.actionKind === normalizeActionKind(element)));
+}
+
+function normalizeActionKind(item: AssetRecordingPageElement): NonNullable<AssetRecordingPageElement["actionKind"]> {
+  if (item.actionKind) {
+    return item.actionKind;
+  }
+  if (/scroll|swipe|滑动/i.test(item.action)) {
+    return "scroll";
+  }
+  if (/long/i.test(item.action)) {
+    return "long_press";
+  }
+  return "tap";
+}
+
+function readFormString(value: FormDataEntryValue | null): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readPositiveInteger(value: FormDataEntryValue | null): number | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
+export function pageTaskDraftFromForm(
+  input: FormData | Record<string, FormDataEntryValue | string | undefined>,
+  context: {
+    sourceNodeId?: string;
+    task?: AssetRecordingPageTask;
+    elements: AssetRecordingPageElement[];
+  }
+): AssetRecordingPageTaskDraft {
+  const get = (name: string) => (input instanceof FormData ? input.get(name) : input[name] ?? null);
+  const steps: AssetRecordingPageTaskStep[] = [];
+  const knownElementIds = new Set(context.elements.map((element) => element.id).filter((id): id is string => Boolean(id)));
+  for (let index = 0; index < 12; index += 1) {
+    const fieldType = readPageTaskFieldType(get(`step_${index}_fieldType`));
+    const elementId = readFormString(get(`step_${index}_elementId`));
+    const valueParamKey = readFormString(get(`step_${index}_valueParamKey`));
+    const desiredStateParamKey = readFormString(get(`step_${index}_desiredStateParamKey`));
+    const text = readFormString(get(`step_${index}_text`));
+    const label = readFormString(get(`step_${index}_label`));
+    if (fieldType !== "wait" && (!elementId || !knownElementIds.has(elementId))) {
+      continue;
+    }
+    if (fieldType === "wait" && !text && !valueParamKey) {
+      continue;
+    }
+    steps.push({
+      id: readFormString(get(`step_${index}_id`)),
+      order: steps.length + 1,
+      elementId,
+      fieldType,
+      label,
+      valueParamKey,
+      desiredStateParamKey,
+      text
+    });
+  }
+  return {
+    sourceNodeId: context.sourceNodeId,
+    taskId: readFormString(get("taskId")) ?? context.task?.id,
+    name: readFormString(get("taskName")) ?? context.task?.name ?? "页面任务",
+    status: readPageTaskStatus(get("taskStatus")),
+    steps
+  };
+}
+
+export function operationTransitionDraftFromForm(
+  input: FormData | Record<string, FormDataEntryValue | string | undefined>,
+  context: {
+    sourceNodeId?: string;
+    locator: string;
+    elementLabel: string;
+    targetText?: string;
+    abilityType?: AssetRecordingAbilityType;
+    semanticArea?: VisualSemanticArea;
+    coordinateSpace?: "screen" | "app_viewport" | "region";
+    scrollProfile?: AssetRecordingScrollProfile;
+  }
+): AssetRecordingOperationTransitionDraft {
+  const get = (name: string) => (input instanceof FormData ? input.get(name) : input[name] ?? null);
+  const actionKind = readActionKind(get("actionKind"));
+  const outcomeType = readElementOutcomeType(get("outcomeType")) ?? "navigate";
+  const abilityType = readAbilityTypeOptional(get("abilityType")) ?? context.abilityType;
+  const semanticArea = readVisualSemanticArea(get("semanticArea")) ?? context.semanticArea ?? semanticAreaForLocator(context.locator);
+  const scrollProfile = actionKind === "scroll" || abilityType === "grid_candidate" ? readScrollProfile(input, abilityType) : context.scrollProfile;
+  return {
+    sourceNodeId: context.sourceNodeId,
+    targetNodeId: outcomeType === "navigate" || outcomeType === "compound_navigation" ? readFormString(get("targetNodeId")) : undefined,
+    ...(abilityType && abilityType !== "fixed_tap" ? { abilityType } : {}),
+    actionKind,
+    availability: readAvailability(get("availability")),
+    outcomeType,
+    locator: context.locator,
+    semanticArea,
+    coordinateSpace: context.coordinateSpace ?? (context.locator.startsWith("image-region:") ? "screen" : undefined),
+    elementLabel: context.elementLabel,
+    targetText: readFormString(get("targetText")) ?? context.targetText,
+    targetLabel: readFormString(get("targetLabel")),
+    ...(outcomeType === "compound_navigation" ? { compoundSteps: readCompoundSteps(input) } : {}),
+    ...(scrollProfile ? { scrollProfile } : {})
+  };
+}
+
+export function manualOperationDraftFromForm(
+  input: FormData | Record<string, FormDataEntryValue | string | undefined>,
+  context: { sourceNodeId?: string; region: Pick<AssetRecordingScreenshotRegion, "x" | "y" | "width" | "height" | "semanticArea"> }
+): AssetRecordingPageElementDraft {
+  const get = (name: string) => (input instanceof FormData ? input.get(name) : input[name] ?? null);
+  const abilityType = readAbilityType(get("abilityType"));
+  const actionKind = readActionKind(get("actionKind"));
+  const elementLabel = readFormString(get("elementLabel")) ?? manualActionLabel(actionKind);
+  return {
+    elementId: readFormString(get("elementId")),
+    sourceNodeId: context.sourceNodeId,
+    ...(abilityType === "fixed_tap" ? {} : { abilityType }),
+    actionKind,
+    availability: readAvailability(get("availability")),
+    locator: imageRegionLocator(context.region),
+    semanticArea: readVisualSemanticArea(get("semanticArea")) ?? context.region.semanticArea ?? semanticAreaForRegion(context.region),
+    coordinateSpace: "screen",
+    elementLabel,
+    targetText: readFormString(get("targetText")),
+    outcomeType: readElementOutcomeType(get("outcomeType")),
+    outcomeLabel: readFormString(get("outcomeLabel")),
+    targetNodeId: readFormString(get("targetNodeId")),
+    targetLabel: readFormString(get("targetLabel")),
+    ...(readElementOutcomeType(get("outcomeType")) === "compound_navigation" ? { compoundSteps: readCompoundSteps(input) } : {}),
+    ...(actionKind === "scroll" || abilityType === "grid_candidate" ? { scrollProfile: readScrollProfile(input, abilityType) } : {})
+  };
+}
+
+function readCompoundSteps(input: FormData | Record<string, FormDataEntryValue | string | undefined>): AssetRecordingCompoundStepDraft[] {
+  const get = (name: string) => (input instanceof FormData ? input.get(name) : input[name] ?? null);
+  const waitText = readFormString(get("compoundWaitText"));
+  const tapText = readFormString(get("compoundTapText"));
+  const timeoutMs = readPositiveInteger(get("compoundTimeoutMs"));
+  const steps: AssetRecordingCompoundStepDraft[] = [];
+  if (waitText) {
+    steps.push({
+      type: "wait_until_state",
+      text: waitText,
+      label: `等待 ${waitText} 出现`,
+      ...(timeoutMs ? { timeoutMs } : {})
+    });
+  }
+  if (tapText) {
+    steps.push({
+      type: "tap_on_text",
+      text: tapText,
+      label: `点击 ${tapText}`,
+      ...(timeoutMs ? { timeoutMs } : {})
+    });
+  }
+  return steps;
+}
+
+function imageRegionLocator(region: Pick<AssetRecordingScreenshotRegion, "x" | "y" | "width" | "height">): string {
+  return `image-region:${formatRegionNumber(region.x)},${formatRegionNumber(region.y)},${formatRegionNumber(region.width)},${formatRegionNumber(region.height)}`;
+}
+
+function semanticAreaForLocator(locator: string): VisualSemanticArea | undefined {
+  if (!locator.startsWith("image-region:")) {
+    return undefined;
+  }
+  const parts = locator
+    .replace(/^image-region:\s*/, "")
+    .split(",")
+    .map((part) => Number(part.trim()));
+  if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) {
+    return undefined;
+  }
+  const [x, y, width, height] = parts;
+  return semanticAreaForRegion({ x, y, width, height });
+}
+
+function semanticAreaForRegion(region: Pick<AssetRecordingScreenshotRegion, "x" | "y" | "width" | "height">): VisualSemanticArea {
+  const centerY = region.y + region.height / 2;
+  if (centerY <= 14) {
+    return "top";
+  }
+  if (centerY >= 88) {
+    return "bottom";
+  }
+  return "content";
+}
+
+function semanticAreaLabel(area: VisualSemanticArea): string {
+  if (area === "top") {
+    return "顶部标题栏区域";
+  }
+  if (area === "bottom") {
+    return "底部固定区域";
+  }
+  if (area === "content") {
+    return "中间内容区域";
+  }
+  return "未知区域";
+}
+
+function formatRegionNumber(value: number): string {
+  return String(Math.round(value * 100) / 100);
+}
+
+function abilityTypeFromElement(element: AssetRecordingPageElement): AssetRecordingAbilityType {
+  if (element.abilityType === "scroll_candidate") {
+    return "scroll_candidate";
+  }
+  if (element.scrollProfile?.containerKind === "grid_list" || element.scrollProfile?.failureStrategy === "try_next_candidate" || element.scrollProfile?.failureStrategy === "back_and_try_next_candidate") {
+    return "grid_candidate";
+  }
+  if (element.availability === "conditional") {
+    return "conditional_tap";
+  }
+  return "fixed_tap";
+}
+
+function abilityTypeLabel(abilityType: AssetRecordingAbilityType): string {
+  if (abilityType === "grid_candidate") {
+    return "网格候选入口";
+  }
+  if (abilityType === "scroll_candidate") {
+    return "滚动查找目标";
+  }
+  if (abilityType === "conditional_tap") {
+    return "条件点击能力";
+  }
+  return "固定点击能力";
+}
+
+function manualActionLabel(actionKind: ManualActionKind): string {
+  if (actionKind === "scroll") {
+    return "滑动区域";
+  }
+  if (actionKind === "long_press") {
+    return "长按区域";
+  }
+  if (actionKind === "input") {
+    return "输入区域";
+  }
+  return "点击区域";
+}
+
+function operationKindLabel(actionKind: NonNullable<AssetRecordingPageElement["actionKind"]>): string {
+  if (actionKind === "scroll") {
+    return "滑动";
+  }
+  if (actionKind === "long_press") {
+    return "长按";
+  }
+  if (actionKind === "input") {
+    return "输入";
+  }
+  return "点击";
+}
+
+function candidateSourceLabel(source: AssetRecordingAutoExploreCandidate["source"]): string {
+  if (source === "manual_element") {
+    return "已录入能力";
+  }
+  if (source === "ocr_text") {
+    return "OCR 候选";
+  }
+  return "候选";
+}
+
+function exploreResultTypeLabel(type: AssetRecordingAutoExploreResult["resultType"]): string {
+  if (type === "existing_page") {
+    return "到达已保存页面";
+  }
+  if (type === "new_page_candidate") {
+    return "新页面候选";
+  }
+  if (type === "local_state_change") {
+    return "页面局部变化";
+  }
+  if (type === "no_change") {
+    return "无明显变化";
+  }
+  if (type === "dangerous_skipped") {
+    return "安全跳过";
+  }
+  return "失败";
+}
+
+function exploreResultStatusLabel(status: AssetRecordingAutoExploreResult["status"]): string {
+  if (status === "passed") {
+    return "已观察";
+  }
+  if (status === "skipped") {
+    return "已跳过";
+  }
+  return "失败";
+}
+
+function availabilityLabel(availability: AssetRecordingPageElement["availability"]): string {
+  if (availability === "after_scroll") {
+    return "滚动后出现";
+  }
+  if (availability === "conditional") {
+    return "条件出现";
+  }
+  return "当前可见";
+}
+
+function readScrollProfile(input: FormData | Record<string, FormDataEntryValue | string | undefined>, abilityType?: AssetRecordingAbilityType): AssetRecordingScrollProfile {
+  const get = (name: string) => (input instanceof FormData ? input.get(name) : input[name] ?? null);
+  const isGridCandidate = abilityType === "grid_candidate";
+  const isScrollCandidate = abilityType === "scroll_candidate";
+  return {
+    containerKind: readScrollContainerKind(get("containerKind"), isGridCandidate),
+    direction: readScrollDirection(get("scrollDirection")),
+    columns: readColumns(get("layoutColumns")) ?? (isGridCandidate ? 2 : undefined),
+    targetKind: readScrollTargetKind(get("targetKind"), isGridCandidate, isScrollCandidate),
+    targetQuery: readFormString(get("targetQuery")),
+    afterFoundAction: readAfterFoundAction(get("afterFoundAction")),
+    ...(isGridCandidate || isScrollCandidate ? readCandidateProfile(input, isGridCandidate) : {})
+  };
+}
+
+function readScrollContainerKind(value: FormDataEntryValue | null, preferGrid = false): AssetRecordingScrollProfile["containerKind"] {
+  return value === "grid_list" || value === "tab_bar" || value === "carousel" || value === "scroll_area" ? value : preferGrid ? "grid_list" : "list";
+}
+
+function readScrollDirection(value: FormDataEntryValue | null): AssetRecordingScrollProfile["direction"] {
+  return value === "horizontal" ? "horizontal" : "vertical";
+}
+
+function readScrollTargetKind(value: FormDataEntryValue | null, preferNth = false, preferImage = false): AssetRecordingScrollProfile["targetKind"] {
+  return value === "item_text" || value === "ocr_text" || value === "semantic_label" || value === "nth_item" || value === "image_region" ? value : preferNth ? "nth_item" : preferImage ? "image_region" : "item_text";
+}
+
+function readAfterFoundAction(value: FormDataEntryValue | null): AssetRecordingScrollProfile["afterFoundAction"] {
+  return value === "tap_child" || value === "verify_visible" ? value : "tap_item";
+}
+
+function readColumns(value: FormDataEntryValue | null): number | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue) || numberValue < 1) {
+    return undefined;
+  }
+  return Math.min(6, Math.floor(numberValue));
+}
+
+function readCandidateProfile(input: FormData | Record<string, FormDataEntryValue | string | undefined>, includeGridDefaults: boolean): Pick<AssetRecordingScrollProfile, "candidateItemHeightPercent" | "clickSafePoint" | "scrollStepPercent" | "failureStrategy"> {
+  const get = (name: string) => (input instanceof FormData ? input.get(name) : input[name] ?? null);
+  return {
+    ...(includeGridDefaults ? { candidateItemHeightPercent: readPercentNumber(get("candidateItemHeightPercent")) } : {}),
+    ...(includeGridDefaults ? {
+      clickSafePoint: {
+        xPercent: readPercentNumber(get("clickSafeXPercent")) ?? 50,
+        yPercent: readPercentNumber(get("clickSafeYPercent")) ?? 28
+      }
+    } : {}),
+    scrollStepPercent: readPercentNumber(get("scrollStepPercent")) ?? 65,
+    failureStrategy: readCandidateFailureStrategy(get("candidateFailureStrategy"))
+  };
+}
+
+function readPercentNumber(value: FormDataEntryValue | null): number | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return undefined;
+  }
+  return Math.max(0, Math.min(100, numberValue));
+}
+
+function readCandidateFailureStrategy(value: FormDataEntryValue | null): NonNullable<AssetRecordingScrollProfile["failureStrategy"]> {
+  return value === "none" || value === "back_and_try_next_candidate" ? value : "try_next_candidate";
+}
+
+function readAbilityType(value: FormDataEntryValue | null): AssetRecordingAbilityType {
+  return value === "scroll_candidate" || value === "grid_candidate" || value === "conditional_tap" ? value : "fixed_tap";
+}
+
+function readAbilityTypeOptional(value: FormDataEntryValue | null): AssetRecordingAbilityType | undefined {
+  return value === "scroll_candidate" || value === "grid_candidate" || value === "conditional_tap" || value === "fixed_tap" ? value : undefined;
+}
+
+function readActionKind(value: FormDataEntryValue | null): AssetRecordingOperationTransitionDraft["actionKind"] {
+  return value === "scroll" || value === "long_press" || value === "input" ? value : "tap";
+}
+
+function readAvailability(value: FormDataEntryValue | null): AssetRecordingOperationTransitionDraft["availability"] {
+  return value === "after_scroll" || value === "conditional" ? value : "visible";
+}
+
+function readPageTaskFieldType(value: FormDataEntryValue | null): AssetRecordingPageTaskFieldType {
+  return value === "text_input" ||
+    value === "picker_select" ||
+    value === "toggle_set" ||
+    value === "subpage_edit" ||
+    value === "submit" ||
+    value === "wait"
+    ? value
+    : "tap";
+}
+
+function readPageTaskStatus(value: FormDataEntryValue | null): AssetRecordingPageTask["status"] {
+  return value === "draft" || value === "deprecated" ? value : "active";
+}
+
+function pageTaskStepSummary(step: AssetRecordingPageTaskStep, elements: AssetRecordingPageElement[]): string {
+  const element = step.elementId ? elements.find((item) => item.id === step.elementId) : undefined;
+  const label = step.label ?? element?.label ?? pageTaskFieldTypeLabel(step.fieldType);
+  return step.valueParamKey ? `${label}(${step.valueParamKey})` : label;
+}
+
+function pageTaskFieldTypeLabel(fieldType: AssetRecordingPageTaskFieldType): string {
+  if (fieldType === "text_input") {
+    return "输入文本";
+  }
+  if (fieldType === "picker_select") {
+    return "选择器";
+  }
+  if (fieldType === "toggle_set") {
+    return "开关/勾选";
+  }
+  if (fieldType === "subpage_edit") {
+    return "进入子页面编辑";
+  }
+  if (fieldType === "submit") {
+    return "提交";
+  }
+  if (fieldType === "wait") {
+    return "等待文字";
+  }
+  return "点击";
+}
+
+function readOutcomeType(value: FormDataEntryValue | null): AssetRecordingOperationTransitionDraft["outcomeType"] {
+  return value === "compound_navigation" || value === "show_inline_state" || value === "local_state_change" || value === "no_visible_change" ? value : "navigate";
+}
+
+function readVisualSemanticArea(value: FormDataEntryValue | string | null): VisualSemanticArea | undefined {
+  return value === "top" ||
+    value === "content" ||
+    value === "bottom" ||
+    value === "unknown"
+    ? value
+    : undefined;
+}
+
+function transitionStatusLabel(status: string): string {
+  if (status === "active") {
+    return "可用于路径规划";
+  }
+  if (status === "draft") {
+    return "待完善";
+  }
+  if (status === "deprecated") {
+    return "已废弃";
+  }
+  if (status === "rejected") {
+    return "已拒绝";
+  }
+  return status;
+}
+
+function addUnique(items: string[], item: string): string[] {
+  return items.includes(item) ? items : [...items, item];
+}
+
+function EvidenceList({
+  title,
+  items,
+  actionLabel,
+  emptyText,
+  editingEvidence,
+  draftEvidenceValue,
+  onAction,
+  onCancelEdit,
+  onConfirmEdit,
+  onDraftEvidenceValueChange,
+  onEdit
+}: {
+  title: string;
+  items: AssetEvidenceItem[];
+  actionLabel: string;
+  emptyText: string;
+  editingEvidence?: EditingEvidence;
+  draftEvidenceValue: string;
+  onAction: (item: AssetEvidenceItem) => void;
+  onCancelEdit: () => void;
+  onConfirmEdit: () => void;
+  onDraftEvidenceValueChange: (value: string) => void;
+  onEdit: (item: AssetEvidenceItem) => void;
+}) {
+  return (
+    <div className="asset-matcher-section">
+      <strong>{title}</strong>
+      {items.length ? (
+        <div className="asset-chip-list">
+          {items.map((item) => (
+            <EvidenceChip
+              key={evidenceKey(item)}
+              actionLabel={actionLabel}
+              draftEvidenceValue={draftEvidenceValue}
+              editingEvidence={editingEvidence}
+              item={item}
+              onAction={onAction}
+              onCancelEdit={onCancelEdit}
+              onConfirmEdit={onConfirmEdit}
+              onDraftEvidenceValueChange={onDraftEvidenceValueChange}
+              onEdit={onEdit}
+            />
+          ))}
+        </div>
+      ) : (
+        <small>{emptyText}</small>
+      )}
+    </div>
+  );
+}
+
+function EvidenceGroupList({
+  title,
+  groups,
+  actionLabel,
+  emptyText,
+  editingEvidence,
+  draftEvidenceValue,
+  onAction,
+  onCancelEdit,
+  onConfirmEdit,
+  onDraftEvidenceValueChange,
+  onEdit
+}: {
+  title: string;
+  groups: AssetEvidenceGroup[];
+  actionLabel: string;
+  emptyText: string;
+  editingEvidence?: EditingEvidence;
+  draftEvidenceValue: string;
+  onAction: (item: AssetEvidenceItem) => void;
+  onCancelEdit: () => void;
+  onConfirmEdit: () => void;
+  onDraftEvidenceValueChange: (value: string) => void;
+  onEdit: (item: AssetEvidenceItem) => void;
+}) {
+  return (
+    <div className="asset-matcher-section">
+      <strong>{title}</strong>
+      {groups.length ? (
+        <div className="asset-evidence-groups">
+          {groups.map((group) => (
+            <div className="asset-evidence-group" key={group.title}>
+              <span className="asset-evidence-group-title">{group.title}</span>
+              <div className="asset-chip-list">
+                {group.items.map((item) => (
+                  <EvidenceChip
+                    key={evidenceKey(item)}
+                    actionLabel={actionLabel}
+                    draftEvidenceValue={draftEvidenceValue}
+                    editingEvidence={editingEvidence}
+                    item={item}
+                    onAction={onAction}
+                    onCancelEdit={onCancelEdit}
+                    onConfirmEdit={onConfirmEdit}
+                    onDraftEvidenceValueChange={onDraftEvidenceValueChange}
+                    onEdit={onEdit}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <small>{emptyText}</small>
+      )}
+    </div>
+  );
+}
+
+function EvidenceChip({
+  item,
+  actionLabel,
+  editingEvidence,
+  draftEvidenceValue,
+  onAction,
+  onCancelEdit,
+  onConfirmEdit,
+  onDraftEvidenceValueChange,
+  onEdit
+}: {
+  item: AssetEvidenceItem;
+  actionLabel: string;
+  editingEvidence?: EditingEvidence;
+  draftEvidenceValue: string;
+  onAction: (item: AssetEvidenceItem) => void;
+  onCancelEdit: () => void;
+  onConfirmEdit: () => void;
+  onDraftEvidenceValueChange: (value: string) => void;
+  onEdit: (item: AssetEvidenceItem) => void;
+}) {
+  const isEditing = editingEvidence ? evidenceKey(editingEvidence.item) === evidenceKey(item) : false;
+  const displayValue = evidenceDisplayValue(item);
+
+  if (isEditing) {
+    return (
+      <span className="asset-chip editing">
+        <em>{item.kind}</em>
+        <input aria-label={`修正${item.kind}`} className="asset-evidence-edit-input" value={draftEvidenceValue} onChange={(event) => onDraftEvidenceValueChange(event.target.value)} />
+        <button className="asset-matcher-action primary" type="button" disabled={!draftEvidenceValue.trim()} onClick={onConfirmEdit}>
+          确认
+        </button>
+        <button className="asset-matcher-action" type="button" onClick={onCancelEdit}>
+          取消
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="asset-chip">
+      <em>{item.kind}</em>
+      <span className="asset-evidence-value">{displayValue}</span>
+      {canEditEvidence(item) ? (
+        <button className="asset-matcher-action" type="button" aria-label={`${editEvidenceActionLabel(item.kind)}：${displayValue}`} onClick={() => onEdit(item)}>
+          编辑
+        </button>
+      ) : null}
+      <button className="asset-matcher-action" type="button" onClick={() => onAction(item)}>
+        {actionLabel}
+      </button>
+    </span>
+  );
+}
+
+function editEvidenceActionLabel(kind: AssetEvidenceKind): string {
+  return kind === "OCR 文字" ? "编辑 OCR 文字" : `编辑${kind}`;
+}
+
+export function pageNameDraftPatch(value: string): Pick<AssetRecordingCurrentPage, "pageName"> | undefined {
+  const pageName = value.trim();
+  return pageName ? { pageName } : undefined;
+}
+
+function statusLabel(status: AssetRecordingCurrentPage["status"]): string {
+  if (status === "matched") {
+    return "已匹配";
+  }
+  if (status === "draft_created") {
+    return "新草稿";
+  }
+  if (status === "draft_reused") {
+    return "复用草稿";
+  }
+  if (status === "draft_candidate") {
+    return "待保存";
+  }
+  if (status === "unknown") {
+    return "未知";
+  }
+  if (status === "error") {
+    return "异常";
+  }
+  return "待识别";
+}
+
+function formatScore(score?: number): string {
+  if (typeof score !== "number" || Number.isNaN(score)) {
+    return "--";
+  }
+  return `${Math.round(score * 100)}%`;
+}
