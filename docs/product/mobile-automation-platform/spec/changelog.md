@@ -4,7 +4,7 @@ doc_type: changelog
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-06-24
+updated_at: 2026-07-05
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -13,10 +13,69 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 
 # 自动化测试平台 Spec 变更记录
 
+## 2026-07-05
+
+### Changed
+
+- 登录 / 表单类固定语义控件正式收口为运行时定位规则：手机号 / 邮箱输入框、密码输入框、协议勾选、主登录按钮等 PageElement 使用 `runtime-locator:*`、`locatorKind=structural_locator` 和 `coordinateSpace=runtime`；历史圈选区域只允许保留为 `searchHintRegion` / debug evidence，不能作为 `region`、最终点击点、输入点或验证区域。
+- 登录页本地页面资产更新为 4 个 runtime structural PageElement + 1 个 `账号密码登录` PageTask；`登录 -> 主页` 连接边只引用 `taskMode=source_page_navigation` + `taskId`，不再复制手机号输入框、密码输入框、协议勾选和登录按钮的底层动作。
+- 资产录制面板对没有固定 `region` 的 runtime structural PageElement 显示“运行时定位”，避免把登录输入框 / 登录按钮误解为“未采集到控件位置”。
+
+### Verified
+
+- `pnpm vitest run platform/apps/dashboard/src/components/AssetRecordingPanel.test.ts platform/apps/server/src/semantic-locator.test.ts platform/apps/server/src/graph-run-service.test.ts platform/apps/server/src/page-transition-assets.test.ts --testTimeout=15000` 通过，共 166 个测试，覆盖 runtime structural 登录控件展示、登录 PageTask 展开、运行时输入 / 点击定位和 source page task navigation。
+- `pnpm --filter @mobile-automation/server typecheck` 与 `pnpm --filter @mobile-automation/dashboard typecheck` 通过。
+- 本地 SQLite 已备份到 `mobile-automation.sqlite.bak-login-runtime-cleanup-20260705165947`；登录页只保留 active 的 `登录 -> 主页` source PageTask 任务边，旧 `image-region:6,47,88,8` 登录按钮边和旧录制节点边已标记为 `deprecated`。
+
+## 2026-07-02
+
+### Added
+
+- 新增 REQ-045 / DES-045 / T-093 / AC-047：探索异常 AI 诊断与受控资产修复。执行异常先固化证据并脱敏，再由规则和 AI 诊断分类为业务异常、资产过期、测试计划缺口、环境问题或不可判定。
+- 新增 `AiDiagnosisEvidencePack`、`AiDiagnosisResult`、`AssetPatchCandidate`、`AssetPatchValidator` 和 MCP / REST 工具规划，支持 AI 查询证据、提交资产修复 patch、验证 patch、自动应用已验证 patch、回滚 patch、创建缺陷候选和按策略继续探索。
+
+### Changed
+
+- 明确 AI 不直接控制设备、不裸写 active 页面资产、不写入平台依赖 matcher；资产问题默认生成受控 draft patch，高置信、低风险、验证通过且策略允许时，可由系统自动应用为新的 active 资产版本并继续执行。
+- 明确 crash / ANR / 黑屏 / App 退出 / fatal log 等高置信运行异常优先进入报告和缺陷候选，不自动走资产修复。
+
+## 2026-07-01
+
+### Added
+
+- 新增 REQ-044 / DES-044 / T-092 / AC-046：资产驱动巡检。该能力作为独立产品入口，基于 active PageStateFlow 页面资产验证页面健康、区域滚动、元素重定位、连接边稳定性、PageTask 可执行性、性能指标和异常事件。
+- 产品规划新增三层自动测试形态：目标驱动编排验证核心业务，资产驱动巡检验证已录入资产和主流程覆盖，自动探索 / 稳定性探索发现未知页面和异常状态。
+- 新增场景 14“资产驱动巡检”，明确从当前页面匹配 PageModel 后按资产生成巡检计划，未录入候选只进入建议，不直接执行。
+
+### Changed
+
+- 明确旧的自动探索 / 稳定性探索入口不删除；资产驱动巡检和盲目探索必须入口隔离、策略隔离、资产写入权限隔离。
+- 明确资产驱动巡检不得点击历史 `region_center`，也不得把所有 OCR / UI dump 候选当成可操作目标；只有正式 PageElement / PageTransition / PageTask 或明确允许的低风险健康动作可执行。
+
+## 2026-06-26
+
+### Changed
+
+- `tap_on_image` 普通手工 `image-region` 不再默认点击 `region_center`。运行时必须先由 OCR、crop hash/template、视觉候选或结构候选完成重定位；失败时返回 `runtime_relocation_required`，metadata 标记 `fallback=region_center_disabled`，报告和修复 UI 使用记录区域 / 记录中心点作为修复证据。
+- PageElement 录入模型新增 `locatorKind`、`dynamicMasks`、`structuralLocator`，用于区分文本定位、视觉定位、结构定位和集合项定位，并排除头像、昵称、业务标题、数字等动态内容。
+- 动态列表 / 网格第一阶段模型落地：PageModel metadata 可保存 `dynamicRegion` 和 `itemTemplate`，PageElement / PageTransition action params 可保存 `transitionKind=parameterized` 与 `parameterMapping`。当前阶段先覆盖录入、持久化、回显和执行参数透传，不一次性实现完整列表参数化探索规划器。
+- PageElement 保存质量校验扩展到结构型定位和动态内容：结构定位可用 `dynamicMasks` 排除个人头像 / 昵称；视觉-only 区域如果包含动态 OCR 文本且没有 mask，会提示 `dynamic_content_unmasked` 建议复核。
+
+### Verified
+
+- `CI=true pnpm vitest run platform/apps/server/src/semantic-locator.test.ts platform/apps/server/src/page-transition-assets.test.ts platform/apps/server/src/page-element-quality.test.ts` 通过，共 73 个测试。
+- `CI=true pnpm vitest run platform/apps/dashboard/src/components/AssetRecordingPanel.test.ts -t "structural locator|collection item|manual operation drafts"` 通过。
+- `CI=true pnpm vitest run platform/apps/dashboard/src/App.test.ts -t "structural locator metadata|dynamic region|page ability type"` 通过。
+- `CI=true pnpm --filter @mobile-automation/server typecheck` 与 `CI=true pnpm --filter @mobile-automation/dashboard typecheck` 通过。
+
 ## 2026-06-25
 
 ### Changed
 
+- T-090 第一版稳定性探索落地：新增独立 Dashboard “稳定性探索”入口，可选择设备、输入 / 选择目标包、配置最大时长、最大动作数、seed、策略、允许动作、危险词和 App 外处理策略，并显示运行中提示、最近步骤、停止和报告入口。
+- 后端新增 `StabilityExplorer` 服务和 `POST /api/stability-explorations`，稳定性探索以 `runKind=stability_exploration` 写入统一 Run / StepResult / Report 体系，保留 seed、动作来源、候选过滤原因、当前包、OCR 摘要和 summary artifact。
+- Report Core 新增“稳定性探索摘要”，展示目标包、seed、策略、动作进度、App 外处理、过滤候选和最近动作。
+- 已补 `stability-explorer.test.ts`、`App.test.ts`、`report-core.test.ts` 覆盖第一版稳定性探索核心行为。
 - 登录页建模口径收口：登录页保留 4 个页面能力和 1 个页面任务 `账号密码登录`，其中任务负责手机号、密码、协议勾选和登录按钮的页内编排；从登录页到主页的连接边改为 `source_page_navigation` 任务边，只引用 `taskId` 和目标页，不再把多步登录动作复制进普通连接边。
 - Dashboard 连接边页签新增“通过页面任务连接”入口，可从当前页已保存的 PageTask 直接创建到目标页面的边，适合登录、发布、创建这类多步跨页动作。
 - GraphRun 执行链路已支持展开源页面 PageTask 导航边：运行时会先把登录页 PageTask 解析成多步 ActionStep，再进入目标页验证逻辑。
@@ -89,7 +148,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 
 - PageStateFlow 视觉资产坐标模型升级：`StateMatcher`、截图重点区域、region-bound OCR / UI 文本、手工 PageElement 和 PageTransition action params 现在会保存 `semanticArea` 与 `coordinateSpace`。`semanticArea` 收敛为 `top` / `content` / `bottom` / `unknown` 四个大区；旧细分区域值不做兼容映射，异常历史资产按删除后重新录入处理。区域坐标继续保留为用户圈选的原始证据，但不再作为唯一真理。
 - PageMatcher 支持同语义区域内的区域 OCR / 文本漂移匹配：如果历史资产保存的 OCR 框和当前 OCR 框因为 OCR 引擎、状态栏 inset 或截图采集差异发生小幅偏移，只要仍处于同一视觉语义区域即可命中；跨语义区域同文案不会误命中。
-- `tap_on_image` 执行策略升级：非网格手工 image-region 动作会携带 `targetText`，运行时先在当前截图 OCR 结果中按同一 `semanticArea` 重定位目标文字并点击 OCR 框中心，找不到时才退回人工区域中心点。
+- `tap_on_image` 执行策略升级：非网格手工 image-region 动作会携带 `targetText`，运行时先在当前截图 OCR 结果中按同一 `semanticArea` 重定位目标文字并点击 OCR 框中心；当日实现曾允许区域中心兜底，该兜底已在 2026-06-26 废弃。
 - 兼容历史手工 image-region 边：旧 action 如果还没有 `targetText`，运行时会读取 `elementLabel` / `label` 作为重定位目标文案，减少旧资产重录成本。
 - 资产录制面板和后端 API 已贯通 `semanticArea` / `coordinateSpace`：截图重点区域绘制 / 移动 / 缩放会实时刷新语义区域，保存页面资产、保存手工可操作元素、由 PageElement 创建 navigate transition 时均会保留这些字段。
 - 资产录制面板支持人工选择 / 修改 `semanticArea`：页面截图重点区域和手工动作区域都提供语义区域下拉，用户可以在 `top`、`content`、`bottom`、`unknown` 四个大区里修正系统推断结果，保存后进入 PageMatcher / PageElement / PageTransition 数据。

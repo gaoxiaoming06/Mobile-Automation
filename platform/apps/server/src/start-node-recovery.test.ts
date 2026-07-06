@@ -128,6 +128,39 @@ describe("start node recovery", () => {
     );
   });
 
+  it("treats a visually matched current-device package as in scope when requested", async () => {
+    const home = node("node-home", "home", "主页", [matcher("resource_id", "flutter:id/home_title", 3)]);
+    const target = node("node-target", "target", "发布活动", [matcher("text", "发布活动")]);
+    const graphVersion: BusinessGraphVersion = {
+      id: "version-1",
+      graphId: "graph-1",
+      version: 1,
+      sourceSummary: [],
+      status: "active",
+      nodes: [home, target],
+      edges: [edge("edge-home-target", home.id, target.id)],
+      createdAt: "2026-06-20T00:00:00.000Z"
+    };
+    const actions: string[] = [];
+
+    const result = await resolveReachableStartNode({
+      graphVersion,
+      appId: "demo",
+      targetApp: { androidPackageName: "cn.eeo.classin" },
+      platform: "android",
+      startAppScope: "current_device",
+      targetNodeId: target.id,
+      collectObservation: async () => observation("主页", "flutter:id/home_title", "cn.eeo.classin.flutter"),
+      performAction: async (action) => {
+        actions.push(action.type);
+      }
+    });
+
+    expect(actions).toEqual([]);
+    expect(result.startNodeId).toBe(home.id);
+    expect(result.recovery).toBeUndefined();
+  });
+
   it("does not back out of home when home cannot reach the target", async () => {
     const home = node("node-home", "home", "主页", [matcher("package", "com.demo"), matcher("resource_id", "com.demo:id/home_title", 3)]);
     const target = node("node-target", "target", "发布活动", [matcher("package", "com.demo"), matcher("resource_id", "com.demo:id/activity_title", 3)]);

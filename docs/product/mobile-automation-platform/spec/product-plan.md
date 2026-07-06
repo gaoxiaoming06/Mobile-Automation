@@ -4,7 +4,7 @@ doc_type: product-plan
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-06
-updated_at: 2026-06-25
+updated_at: 2026-07-02
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -37,6 +37,7 @@ v2.0 的产品目标应升级为：
 - 页面资产必须按逻辑页面 key 跨端复用，例如 `home` / `teacher_class_list` / `lesson_create` 只建一份逻辑 PageModel。正式 PageModel 身份优先使用跨端 portable 的 OCR、截图重点区域和 `semantic_image_region`；Android activity、resource-id、accessibility id、iOS WDA source / accessibility label 等平台字段只进入平台 profile、候选发现或调试证据，不作为正式页面身份。
 - 录制不是为了无限保存线性脚本，而是边操作边沉淀 PageModel、PageElement 和 PageTransition。
 - StructuredFlow 是页面路径的一次可执行快照，可作为回归用例、问题复现用例和 AI/CI 调用入口。
+- 自动测试产品形态拆成三层：目标驱动编排验证核心业务，资产驱动巡检验证已录入资产和主流程覆盖，自动探索 / 稳定性探索发现未知页面和异常状态。三者共享 Observation、语义定位、报告和性能监控，但入口、执行策略和资产写入权限必须隔离。
 - Runtime Interceptor 用于处理权限、升级、公告、选择学科等临时阻断页面；这些阻断不进入主业务页面路径。
 - 坐标只作为 fallback 证据，稳定 PageStateFlow 资产优先使用 OCR、图像区域、页面截图锚点和人工确认的语义区域。resource-id、accessibility id、content-desc、UIAutomator / WDA 文本等平台信号只能辅助候选生成、调试解释或平台专属 fallback，不能绕过人工确认成为正式页面身份。
 - 当某个平台缺少专属证据时，平台可以使用跨端通用的截图区域、OCR 文本、布局描述和页面语义进行低置信执行；执行报告必须提示“缺少该平台精确识别 / 定位信息”，并引导补录该平台 profile。
@@ -130,9 +131,10 @@ collect Observation
 - 手工录制：用户每完成一步，平台保存 before PageModel、PageElement action、after PageModel / Overlay 和 transition expectation。
 - 当前页面识别 / 标注：用户可把当前设备页面保存为 PageModel，并圈选主要截图区域和可操作元素。
 - 页面身份标注：用户确认的标题栏、页面主体和稳定业务区域可以成为 PageMatcher；全屏 OCR / UI 文本只作为候选，OCR 候选确认时必须绑定相对区域、视觉语义区域和坐标空间，并保存为 `ocr_text:文案@region(x,y,width,height)`。底部 Tab、固定导航栏和全局入口默认作为 PageElement / PageTransition 操作资产，不作为页面身份 critical matcher。
-- 视觉区域资产：用户圈选区域不是单纯固定坐标，而是“原始截图相对矩形 + semanticArea + coordinateSpace + baseline / OCR / layout 证据”。`semanticArea` 只保留 `top` / `content` / `bottom` / `unknown` 四个大区；旧细分区域数据不做兼容映射，异常资产删除后重新录入。运行时 PageMatcher 允许同一语义区域内的小幅漂移，执行 `tap_on_image` 时也会先按目标文案在同一语义区域内重定位，找不到才退回人工区域中心点。
+- 视觉区域资产：用户圈选区域不是单纯固定坐标，而是“原始截图相对矩形 + semanticArea + coordinateSpace + baseline / OCR / layout 证据”。`semanticArea` 只保留 `top` / `content` / `bottom` / `unknown` 四个大区；旧细分区域数据不做兼容映射，异常资产删除后重新录入。运行时 PageMatcher 允许同一语义区域内的小幅漂移，执行 `tap_on_image` 时必须先按 OCR、crop hash/template、视觉候选或结构候选在当前截图中重定位；找不到时失败并进入 locator 修复，不再退回人工区域中心点。
 - 页面操作资产：每个 PageModel 维护本页可执行的 PageElement / PageAbility 入口，而不是把菜单、临时黑条、底部面板和动态卡片都拆成独立页面。资产录制阶段先按能力类型录入区域和参数：`fixed_tap` 表示固定位置点击，`scroll_candidate` 表示在内容区滚动查找某个 OCR / 图像目标，`grid_candidate` 表示动态列表 / 两列网格中的候选入口，`conditional_tap` 表示只在条件满足时出现的点击能力；连接边阶段再选择已保存 PageElement、执行动作并确认目标页面 / 页面内状态，沉淀为 PageTransition。对于“主页两列班级列表 -> 班级详情 -> 有 add 按钮才可创建课堂”这类场景，主页只录入“打开班级详情”的 `grid_candidate` 能力：圈选列表容器，保存列数、候选 item 高度、点击安全点、滑动步长和失败策略，并在跳转页面类型下绑定“班级详情”目标页面；班级详情再录入“创建课堂”的 `conditional_tap` 能力。如果业务目标要求进入指定数据项，例如“进入 {{className}} 这个班级再创建课堂”，`grid_candidate.scrollProfile.targetQuery` 可以保存 `{{className}}` 模板，目标页面测试通过运行参数 `className=班级四十一号` 注入；运行时只在人工圈选的列表 / 网格区域内 OCR 查找该文本，找不到时按容器滑动继续查找，最终仍找不到则失败并报告，不得退化为随便点击第一个候选。对于会随滚动出现的图标 / 图片按钮，录入 `scroll_candidate + targetKind=image_region`，执行时在内容区循环截图查找该图像目标。已绑定目标页面的 `navigate` PageAbility 会在路径规划和执行时临时转成 active route edge；未绑定目标页面的跳转能力会在保存或 route-plan 中提示，不参与规划。`grid_candidate` 运行时按视觉区域和安全点点击候选，不依赖 UIAutomator dump。同屏候选一期开通：非指定候选的下游失败重规划时会按 recovery attempt 尝试下一个候选；跨屏滚动翻页继续作为后续增强，而不是把每个班级卡片或每种账号数据保存成页面。
 - 自动探索：平台只针对已识别为已保存 PageModel 的当前页运行，V1 做当前页一跳探索，V2 做受深度和动作数限制的多层探索。候选来源优先使用已录入 PageElement / PageAbility，其次使用带区域的 OCR 文本候选；删除、退出登录、支付、发布、提交、确认等危险文案默认标记为 skipped。自动探索只生成候选、执行报告、新页面候选和异常证据，不直接写入正式 PageMatcher、PageElement 或 PageTransition；用户确认后仍通过“页面能力”和“连接边”流程入库。探索采集默认使用快速视觉模式（截图 + OCR + 已有视觉基线匹配），不依赖 UIAutomator / WDA 作为主路径。
+- 资产驱动巡检：作为独立于“目标执行”和“自动探索 / 稳定性探索”的产品入口，按已保存 PageModel 识别当前页面，再读取该页 PageElement、PageTransition、PageTask 和人工标注区域生成巡检计划。巡检先做页面健康检查、内容区滚动检查、元素重定位检查，再按风险策略验证连接边和轻量 PageTask；未录入为正式资产的 OCR / UI 候选只进入建议，不直接执行。巡检报告输出页面覆盖率、元素定位成功率、连接边稳定性、路径缺口、性能耗时、异常事件和修复入口。
 - 稳定性探索：作为独立于目标执行和资产录制的测试入口，用于启动 App 后持续探索安全点击 / 滑动位置，发现 crash、ANR、黑屏、卡死、App 退出、未知页面和不可恢复状态。它类似视觉版 Monkey / Fastbot，但必须受最大时长、最大步数、危险词、黑名单区域、App 外恢复和 seed 复现约束；探索出来的新页面 / 新边 / 新能力只进入 draft 候选，不直接污染正式页面资产库。
 - 源码 / UI dump 辅助：源码、UIAutomator dump、WDA source、OCR 和截图分析只作为候选生成来源，不直接发布正式资产；其中 UIAutomator / WDA / resource-id / accessibility-id 相关信息必须留在 raw/debug evidence 或平台 profile，不能进入 active PageMatcher 白名单。
 - AI / CI 动态验证：AI 可请求执行到某个 PageModel 或运行某条 StructuredFlow，并临时覆盖目标预期。
@@ -487,6 +489,19 @@ MVP 建议先做 Android APK：
 - 可控随机探索。
 - 探索路径可复现。
 
+### Phase 5A：资产驱动巡检
+
+目标：在已经录入一批高质量 PageStateFlow 资产后，提供一个比盲目探索更稳定、比固定目标任务更覆盖面的巡检入口，持续验证“当前 App 还是否符合我们录入过的页面资产和主流程连接”。
+
+重点：
+
+- 新增“资产驱动巡检”入口，保留现有自动探索 / 稳定性探索入口不删除。
+- 支持从当前设备当前页面开始巡检；当前页面必须稳定匹配已保存 PageModel，未知页只做诊断。
+- 生成 AssetPatrolPlan：页面健康检查、区域滚动检查、PageElement 重定位检查、PageTransition 验证、PageTask dry-run / 轻量验证和系统守护。
+- 巡检策略按页面集合、风险等级、最大时长、最大边数、是否允许高风险动作、是否允许真实提交业务数据配置。
+- 输出资产健康报告：页面覆盖率、元素定位成功率、连接边成功率、耗时分布、性能指标、异常事件、跳过原因和修复建议。
+- 新发现页面 / 元素 / 边进入候选管理或资产录制确认流程，不自动写入 active 资产。
+
 ### Phase 6：AI / CI 闭环验证与团队级质量平台
 
 目标：从工具升级为 AI/CI 可调用的结构化流程验证平台和团队质量看板。
@@ -495,6 +510,7 @@ MVP 建议先做 Android APK：
 
 - 外部工具接口：CI、CLI、MCP 或 AI Agent 可发起 StructuredFlow 测试、查报告、获取失败证据、发通知。
 - AI 代码修改后动态传入 Flow、执行到中间步骤或预期覆盖，平台验证后返回结构化结果。
+- 探索异常 AI 诊断：执行异常先固化证据并脱敏，再由规则和 AI 分类为业务异常、资产过期、测试计划缺口、环境问题或不可判定；业务异常进入报告 / 缺陷候选并按策略重启继续，资产问题默认生成受控 patch 草稿，高置信、低风险且验证通过时可按策略自动应用为新的 active 资产版本并继续。
 - `.ai/` 仓库导航：让维护者和大模型快速理解代码入口、构建命令、风险边界。
 - 多人权限。
 - 包质量趋势。

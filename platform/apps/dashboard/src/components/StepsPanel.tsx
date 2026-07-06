@@ -278,12 +278,13 @@ export function StepsPanel({
               <div className="run-step-results">
                 {currentRun.stepResults.slice(0, 8).map((step) => {
                   const screenshot = step.artifacts.find((artifact) => artifact.type === "screenshot");
+                  const display = runStepResultDisplay(step);
                   return (
                     <div className="run-step-result" key={step.id}>
                       <span className="step-order">{step.stepOrder}</span>
                       <div>
-                        <strong>{step.type}</strong>
-                        <small>{step.durationMs ?? "-"} ms · {step.status}</small>
+                        <strong>{display.label}</strong>
+                        <small>{formatRunStepResultDetail(step, display)}</small>
                         {step.errorMessage && <small className="error-text">{step.errorMessage}</small>}
                         {renderStepConditionResult(step.metadata)}
                         {visibleExpectationResults(step.expectationResults).length > 0 && (
@@ -371,6 +372,39 @@ function renderExpectationResultChip(result: StepExpectationResult) {
 
 function visibleExpectationResults(results: StepExpectationResult[] | undefined): StepExpectationResult[] {
   return (results ?? []).filter(shouldDisplayExpectationResult);
+}
+
+type RunStepResult = TestRun["stepResults"][number];
+
+type RunStepResultDisplay = {
+  label: string;
+  detailPrefix?: string;
+};
+
+export function runStepResultDisplay(step: RunStepResult): RunStepResultDisplay {
+  const assetPatrol = readAssetPatrolStepMetadata(step.metadata?.assetPatrol);
+  if (assetPatrol) {
+    return {
+      label: assetPatrol.label || assetPatrol.kind || step.type,
+      detailPrefix: [assetPatrol.kind, assetPatrol.skipReason].filter(isNonEmptyString).join(" · ") || undefined
+    };
+  }
+  return { label: step.type };
+}
+
+function formatRunStepResultDetail(step: RunStepResult, display: RunStepResultDisplay): string {
+  const base = `${step.durationMs ?? "-"} ms · ${step.status}`;
+  return display.detailPrefix ? `${display.detailPrefix} · ${base}` : base;
+}
+
+function readAssetPatrolStepMetadata(value: unknown): { kind?: string; label?: string; skipReason?: string } | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as { kind?: string; label?: string; skipReason?: string })
+    : undefined;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function renderStepConditionResult(metadata: Record<string, unknown> | undefined) {

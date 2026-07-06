@@ -6,8 +6,9 @@ export type AssetRecordingPageElement = {
   id?: string;
   label: string;
   locator: string;
+  locatorKind?: AssetRecordingLocatorKind;
   semanticArea?: VisualSemanticArea;
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   action: string;
   abilityType?: AssetRecordingAbilityType;
   actionKind?: "tap" | "scroll" | "long_press" | "input" | "unknown";
@@ -35,7 +36,45 @@ export type AssetRecordingPageElement = {
   targetNodeId?: string;
   targetLabel?: string;
   targetText?: string;
+  tapPointPercent?: {
+    x: number;
+    y: number;
+  };
   compoundSteps?: AssetRecordingCompoundStepDraft[];
+  quality?: AssetRecordingPageElementQuality;
+  visualLocator?: Record<string, unknown>;
+  dynamicMasks?: AssetRecordingDynamicMask[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegionId?: string;
+  itemTemplateId?: string;
+  transitionKind?: "static" | "parameterized";
+  parameterMapping?: Record<string, string>;
+};
+
+export type AssetRecordingLocatorKind = "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator";
+
+export type AssetRecordingDynamicMask = {
+  kind: "avatar" | "text" | "image" | "number" | "custom";
+  label?: string;
+  region: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  reason?: string;
+};
+
+export type AssetRecordingPageElementQuality = {
+  status: "pass" | "needs_review" | "fail";
+  score: number;
+  warnings: Array<{
+    code: string;
+    severity: "info" | "warning" | "error";
+    message: string;
+  }>;
+  candidates: Array<Record<string, unknown>>;
+  evidence: Record<string, unknown>;
 };
 
 export type AssetRecordingScrollProfile = {
@@ -171,12 +210,25 @@ export type AssetRecordingOperationTransitionDraft = {
   outcomeType: AssetRecordingElementOutcomeType;
   locator: string;
   semanticArea?: VisualSemanticArea;
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   elementLabel: string;
   targetText?: string;
   targetLabel?: string;
+  tapPointPercent?: {
+    x: number;
+    y: number;
+  };
   scrollProfile?: AssetRecordingScrollProfile;
   compoundSteps?: AssetRecordingCompoundStepDraft[];
+  quality?: AssetRecordingPageElementQuality;
+  visualLocator?: Record<string, unknown>;
+  locatorKind?: AssetRecordingLocatorKind;
+  dynamicMasks?: AssetRecordingDynamicMask[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegion?: Record<string, unknown>;
+  itemTemplate?: Record<string, unknown>;
+  transitionKind?: "static" | "parameterized";
+  parameterMapping?: Record<string, string>;
 };
 
 export type AssetRecordingElementOutcomeType = "navigate" | "compound_navigation" | "show_inline_state" | "local_state_change" | "no_visible_change";
@@ -190,15 +242,28 @@ export type AssetRecordingPageElementDraft = {
   availability: "visible" | "after_scroll" | "conditional";
   locator: string;
   semanticArea?: VisualSemanticArea;
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   elementLabel: string;
   targetText?: string;
   outcomeType?: AssetRecordingElementOutcomeType;
   outcomeLabel?: string;
   targetNodeId?: string;
   targetLabel?: string;
+  tapPointPercent?: {
+    x: number;
+    y: number;
+  };
   scrollProfile?: AssetRecordingScrollProfile;
   compoundSteps?: AssetRecordingCompoundStepDraft[];
+  quality?: AssetRecordingPageElementQuality;
+  visualLocator?: Record<string, unknown>;
+  locatorKind?: AssetRecordingLocatorKind;
+  dynamicMasks?: AssetRecordingDynamicMask[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegion?: Record<string, unknown>;
+  itemTemplate?: Record<string, unknown>;
+  transitionKind?: "static" | "parameterized";
+  parameterMapping?: Record<string, string>;
 };
 
 export type AssetRecordingCompoundStepDraft = {
@@ -216,7 +281,7 @@ export type AssetRecordingScreenshotRegion = {
   width: number;
   height: number;
   semanticArea?: VisualSemanticArea;
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   ignoreRegions?: Array<{
     x: number;
     y: number;
@@ -280,7 +345,7 @@ export type AssetRecordingPanelProps = {
   onConfirmOperationTransition?: (draft: AssetRecordingOperationTransitionDraft) => void | Promise<void>;
   onConfirmPageTaskTransition?: (draft: AssetRecordingPageTaskTransitionDraft) => void | Promise<void>;
   onDeleteOperationTransition?: (transition: AssetRecordingPageTransition) => void | Promise<void>;
-  onSavePageElement?: (draft: AssetRecordingPageElementDraft) => void | Promise<void>;
+  onSavePageElement?: (draft: AssetRecordingPageElementDraft) => boolean | void | Promise<boolean | void>;
   onDeletePageElement?: (element: AssetRecordingPageElement) => void | Promise<void>;
   onSavePageTask?: (draft: AssetRecordingPageTaskDraft) => void | Promise<void>;
   onDeletePageTask?: (task: AssetRecordingPageTask) => void | Promise<void>;
@@ -627,7 +692,7 @@ export function AssetRecordingPanel({
     setIsAddingPageElement(false);
   }
 
-  function submitManualPageElement(event: FormEvent<HTMLFormElement>) {
+  async function submitManualPageElement(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!manualActionRegion || manualActionRegion.width < 1 || manualActionRegion.height < 1) {
       return;
@@ -637,7 +702,10 @@ export function AssetRecordingPanel({
       sourceNodeId: page.nodeId,
       region: manualActionRegion
     });
-    void onSavePageElement?.(draft);
+    const saved = await onSavePageElement?.(draft);
+    if (saved === false) {
+      return;
+    }
     setEditingPageElement(undefined);
     setManualActionRegion(undefined);
     setManualActionEdit(undefined);
@@ -737,6 +805,15 @@ export function AssetRecordingPanel({
             <form className="asset-element-actions asset-operation-editor asset-manual-action-form" key={editingPageElement?.id ?? editingPageElement?.locator ?? "new-page-element"} onSubmit={submitManualPageElement}>
               {editingPageElement?.id ? <input type="hidden" name="elementId" value={editingPageElement.id} /> : null}
               <label>
+                定位方式
+                <select name="locatorKind" defaultValue={editingPageElement?.locatorKind ?? (manualAbilityType === "grid_candidate" ? "collection_item_locator" : "visual_locator")}>
+                  <option value="visual_locator">视觉重定位</option>
+                  <option value="text_locator">文字重定位</option>
+                  <option value="structural_locator">结构型入口</option>
+                  <option value="collection_item_locator">动态列表项</option>
+                </select>
+              </label>
+              <label>
                 能力类型
                 <select name="abilityType" value={manualAbilityType} onChange={(event) => setManualAbilityType(readAbilityType(event.target.value))}>
                   <option value="fixed_tap">固定点击能力</option>
@@ -781,6 +858,41 @@ export function AssetRecordingPanel({
                 执行识别文字
                 <input name="targetText" placeholder="可选，例如：学习方案" defaultValue={editingPageElement?.targetText ?? ""} />
               </label>
+              <label>
+                动态区域处理
+                <select name="dynamicMaskPreset" defaultValue={editingPageElement?.dynamicMasks?.length ? "avatar_text" : "none"}>
+                  <option value="none">无动态 mask</option>
+                  <option value="avatar_text">头像/昵称不参与强识别</option>
+                </select>
+              </label>
+              {manualAbilityType === "grid_candidate" ? (
+                <div className="asset-operation-inline-fields">
+                  <label>
+                    动态区域名
+                    <input name="dynamicRegionLabel" placeholder="例如：班级列表" defaultValue={editingPageElement?.targetLabel ? `${editingPageElement.targetLabel}列表` : "班级列表"} />
+                  </label>
+                  <label>
+                    列表模板名
+                    <input name="itemTemplateLabel" placeholder="例如：班级卡片" defaultValue="班级卡片" />
+                  </label>
+                  <label>
+                    参数名
+                    <input name="parameterName" placeholder="例如：className" defaultValue="className" />
+                  </label>
+                </div>
+              ) : null}
+              {manualActionRegion && manualAbilityType !== "grid_candidate" ? (
+                <div className="asset-operation-inline-fields">
+                  <label>
+                    点击点 X%
+                    <input name="tapPointXPercent" type="number" min="0" max="100" step="0.1" defaultValue={editingPageElement?.tapPointPercent?.x ?? 50} />
+                  </label>
+                  <label>
+                    点击点 Y%
+                    <input name="tapPointYPercent" type="number" min="0" max="100" step="0.1" defaultValue={editingPageElement?.tapPointPercent?.y ?? 50} />
+                  </label>
+                </div>
+              ) : null}
               <label>
                 出现条件
                 <select name="availability" defaultValue={editingPageElement?.availability ?? "visible"}>
@@ -892,6 +1004,7 @@ export function AssetRecordingPanel({
                 </div>
               ) : null}
               {identifying ? <div className="asset-identifying-banner">识别中：正在识别当前页面，完成后可继续操作。</div> : null}
+              {page.status === "error" && page.message ? <div className="asset-identifying-banner asset-warning-banner">{page.message}</div> : null}
             </>
           )}
 
@@ -1057,6 +1170,7 @@ export function AssetRecordingPanel({
                                     <strong>{element.label}</strong>
                                     <span>{element.locator}</span>
                                     <small>{abilityTypeLabel(element.abilityType ?? abilityTypeFromElement(element))} · {operationKindLabel(normalizeActionKind(element))} · {availabilityLabel(element.availability)}</small>
+                                    <PageElementQualitySummary quality={element.quality} />
                                     <CompoundStepsSummary steps={element.compoundSteps} />
                                   </div>
                                 </div>
@@ -1518,7 +1632,27 @@ function OperationRegionPreview({ element, screenshotUrl }: { element: AssetReco
       </div>
     );
   }
+  if (isRuntimeLocatedElement(element)) {
+    return (
+      <div className="asset-operation-preview runtime" aria-label={`${element.label} 运行时定位`}>
+        <b>运行时定位</b>
+        <small>{runtimeLocatorSummary(element)}</small>
+      </div>
+    );
+  }
   return <small className="asset-operation-preview-missing">未采集到控件位置</small>;
+}
+
+function isRuntimeLocatedElement(element: AssetRecordingPageElement): boolean {
+  return element.coordinateSpace === "runtime" || element.locator.startsWith("runtime-locator:") || element.locatorKind === "structural_locator";
+}
+
+function runtimeLocatorSummary(element: AssetRecordingPageElement): string {
+  const role = typeof element.structuralLocator?.role === "string" ? element.structuralLocator.role : undefined;
+  if (element.targetText && role) {
+    return `${element.targetText} · ${role}`;
+  }
+  return element.targetText ?? role ?? "运行时按 OCR / 结构证据重定位";
 }
 
 export function operationPreviewFrame(
@@ -1578,6 +1712,20 @@ function CompoundStepsSummary({ steps }: { steps?: AssetRecordingCompoundStepDra
     <small>
       复合步骤：{steps.map((step) => step.label || `${step.type}:${step.text}`).join(" → ")}
     </small>
+  );
+}
+
+function PageElementQualitySummary({ quality }: { quality?: AssetRecordingPageElementQuality }) {
+  if (!quality) {
+    return null;
+  }
+  const firstWarning = quality.warnings.find((warning) => warning.severity === "error" || warning.severity === "warning");
+  return (
+    <div className={`asset-element-quality ${quality.status}`}>
+      <span>定位质量</span>
+      <strong>{pageElementQualityStatusLabel(quality.status)} · {Math.round(quality.score * 100)}%</strong>
+      {firstWarning ? <small>{firstWarning.message}</small> : null}
+    </div>
   );
 }
 
@@ -2171,7 +2319,7 @@ export function operationTransitionDraftFromForm(
     targetText?: string;
     abilityType?: AssetRecordingAbilityType;
     semanticArea?: VisualSemanticArea;
-    coordinateSpace?: "screen" | "app_viewport" | "region";
+    coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
     scrollProfile?: AssetRecordingScrollProfile;
   }
 ): AssetRecordingOperationTransitionDraft {
@@ -2181,6 +2329,9 @@ export function operationTransitionDraftFromForm(
   const abilityType = readAbilityTypeOptional(get("abilityType")) ?? context.abilityType;
   const semanticArea = readVisualSemanticArea(get("semanticArea")) ?? context.semanticArea ?? semanticAreaForLocator(context.locator);
   const scrollProfile = actionKind === "scroll" || abilityType === "grid_candidate" ? readScrollProfile(input, abilityType) : context.scrollProfile;
+  const tapPointPercent = readTapPointPercent(input);
+  const targetText = readFormString(get("targetText")) ?? context.targetText;
+  const targetLabel = readFormString(get("targetLabel"));
   return {
     sourceNodeId: context.sourceNodeId,
     targetNodeId: outcomeType === "navigate" || outcomeType === "compound_navigation" ? readFormString(get("targetNodeId")) : undefined,
@@ -2192,8 +2343,9 @@ export function operationTransitionDraftFromForm(
     semanticArea,
     coordinateSpace: context.coordinateSpace ?? (context.locator.startsWith("image-region:") ? "screen" : undefined),
     elementLabel: context.elementLabel,
-    targetText: readFormString(get("targetText")) ?? context.targetText,
-    targetLabel: readFormString(get("targetLabel")),
+    ...(targetText ? { targetText } : {}),
+    ...(targetLabel ? { targetLabel } : {}),
+    ...(tapPointPercent ? { tapPointPercent } : {}),
     ...(outcomeType === "compound_navigation" ? { compoundSteps: readCompoundSteps(input) } : {}),
     ...(scrollProfile ? { scrollProfile } : {})
   };
@@ -2207,6 +2359,18 @@ export function manualOperationDraftFromForm(
   const abilityType = readAbilityType(get("abilityType"));
   const actionKind = readActionKind(get("actionKind"));
   const elementLabel = readFormString(get("elementLabel")) ?? manualActionLabel(actionKind);
+  const tapPointPercent = readTapPointPercent(input);
+  const locatorKind = readLocatorKind(get("locatorKind")) ?? (abilityType === "grid_candidate" ? "collection_item_locator" : "visual_locator");
+  const targetText = readFormString(get("targetText"));
+  const outcomeType = readElementOutcomeType(get("outcomeType"));
+  const outcomeLabel = readFormString(get("outcomeLabel"));
+  const targetNodeId = readFormString(get("targetNodeId"));
+  const targetLabel = readFormString(get("targetLabel"));
+  const dynamicMasks = dynamicMasksForPreset(get("dynamicMaskPreset"), context.region);
+  const structuralLocator = locatorKind === "structural_locator" ? structuralLocatorForRegion(context.region, elementLabel) : undefined;
+  const collectionModel = locatorKind === "collection_item_locator" || abilityType === "grid_candidate"
+    ? collectionModelFromForm(input, context.region, elementLabel, context.sourceNodeId)
+    : undefined;
   return {
     elementId: readFormString(get("elementId")),
     sourceNodeId: context.sourceNodeId,
@@ -2217,14 +2381,154 @@ export function manualOperationDraftFromForm(
     semanticArea: readVisualSemanticArea(get("semanticArea")) ?? context.region.semanticArea ?? semanticAreaForRegion(context.region),
     coordinateSpace: "screen",
     elementLabel,
-    targetText: readFormString(get("targetText")),
-    outcomeType: readElementOutcomeType(get("outcomeType")),
-    outcomeLabel: readFormString(get("outcomeLabel")),
-    targetNodeId: readFormString(get("targetNodeId")),
-    targetLabel: readFormString(get("targetLabel")),
-    ...(readElementOutcomeType(get("outcomeType")) === "compound_navigation" ? { compoundSteps: readCompoundSteps(input) } : {}),
+    locatorKind,
+    ...(targetText ? { targetText } : {}),
+    ...(outcomeType ? { outcomeType } : {}),
+    ...(outcomeLabel ? { outcomeLabel } : {}),
+    ...(targetNodeId ? { targetNodeId } : {}),
+    ...(targetLabel ? { targetLabel } : {}),
+    ...(tapPointPercent ? { tapPointPercent } : {}),
+    ...(dynamicMasks?.length ? { dynamicMasks } : {}),
+    ...(structuralLocator ? { structuralLocator } : {}),
+    ...(collectionModel ? {
+      dynamicRegion: collectionModel.dynamicRegion,
+      itemTemplate: collectionModel.itemTemplate,
+      transitionKind: "parameterized" as const,
+      parameterMapping: collectionModel.parameterMapping
+    } : {}),
+    ...(outcomeType === "compound_navigation" ? { compoundSteps: readCompoundSteps(input) } : {}),
     ...(actionKind === "scroll" || abilityType === "grid_candidate" ? { scrollProfile: readScrollProfile(input, abilityType) } : {})
   };
+}
+
+function readLocatorKind(value: FormDataEntryValue | null): AssetRecordingLocatorKind | undefined {
+  return value === "text_locator" ||
+    value === "visual_locator" ||
+    value === "structural_locator" ||
+    value === "collection_item_locator"
+    ? value
+    : undefined;
+}
+
+function structuralLocatorForRegion(
+  region: Pick<AssetRecordingScreenshotRegion, "x" | "y" | "width" | "height" | "semanticArea">,
+  label: string
+): Record<string, unknown> {
+  return {
+    kind: "marked_row",
+    role: "list_item",
+    label,
+    indexHint: {
+      semanticArea: region.semanticArea ?? semanticAreaForRegion(region),
+      order: 0
+    },
+    stableAnchors: [
+      {
+        kind: "row_bounds",
+        region: { x: region.x, y: region.y, width: region.width, height: region.height }
+      }
+    ]
+  };
+}
+
+function dynamicMasksForPreset(
+  value: FormDataEntryValue | null,
+  region: Pick<AssetRecordingScreenshotRegion, "x" | "y" | "width" | "height">
+): AssetRecordingDynamicMask[] | undefined {
+  if (value !== "avatar_text") {
+    return undefined;
+  }
+  return [
+    {
+      kind: "avatar",
+      label: "头像",
+      region: {
+        x: roundRegion(region.x + region.width * 0.02),
+        y: roundRegion(region.y + region.height * 0.1),
+        width: roundRegion(region.width * 0.16),
+        height: roundRegion(region.height * 0.8)
+      },
+      reason: "personalized_visual"
+    },
+    {
+      kind: "text",
+      label: "动态文本",
+      region: {
+        x: roundRegion(region.x + region.width * 0.2),
+        y: roundRegion(region.y + region.height * 0.1),
+        width: roundRegion(region.width * 0.5),
+        height: roundRegion(region.height * 0.8)
+      },
+      reason: "personalized_text"
+    }
+  ];
+}
+
+function collectionModelFromForm(
+  input: FormData | Record<string, FormDataEntryValue | string | undefined>,
+  region: Pick<AssetRecordingScreenshotRegion, "x" | "y" | "width" | "height">,
+  elementLabel: string,
+  sourceNodeId: string | undefined
+): {
+  dynamicRegion: Record<string, unknown>;
+  itemTemplate: Record<string, unknown>;
+  parameterMapping: Record<string, string>;
+} {
+  const get = (name: string) => (input instanceof FormData ? input.get(name) : input[name] ?? null);
+  const dynamicRegionLabel = readFormString(get("dynamicRegionLabel")) ?? elementLabel;
+  const itemTemplateLabel = readFormString(get("itemTemplateLabel")) ?? `${dynamicRegionLabel}项`;
+  const parameterName = readFormString(get("parameterName")) ?? "itemText";
+  const baseSlug = slugForAsset(`${sourceNodeId ?? "page"}-${dynamicRegionLabel}`);
+  const itemTemplateId = `item_template_${baseSlug}`;
+  return {
+    dynamicRegion: {
+      id: `dynamic_region_${baseSlug}`,
+      label: dynamicRegionLabel,
+      kind: "grid",
+      region: { x: region.x, y: region.y, width: region.width, height: region.height },
+      itemTemplateId,
+      dynamicFieldRules: [
+        { name: parameterName, source: "ocr_text", role: "title" }
+      ]
+    },
+    itemTemplate: {
+      id: itemTemplateId,
+      label: itemTemplateLabel,
+      region: { x: region.x, y: region.y, width: roundRegion(region.width / 2), height: roundRegion(region.height / 3) },
+      actionArea: { x: region.x, y: region.y, width: roundRegion(region.width / 2), height: roundRegion(region.height / 3) },
+      dynamicFields: [
+        { name: parameterName, role: "title" }
+      ],
+      stableStructure: {
+        source: "manual_marked_collection"
+      }
+    },
+    parameterMapping: {
+      [parameterName]: "dynamicRegion.item.titleText"
+    }
+  };
+}
+
+function slugForAsset(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "_")
+    .replace(/^_+|_+$/g, "") || "unknown";
+}
+
+function roundRegion(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function readTapPointPercent(input: FormData | Record<string, FormDataEntryValue | string | undefined>): { x: number; y: number } | undefined {
+  const get = (name: string) => (input instanceof FormData ? input.get(name) : input[name] ?? null);
+  const x = readPercentNumber(get("tapPointXPercent"));
+  const y = readPercentNumber(get("tapPointYPercent"));
+  if (x === undefined || y === undefined) {
+    return undefined;
+  }
+  return { x, y };
 }
 
 function readCompoundSteps(input: FormData | Record<string, FormDataEntryValue | string | undefined>): AssetRecordingCompoundStepDraft[] {
@@ -2398,6 +2702,16 @@ function availabilityLabel(availability: AssetRecordingPageElement["availability
     return "条件出现";
   }
   return "当前可见";
+}
+
+function pageElementQualityStatusLabel(status: AssetRecordingPageElementQuality["status"]): string {
+  if (status === "pass") {
+    return "通过";
+  }
+  if (status === "fail") {
+    return "不可用";
+  }
+  return "建议复核";
 }
 
 function readScrollProfile(input: FormData | Record<string, FormDataEntryValue | string | undefined>, abilityType?: AssetRecordingAbilityType): AssetRecordingScrollProfile {

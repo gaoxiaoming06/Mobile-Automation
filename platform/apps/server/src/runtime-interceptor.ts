@@ -67,6 +67,24 @@ export type RuntimeInterceptorOutcome = {
 
 const DEFAULT_RULES: RuntimeInterceptorRule[] = [
   {
+    id: "classin-service-agreement",
+    name: "ClassIn 服务协议弹窗",
+    enabled: true,
+    matchers: [
+      { type: "package", value: "cn.eeo.classin", mode: "equals" },
+      { type: "text", value: "ClassIn服务协议" },
+      { type: "resource_id", value: "cn.eeo.classin:id/btn_agree", mode: "equals" }
+    ],
+    action: {
+      type: "tap_element",
+      resourceId: "cn.eeo.classin:id/btn_agree",
+      text: "同意",
+      mode: "equals"
+    },
+    platformScope: "android",
+    appPackageName: "cn.eeo.classin"
+  },
+  {
     id: "classin-stage-subject-picker",
     name: "ClassIn 选择学段学科页",
     enabled: true,

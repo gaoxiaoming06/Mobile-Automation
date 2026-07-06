@@ -16,6 +16,36 @@ import {
 
 export type PageMatcherBaselineReader = (artifactId: string) => Promise<Buffer | undefined>;
 
+type VisualMatchCache = {
+  baselineByArtifactId: Map<string, Promise<Buffer | undefined>>;
+  sampleByBuffer: WeakMap<Buffer, Promise<ImageSample | undefined>>;
+};
+
+export type VisualLocatorTemplate = {
+  version: 1;
+  source: "recorded_crop";
+  width: number;
+  height: number;
+  pixels: number[];
+  hash: string;
+  region: Rect;
+};
+
+export type VisualTemplateSearchResult = {
+  selected?: {
+    region: Rect;
+    pointPercent: { x: number; y: number };
+    similarity: number;
+  };
+  diagnostic: {
+    reason: "template_selected" | "template_below_threshold" | "missing_template" | "missing_screenshot" | "missing_region";
+    minSimilarity: number;
+    candidateCount: number;
+    bestSimilarity?: number;
+    templateHash?: string;
+  };
+};
+
 export type PageMatcherEvidenceDiagnostic = {
   matcherId: string;
   type: StateMatcher["type"];
@@ -26,6 +56,23 @@ export type PageMatcherEvidenceDiagnostic = {
   matched: boolean;
   score: number;
   reason?: string;
+};
+
+export type PageMatcherPollutionDiagnostic = {
+  code: "SCREENSHOT_POLLUTION";
+  message: string;
+  pollutionTexts: Array<{
+    text: string;
+    region?: Rect;
+  }>;
+  affectedMatchers: Array<{
+    nodeId: string;
+    nodeName: string;
+    matcherId: string;
+    type: StateMatcher["type"];
+    expected: string;
+    region?: Rect;
+  }>;
 };
 
 export type PageMatcherDiagnostics = {
@@ -46,6 +93,7 @@ export type PageMatcherDiagnostics = {
   };
   matchedEvidence: PageMatcherEvidenceDiagnostic[];
   missingEvidence: PageMatcherEvidenceDiagnostic[];
+  pollution?: PageMatcherPollutionDiagnostic;
   candidates: Array<{
     nodeId: string;
     key: string;
@@ -67,22 +115,35 @@ export async function matchCurrentPage(input: {
   graphVersion: BusinessGraphVersion;
   observation: Observation;
   baselineReader?: PageMatcherBaselineReader;
+  candidateNodeIds?: string[];
 }): Promise<PageMatcherResult> {
-  const graphVersion = pageAssetOnlyGraphVersion(input.graphVersion);
-  const observation = await enrichObservationImageRegions(input.observation, graphVersion, input.baselineReader);
+  const graphVersion = candidateOnlyGraphVersion(pageAssetOnlyGraphVersion(input.graphVersion), input.candidateNodeIds);
+  const observation = await enrichObservationImageRegions(input.observation, graphVersion, input.baselineReader, createVisualMatchCache());
   const rawMatch = detectNode(observation, graphVersion, observation.platform);
   const match = promoteParentPageLocalStateMatch(rawMatch, observation);
   return {
     match,
     observation,
-    diagnostics: buildPageMatcherDiagnostics(match)
+    diagnostics: buildPageMatcherDiagnostics(match, observation)
+  };
+}
+
+function candidateOnlyGraphVersion(graphVersion: BusinessGraphVersion, candidateNodeIds: string[] | undefined): BusinessGraphVersion {
+  const ids = new Set((candidateNodeIds ?? []).map((id) => id.trim()).filter(Boolean));
+  if (!ids.size) {
+    return graphVersion;
+  }
+  return {
+    ...graphVersion,
+    nodes: graphVersion.nodes.filter((node) => ids.has(node.id))
   };
 }
 
 export async function enrichObservationImageRegions(
   observation: Observation,
   graphVersion: BusinessGraphVersion,
-  baselineReader?: PageMatcherBaselineReader
+  baselineReader?: PageMatcherBaselineReader,
+  visualCache: VisualMatchCache = createVisualMatchCache()
 ): Promise<Observation> {
   const matchers = graphVersion.nodes.flatMap((node) => node.matchers.filter((matcher) => isImageRegionMatcherType(matcher.type) && matcher.region));
   if (!matchers.length) {
@@ -94,7 +155,7 @@ export async function enrichObservationImageRegions(
     if (!matcher.region || [...existing, ...generated].some((region) => region.value === matcher.value)) {
       continue;
     }
-    const similarity = await imageRegionSimilarity(observation, matcher, baselineReader);
+    const similarity = await imageRegionSimilarity(observation, matcher, baselineReader, visualCache);
     generated.push({
       value: matcher.value,
       region: matcher.region,
@@ -110,6 +171,120 @@ export async function enrichObservationImageRegions(
   };
 }
 
+export async function createVisualLocatorTemplate(input: {
+  screenshot: Buffer;
+  percentRegion: Rect;
+  resolution?: Observation["resolution"];
+  sampleSize?: number;
+}): Promise<VisualLocatorTemplate | undefined> {
+  const screenshotSample = await imageSampleNativeBestEffort(input.screenshot);
+  if (!screenshotSample) {
+    return undefined;
+  }
+  const pixelRegion = percentRectToPixels(input.percentRegion, input.resolution ?? { width: screenshotSample.width, height: screenshotSample.height });
+  if (!pixelRegion) {
+    return undefined;
+  }
+  const crop = cropSample(screenshotSample, pixelRegion);
+  if (!crop) {
+    return undefined;
+  }
+  const sampleSize = Math.max(4, Math.min(32, Math.floor(input.sampleSize ?? 16)));
+  const sample = resizeSample(crop, sampleSize, sampleSize);
+  return {
+    version: 1,
+    source: "recorded_crop",
+    width: sample.width,
+    height: sample.height,
+    pixels: sample.pixels,
+    hash: sampleHash(sample.pixels),
+    region: input.percentRegion
+  };
+}
+
+export async function locateVisualTemplateInScreenshot(input: {
+  screenshot: Buffer;
+  template: unknown;
+  percentRegion: Rect;
+  resolution?: Observation["resolution"];
+  minSimilarity?: number;
+}): Promise<VisualTemplateSearchResult> {
+  const minSimilarity = Math.max(0, Math.min(1, input.minSimilarity ?? 0.82));
+  const template = readVisualLocatorTemplate(input.template);
+  if (!template) {
+    return {
+      diagnostic: {
+        reason: "missing_template",
+        minSimilarity,
+        candidateCount: 0
+      }
+    };
+  }
+  const screenshotSample = await imageSampleNativeBestEffort(input.screenshot);
+  if (!screenshotSample) {
+    return {
+      diagnostic: {
+        reason: "missing_screenshot",
+        minSimilarity,
+        candidateCount: 0,
+        templateHash: template.hash
+      }
+    };
+  }
+  const pixelRegion = percentRectToPixels(input.percentRegion, input.resolution ?? { width: screenshotSample.width, height: screenshotSample.height });
+  if (!pixelRegion) {
+    return {
+      diagnostic: {
+        reason: "missing_region",
+        minSimilarity,
+        candidateCount: 0,
+        templateHash: template.hash
+      }
+    };
+  }
+  const candidates = candidateSearchRects(pixelRegion, screenshotSample);
+  let best: { region: Rect; similarity: number } | undefined;
+  const templateSample: ImageSample = {
+    width: template.width,
+    height: template.height,
+    pixels: template.pixels
+  };
+  for (const candidate of candidates) {
+    const crop = cropSample(screenshotSample, candidate);
+    if (!crop) {
+      continue;
+    }
+    const sample = resizeSample(crop, template.width, template.height);
+    const similarity = combinedVisualSimilarity(sample.pixels, templateSample.pixels);
+    if (!best || similarity > best.similarity) {
+      best = { region: candidate, similarity };
+    }
+  }
+  const bestSimilarity = best ? roundSimilarity(best.similarity) : undefined;
+  const diagnostic = {
+    reason: bestSimilarity !== undefined && bestSimilarity >= minSimilarity ? "template_selected" as const : "template_below_threshold" as const,
+    minSimilarity,
+    candidateCount: candidates.length,
+    bestSimilarity,
+    templateHash: template.hash
+  };
+  if (!best || bestSimilarity === undefined || bestSimilarity < minSimilarity) {
+    return { diagnostic };
+  }
+  const region = pixelRectToPercent(best.region, { width: screenshotSample.width, height: screenshotSample.height });
+  return {
+    selected: {
+      region,
+      pointPercent: {
+        x: roundPercentValue(region.x + region.width / 2),
+        y: roundPercentValue(region.y + region.height / 2)
+      },
+      similarity: bestSimilarity
+    },
+    diagnostic
+  };
+}
+
 export function pageAssetOnlyGraphVersion(graphVersion: BusinessGraphVersion): BusinessGraphVersion {
   const nodes = graphVersion.nodes.filter(isConfirmedPageAssetNode).map(withRuntimeScreenshotRegionMatchers);
   const nodeIds = new Set(nodes.map((node) => node.id));
@@ -120,11 +295,12 @@ export function pageAssetOnlyGraphVersion(graphVersion: BusinessGraphVersion): B
   };
 }
 
-export function buildPageMatcherDiagnostics(match: NodeMatchResult): PageMatcherDiagnostics {
+export function buildPageMatcherDiagnostics(match: NodeMatchResult, observation?: Observation): PageMatcherDiagnostics {
   const topCandidate = match.candidates[0];
   const evidenceSource = match.status === "matched" ? match.candidates.find((candidate) => candidate.node.id === match.node?.id) ?? topCandidate : topCandidate;
   const matchedEvidence = summarizeEvidence(evidenceSource?.matcherResults ?? [], true);
   const missingEvidence = summarizeEvidence(evidenceSource?.matcherResults ?? [], false);
+  const pollution = observation && match.status !== "matched" ? detectScreenshotPollution(match, observation) : undefined;
   return {
     status: match.status,
     score: match.score,
@@ -133,6 +309,7 @@ export function buildPageMatcherDiagnostics(match: NodeMatchResult): PageMatcher
     topCandidate: topCandidate ? summarizeCandidate(topCandidate) : undefined,
     matchedEvidence,
     missingEvidence,
+    pollution,
     candidates: match.candidates.map((candidate) => ({
       ...summarizeCandidate(candidate),
       matchedEvidence: summarizeEvidence(candidate.matcherResults, true),
@@ -158,6 +335,70 @@ export function promoteParentPageLocalStateMatch(match: NodeMatchResult, observa
     candidates: [candidate, ...match.candidates.filter((item) => item.node.id !== candidate.node.id)],
     threshold: match.threshold
   };
+}
+
+function detectScreenshotPollution(match: NodeMatchResult, observation: Observation): PageMatcherPollutionDiagnostic | undefined {
+  const pollutionTexts = (observation.ocrTexts ?? [])
+    .filter((text) => isDebugOverlayText(text.text))
+    .map((text) => ({
+      text: text.text,
+      region: text.region
+    }));
+  if (!pollutionTexts.length) {
+    return undefined;
+  }
+  const affectedMatchers = [];
+  for (const candidate of match.candidates) {
+    for (const result of candidate.matcherResults) {
+      if (!isPollutionSensitiveMissingCritical(result)) {
+        continue;
+      }
+      const isCovered = pollutionTexts.some((pollution) => pollution.region && result.region && percentRectOverlaps(pollution.region, result.region, observation.resolution));
+      if (!isCovered) {
+        continue;
+      }
+      affectedMatchers.push({
+        nodeId: candidate.node.id,
+        nodeName: candidate.node.name,
+        matcherId: result.matcherId,
+        type: result.type,
+        expected: result.expected,
+        region: result.region
+      });
+    }
+  }
+  if (!affectedMatchers.length) {
+    return undefined;
+  }
+  return {
+    code: "SCREENSHOT_POLLUTION",
+    message: "当前截图疑似被调试浮层遮挡，无法确认页面资产。请关闭 MEM/FPS/Toolbox 等浮层后重试。",
+    pollutionTexts,
+    affectedMatchers
+  };
+}
+
+function isPollutionSensitiveMissingCritical(result: MatcherResult): boolean {
+  return (
+    Boolean(result.critical) &&
+    !result.matched &&
+    Boolean(result.region) &&
+    (result.type === "ocr_text" || result.type === "image_region" || result.type === "semantic_image_region")
+  );
+}
+
+function isDebugOverlayText(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  return [
+    /\bMEM\s*:/i,
+    /\bFPS\s*:/i,
+    /\bCPU\s*:/i,
+    /Toolbox/i,
+    /SFRIDA/i,
+    /LET'?S\s*ROCK/i
+  ].some((pattern) => pattern.test(text));
 }
 
 function isHighQualityPageAssetCandidate(candidate: NodeMatchResult["candidates"][number], threshold: number): boolean {
@@ -404,16 +645,21 @@ function semanticImageRegionMatcher(region: ScreenshotRegionMatcher): StateMatch
   };
 }
 
-async function imageRegionSimilarity(observation: Observation, matcher: StateMatcher, baselineReader: PageMatcherBaselineReader | undefined): Promise<number> {
+async function imageRegionSimilarity(
+  observation: Observation,
+  matcher: StateMatcher,
+  baselineReader: PageMatcherBaselineReader | undefined,
+  visualCache: VisualMatchCache
+): Promise<number> {
   if (matcher.type === "semantic_image_region") {
-    return semanticImageRegionSimilarity(observation, matcher, baselineReader);
+    return semanticImageRegionSimilarity(observation, matcher, baselineReader, visualCache);
   }
   const baselineArtifactId = matcher.source?.artifactId;
   const screenshot = readObservationScreenshotBytes(observation);
   if (baselineReader && baselineArtifactId && matcher.region && screenshot) {
-    const baseline = await baselineReader(baselineArtifactId).catch(() => undefined);
+    const baseline = await readBaselineArtifact(baselineReader, baselineArtifactId, visualCache);
     if (baseline) {
-      return imageRegionVisualSimilarity(screenshot, baseline, matcher.region, observation.resolution, matcher.ignoreRegions);
+      return imageRegionVisualSimilarity(screenshot, baseline, matcher.region, observation.resolution, matcher.ignoreRegions, visualCache);
     }
   }
   const expectedSignature = parseImageRegionSignature(matcher.value);
@@ -421,25 +667,35 @@ async function imageRegionSimilarity(observation: Observation, matcher: StateMat
   return expectedSignature.evidence ? textSignatureSimilarity(expectedSignature.evidence, actualSignature) : 0;
 }
 
-async function semanticImageRegionSimilarity(observation: Observation, matcher: StateMatcher, baselineReader: PageMatcherBaselineReader | undefined): Promise<number> {
+async function semanticImageRegionSimilarity(
+  observation: Observation,
+  matcher: StateMatcher,
+  baselineReader: PageMatcherBaselineReader | undefined,
+  visualCache: VisualMatchCache
+): Promise<number> {
   const expectedSignature = parseImageRegionSignature(matcher.value);
   const actualSignature = matcher.region ? regionTextSignature(observation, matcher.region) : "";
   const textScore = expectedSignature.evidence ? textSignatureSimilarity(expectedSignature.evidence, actualSignature) : 0;
-  const visualScore = await visualRegionSimilarity(observation, matcher, baselineReader);
+  const visualScore = await visualRegionSimilarity(observation, matcher, baselineReader, visualCache);
   return roundSimilarity(Math.max(textScore, visualScore * 0.75));
 }
 
-async function visualRegionSimilarity(observation: Observation, matcher: StateMatcher, baselineReader: PageMatcherBaselineReader | undefined): Promise<number> {
+async function visualRegionSimilarity(
+  observation: Observation,
+  matcher: StateMatcher,
+  baselineReader: PageMatcherBaselineReader | undefined,
+  visualCache: VisualMatchCache
+): Promise<number> {
   const baselineArtifactId = matcher.source?.artifactId;
   const screenshot = readObservationScreenshotBytes(observation);
   if (!baselineReader || !baselineArtifactId || !matcher.region || !screenshot) {
     return 0;
   }
-  const baseline = await baselineReader(baselineArtifactId).catch(() => undefined);
+  const baseline = await readBaselineArtifact(baselineReader, baselineArtifactId, visualCache);
   if (!baseline) {
     return 0;
   }
-  return imageRegionVisualSimilarity(screenshot, baseline, matcher.region, observation.resolution, matcher.ignoreRegions);
+  return imageRegionVisualSimilarity(screenshot, baseline, matcher.region, observation.resolution, matcher.ignoreRegions, visualCache);
 }
 
 function isImageRegionMatcherType(type: StateMatcher["type"]): boolean {
@@ -602,6 +858,15 @@ function percentRectToPixels(region: Rect, resolution: Observation["resolution"]
   };
 }
 
+function pixelRectToPercent(region: Rect, resolution: NonNullable<Observation["resolution"]>): Rect {
+  return {
+    x: roundPercentValue((region.x / resolution.width) * 100),
+    y: roundPercentValue((region.y / resolution.height) * 100),
+    width: roundPercentValue((region.width / resolution.width) * 100),
+    height: roundPercentValue((region.height / resolution.height) * 100)
+  };
+}
+
 function normalizeRectScale(rect: Rect, resolution: Observation["resolution"]): Rect | undefined {
   if (!resolution?.width || !resolution.height || rect.x > 100 || rect.y > 100 || rect.width > 100 || rect.height > 100) {
     return rect;
@@ -653,10 +918,11 @@ async function imageRegionVisualSimilarity(
   baseline: Buffer,
   percentRegion: Rect,
   resolution: Observation["resolution"],
-  ignoreRegions: Rect[] | undefined
+  ignoreRegions: Rect[] | undefined,
+  visualCache?: VisualMatchCache
 ): Promise<number> {
-  const actualSample = await imageSampleNativeBestEffort(screenshot);
-  const baselineSample = await imageSampleNativeBestEffort(baseline);
+  const actualSample = visualCache ? await imageSampleNativeBestEffortCached(screenshot, visualCache) : await imageSampleNativeBestEffort(screenshot);
+  const baselineSample = visualCache ? await imageSampleNativeBestEffortCached(baseline, visualCache) : await imageSampleNativeBestEffort(baseline);
   if (!actualSample || !baselineSample) {
     const actual = await cropRegionBestEffort(screenshot, percentRegion, resolution);
     return imageBufferSimilarity(actual, baseline);
@@ -791,13 +1057,44 @@ function differenceHash(pixels: number[]): boolean[] {
   return result;
 }
 
-type ImageSample = {
+export type ImageSample = {
   width: number;
   height: number;
   pixels: number[];
 };
 
-async function imageSampleNativeBestEffort(image: Buffer): Promise<ImageSample | undefined> {
+function createVisualMatchCache(): VisualMatchCache {
+  return {
+    baselineByArtifactId: new Map(),
+    sampleByBuffer: new WeakMap()
+  };
+}
+
+function readBaselineArtifact(
+  baselineReader: PageMatcherBaselineReader,
+  artifactId: string,
+  visualCache: VisualMatchCache
+): Promise<Buffer | undefined> {
+  const cached = visualCache.baselineByArtifactId.get(artifactId);
+  if (cached) {
+    return cached;
+  }
+  const loaded = baselineReader(artifactId).catch(() => undefined);
+  visualCache.baselineByArtifactId.set(artifactId, loaded);
+  return loaded;
+}
+
+function imageSampleNativeBestEffortCached(image: Buffer, visualCache: VisualMatchCache): Promise<ImageSample | undefined> {
+  const cached = visualCache.sampleByBuffer.get(image);
+  if (cached) {
+    return cached;
+  }
+  const sampled = imageSampleNativeBestEffort(image);
+  visualCache.sampleByBuffer.set(image, sampled);
+  return sampled;
+}
+
+export async function imageSampleNativeBestEffort(image: Buffer): Promise<ImageSample | undefined> {
   const pgmSample = parsePgm(image);
   if (pgmSample) {
     return pgmSample;
@@ -1024,6 +1321,10 @@ function roundSimilarity(value: number): number {
   return Math.round(Math.max(0, Math.min(1, value)) * 10000) / 10000;
 }
 
+function roundPercentValue(value: number): number {
+  return Math.round(Math.max(0, Math.min(100, value)) * 100) / 100;
+}
+
 function uniqueStrings(values: Array<string | undefined>): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -1036,6 +1337,56 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
     result.push(normalized);
   }
   return result;
+}
+
+function readVisualLocatorTemplate(value: unknown): VisualLocatorTemplate | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  const width = typeof input.width === "number" && Number.isFinite(input.width) ? Math.floor(input.width) : undefined;
+  const height = typeof input.height === "number" && Number.isFinite(input.height) ? Math.floor(input.height) : undefined;
+  const pixels = Array.isArray(input.pixels)
+    ? input.pixels.map((item) => (typeof item === "number" && Number.isFinite(item) ? Math.max(0, Math.min(255, Math.round(item))) : undefined))
+    : [];
+  const region = readVisualTemplateRect(input.region);
+  if (!width || !height || pixels.length !== width * height || pixels.some((item) => item === undefined) || !region) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    source: "recorded_crop",
+    width,
+    height,
+    pixels: pixels as number[],
+    hash: typeof input.hash === "string" && input.hash.trim() ? input.hash : sampleHash(pixels as number[]),
+    region
+  };
+}
+
+function readVisualTemplateRect(value: unknown): Rect | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  const x = typeof input.x === "number" && Number.isFinite(input.x) ? input.x : undefined;
+  const y = typeof input.y === "number" && Number.isFinite(input.y) ? input.y : undefined;
+  const width = typeof input.width === "number" && Number.isFinite(input.width) ? input.width : undefined;
+  const height = typeof input.height === "number" && Number.isFinite(input.height) ? input.height : undefined;
+  if (x === undefined || y === undefined || width === undefined || height === undefined || width <= 0 || height <= 0) {
+    return undefined;
+  }
+  return { x, y, width, height };
+}
+
+function sampleHash(pixels: number[]): string {
+  const bits = [...averageHash(pixels), ...differenceHash(pixels)].map((bit) => bit ? "1" : "0").join("");
+  let hash = 2166136261;
+  for (let index = 0; index < bits.length; index += 1) {
+    hash ^= bits.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function decodeComponent(value: string): string {

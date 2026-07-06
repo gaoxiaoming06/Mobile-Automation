@@ -1,21 +1,64 @@
 import React from "react";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   App,
+  ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE,
+  ASSET_PATROL_PRIMARY_ACTION_LABEL,
+  ASSET_DRIVEN_TEST_ACTION_LABEL,
+  DEFAULT_ASSET_PATROL_PACKAGE_NAME,
+  DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES,
+  DEFAULT_STABILITY_EXPLORER_APP_EXIT_POLICY,
+  DEFAULT_STABILITY_EXPLORER_MAX_DEPTH,
+  DEFAULT_STABILITY_EXPLORER_START_MODE,
+  DEFAULT_STABILITY_DANGEROUS_TEXT,
   actionStrategyForWorkspace,
   assetConnectionEdgeMessage,
+  assetPatrolPanelDisplayMode,
+  assetPatrolPreviewMessage,
+  assetPatrolPageScopeOptions,
+  assetPatrolPlanRequiresBusinessSubmit,
+  assetPatrolRequestBody,
+  assetPatrolRuntimeParamDefinitionsForDisplay,
+  assetPatrolRuntimeParamPlaceholder,
+  assetPatrolRuntimeParamUsageSummary,
+  assetPatrolRuntimeParamsTemplate,
+  assetPatrolRuntimeParamValuesFromText,
+  assetPatrolRunProgressSummary,
+  assetPatrolStartMessage,
+  mergeAssetPatrolRuntimeParamsText,
+  setAssetPatrolRuntimeParamValue,
+  assetDrivenTestStartMessage,
   assetPageElementRequestBody,
   assetPageTaskRequestBody,
   assetRecordingIdentificationStateAfter,
   assetOperationTransitionRequestBody,
   currentPageAssetErrorMessage,
+  loadStabilityDangerousTextForPackage,
   mapCurrentPageAssetResponse,
   pageAssetMessage,
   previewWorkspaceKey,
+  saveStabilityDangerousTextForPackage,
+  stabilityExplorerRequestBody,
+  stabilityRunProgressSummary,
+  shouldAutoSyncAssetPatrolRuntimeParams,
   validateAssetPageElementDraftForSave,
   workspaceStyleForNav
 } from "./App.js";
+import { manualOperationDraftFromForm } from "./components/AssetRecordingPanel.js";
+
+class MemoryStorage {
+  private readonly values = new Map<string, string>();
+
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+}
 
 describe("App shell", () => {
   it("includes the asset recording navigation entry and keeps existing recording modules", () => {
@@ -25,6 +68,443 @@ describe("App shell", () => {
     expect(markup).toContain("用例库");
     expect(markup).toContain("资产录制");
     expect(markup).toContain("页面资产库");
+    expect(markup).toContain("资产驱动巡检");
+    expect(markup).toContain("稳定性探索");
+  });
+
+  it("keeps the stability exploration config panel independently scrollable", () => {
+    const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+    const configPanelRule = styles.match(/\.stability-config-panel\s*\{[^}]+\}/)?.[0] ?? "";
+    const panelOverrideRule = styles.match(/\.panel\.stability-config-panel\s*\{[^}]+\}/)?.[0] ?? "";
+
+    expect(configPanelRule).toContain("overflow-y: auto");
+    expect(configPanelRule).toContain("max-height:");
+    expect(panelOverrideRule).toContain("overflow-y: auto");
+  });
+
+  it("defaults stability exploration start mode to restart app", () => {
+    expect(DEFAULT_STABILITY_EXPLORER_START_MODE).toBe("restart_app");
+  });
+
+  it("defaults stability exploration app-exit policy to returning to app", () => {
+    expect(DEFAULT_STABILITY_EXPLORER_APP_EXIT_POLICY).toBe("back_to_app");
+  });
+
+  it("defaults stability exploration max depth to four", () => {
+    expect(DEFAULT_STABILITY_EXPLORER_MAX_DEPTH).toBe(4);
+  });
+
+  it("persists stability dangerous text by package and keeps defaults visible", () => {
+    const storage = new MemoryStorage();
+
+    saveStabilityDangerousTextForPackage(" com.demo ", "删除\n支付\n封禁", storage);
+
+    expect(loadStabilityDangerousTextForPackage("com.demo", storage)).toBe(`${DEFAULT_STABILITY_DANGEROUS_TEXT}\n封禁`);
+  });
+
+  it("isolates saved stability dangerous text between packages", () => {
+    const storage = new MemoryStorage();
+
+    saveStabilityDangerousTextForPackage("com.demo.a", "注销\n清退", storage);
+
+    expect(loadStabilityDangerousTextForPackage("com.demo.b", storage)).toBe(DEFAULT_STABILITY_DANGEROUS_TEXT);
+  });
+
+  it("builds a bounded stability exploration request body", () => {
+    expect(
+      stabilityExplorerRequestBody({
+        selectedSerial: "device-1",
+        packageName: " com.demo ",
+        maxDurationMinutes: 3,
+        maxActions: 120,
+        strategy: "balanced",
+        startMode: "current_state",
+        seed: "seed-42",
+        allowedActions: {
+          tap: true,
+          swipe: false,
+          back: true,
+          wait: true
+        },
+        appExitPolicy: "restart_app",
+        backtrackStrategy: "shallow",
+        maxDepth: 2,
+        dangerousTextPatternsText: "删除\n支付\n "
+      })
+    ).toEqual({
+      deviceSerial: "device-1",
+      packageName: "com.demo",
+      maxDurationMs: 180_000,
+      maxActions: 120,
+      strategy: "balanced",
+      startMode: "current_state",
+      seed: "seed-42",
+      allowedActions: ["tap", "back", "wait"],
+      appExitPolicy: "restart_app",
+      backtrackStrategy: "shallow",
+      maxDepth: 2,
+      dangerousTextPatterns: ["删除", "支付"],
+      stopOnCrash: true,
+      stopOnAnr: true,
+      stopOnBlackScreen: true,
+      stopOnUnknownPageStuck: true
+    });
+  });
+
+  it("summarizes stability exploration progress from run metadata", () => {
+    const summary = stabilityRunProgressSummary({
+      id: "run-1",
+      caseName: "稳定性探索：com.demo",
+      deviceSerial: "device-1",
+      status: "running",
+      config: {
+        runKind: "stability_exploration",
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 350,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false,
+        stabilityExploration: {
+          packageName: "com.demo",
+          strategy: "balanced",
+          startMode: "launch_app",
+          seed: "seed-42",
+          maxDurationMs: 180_000,
+          maxActions: 20,
+          allowedActions: ["tap", "swipe"],
+          appExitPolicy: "restart_app",
+          backtrackStrategy: "shallow",
+          maxDepth: 2,
+          dangerousTextPatterns: ["删除"],
+          stopOnCrash: true,
+          stopOnAnr: true,
+          stopOnBlackScreen: true,
+          stopOnUnknownPageStuck: true
+        }
+      },
+      steps: [],
+      stepResults: [
+        {
+          id: "step-result-1",
+          runId: "run-1",
+          iterationIndex: 0,
+          stepId: "stability_step_1",
+          stepOrder: 1,
+          type: "tap",
+          status: "passed",
+          startedAt: "2026-06-25T10:00:00.000Z",
+          artifacts: [],
+          metadata: {
+            stabilityExploration: {
+              candidateLabel: "添加好友",
+              candidateSource: "ocr_text",
+              currentPackage: "com.demo",
+              skippedCandidates: [{ label: "删除", skipReason: "dangerous_text" }]
+            }
+          }
+        }
+      ],
+      metrics: [],
+      events: [],
+      artifacts: [],
+      startedAt: "2026-06-25T10:00:00.000Z"
+    });
+
+    expect(summary).toEqual({
+      packageName: "com.demo",
+      seed: "seed-42",
+      progressText: "1 / 20",
+      latestAction: "添加好友",
+      latestSource: "ocr_text",
+      currentPackage: "com.demo",
+      skippedCandidates: 1
+    });
+  });
+
+  it("builds an asset patrol request body with safe defaults exposed by the UI", () => {
+    expect(
+      assetPatrolRequestBody({
+        selectedSerial: "device-1",
+        packageName: " cn.eeo.classin ",
+        startMode: "current_state",
+        pageScope: "current_page",
+        maxDurationMinutes: 2,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: false,
+        dangerousTextPatternsText: "删除\n退出登录\n发布"
+      })
+    ).toEqual({
+      deviceSerial: "device-1",
+      packageName: "cn.eeo.classin",
+      startMode: "current_state",
+      pageScope: "current_page",
+      maxDurationMs: 120_000,
+      maxTransitions: 8,
+      allowRiskyActions: false,
+      allowBusinessSubmit: false,
+      dangerousTextPatterns: ["删除", "退出登录", "发布"]
+    });
+  });
+
+  it("includes runtime params in asset patrol requests for real asset-driven execution", () => {
+    expect(
+      assetPatrolRequestBody({
+        selectedSerial: "device-1",
+        packageName: " cn.eeo.classin ",
+        startMode: "current_state",
+        pageScope: "current_page",
+        maxDurationMinutes: 2,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: true,
+        dangerousTextPatternsText: "删除",
+        runtimeParamsText: "phone=18743085313\npassword=secret"
+      })
+    ).toEqual(
+      expect.objectContaining({
+        runtimeParams: {
+          phone: "18743085313",
+          password: "secret"
+        }
+      })
+    );
+  });
+
+  it("builds and merges global asset runtime parameter templates without overwriting values", () => {
+    const parameters = [
+      { key: "phone" },
+      { key: "password" },
+      { key: "className" },
+      { key: "duration" },
+      { key: "recordClassroom" }
+    ];
+
+    expect(DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.phone).toBe("18743085313");
+    expect(DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.password).toBe("eeo123");
+    expect(DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.className).toBe("班级四十二号");
+    expect(assetPatrolRuntimeParamsTemplate(parameters)).toBe("phone=18743085313\npassword=eeo123\nclassName=班级四十二号\nduration=30\nrecordClassroom=true");
+    expect(mergeAssetPatrolRuntimeParamsText("phone=19900000000", parameters)).toBe("phone=19900000000\npassword=eeo123\nclassName=班级四十二号\nduration=30\nrecordClassroom=true");
+    expect(mergeAssetPatrolRuntimeParamsText("phone=\npassword=secret", parameters)).toBe("phone=18743085313\npassword=secret\nclassName=班级四十二号\nduration=30\nrecordClassroom=true");
+  });
+
+  it("keeps runtime parameter values editable as structured fields", () => {
+    expect(assetPatrolRuntimeParamValuesFromText("phone=\npassword=secret")).toEqual({
+      phone: "",
+      password: "secret"
+    });
+    expect(setAssetPatrolRuntimeParamValue("phone=\npassword=secret", "phone", "18743085313")).toBe("phone=18743085313\npassword=secret");
+    expect(setAssetPatrolRuntimeParamValue("phone=18743085313", "password", "secret")).toBe("phone=18743085313\npassword=secret");
+  });
+
+  it("prioritizes runtime parameters used by the current page", () => {
+    const definitions = [
+      { key: "lessonName", usages: [{ pageModelName: "新建公开课", taskName: "创建课堂", stepLabel: "课堂标题" }] },
+      { key: "phone", usages: [{ pageModelName: "登录", taskName: "账号密码登录", stepLabel: "手机号输入框" }] },
+      { key: "password", usages: [{ pageModelName: "登录", taskName: "账号密码登录", stepLabel: "密码输入框" }] }
+    ];
+
+    expect(assetPatrolRuntimeParamDefinitionsForDisplay(definitions, "登录").map((item) => item.key)).toEqual(["phone", "password", "lessonName"]);
+    expect(assetPatrolRuntimeParamUsageSummary(definitions[1])).toBe("登录 / 账号密码登录 / 手机号输入框");
+    expect(assetPatrolRuntimeParamPlaceholder(definitions[2])).toBe("请输入密码");
+  });
+
+  it("keeps unsupported asset patrol scopes disabled until cross-page patrol is implemented", () => {
+    expect(assetPatrolPageScopeOptions()).toEqual([
+      { value: "current_page", label: "当前页", disabled: false },
+      { value: "reachable_pages", label: "可达页面（后续接入）", disabled: true },
+      { value: "tagged_pages", label: "标记页面（后续接入）", disabled: true },
+      { value: "all_active_pages", label: "全部已激活页面（后续接入）", disabled: true }
+    ]);
+    expect(
+      assetPatrolRequestBody({
+        selectedSerial: "device-1",
+        packageName: "cn.eeo.classin",
+        startMode: "current_state",
+        pageScope: "all_active_pages",
+        maxDurationMinutes: 2,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: false,
+        dangerousTextPatternsText: "删除"
+      }).pageScope
+    ).toBe("current_page");
+  });
+
+  it("defaults asset patrol to the ClassIn Android package", () => {
+    expect(DEFAULT_ASSET_PATROL_PACKAGE_NAME).toBe("cn.eeo.classin");
+  });
+
+  it("auto-syncs asset patrol runtime params when opening the asset patrol page for a package", () => {
+    expect(
+      shouldAutoSyncAssetPatrolRuntimeParams({
+        activeNavItem: "assetPatrol",
+        packageName: " cn.eeo.classin ",
+        lastSyncedPackageName: ""
+      })
+    ).toBe(true);
+    expect(
+      shouldAutoSyncAssetPatrolRuntimeParams({
+        activeNavItem: "assetPatrol",
+        packageName: "cn.eeo.classin",
+        lastSyncedPackageName: "cn.eeo.classin"
+      })
+    ).toBe(false);
+    expect(
+      shouldAutoSyncAssetPatrolRuntimeParams({
+        activeNavItem: "recording",
+        packageName: "cn.eeo.classin",
+        lastSyncedPackageName: ""
+      })
+    ).toBe(false);
+    expect(
+      shouldAutoSyncAssetPatrolRuntimeParams({
+        activeNavItem: "assetPatrol",
+        packageName: " ",
+        lastSyncedPackageName: ""
+      })
+    ).toBe(false);
+  });
+
+  it("summarizes asset patrol progress from run metadata", () => {
+    const summary = assetPatrolRunProgressSummary({
+      id: "run-asset-patrol",
+      caseName: "资产驱动巡检：com.demo",
+      deviceSerial: "device-1",
+      status: "failed",
+      config: {
+        runKind: "asset_patrol",
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 150,
+        stopOnFailure: false,
+        recordVideo: false,
+        keepVideoOnSuccess: false,
+        assetPatrol: {
+          packageName: "com.demo",
+          startMode: "current_state",
+          pageScope: "current_page",
+          maxDurationMs: 120_000,
+          maxTransitions: 8,
+          allowRiskyActions: false,
+          allowBusinessSubmit: false,
+          dangerousTextPatterns: ["删除"],
+          runtimeParams: {}
+        }
+      },
+      steps: [],
+      stepResults: [
+        {
+          id: "step-result-1",
+          runId: "run-asset-patrol",
+          iterationIndex: 0,
+          stepId: "asset_patrol_step_1",
+          stepOrder: 1,
+          type: "wait",
+          status: "failed",
+          startedAt: "2026-07-01T10:00:00.000Z",
+          artifacts: [],
+          metadata: {
+            assetPatrol: {
+              kind: "element_relocation",
+              label: "元素可重定位：旧坐标区域",
+              status: "needs_repair",
+              skipReason: "runtime_relocation_required",
+              pageModelName: "主页"
+            }
+          }
+        }
+      ],
+      metrics: [],
+      events: [],
+      artifacts: [],
+      startedAt: "2026-07-01T10:00:00.000Z"
+    });
+
+    expect(summary).toEqual({
+      packageName: "com.demo",
+      progressText: "1 项",
+      latestCheck: "元素可重定位：旧坐标区域",
+      latestKind: "element_relocation",
+      pageName: "主页",
+      failed: 1,
+      skipped: 0,
+      needsRepair: 1
+    });
+  });
+
+  it("shows freshly previewed asset patrol plans before completed run feedback", () => {
+    expect(assetPatrolPanelDisplayMode({ plan: { status: "ready" } as never, currentRun: { id: "run-1", status: "passed" } as never })).toBe("plan");
+    expect(assetPatrolPanelDisplayMode({ plan: { status: "ready" } as never, currentRun: { id: "run-1", status: "running" } as never })).toBe("run");
+    expect(assetPatrolPanelDisplayMode({ currentRun: { id: "run-1", status: "passed" } as never })).toBe("run");
+    expect(assetPatrolPanelDisplayMode({ plan: { status: "ready" } as never })).toBe("plan");
+  });
+
+  it("labels asset patrol health checks separately from real asset-driven execution", () => {
+    expect(ASSET_PATROL_PRIMARY_ACTION_LABEL).toBe("执行资产体检");
+    expect(ASSET_DRIVEN_TEST_ACTION_LABEL).toBe("开始资产测试");
+    expect(ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE).toContain("诊断模式");
+    expect(ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE).toContain("不会触发页面点击或输入");
+    expect(assetPatrolPreviewMessage({ status: "ready", steps: [{ id: "step-1" }], issues: [] } as never)).toBe("已生成资产体检计划：1 项");
+    expect(assetPatrolStartMessage({ id: "run-1" } as never)).toBe("已启动资产体检：run-1");
+    expect(assetDrivenTestStartMessage({ id: "run-2" } as never)).toBe("已启动资产测试：run-2");
+    expect(assetDrivenTestStartMessage({ id: "run-2" } as never, { total: 3, remaining: 2 })).toBe(
+      "已启动资产测试：run-2，本页面资产边 3 条，剩余 2 条后台巡检"
+    );
+  });
+
+  it("requires explicit business submit permission before running asset page tasks", () => {
+    expect(
+      assetPatrolPlanRequiresBusinessSubmit({
+        status: "ready",
+        issues: [],
+        steps: [
+          {
+            id: "task-check",
+            order: 1,
+            kind: "task_dry_run",
+            label: "任务编排体检：账号密码登录",
+            status: "skipped",
+            skipReason: "business_submit_disabled"
+          }
+        ],
+        summary: {
+          pageChecks: 0,
+          elementChecks: 0,
+          transitionChecks: 0,
+          taskChecks: 1,
+          skipped: 1,
+          needsRepair: 0
+        }
+      })
+    ).toBe(true);
+
+    expect(
+      assetPatrolPlanRequiresBusinessSubmit({
+        status: "ready",
+        issues: [],
+        steps: [
+          {
+            id: "page-check",
+            order: 1,
+            kind: "page_match",
+            label: "页面匹配：登录",
+            status: "ready"
+          }
+        ],
+        summary: {
+          pageChecks: 1,
+          elementChecks: 0,
+          transitionChecks: 0,
+          taskChecks: 0,
+          skipped: 0,
+          needsRepair: 0
+        }
+      })
+    ).toBe(false);
   });
 
   it("uses different preview workspaces for case recording and asset recording", () => {
@@ -178,6 +658,224 @@ describe("App shell", () => {
     expect(page.pageName).toBe("我改过的主页");
     expect(page.visualPageName).toBe("主页");
     expect(page.matchedAssetName).toBeUndefined();
+  });
+
+  it("deduplicates persisted manual elements and keeps the richer semantic locator asset", () => {
+    const page = mapCurrentPageAssetResponse(
+      {
+        result: {
+          status: "matched",
+          match: {
+            status: "matched",
+            score: 0.9,
+            node: {
+              id: "node-settings",
+              key: "classin.settings",
+              name: "设置",
+              metadata: {
+                assetRecordingConfirmed: true,
+                assetRecordingManualElements: [
+                  {
+                    id: "old-qr",
+                    label: "我的二维码",
+                    targetText: "我的二维码",
+                    locator: "image-region:6,43,88,8",
+                    action: "tap",
+                    actionKind: "tap",
+                    availability: "visible",
+                    region: { x: 6, y: 43, width: 88, height: 8 },
+                    targetNodeId: "node-qr",
+                    targetLabel: "我的二维码",
+                    outcomeType: "navigate"
+                  },
+                  {
+                    id: "new-qr",
+                    label: "我的二维码",
+                    targetText: "我的二维码",
+                    locator: "image-region:3.96,47.36,91.57,6.16",
+                    action: "tap",
+                    actionKind: "tap",
+                    availability: "visible",
+                    region: { x: 3.96, y: 47.36, width: 91.57, height: 6.16 },
+                    targetNodeId: "node-qr",
+                    targetLabel: "我的二维码",
+                    outcomeType: "navigate",
+                    quality: { status: "pass", score: 1, warnings: [], candidates: [], evidence: { uniqueCandidate: true, candidateCount: 1 } },
+                    visualLocator: { strategy: "recorded_crop_template" }
+                  }
+                ]
+              }
+            },
+            candidates: []
+          },
+          observation: {
+            id: "obs-1",
+            platform: "android",
+            capturedAt: "2026-06-26T10:00:00.000Z",
+            resolution: { width: 1080, height: 2340 },
+            uiElements: [],
+            ocrTexts: []
+          }
+        },
+        assets: { pageAssets: [] }
+      },
+      "version-1"
+    );
+
+    const qrElements = (page.elements ?? []).filter((element) => element.label === "我的二维码");
+    expect(qrElements).toHaveLength(1);
+    expect(qrElements[0]).toEqual(
+      expect.objectContaining({
+        id: "new-qr",
+        locator: "image-region:3.96,47.36,91.57,6.16",
+        quality: expect.objectContaining({ status: "pass" }),
+        visualLocator: expect.objectContaining({ strategy: "recorded_crop_template" })
+      })
+    );
+  });
+
+  it("keeps same-label manual elements when their marked regions do not overlap", () => {
+    const page = mapCurrentPageAssetResponse(
+      {
+        result: {
+          status: "matched",
+          match: {
+            status: "matched",
+            score: 0.9,
+            node: {
+              id: "node-list",
+              key: "classin.list",
+              name: "列表页",
+              metadata: {
+                assetRecordingConfirmed: true,
+                assetRecordingManualElements: [
+                  {
+                    id: "first-detail",
+                    label: "详情",
+                    locator: "image-region:6,20,88,6",
+                    action: "tap",
+                    actionKind: "tap",
+                    availability: "visible",
+                    region: { x: 6, y: 20, width: 88, height: 6 },
+                    targetNodeId: "node-detail",
+                    targetLabel: "详情页",
+                    outcomeType: "navigate"
+                  },
+                  {
+                    id: "second-detail",
+                    label: "详情",
+                    locator: "image-region:6,60,88,6",
+                    action: "tap",
+                    actionKind: "tap",
+                    availability: "visible",
+                    region: { x: 6, y: 60, width: 88, height: 6 },
+                    targetNodeId: "node-detail",
+                    targetLabel: "详情页",
+                    outcomeType: "navigate",
+                    quality: { status: "pass", score: 1, warnings: [], candidates: [], evidence: { uniqueCandidate: true, candidateCount: 1 } }
+                  }
+                ]
+              }
+            },
+            candidates: []
+          },
+          observation: {
+            id: "obs-1",
+            platform: "android",
+            capturedAt: "2026-06-26T10:00:00.000Z",
+            resolution: { width: 1080, height: 2340 },
+            uiElements: [],
+            ocrTexts: []
+          }
+        },
+        assets: { pageAssets: [] }
+      },
+      "version-1"
+    );
+
+    expect((page.elements ?? []).filter((element) => element.label === "详情")).toEqual([
+      expect.objectContaining({ id: "first-detail", locator: "image-region:6,20,88,6" }),
+      expect.objectContaining({ id: "second-detail", locator: "image-region:6,60,88,6" })
+    ]);
+  });
+
+  it("preserves structural locator metadata when mapping persisted page abilities", () => {
+    const page = mapCurrentPageAssetResponse(
+      {
+        result: {
+          status: "matched",
+          match: {
+            status: "matched",
+            score: 0.9,
+            node: {
+              id: "node-settings",
+              key: "classin.settings",
+              name: "设置",
+              metadata: {
+                assetRecordingConfirmed: true,
+                assetRecordingManualElements: [
+                  {
+                    id: "profile-entry",
+                    label: "个人信息",
+                    locator: "image-region:6,15,88.77,8.78",
+                    locatorKind: "structural_locator",
+                    action: "tap",
+                    actionKind: "tap",
+                    availability: "visible",
+                    region: { x: 6, y: 15, width: 88.77, height: 8.78 },
+                    targetNodeId: "node-profile",
+                    targetLabel: "个人信息",
+                    outcomeType: "navigate",
+                    structuralLocator: {
+                      kind: "marked_row",
+                      role: "list_item",
+                      stableAnchors: [{ kind: "row_bounds", region: { x: 6, y: 15, width: 88.77, height: 8.78 } }]
+                    },
+                    dynamicMasks: [
+                      { kind: "avatar", label: "头像", region: { x: 7.78, y: 15.88, width: 14.2, height: 7.02 }, reason: "personalized_visual" },
+                      { kind: "text", label: "动态昵称", region: { x: 23.75, y: 15.88, width: 44.39, height: 7.02 }, reason: "personalized_text" }
+                    ],
+                    quality: {
+                      status: "pass",
+                      score: 0.87,
+                      warnings: [],
+                      candidates: [],
+                      evidence: { locatorKind: "structural_locator", dynamicMaskCount: 2 }
+                    }
+                  }
+                ]
+              }
+            },
+            candidates: []
+          },
+          observation: {
+            id: "obs-1",
+            platform: "android",
+            capturedAt: "2026-06-26T10:00:00.000Z",
+            resolution: { width: 1080, height: 2340 },
+            uiElements: [],
+            ocrTexts: []
+          }
+        },
+        assets: { pageAssets: [] }
+      },
+      "version-1"
+    );
+
+    expect(page.elements?.[0]).toEqual(
+      expect.objectContaining({
+        id: "profile-entry",
+        locatorKind: "structural_locator",
+        structuralLocator: expect.objectContaining({ kind: "marked_row" }),
+        dynamicMasks: [
+          expect.objectContaining({ kind: "avatar", reason: "personalized_visual" }),
+          expect.objectContaining({ kind: "text", reason: "personalized_text" })
+        ],
+        quality: expect.objectContaining({
+          evidence: expect.objectContaining({ dynamicMaskCount: 2 })
+        })
+      })
+    );
   });
 
   it("preserves screenshot focus ignore regions when mapping page assets", () => {
@@ -494,6 +1192,49 @@ describe("App shell", () => {
     expect(page.matchedMatchers).not.toContain("text:错误旧候选");
   });
 
+  it("maps screenshot pollution blocks as non-saveable asset recording errors", () => {
+    const response = {
+      result: {
+        status: "blocked" as const,
+        blocker: {
+          code: "SCREENSHOT_POLLUTION",
+          message: "当前截图疑似被调试浮层遮挡，无法确认页面资产。",
+          pollutionTexts: [{ text: "MEM: 369.6 MB" }],
+          affectedMatchers: [{ nodeName: "主页", matcherId: "matcher-home-title", type: "ocr_text", expected: "主页" }]
+        },
+        matcherDiagnostics: {
+          status: "unknown",
+          matchedEvidence: [],
+          missingEvidence: [{ type: "ocr_text", expected: "主页", matched: false }]
+        },
+        match: {
+          status: "unknown",
+          score: 0,
+          candidates: []
+        },
+        observation: {
+          id: "obs-home-polluted",
+          platform: "android" as const,
+          capturedAt: "2026-07-01T10:00:00.000Z",
+          packageName: "cn.eeo.classin",
+          activityName: ".MainActivity",
+          resolution: { width: 1080, height: 2340 },
+          uiElements: [],
+          ocrTexts: [{ text: "MEM: 369.6 MB", region: { x: 320, y: 150, width: 360, height: 52 }, source: "ocr" as const }]
+        },
+        visualPageName: "主页"
+      },
+      assets: { pageAssets: [] }
+    };
+
+    const page = mapCurrentPageAssetResponse(response, "version-1");
+
+    expect(page.status).toBe("error");
+    expect(page.nodeId).toBeUndefined();
+    expect(page.message).toContain("调试浮层遮挡");
+    expect(pageAssetMessage(response, page)).toBe("当前截图疑似被调试浮层遮挡，无法确认页面资产。");
+  });
+
   it("keeps bottom sheets as page-local transition context instead of page assets", () => {
     const page = mapCurrentPageAssetResponse(
       {
@@ -730,6 +1471,56 @@ describe("App shell", () => {
           candidateItemHeightPercent: 24.5,
           clickSafePoint: { xPercent: 50, yPercent: 28 },
           failureStrategy: "try_next_candidate"
+        })
+      })
+    );
+  });
+
+  it("includes dynamic region and parameterized transition metadata in page element requests", () => {
+    expect(
+      assetPageElementRequestBody(
+        {
+          sourceNodeId: "node-home",
+          abilityType: "grid_candidate",
+          actionKind: "tap",
+          availability: "visible",
+          locator: "image-region:3,32,91,56",
+          semanticArea: "content",
+          coordinateSpace: "screen",
+          elementLabel: "打开班级详情",
+          outcomeType: "navigate",
+          targetNodeId: "node-class-detail",
+          targetLabel: "班级详情",
+          locatorKind: "collection_item_locator",
+          transitionKind: "parameterized",
+          parameterMapping: { className: "dynamicRegion.item.titleText" },
+          dynamicRegion: {
+            id: "dynamic_region_node_home_classes",
+            label: "班级列表",
+            kind: "grid",
+            region: { x: 3, y: 32, width: 91, height: 56 },
+            itemTemplateId: "item_template_node_home_class_card"
+          },
+          itemTemplate: {
+            id: "item_template_node_home_class_card",
+            label: "班级卡片",
+            region: { x: 3, y: 32, width: 45.5, height: 18.67 },
+            actionArea: { x: 3, y: 32, width: 45.5, height: 18.67 }
+          }
+        },
+        { sourceNodeId: "node-home", platformScope: "android" }
+      )
+    ).toEqual(
+      expect.objectContaining({
+        locatorKind: "collection_item_locator",
+        transitionKind: "parameterized",
+        parameterMapping: { className: "dynamicRegion.item.titleText" },
+        dynamicRegion: expect.objectContaining({
+          id: "dynamic_region_node_home_classes",
+          itemTemplateId: "item_template_node_home_class_card"
+        }),
+        itemTemplate: expect.objectContaining({
+          id: "item_template_node_home_class_card"
         })
       })
     );
@@ -1195,6 +1986,7 @@ describe("App shell", () => {
           outcomeType: "compound_navigation",
           targetNodeId: "node-add-friend",
           targetLabel: "添加好友页",
+          tapPointPercent: { x: 20, y: 70 },
           outcomeLabel: "弹出更多菜单后可继续点添加好友",
           compoundSteps: [
             { type: "wait_until_state", text: "添加好友", label: "等待更多菜单出现", timeoutMs: 1200 },
@@ -1219,12 +2011,41 @@ describe("App shell", () => {
       outcomeType: "compound_navigation",
       targetNodeId: "node-add-friend",
       targetLabel: "添加好友页",
+      tapPointPercent: { x: 20, y: 70 },
       outcomeLabel: "弹出更多菜单后可继续点添加好友",
       compoundSteps: [
         { type: "wait_until_state", text: "添加好友", label: "等待更多菜单出现", timeoutMs: 1200 },
         { type: "tap_on_text", text: "添加好友", label: "点击添加好友" }
       ]
     });
+  });
+
+  it("builds manual page element drafts with a separate tap point", () => {
+    expect(
+      manualOperationDraftFromForm(
+        {
+          actionKind: "input",
+          availability: "visible",
+          semanticArea: "content",
+          elementLabel: "密码输入框",
+          outcomeType: "no_visible_change",
+          tapPointXPercent: "20",
+          tapPointYPercent: "70"
+        },
+        {
+          sourceNodeId: "node-login",
+          region: { x: 6, y: 31, width: 88, height: 6, semanticArea: "content" }
+        }
+      )
+    ).toEqual(
+      expect.objectContaining({
+        sourceNodeId: "node-login",
+        actionKind: "input",
+        locator: "image-region:6,31,88,6",
+        elementLabel: "密码输入框",
+        tapPointPercent: { x: 20, y: 70 }
+      })
+    );
   });
 
   it("requires a target page for navigable page ability requests", () => {
@@ -1239,7 +2060,7 @@ describe("App shell", () => {
         outcomeType: "navigate",
         targetLabel: "班级详情"
       })
-    ).toBe("跳转页面类型必须选择已保存的目标页面，否则不会进入路径规划");
+    ).toBe("跳转页面类型必须选择已保存的目标页面；如果只是普通点击，请把结果类型改为本页状态变化或无可见变化");
 
     expect(
       validateAssetPageElementDraftForSave({
@@ -1254,6 +2075,73 @@ describe("App shell", () => {
         targetLabel: "班级详情"
       })
     ).toBeUndefined();
+  });
+
+  it("requires a stable manual image region before saving a page ability", () => {
+    expect(
+      validateAssetPageElementDraftForSave({
+        sourceNodeId: "node-home",
+        actionKind: "tap",
+        availability: "visible",
+        locator: "image-region:49,50,1.2,0.8",
+        elementLabel: "更多",
+        outcomeType: "no_visible_change"
+      })
+    ).toBe("圈选区域过小，请重新圈选完整的可识别元素区域");
+  });
+
+  it("includes page element quality evidence in the save request body", () => {
+    expect(
+      assetPageElementRequestBody(
+        {
+          sourceNodeId: "node-login",
+          actionKind: "input",
+          availability: "visible",
+          locator: "image-region:6,31,88,6",
+          semanticArea: "content",
+          coordinateSpace: "screen",
+          elementLabel: "密码输入框",
+          targetText: "请输入密码",
+          outcomeType: "no_visible_change",
+          quality: {
+            status: "pass",
+            score: 0.88,
+            warnings: [],
+            candidates: [],
+            evidence: {
+              targetText: "请输入密码",
+              semanticArea: "content",
+              uniqueCandidate: true,
+              candidateCount: 1
+            }
+          },
+          visualLocator: {
+            version: 1,
+            strategy: "recorded_crop_template",
+            template: {
+              hash: "crop-hash"
+            }
+          }
+        },
+        {
+          sourceNodeId: "node-login",
+          platformScope: "android"
+        }
+      )
+    ).toEqual(
+      expect.objectContaining({
+        quality: expect.objectContaining({
+          status: "pass",
+          score: 0.88
+        }),
+        visualLocator: expect.objectContaining({
+          strategy: "recorded_crop_template",
+          template: expect.objectContaining({
+            hash: "crop-hash"
+          })
+        })
+      })
+    );
   });
 
   it("maps legacy overlay assets as page-local context instead of surfacing overlay controls", () => {

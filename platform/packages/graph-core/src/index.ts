@@ -88,7 +88,7 @@ export type StateMatcher = {
   region?: Rect;
   ignoreRegions?: Rect[];
   semanticArea?: VisualSemanticArea;
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   platformScope?: PlatformScope;
   source?: GraphAssetSource;
 };
@@ -409,7 +409,20 @@ export type ObservationImageRegion = {
 };
 
 export type ObservationEventSummary = {
-  type: "crash" | "anr" | "command_failed" | "device_lost" | "preview_lost" | "runner_error" | "video_unavailable" | "start_state_failed";
+  type:
+    | "crash"
+    | "anr"
+    | "command_failed"
+    | "device_lost"
+    | "preview_lost"
+    | "runner_error"
+    | "video_unavailable"
+    | "start_state_failed"
+    | "app_exit"
+    | "black_screen"
+    | "unknown_page_stuck"
+    | "stability_exploration"
+    | "asset_patrol";
   severity: "info" | "warning" | "error";
   summary: string;
   occurredAt?: string;
@@ -1249,11 +1262,13 @@ function evaluateNodeMatchQuality(matcherResults: MatcherResult[]): NodeMatchQua
 function effectiveNodeMatcherResults(matcherResults: MatcherResult[]): MatcherResult[] {
   const matchedImageRegions = matcherResults.filter((result) => isImageRegionMatcherType(result.type) && result.matched && result.region);
   const matchedSemanticImageRegions = matcherResults.filter((result) => result.type === "semantic_image_region" && result.matched && result.region);
+  const matchedTextResults = matcherResults.filter((result) => isTextMatcherResult(result) && result.matched);
   const matchedStrongSignals = matcherResults.filter((result) => result.matched && isStrongStateMatcher(result)).length;
   const matchedWeakSignals = matcherResults.filter((result) => result.matched && isWeakStateMatcher(result)).length;
   return matcherResults.filter(
     (result) =>
       !isDerivedRegionTextCoveredByMatchedImageRegion(result, matchedImageRegions) &&
+      !isMissingTextCoveredByEquivalentMatchedText(result, matchedTextResults) &&
       !isImageRegionCoveredByMatchedSemanticRegion(result, matchedSemanticImageRegions) &&
       !isChangedImageRegionCoveredByOtherPageAnchors(result, matchedImageRegions, matchedStrongSignals, matchedWeakSignals)
   );
@@ -1267,6 +1282,21 @@ function isDerivedRegionTextCoveredByMatchedImageRegion(result: MatcherResult, m
     return false;
   }
   return matchedImageRegions.some((imageRegion) => imageRegion.region && rectsNearlyEqual(result.region!, imageRegion.region));
+}
+
+function isMissingTextCoveredByEquivalentMatchedText(result: MatcherResult, matchedTextResults: MatcherResult[]): boolean {
+  if (result.type !== "text" || result.matched) {
+    return false;
+  }
+  const expected = normalizeMatcherText(result.expected);
+  if (!expected) {
+    return false;
+  }
+  return matchedTextResults.some((matched) => matched.type === "ocr_text" && normalizeMatcherText(matched.expected) === expected);
+}
+
+function isTextMatcherResult(result: MatcherResult): boolean {
+  return result.type === "text" || result.type === "ocr_text";
 }
 
 function isChangedImageRegionCoveredByOtherPageAnchors(result: MatcherResult, matchedImageRegions: MatcherResult[], matchedStrongSignals: number, matchedWeakSignals: number): boolean {
@@ -1348,6 +1378,9 @@ function isCommonNavigationSignature(value: string): boolean {
   const decoded = safeDecodeURIComponent(value);
   const normalized = normalizeText(decoded);
   const tabTokenCount = ["主页", "消息", "待办", "课程表", "空间", "成长"].filter((token) => normalized.includes(normalizeText(token))).length;
+  if (tabTokenCount <= 1 && /selected|active|current|选中/i.test(decoded)) {
+    return false;
+  }
   return /tab|navigation|fixed_bottom_navigation/i.test(decoded) || tabTokenCount >= 3;
 }
 

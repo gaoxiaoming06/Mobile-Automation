@@ -125,7 +125,7 @@ describe("iOS fallback actions", () => {
   it("treats Android-style back as a no-op", async () => {
     const driver = new IosDriver();
 
-    await expect(driver.performAction("ios-device", { type: "back" })).resolves.toBeUndefined();
+    await expect(driver.performAction("ios-device", { type: "back" })).resolves.toEqual({ driverChannel: "appium" });
   });
 
   it("does not emit placeholder text for unsupported log collection", async () => {

@@ -55,7 +55,7 @@ import { artifactFilePath } from "./artifacts.js";
 import { matchCurrentPage } from "./page-matcher.js";
 import { pageAbilityRouteGapIssues, withPageAbilityEdges } from "./page-ability-edges.js";
 import { SemanticStepResolver } from "./semantic-locator.js";
-import { resolveReachableStartNode } from "./start-node-recovery.js";
+import { resolveReachableStartNode, type StartAppScope } from "./start-node-recovery.js";
 import { StepExpectationEvaluator, annotateNonBlockingExpectationResults, shouldFailStepForExpectation, stateExpectedDescription } from "./step-expectations.js";
 import type { Storage } from "./storage.js";
 
@@ -116,8 +116,10 @@ export type StartGraphRunInput = {
   strategy?: RouteStrategy;
   stopOnFailure?: boolean;
   startStrategy?: FlowStartStrategy;
+  startAppPackageName?: string;
   overlay?: RuntimeOverlay;
   executionProfile?: "full" | "fast_visual";
+  startAppScope?: StartAppScope;
 };
 
 export type StartedGraphRun = {
@@ -213,7 +215,8 @@ export class GraphRunService {
               includeOcr: true
             }),
           performAction: (action) => this.driver.performAction(input.deviceSerial, action),
-          baselineReader: (artifactId) => this.readPageAssetBaselineArtifact(artifactId)
+          baselineReader: (artifactId) => this.readPageAssetBaselineArtifact(artifactId),
+          startAppScope: input.startAppScope
         });
     const detectedStartNodeId = startResolution.startNodeId;
     const routePlan = planRoute({
@@ -237,7 +240,13 @@ export class GraphRunService {
     );
     this.storage.saveRoutePlan(finalRoutePlan);
 
-    const config = this.createRunConfig(input.deviceSerial, graph.targetApp, input.startStrategy, input.executionProfile);
+    const config = this.createRunConfig(
+      input.deviceSerial,
+      input.startAppScope === "current_device" ? undefined : graph.targetApp,
+      input.startStrategy,
+      input.executionProfile,
+      input.startAppPackageName
+    );
     const testCase = graphExecutionPlanToCase(graph.name, executionPlan.steps, graph.targetApp, input.overlay);
     const run = this.storage.createRun({
       caseName: testCase.name,
@@ -297,7 +306,7 @@ export class GraphRunService {
     }
 
     const controller = new RunExecutionController();
-    const promise = this.execute(run.id, planningGraphVersion, executionPlan, config, controller, input.stopOnFailure ?? true, input.overlay).finally(() => {
+    const promise = this.execute(run.id, planningGraphVersion, executionPlan, config, controller, input.stopOnFailure ?? true, input.overlay, input.startAppScope).finally(() => {
       this.activeRuns.delete(run.id);
     });
     this.activeRuns.set(run.id, {
@@ -318,6 +327,10 @@ export class GraphRunService {
 
   isRunning(runId: string): boolean {
     return this.activeRuns.has(runId);
+  }
+
+  async waitForRun(runId: string): Promise<void> {
+    await this.activeRuns.get(runId)?.promise;
   }
 
   getActiveRunForDevice(deviceSerial: string): { runId: string; deviceSerial: string } | undefined {
@@ -350,7 +363,8 @@ export class GraphRunService {
     config: RunConfig,
     controller: RunExecutionController,
     stopOnFailure: boolean,
-    overlay?: RuntimeOverlay
+    overlay?: RuntimeOverlay,
+    startAppScope?: StartAppScope
   ): Promise<void> {
     const runStartedAt = new Date();
     let failed = false;
@@ -412,7 +426,9 @@ export class GraphRunService {
         targetApp: executionPlan.targetApp,
         overlay,
         requestedStartNodeId: executionPlan.startNodeId,
-        executionProfile: config.executionProfile
+        executionProfile: config.executionProfile,
+        startStrategy: config.startStrategy,
+        startAppScope
       });
       const executablePlan = normalizeRuntimeExecutionPlan(runtimeExecutionPlan, config.executionProfile);
       const graphDriver = this.createGraphDriver(runId, graphVersion, config.deviceSerial, graphStepResults, (stepResultId) => {
@@ -475,6 +491,7 @@ export class GraphRunService {
     executionProfile?: RunConfig["executionProfile"]
   ): GraphRunnerDriver {
     const latestMetricByStepResultId = new Map<string, MetricSample | undefined>();
+    const preferredNodeIdByObservationId = new Map<string, string>();
 
     return {
       observe: async (step, phase) => {
@@ -492,6 +509,9 @@ export class GraphRunService {
         }, this.runtimeInterceptorRulesForGraph(graphVersion, observationPhase));
         const outcome = await interceptor.handle({ phase: observationPhase });
         const observation = outcome.observation;
+        if (observation.id) {
+          preferredNodeIdByObservationId.set(observation.id, phase === "precondition" ? step.fromNode.id : step.toNode.id);
+        }
         const graphMetadata = readGraphMetadata(stepResult.metadata).graph ?? {};
         stepResult.metadata = {
           ...(stepResult.metadata ?? {}),
@@ -516,7 +536,10 @@ export class GraphRunService {
         };
         return observation;
       },
-      detectNode: async (observation) => this.matchBusinessNode(observation, graphVersion, observation.platform),
+      detectNode: async (observation) => {
+        const preferredNodeId = observation.id ? preferredNodeIdByObservationId.get(observation.id) : undefined;
+        return this.matchBusinessNode(observation, graphVersion, observation.platform, preferredNodeId);
+      },
       performAction: async (action, step) => {
         const stepResult = ensureGraphStepResult(runId, step, stepResultsByPlanStepId);
         const device = await this.driver.getDeviceInfo(serial);
@@ -912,22 +935,32 @@ export class GraphRunService {
     overlay?: RuntimeOverlay;
     requestedStartNodeId?: string;
     executionProfile?: RunConfig["executionProfile"];
+    startStrategy?: FlowStartStrategy;
+    startAppScope?: StartAppScope;
   }): Promise<GraphExecutionPlan> {
     const graph = this.storage.getBusinessGraph(input.graphVersion.graphId);
-    const shouldTrustRequestedStart = input.executionProfile === "fast_visual" && Boolean(input.requestedStartNodeId);
+    const startStrategyKeepsCurrentState = !input.startStrategy || input.startStrategy === "keep_current";
+    const shouldTrustRequestedStart = input.executionProfile === "fast_visual" && Boolean(input.requestedStartNodeId) && startStrategyKeepsCurrentState;
     const startState = shouldTrustRequestedStart
       ? undefined
-      : await this.detectRuntimeStartState(input.serial, input.graphVersion, input.targetApp, input.platform, input.executionProfile);
-    let startNodeId = shouldTrustRequestedStart ? input.requestedStartNodeId : startState?.nodeId;
+      : await this.detectRuntimeStartState(input.serial, input.graphVersion, input.targetApp, input.platform, input.executionProfile, input.startAppScope);
+    let startNodeId = startState?.nodeId ?? (shouldTrustRequestedStart ? input.requestedStartNodeId : undefined);
     if (startState && startNodeId && shouldRecordMatchedStartState(startState.reason)) {
       this.recordMatchedStartState(input.runId, input.serial, startState);
     }
     if (!startNodeId) {
+      if (input.startAppScope === "current_device") {
+        await this.recordUnrecognizedCurrentDeviceStart(input.runId, input.serial, input.graphVersion, input.targetNodeId, startState ?? {
+          inTargetApp: true,
+          reason: "unknown_app_state"
+        });
+        throw new Error("CURRENT_DEVICE_START_NODE_NOT_RECOGNIZED: current device state did not match any business graph node.");
+      }
       await this.performBootstrapStart(input.runId, input.serial, input.targetApp, startState ?? {
         inTargetApp: true,
         reason: "unknown_app_state"
       });
-      const bootstrapped = await this.waitForRecognizedStartNode(input.serial, input.graphVersion, input.platform, input.targetApp, input.executionProfile);
+      const bootstrapped = await this.waitForRecognizedStartNode(input.serial, input.graphVersion, input.platform, input.targetApp, input.executionProfile, input.startAppScope);
       startNodeId = bootstrapped.nodeId;
       if (!startNodeId) {
         await this.recordUnrecognizedBootstrapStart(input.runId, input.serial, input.graphVersion, input.targetNodeId, startState ?? {
@@ -1113,7 +1146,8 @@ export class GraphRunService {
     graphVersion: BusinessGraphVersion,
     targetApp: GraphTargetApp | undefined,
     platform: "android" | "ios",
-    executionProfile?: RunConfig["executionProfile"]
+    executionProfile?: RunConfig["executionProfile"],
+    startAppScope?: StartAppScope
   ): Promise<RuntimeStartState> {
     const observationProfile = graphObservationProfile(executionProfile);
     const observation = await this.observationService.collect(serial, {
@@ -1122,7 +1156,7 @@ export class GraphRunService {
       includeOcr: true
     });
     const match = await this.matchBusinessNode(observation, graphVersion, platform);
-    const inTargetApp = isObservationInTargetApp(observation, targetApp, platform);
+    const inTargetApp = isObservationInRunScope(observation, targetApp, platform, startAppScope);
     const nodeId = match.status === "matched" && inTargetApp ? match.node?.id : undefined;
     return {
       nodeId,
@@ -1138,12 +1172,13 @@ export class GraphRunService {
     graphVersion: BusinessGraphVersion,
     platform: "android" | "ios",
     targetApp: GraphTargetApp | undefined,
-    executionProfile?: RunConfig["executionProfile"]
+    executionProfile?: RunConfig["executionProfile"],
+    startAppScope?: StartAppScope
   ): Promise<{ nodeId?: string; match?: NodeMatchResult; state?: RuntimeStartState }> {
     const deadline = Date.now() + 8000;
     let latest: { nodeId?: string; match?: NodeMatchResult; state?: RuntimeStartState } = {};
     while (Date.now() < deadline) {
-      const state = await this.detectRuntimeStartState(serial, graphVersion, targetApp, platform, executionProfile);
+      const state = await this.detectRuntimeStartState(serial, graphVersion, targetApp, platform, executionProfile, startAppScope);
       latest = { nodeId: state.nodeId, match: state.match, state };
       if (state.nodeId && state.inTargetApp) {
         return latest;
@@ -1237,6 +1272,48 @@ export class GraphRunService {
         candidateEdgeId: edge?.id,
         candidateEdgeKey: edge?.key,
         hint: "Add a recovery edge to a known node or strengthen matchers for the current page before running this target."
+      }),
+      artifactIds: candidate ? [candidate.artifact.id] : []
+    });
+  }
+
+  private async recordUnrecognizedCurrentDeviceStart(
+    runId: string,
+    serial: string,
+    graphVersion: BusinessGraphVersion,
+    targetNodeId: string,
+    startState: RuntimeStartState
+  ): Promise<void> {
+    const candidate = await this.writeRuntimeUnknownNodeCandidate(runId, graphVersion, startState.observation, startState.match);
+    const edge = candidate
+      ? this.createRuntimeUnknownToTargetDraftEdge({
+          graphVersion,
+          fromNode: candidate.node,
+          targetNodeId,
+          observation: startState.observation,
+          artifactId: candidate.artifact.id
+        })
+      : undefined;
+    this.addDeviceEvent({
+      id: createId("event"),
+      runId,
+      deviceSerial: serial,
+      type: "start_state_failed",
+      severity: "error",
+      occurredAt: nowIso(),
+      summary: "Current device start state did not match a recognized graph node",
+      detail: JSON.stringify({
+        code: "CURRENT_DEVICE_START_NODE_NOT_RECOGNIZED",
+        reason: startState.reason,
+        inTargetApp: startState.inTargetApp,
+        observation: startState.observation ? summarizeObservation(startState.observation) : undefined,
+        match: summarizeNodeMatch(startState.match),
+        candidateNodeId: candidate?.node.id,
+        candidateNodeKey: candidate?.node.key,
+        candidateArtifactId: candidate?.artifact.id,
+        candidateEdgeId: edge?.id,
+        candidateEdgeKey: edge?.key,
+        hint: "Strengthen matchers for the current page or add a connection edge before running this target."
       }),
       artifactIds: candidate ? [candidate.artifact.id] : []
     });
@@ -1359,6 +1436,9 @@ export class GraphRunService {
       return undefined;
     }
     if (deviation.actualNodeId === failedStep.toNodeId) {
+      return undefined;
+    }
+    if (deviation.actualNodeId === failedStep.fromNodeId) {
       return undefined;
     }
     return {
@@ -1556,7 +1636,7 @@ export class GraphRunService {
   ): GraphExecutionPlan {
     return {
       ...executionPlan,
-      steps: executionPlan.steps.map((step, index) => ({
+      steps: executionPlan.steps.map((step) => ({
         ...step,
         order: step.order + 1000 * attempt,
         recovery: {
@@ -1584,7 +1664,10 @@ export class GraphRunService {
         checkedAt: nowIso()
       };
     }
-    const match = await this.matchBusinessNode(input.observation, graphVersion, input.observation.platform);
+    const match =
+      input.nodeMatch && input.nodeMatch.observationId === input.observation.id
+        ? input.nodeMatch
+        : await this.matchBusinessNode(input.observation, graphVersion, input.observation.platform);
     const expectedNodeId = stringParam(input.expectation.params.nodeId ?? input.expectation.params.expectedNodeId ?? input.expectation.params.expected);
     const expectedNodeKey = stringParam(input.expectation.params.nodeKey ?? input.expectation.params.expectedNodeKey);
     const expectedNodeName = stringParam(input.expectation.params.nodeName ?? input.expectation.params.expectedNodeName);
@@ -1620,11 +1703,12 @@ export class GraphRunService {
     const graphResultArtifact = await this.artifactService.writeLog(runId, "graph-execution-result.json", JSON.stringify(result, null, 2));
     for (const step of result.steps) {
       const planStep = executionPlan.steps.find((item) => item.id === step.planStepId);
-      const stepResult: StepResult = stepResultsByPlanStepId.get(step.planStepId) ?? {
+      const stepResultKey = graphStepResultKeyFromResultStep(step);
+      const stepResult: StepResult = stepResultsByPlanStepId.get(stepResultKey) ?? {
         id: createId("step_result"),
         runId,
         iterationIndex: 0,
-        stepId: step.planStepId,
+        stepId: stepResultKey,
         stepOrder: step.order,
         type: planStep?.action?.type ?? "wait",
         status: "running",
@@ -1749,19 +1833,35 @@ export class GraphRunService {
   private async matchBusinessNode(
     observation: Observation,
     graphVersion: BusinessGraphVersion,
-    platform: "android" | "ios"
+    platform: "android" | "ios",
+    preferredNodeId?: string
   ): Promise<NodeMatchResult> {
     const graphMatch = detectNode(observation, graphVersion, platform);
     if (graphMatch.status === "matched" && (isBlockingStateNode(graphMatch.node) || isLoginRequiredNode(graphMatch.node))) {
       return graphMatch;
     }
+    if (preferredNodeId && graphMatch.status === "matched" && graphMatch.node?.id === preferredNodeId) {
+      return graphMatch;
+    }
     const pageMatch = await matchCurrentPage({
       graphVersion,
       observation,
-      baselineReader: (artifactId) => this.readPageAssetBaselineArtifact(artifactId)
+      baselineReader: (artifactId) => this.readPageAssetBaselineArtifact(artifactId),
+      candidateNodeIds: preferredNodeId ? [preferredNodeId] : undefined
     });
     if (pageMatch.match.status === "matched") {
       return pageMatch.match;
+    }
+    if (preferredNodeId) {
+      const fallbackPageMatch = await matchCurrentPage({
+        graphVersion,
+        observation,
+        baselineReader: (artifactId) => this.readPageAssetBaselineArtifact(artifactId)
+      });
+      if (fallbackPageMatch.match.status === "matched") {
+        return fallbackPageMatch.match;
+      }
+      return graphMatch.status === "matched" ? graphMatch : detectNode(fallbackPageMatch.observation, graphVersion, platform);
     }
     return graphMatch.status === "matched" ? graphMatch : detectNode(pageMatch.observation, graphVersion, platform);
   }
@@ -1778,9 +1878,10 @@ export class GraphRunService {
     deviceSerial: string,
     targetApp: GraphTargetApp | undefined,
     startStrategy: FlowStartStrategy | undefined,
-    executionProfile: RunConfig["executionProfile"] | undefined
+    executionProfile: RunConfig["executionProfile"] | undefined,
+    explicitStartAppPackageName?: string
   ): RunConfig {
-    const startAppPackageName = targetApp?.androidPackageName;
+    const startAppPackageName = explicitStartAppPackageName?.trim() || targetApp?.androidPackageName;
     const profile = executionProfile ?? "full";
     return {
       deviceSerial,
@@ -1947,7 +2048,8 @@ function graphExecutionPlanToCase(name: string, steps: ExecutionPlanStep[], targ
 }
 
 function ensureGraphStepResult(runId: string, step: ExecutionPlanStep, results: Map<string, StepResult>): StepResult {
-  const existing = results.get(step.id);
+  const resultKey = graphStepResultKeyFromPlanStep(step);
+  const existing = results.get(resultKey);
   if (existing) {
     return existing;
   }
@@ -1955,7 +2057,7 @@ function ensureGraphStepResult(runId: string, step: ExecutionPlanStep, results: 
     id: createId("step_result"),
     runId,
     iterationIndex: 0,
-    stepId: step.id,
+    stepId: resultKey,
     stepOrder: step.order,
     type: step.action?.type ?? "wait",
     status: "running",
@@ -1974,8 +2076,18 @@ function ensureGraphStepResult(runId: string, step: ExecutionPlanStep, results: 
       }
     }
   };
-  results.set(step.id, result);
+  results.set(resultKey, result);
   return result;
+}
+
+function graphStepResultKeyFromPlanStep(step: ExecutionPlanStep): string {
+  const attempt = step.recovery?.attempt;
+  return typeof attempt === "number" && Number.isFinite(attempt) ? `${step.id}__recovery_${Math.max(0, Math.floor(attempt))}` : step.id;
+}
+
+function graphStepResultKeyFromResultStep(step: GraphExecutionResult["steps"][number]): string {
+  const attempt = step.recoveryAttempt;
+  return typeof attempt === "number" && Number.isFinite(attempt) ? `${step.planStepId}__recovery_${Math.max(0, Math.floor(attempt))}` : step.planStepId;
 }
 
 function graphStepFallbackAction(step: ExecutionPlanStep): ActionStep {
@@ -2402,11 +2514,27 @@ type StoredPageTaskStep = {
 type StoredManualPageElement = {
   id?: string;
   label?: string;
+  targetText?: string;
   locator?: string;
   actionKind?: "tap" | "scroll" | "long_press" | "input" | "unknown";
   semanticArea?: "top" | "content" | "bottom" | "unknown";
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   region?: { x: number; y: number; width: number; height: number };
+  tapPointPercent?: { x: number; y: number };
+  quality?: Record<string, unknown>;
+  visualLocator?: Record<string, unknown>;
+  locatorKind?: string;
+  anchorText?: string;
+  anchorOffsetPercent?: Record<string, unknown>;
+  role?: string;
+  slot?: string;
+  orderFromRight?: number;
+  dynamicMasks?: Record<string, unknown>[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegionId?: string;
+  itemTemplateId?: string;
+  transitionKind?: string;
+  parameterMapping?: Record<string, unknown>;
 };
 
 function appendSourcePageTaskNavigationSteps(executionPlan: GraphExecutionPlan, graphVersion: BusinessGraphVersion, overlay: RuntimeOverlay | undefined): GraphExecutionPlan {
@@ -2762,6 +2890,51 @@ function pageTaskActionParams(taskStep: StoredPageTaskStep, runtimeParams: Recor
 
 function manualElementActionParams(element: StoredManualPageElement): Record<string, unknown> {
   const region = element.region ?? parseImageRegionLocator(element.locator);
+  if (element.locatorKind === "top_bar_icon_locator" || element.locator?.startsWith("top-bar-icon:")) {
+    return {
+      locator: element.locator,
+      locatorKind: element.locatorKind ?? "top_bar_icon_locator",
+      semanticArea: element.semanticArea ?? "top",
+      coordinateSpace: element.coordinateSpace ?? "runtime",
+      ...(element.targetText ? { targetText: element.targetText } : {}),
+      ...(element.anchorText ? { anchorText: element.anchorText } : {}),
+      ...(element.role ? { role: element.role } : {}),
+      ...(element.slot ? { slot: element.slot } : {}),
+      ...(typeof element.orderFromRight === "number" ? { orderFromRight: element.orderFromRight } : {}),
+      ...(element.quality ? { quality: element.quality } : {}),
+      ...(element.visualLocator ? { visualLocator: element.visualLocator } : {}),
+      ...(element.dynamicMasks?.length ? { dynamicMasks: element.dynamicMasks } : {}),
+      ...(element.transitionKind ? { transitionKind: element.transitionKind } : {}),
+      ...(element.parameterMapping ? { parameterMapping: element.parameterMapping } : {})
+    };
+  }
+  if (element.locatorKind === "ocr_anchor_offset") {
+    return {
+      locator: element.locator,
+      locatorKind: element.locatorKind,
+      semanticArea: element.semanticArea ?? "top",
+      coordinateSpace: element.coordinateSpace ?? "screen",
+      ...(element.targetText ? { targetText: element.targetText } : {}),
+      ...(element.anchorText ? { anchorText: element.anchorText } : {}),
+      ...(element.anchorOffsetPercent ? { anchorOffsetPercent: element.anchorOffsetPercent } : {})
+    };
+  }
+  if (element.locator?.startsWith("runtime-locator:")) {
+    return {
+      locator: element.locator,
+      semanticArea: element.semanticArea ?? "content",
+      coordinateSpace: element.coordinateSpace ?? "runtime",
+      ...(element.targetText ? { targetText: element.targetText } : {}),
+      ...(element.quality ? { quality: element.quality } : {}),
+      ...(element.locatorKind ? { locatorKind: element.locatorKind } : {}),
+      ...(element.dynamicMasks?.length ? { dynamicMasks: element.dynamicMasks } : {}),
+      ...(element.structuralLocator ? { structuralLocator: element.structuralLocator } : {}),
+      ...(element.dynamicRegionId ? { dynamicRegionId: element.dynamicRegionId } : {}),
+      ...(element.itemTemplateId ? { itemTemplateId: element.itemTemplateId } : {}),
+      ...(element.transitionKind ? { transitionKind: element.transitionKind } : {}),
+      ...(element.parameterMapping ? { parameterMapping: element.parameterMapping } : {})
+    };
+  }
   if (region) {
     return {
       region,
@@ -2769,7 +2942,17 @@ function manualElementActionParams(element: StoredManualPageElement): Record<str
       locator: element.locator,
       semanticArea: element.semanticArea ?? semanticAreaForPercentRegion(region),
       coordinateSpace: element.coordinateSpace ?? "screen",
-      ...(element.label ? { targetText: element.label } : {})
+      ...(element.tapPointPercent ? { tapPointPercent: element.tapPointPercent } : {}),
+      ...(element.targetText ? { targetText: element.targetText } : {}),
+      ...(element.quality ? { quality: element.quality } : {}),
+      ...(element.visualLocator ? { visualLocator: element.visualLocator } : {}),
+      ...(element.locatorKind ? { locatorKind: element.locatorKind } : {}),
+      ...(element.dynamicMasks?.length ? { dynamicMasks: element.dynamicMasks } : {}),
+      ...(element.structuralLocator ? { structuralLocator: element.structuralLocator } : {}),
+      ...(element.dynamicRegionId ? { dynamicRegionId: element.dynamicRegionId } : {}),
+      ...(element.itemTemplateId ? { itemTemplateId: element.itemTemplateId } : {}),
+      ...(element.transitionKind ? { transitionKind: element.transitionKind } : {}),
+      ...(element.parameterMapping ? { parameterMapping: element.parameterMapping } : {})
     };
   }
   if (element.locator?.startsWith("text:")) {
@@ -2792,6 +2975,12 @@ function actionTypeForManualElement(element: StoredManualPageElement | undefined
   }
   if (element.actionKind === "input") {
     return "input_text_to_element";
+  }
+  if (element.locator?.startsWith("runtime-locator:")) {
+    return "tap_on_image";
+  }
+  if (element.locatorKind === "ocr_anchor_offset" || element.locatorKind === "top_bar_icon_locator" || element.locator?.startsWith("top-bar-icon:")) {
+    return "tap_on_image";
   }
   if (element.locator?.startsWith("image-region:") || element.region) {
     return "tap_on_image";
@@ -2868,11 +3057,27 @@ function readStoredManualElements(metadata: Record<string, unknown> | undefined)
       return {
         id,
         label: stringParam(record.label),
+        targetText: stringParam(record.targetText),
         locator,
         actionKind: readStoredActionKind(record.actionKind),
         semanticArea: readStoredSemanticArea(record.semanticArea),
         coordinateSpace: readStoredCoordinateSpace(record.coordinateSpace),
-        region: readStoredRect(record.region) ?? parseImageRegionLocator(locator)
+        region: readStoredRect(record.region) ?? parseImageRegionLocator(locator),
+        tapPointPercent: readStoredPointPercent(record.tapPointPercent),
+        quality: readStoredRecord(record.quality),
+        visualLocator: readStoredRecord(record.visualLocator),
+        locatorKind: stringParam(record.locatorKind),
+        anchorText: stringParam(record.anchorText),
+        anchorOffsetPercent: readStoredRecord(record.anchorOffsetPercent),
+        role: stringParam(record.role),
+        slot: stringParam(record.slot),
+        orderFromRight: numberParam(record.orderFromRight),
+        dynamicMasks: readStoredRecordArray(record.dynamicMasks),
+        structuralLocator: readStoredRecord(record.structuralLocator),
+        dynamicRegionId: stringParam(record.dynamicRegionId),
+        itemTemplateId: stringParam(record.itemTemplateId),
+        transitionKind: stringParam(record.transitionKind),
+        parameterMapping: readStoredRecord(record.parameterMapping)
       };
     })
     .filter((item): item is StoredManualPageElement => Boolean(item));
@@ -2899,7 +3104,19 @@ function readStoredSemanticArea(value: unknown): StoredManualPageElement["semant
 }
 
 function readStoredCoordinateSpace(value: unknown): StoredManualPageElement["coordinateSpace"] {
-  return value === "screen" || value === "app_viewport" || value === "region" ? value : undefined;
+  return value === "screen" || value === "app_viewport" || value === "region" || value === "runtime" ? value : undefined;
+}
+
+function readStoredRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function readStoredRecordArray(value: unknown): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const records = value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+  return records.length ? records : undefined;
 }
 
 function readStoredRect(value: unknown): StoredManualPageElement["region"] {
@@ -2915,6 +3132,22 @@ function readStoredRect(value: unknown): StoredManualPageElement["region"] {
     return undefined;
   }
   return { x, y, width, height };
+}
+
+function readStoredPointPercent(value: unknown): StoredManualPageElement["tapPointPercent"] {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const x = numberParam(record.x);
+  const y = numberParam(record.y);
+  if (x === undefined || y === undefined) {
+    return undefined;
+  }
+  return {
+    x: Math.max(0, Math.min(100, x)),
+    y: Math.max(0, Math.min(100, y))
+  };
 }
 
 function parseImageRegionLocator(locator: string | undefined): StoredManualPageElement["region"] {
@@ -2982,6 +3215,18 @@ function isObservationInTargetApp(observation: Observation, targetApp: GraphTarg
     return true;
   }
   return observation.bundleId === bundleId || observation.packageName === bundleId;
+}
+
+function isObservationInRunScope(
+  observation: Observation,
+  targetApp: GraphTargetApp | undefined,
+  platform: "android" | "ios",
+  startAppScope: StartAppScope | undefined
+): boolean {
+  if (startAppScope === "current_device") {
+    return true;
+  }
+  return isObservationInTargetApp(observation, targetApp, platform);
 }
 
 function stringParam(value: unknown): string | undefined {

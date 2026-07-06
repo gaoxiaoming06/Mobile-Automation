@@ -4,7 +4,7 @@ doc_type: tasks
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-06-25
+updated_at: 2026-07-05
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -63,7 +63,8 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | R-031 | P0 | in-progress | 支撑主线 | 结构化录制用例能力：已完成 Smart Recorded Flow 基础模型、SQLite 存储、录制保存、StructuredFlowRunner、用例库主入口、执行到中间步骤、运行时预期覆盖；本轮补齐 `input_text_to_element`、`scroll_until_visible`、`wait_until_state`，并新增 Flow 执行前平台 / 包名 / 安装版本校验、用例库详情展示增强和录制步骤规则编辑器；后续继续做 Flow REST / CLI / MCP 外部接口和更完整的步骤修复入口 | 用户可录制一条“App-版本-起点-终点”用例并保存；再次执行时每步先校验 beforeState、执行语义动作、动态等待 afterExpectations；可指定执行到中间步骤；录制页可查看动作前采集、动作策略、动作后采集，并把任一候选提升为强基准；执行前能提示设备平台、包名或版本不满足；AI 可通过后续 MCP 触发并拿到结构化结果；后续作为 PageStateFlow 的路径快照能力继续演进 |
 | R-032 | P0 | done | 当前轮 | 统一 TestRuleCore 底层执行规则：StructuredFlow 作为线性路径快照，BusinessGraph / PageStateFlow 作为未来来源；底层都收敛为 `TestRuleStep`，再由同一适配层转换为可执行 ActionStep | StructuredFlowRunner 不再内联转换逻辑；适配层测试覆盖 beforeState、afterExpectations、systemGuards、timing、source metadata、历史占位 precondition 过滤和 package 推断；后续 PageTransition / Graph RoutePlan 可复用该入口 |
 | R-033 | P0 | done | 当前轮 | StructuredFlow 阶段收敛治理：顶层 README / product-plan / requirements / design / acceptance / tasks / traceability / skills 曾明确 StructuredFlow 是主线，BusinessGraph 上层冻结为实验能力；该结论已被 R-034 PageStateFlow 主线切换覆盖，StructuredFlow 保留为路径快照 | 后续开发默认进入 PageStateFlow / 页面资产库 / TestRuleCore；StructuredFlow 继续作为路径快照和回归用例；除非明确重新打开图谱方向，否则不扩展源码扫描、候选图谱治理、自动晋级和目标节点规划 |
-| R-034 | P0 | in-progress | 当前主线 | PageStateFlow 主线切换：当前主要项目目标命名为“页面状态资产驱动的移动端智能回放测试平台”；新增 PageStateLibrary / PageModel / PageElement / PageTransition / PathPlan，录制用于学习页面资产，StructuredFlow 作为页面路径快照，BusinessGraph 上层继续 experimental；当前已把页面匹配和手工操作区域从“固定坐标”升级为“原始相对区域 + semanticArea + coordinateSpace + OCR / layout / image evidence”，并让 `tap_on_image` 运行时优先在同一语义区域内按 OCR 文案重定位 | 文档完成 REQ-042 / DES-042 / AC-044 / T-084 至 T-089；当前已验证页面身份依据保存、区域 OCR 漂移匹配、手工 PageElement / PageTransition 语义字段透传、视觉点击重定位、资产录制面板 semanticArea 人工确认、连接边页签、`compound_navigation` 复合跳转、同一触发区域多条复合菜单出口共存、同屏 grid candidate 下游失败后尝试下一个候选，以及目标执行报告结构化解释；本轮已清理 active graph 中旧平台依赖 matcher / 旧录制节点 / `tap_on_element + android_uiautomator` 旧边，修复 `state_is` 以 `nodeId` 为权威身份，并用真机通过 `主页 -> 新建公开课`、`主页 -> 添加好友`、`主页 -> 加入班级`、`主页 -> 班级详情 -> 新建课堂` 四条核心回归；PageTask 已在真机打通 `text_input` 输入后 OCR 反查、`picker_select` 选择时长和 `toggle_set` 安全开关，验证新建课堂页可填写课堂标题和课堂时长但不点击发布；当前已补齐并验证 `班级详情` 到教学方案、学习方案、班级聊天、班级待办、班级公告、发布活动类型选择页、新建课堂，以及 `发布活动类型选择页` 到新建课堂、新建作业、新建测验、新建录播课、新建资料的出口；后续继续补 subpage_edit、滚动翻页候选闭环、跨设备样本验证、PageTransition 批量治理、更多真实页面出口，以及独立稳定性探索测试入口 |
+| R-034 | P0 | in-progress | 当前主线 | PageStateFlow 主线切换：当前主要项目目标命名为“页面状态资产驱动的移动端智能回放测试平台”；新增 PageStateLibrary / PageModel / PageElement / PageTransition / PathPlan，录制用于学习页面资产，StructuredFlow 作为页面路径快照，BusinessGraph 上层继续 experimental；当前已把页面匹配和手工操作区域从“固定坐标”升级为“原始相对区域 + semanticArea + coordinateSpace + OCR / layout / image evidence”，并让 `tap_on_image` 运行时优先在同一语义区域内按 OCR 文案重定位；登录 / 表单类固定语义控件进一步收口为 `runtime-locator:*` + `structural_locator` + `coordinateSpace=runtime`，历史圈选区域只保留为 `searchHintRegion` 调试证据 | 文档完成 REQ-042 / DES-042 / AC-044 / T-084 至 T-089；当前已验证页面身份依据保存、区域 OCR 漂移匹配、手工 PageElement / PageTransition 语义字段透传、视觉点击重定位、资产录制面板 semanticArea 人工确认、连接边页签、`compound_navigation` 复合跳转、同一触发区域多条复合菜单出口共存、同屏 grid candidate 下游失败后尝试下一个候选，以及目标执行报告结构化解释；本轮已清理 active graph 中旧平台依赖 matcher / 旧录制节点 / `tap_on_element + android_uiautomator` 旧边，修复 `state_is` 以 `nodeId` 为权威身份，并用真机通过 `主页 -> 新建公开课`、`主页 -> 添加好友`、`主页 -> 加入班级`、`主页 -> 班级详情 -> 新建课堂` 四条核心回归；PageTask 已在真机打通 `text_input` 输入后 OCR 反查、`picker_select` 选择时长和 `toggle_set` 安全开关，验证新建课堂页可填写课堂标题和课堂时长但不点击发布；登录页本地资产已改为 4 个 runtime structural PageElement + 1 个 `账号密码登录` PageTask + 1 条 `source_page_navigation` 任务边，旧区域点击登录边已下线；当前已补齐并验证 `班级详情` 到教学方案、学习方案、班级聊天、班级待办、班级公告、发布活动类型选择页、新建课堂，以及 `发布活动类型选择页` 到新建课堂、新建作业、新建测验、新建录播课、新建资料的出口；后续继续补 subpage_edit、滚动翻页候选闭环、跨设备样本验证、PageTransition 批量治理、更多真实页面出口，以及独立稳定性探索测试入口 |
+| R-035 | P0 | done | 当前轮 | 已关闭 `tap_on_image` / 输入型 PageElement 的默认 `region_center` 执行兜底：普通手工 `image-region` 必须优先依赖 OCR / recorded crop template / 视觉候选 / 结构候选等运行时重定位证据；当跨设备、分辨率变化或已有 `targetText` / `visualLocator` 但重定位失败时，不再退化为原始圈选坐标点击，而是失败并暴露 `runtime_relocation_required` | Server 测试覆盖 OCR / template / visual candidate 命中才执行、重定位失败不点击、报告 metadata 区分 `ocr_text` / `template_search` / `visual_candidate` / `region_center_disabled`；剩余 P0 follow-up 是把失败修复 UI 做成专门 locator 修复卡片 |
 
 ## Phase 0：需求确认与工程决策
 
@@ -1570,8 +1571,10 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
   6. [partial] 资产录制入口已调整为 page-only：保存 / 更新按钮只保存稳定 PageModel；右上角菜单、底部面板、局部黑条和弹窗不再作为独立页面资产入口展示，而应沉淀到父页面的可操作元素、连接边 micro-step 或 Runtime Interceptor。页面能力页签当前只管理 PageElement / PageAbility：优先展示“已录入可操作元素”列表，用户可以编辑 / 删除；列表底部提供“+ 添加可操作元素”；当前没有已录入元素时显示 `0 个元素` 和空态，不自动展开表单。用户点击添加后才出现编辑态条目，通过左侧截图圈选区域、右侧选择能力类型、动作类型、出现条件、结果草稿、目标页面草稿和滚动 / 候选布局参数保存到源 PageModel 的 `assetRecordingManualElements`，不会在该页签创建 PageTransition。当前能力类型包含 `fixed_tap`、`scroll_candidate`、`grid_candidate` 和 `conditional_tap`：`fixed_tap` 用于顶部 / 底部等固定区域的稳定点击；`scroll_candidate` 用于中间内容区内需要滚动查找的目标，支持 `targetKind=image_region` 表达没有稳定 OCR 的图标 / 图片按钮；`grid_candidate` 用于两列班级列表、动态卡片列表等候选入口，保存容器区域、列数、候选 item 高度、点击安全点、滑动步长和失败策略；默认可配置为 `targetKind=item_text` + `targetQuery={{className}}`，用于“指定班级名”这类运行期参数化候选；`conditional_tap` 用于班级详情中“右下角 add 按钮可见才可继续”的条件能力。左侧截图按真实截图比例自适应显示；已圈选动作区域支持整体拖动和边 / 角缩放，只有在空白区域拖拽才会重画新区域，避免用户二次编辑时误重置。结果草稿支持直接跳转、复合跳转、出现页面内状态、局部变化和无明显变化；复合跳转用于“先弹菜单再点菜单项跳页”，页面内状态 / 局部变化用于“点时长弹选择框，确认后选择框消失”等场景。`navigate` / `compound_navigation` 类型 PageAbility 必须绑定已保存目标页面，否则保存入口会提示其不会进入路径规划；服务端 route-plan / graph-run 也会返回 `PAGE_ABILITY_TARGET_MISSING` 诊断，指出具体页面和能力。已绑定目标页面的 PageAbility 会在规划 / 执行时临时转成 active route edge；`compound_navigation` 会持久化 `compoundSteps` 并在执行时展开为“主动作 -> 等待文字出现 -> 点击文字”等 micro-step；`grid_candidate` 即使表单动作方式为滑动，也会按人工圈选容器和点击安全点生成视觉候选点击动作，不走 UI dump 的 `scroll_until_visible`。同屏候选失败重规划时已按 recovery attempt 递增 `candidateIndex`，优先尝试下一个同屏候选；参数化 `targetQuery` 执行时只点击 OCR 命中的指定候选，找不到则失败，不会退化为任选候选；跨屏滚动翻页候选闭环由 T-088 继续承接。
   7. [done] 新增“页面任务”页签和 PageTask 持久化链路：PageTask 归属于当前 PageModel，用于表达到达目标页后的表单填写、按钮提交、等待结果和后续选择器 / 勾选 / 子页面编辑任务。Dashboard 页面任务页签优先展示已保存任务，支持新增、编辑和删除；步骤必须引用当前页已保存手工 PageElement，`wait` 步骤可以只填写等待文本。服务端新增 `POST /api/graphs/:versionId/assets/page-tasks` 和 `DELETE /api/graphs/:versionId/assets/page-tasks/:sourceNodeId/:taskId`，写入源 PageModel 的 `assetRecordingPageTasks`。保存时会归一化步骤顺序、过滤无效元素引用，并拒绝未确认的源页面资产。
   8. [done] 新增资产录制“自动探索”页签：V1 预览 / 执行当前页一跳候选，V2 按深度和动作数限制生成多层探索计划。自动探索必须先命中已保存 PageModel；如果在桌面、其他 App、未知页或低置信页，不创建运行期草稿，也不写入正式资产。候选来源优先为已保存 PageElement / PageAbility，其次为带区域的 OCR 文本；删除、退出登录、支付、发布、提交、确认等危险文案默认 skipped。服务端新增 `/api/graphs/:versionId/auto-explorer/preview` 和 `/api/graphs/:versionId/auto-explorer/run`，采集使用快速视觉模式（截图 + OCR，不采集 UI tree），执行结果只返回 existing_page、new_page_candidate、local_state_change、no_change、dangerous_skipped 或 failed 报告，正式入库仍走页面能力 / 连接边确认流程。
-- 当前实现说明：Dashboard 已新增 `AssetRecordingPanel`，入口接入 `AppNav`，左侧复用 compact `PreviewPanel`，右侧通过现有 `/api/graphs/:versionId/current-page` 自动识别当前页面并展示 PageModel 候选、截图、候选识别信息、元素和资产 ID。页面详情已使用页签组织为“页面匹配 / 页面能力 / 连接边 / 页面任务 / 自动探索”：页面匹配展示截图重点区域、“已确认匹配依据”和“候选信息”；候选信息默认不写入页面 matcher，并按“通用候选 / 平台候选”分组，用户点击“设为依据”后才进入确认区；截图重点区域和手工动作区域均支持人工选择 / 修改四区 `semanticArea`，已确认或候选中的 OCR 文本可以点击“编辑”人工修正，OCR 候选在 UI 上只显示可读文字，实际保存值会携带相对 `region`、`semanticArea` 和 `coordinateSpace`；UI 树文本和平台 id 只能作为候选 / 调试展示，不再进入正式页面身份 matcher。保存 / 更新页面资产时，仅白名单 `confirmedMatchers`、`confirmedOcrTexts` 和带 baseline artifact 的截图重点区域会作为页面匹配依据持久化，`confirmedUiTexts` 不再生成正式 `text` matcher。页面能力页签已切到 PageElement-first：已保存手工元素优先显示，自动识别出的 `uiElements` 不再作为默认候选区展示；空列表只显示计数和空态，点击“+ 添加可操作元素”后才出现编辑态；已保存元素缩略图会围绕人工操作区域自动裁剪，编辑器在当前元素条目内展开，编辑 / 删除 / 添加按钮统一为轻量操作按钮。手工元素保存调用 `POST /api/graphs/:versionId/assets/page-elements`，只写回源 PageModel 的 `assetRecordingManualElements`，删除调用 page-elements DELETE API，不再通过删除 PageTransition 间接清理元素。手工录入交互已改为左侧圈选操作区域、右侧选择能力类型 / 动作方式 / 出现条件 / 结果类型；`scroll_candidate` 已可保存滚动查找目标，并支持没有 OCR 文案的 `targetKind=image_region` / `targetQuery=image-region:x,y,width,height`；`grid_candidate` 已可保存候选容器的布局和重试参数，并在列表中显示为“网格候选入口”；`conditional_tap` 已可保存条件点击能力类型。左侧动作区域可在已有框内拖动移动，也可拖动八个控制点缩放，截图层自适应高度展示完整手机截图。`连接边` 页签已支持选择当前页已保存 PageElement、搜索 / 选择目标页面、保存 navigate / compound_navigation PageTransition，并展示 / 删除已录入连接边；复合跳转编辑器支持填写等待文字、点击文字和超时时间；同一主动作 locator 但 `compoundSteps` 不同的复合边会作为不同 PageTransition / PageElement 保存，例如主页右上角加号可同时连接“添加好友”和“加入班级”。`页面任务` 页签已支持把当前页手工 PageElement 编排为 PageTask，供目标执行到达该页面后继续输入表单、点击提交和等待结果；目标页面测试中若目标页有 active PageTask，可在“目标动作”选择“执行页面任务”。`自动探索` 页签展示 V1 / V2 候选、计划和执行结果；其报告只作为候选证据，不会自动污染 PageMatcher / PageTransition。手工 PageElement / PageTransition / PageTask 的 `image-region` locator 会带上 `semanticArea`、`coordinateSpace` 和非网格元素的 `targetText`，执行 `tap_on_image` 时先用当前 OCR 在同一语义区域内重定位目标文字，再退回人工区域中心。active graph 中已按这套规则录入并验证 `主页 -> 课程表 / 空间 / 成长 / 添加好友 / 加入班级`，其中底部 Tab 为固定视觉区域，右上角加号菜单为 `compound_navigation`。
-- 验证方式：Dashboard 组件测试覆盖资产录制导航、资产录制面板核心信息展示、录制页 / 资产录制页独立预览工作区、人工页面名优先级、修改名称确认入口、视觉页面名 / 匹配状态拆分、截图重点区域、页面详情四页签、semanticArea 人工选择 / 覆盖、确认区 / 候选区、候选默认不入库、候选按通用 / 平台分组展示、page-only 保存入口、旧浮层 metadata 不暴露浮层控件、弹窗 / 菜单 / 底部面板 / 动态黑条仍匹配父页面或历史页面上下文、页面资产库删除按钮、页面能力页签 PageElement-first 展示、手工截图区域生成 `image-region` PageElement draft、手工动作区域绘制 / 移动 / 边角缩放、已保存手工 PageElement 回显 / 编辑 / 删除入口、自动候选默认隐藏、连接边页签入口、连接边由已保存 PageElement 创建 navigate / compound_navigation PageTransition、页面任务页签展示 / draft 生成 / 保存请求体、保存 / 更新判定、固定卡片 / 详情滚动布局、资产录制动作即时下发策略、识别中重叠任务阻断、`navigate` PageAbility 目标页保存校验，以及 `scroll_candidate` image-region 目标、`grid_candidate` 页面能力 draft 和候选布局参数生成；Server 测试覆盖当前页面视觉名推断、ClassIn 首页 / 教师列表状态 matcher 结构、页面资产列表过滤、deprecated 页面资产从列表隐藏、页面资产 outgoing transition 摘要、手工 PageElement 直接写回源页面资产、手工 PageElement 更新和删除不依赖 PageTransition、PageTask 保存 / 更新 / 删除、手工确认 `navigate` / `compound_navigation` PageTransition 只在源 / 目标均为已保存页面资产时创建 `active/manual_edit` 边并可被 `planRoute` 使用、复合跳转 `compoundSteps` 入库和执行、非跳转 outcome 保持 `draft`、手工 image-region locator 持久化为 `tap_on_image` action params、`tap_on_image` 按人工区域中心执行、scrollProfile 和 `scroll_candidate` / `grid_candidate` abilityType / candidate layout 后端持久化、PageAbility 临时规划边、未绑定目标页的 PageAbility 断边诊断、`grid_candidate` 视觉候选点击生成、下游失败后返回源页面并重试下一个候选、只有显式确认依据才生成页面 matcher、确认依据的 `platformScope` 持久化、截图重点区域生成 `image_region` 强 matcher、区域 baseline artifact 绑定和识别时区域相似度参与匹配、系统栏 mask、局部 SSIM + aHash / dHash 组合评分、圈选区域邻域漂移搜索，以及更新页面资产时替换旧 matcher / nodeType。后续继续补 matcher 权重编辑、元素 locator 详细编辑、滚动翻页候选闭环、inline state / local_state_change 专用持久化、picker / toggle / subpage PageTask 执行细节、ORB / template-search 和 PageTransition 批量治理入口。
+- 当前实现说明：Dashboard 已新增 `AssetRecordingPanel`，入口接入 `AppNav`，左侧复用 compact `PreviewPanel`，右侧通过现有 `/api/graphs/:versionId/current-page` 自动识别当前页面并展示 PageModel 候选、截图、候选识别信息、元素和资产 ID。页面详情已使用页签组织为“页面匹配 / 页面能力 / 连接边 / 页面任务 / 自动探索”：页面匹配展示截图重点区域、“已确认匹配依据”和“候选信息”；候选信息默认不写入页面 matcher，并按“通用候选 / 平台候选”分组，用户点击“设为依据”后才进入确认区；截图重点区域和手工动作区域均支持人工选择 / 修改四区 `semanticArea`，已确认或候选中的 OCR 文本可以点击“编辑”人工修正，OCR 候选在 UI 上只显示可读文字，实际保存值会携带相对 `region`、`semanticArea` 和 `coordinateSpace`；UI 树文本和平台 id 只能作为候选 / 调试展示，不再进入正式页面身份 matcher。保存 / 更新页面资产时，仅白名单 `confirmedMatchers`、`confirmedOcrTexts` 和带 baseline artifact 的截图重点区域会作为页面匹配依据持久化，`confirmedUiTexts` 不再生成正式 `text` matcher。页面能力页签已切到 PageElement-first：已保存手工元素优先显示，自动识别出的 `uiElements` 不再作为默认候选区展示；空列表只显示计数和空态，点击“+ 添加可操作元素”后才出现编辑态；已保存元素缩略图会围绕人工操作区域自动裁剪，编辑器在当前元素条目内展开，编辑 / 删除 / 添加按钮统一为轻量操作按钮。手工元素保存调用 `POST /api/graphs/:versionId/assets/page-elements`，只写回源 PageModel 的 `assetRecordingManualElements`，删除调用 page-elements DELETE API，不再通过删除 PageTransition 间接清理元素。手工录入交互已改为左侧圈选操作区域、右侧选择能力类型 / 动作方式 / 出现条件 / 结果类型；`scroll_candidate` 已可保存滚动查找目标，并支持没有 OCR 文案的 `targetKind=image_region` / `targetQuery=image-region:x,y,width,height`；`grid_candidate` 已可保存候选容器的布局和重试参数，并在列表中显示为“网格候选入口”；`conditional_tap` 已可保存条件点击能力类型。左侧动作区域可在已有框内拖动移动，也可拖动八个控制点缩放，截图层自适应高度展示完整手机截图。`连接边` 页签已支持选择当前页已保存 PageElement、搜索 / 选择目标页面、保存 navigate / compound_navigation PageTransition，并展示 / 删除已录入连接边；复合跳转编辑器支持填写等待文字、点击文字和超时时间；同一主动作 locator 但 `compoundSteps` 不同的复合边会作为不同 PageTransition / PageElement 保存，例如主页右上角加号可同时连接“添加好友”和“加入班级”。`页面任务` 页签已支持把当前页手工 PageElement 编排为 PageTask，供目标执行到达该页面后继续输入表单、点击提交和等待结果；目标页面测试中若目标页有 active PageTask，可在“目标动作”选择“执行页面任务”。`自动探索` 页签展示 V1 / V2 候选、计划和执行结果；其报告只作为候选证据，不会自动污染 PageMatcher / PageTransition。手工 PageElement / PageTransition / PageTask 的 `image-region` locator 会带上 `semanticArea`、`coordinateSpace` 和非网格元素的 `targetText`，执行 `tap_on_image` 时先用当前 OCR 在同一语义区域内重定位目标文字；登录 / 表单类固定语义控件使用 `runtime-locator:*` 运行时结构定位，历史圈选仅保留为 `searchHintRegion`，不得退回人工区域中心。active graph 中已按这套规则录入并验证 `主页 -> 课程表 / 空间 / 成长 / 添加好友 / 加入班级`，其中底部 Tab 为固定视觉区域，右上角加号菜单为 `compound_navigation`。
+- 验证方式：Dashboard 组件测试覆盖资产录制导航、资产录制面板核心信息展示、录制页 / 资产录制页独立预览工作区、人工页面名优先级、修改名称确认入口、视觉页面名 / 匹配状态拆分、截图重点区域、页面详情四页签、semanticArea 人工选择 / 覆盖、确认区 / 候选区、候选默认不入库、候选按通用 / 平台分组展示、page-only 保存入口、旧浮层 metadata 不暴露浮层控件、弹窗 / 菜单 / 底部面板 / 动态黑条仍匹配父页面或历史页面上下文、页面资产库删除按钮、页面能力页签 PageElement-first 展示、手工截图区域生成 `image-region` PageElement draft、手工动作区域绘制 / 移动 / 边角缩放、已保存手工 PageElement 回显 / 编辑 / 删除入口、自动候选默认隐藏、连接边页签入口、连接边由已保存 PageElement 创建 navigate / compound_navigation PageTransition、页面任务页签展示 / draft 生成 / 保存请求体、保存 / 更新判定、固定卡片 / 详情滚动布局、资产录制动作即时下发策略、识别中重叠任务阻断、`navigate` PageAbility 目标页保存校验，以及 `scroll_candidate` image-region 目标、`grid_candidate` 页面能力 draft 和候选布局参数生成；Server 测试覆盖当前页面视觉名推断、ClassIn 首页 / 教师列表状态 matcher 结构、页面资产列表过滤、deprecated 页面资产从列表隐藏、页面资产 outgoing transition 摘要、手工 PageElement 直接写回源页面资产、手工 PageElement 更新和删除不依赖 PageTransition、PageTask 保存 / 更新 / 删除、手工确认 `navigate` / `compound_navigation` PageTransition 只在源 / 目标均为已保存页面资产时创建 `active/manual_edit` 边并可被 `planRoute` 使用、复合跳转 `compoundSteps` 入库和执行、非跳转 outcome 保持 `draft`、手工 image-region locator 持久化为 `tap_on_image` action params、`tap_on_image` 运行时重定位、runtime structural 登录控件展开为 `runtime-locator:*` 动作、scrollProfile 和 `scroll_candidate` / `grid_candidate` abilityType / candidate layout 后端持久化、PageAbility 临时规划边、未绑定目标页的 PageAbility 断边诊断、`grid_candidate` 视觉候选点击生成、下游失败后返回源页面并重试下一个候选、只有显式确认依据才生成页面 matcher、确认依据的 `platformScope` 持久化、截图重点区域生成 `image_region` 强 matcher、区域 baseline artifact 绑定和识别时区域相似度参与匹配、系统栏 mask、局部 SSIM + aHash / dHash 组合评分、圈选区域邻域漂移搜索，以及更新页面资产时替换旧 matcher / nodeType。后续继续补 matcher 权重编辑、元素 locator 详细编辑、滚动翻页候选闭环、inline state / local_state_change 专用持久化、picker / toggle / subpage PageTask 执行细节、ORB / template-search 和 PageTransition 批量治理入口。
+- 2026-06-26 修正：以上历史说明中的 `region_center` 执行兜底已作废。当前 `tap_on_image` 必须先通过 OCR、crop hash/template、视觉候选或结构候选完成运行时重定位；普通手工 `image-region` 如果只有记录区域而无重定位证据，执行结果为 `runtime_relocation_required`，metadata 标记 `fallback=region_center_disabled`，记录中心点只用于报告和修复建议。
+- 高优先级后续待办：报告和失败修复 UI 需要把 `region_center_disabled` / `runtime_relocation_required` 提升成专门的 locator 修复卡片，直接引导用户补 `targetText`、结构定位、dynamic masks、visual template 或 OmniParser 候选，而不是只展示原始 metadata。
 
 ### T-088：实现 PageStateFlow 路径规划与执行适配
 
@@ -1634,22 +1637,24 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 
 ### T-090：受控探索录制与稳定性探索 PoC
 
-- 状态：planned
+- 状态：done
 - 关联需求：REQ-042、REQ-032
 - 关联设计：DES-042、DES-030
 - 目标平台：server exploration + Dashboard advanced mode + Stability Explorer
 - 修改边界：Exploration policy、candidate provider、draft asset writer、stability run service、report evidence、Dashboard exploration controls
+- 交付口径：本次关闭“指定包启动后，在 App 内可控持续探索并输出可复现报告”的 PoC 第一版；draft 资产入库和一键转人工确认流程作为后续增强继续沉淀。
 - 任务内容：
-  1. 设计统一探索策略：限制目标 App、起始页面、最大步数、最大时长、允许动作、危险动作黑名单、退出条件和 seed。
-  2. 拆分两个产品入口：资产录制内的“自动探索”继续用于生成 draft 页面 / 元素 / 转移候选；新增独立“稳定性探索”入口用于持续探索并发现 crash / ANR / 黑屏 / 卡死 / App 退出。
-  3. 实现候选来源优先级：已保存 PageElement / PageAbility > 带区域 OCR 候选 > 视觉候选区域 > 随机安全区域。
-  4. 实现探索策略：保守模式只执行已保存能力和低风险 OCR 候选；平衡模式允许视觉候选；激进模式才允许随机安全区域。
-  5. 探索过程只生成 draft PageModel / PageElement / PageTransition，不自动进入 active。
-  6. 保留 seed、动作序列、每步截图、页面识别结果、动作来源、候选过滤原因、OCR、日志、视频时间点和异常证据。
-  7. 稳定性探索支持启动 App、从当前页 / 根页面 / 固定 Flow 终点开始、App 外恢复、连续未知页停止、黑屏 / 长时间无变化检测。
-  8. Dashboard 稳定性探索入口支持配置最大时长、最大动作数、策略、允许动作、危险词、是否允许未知区域、失败停止条件和报告入口。
-  9. 探索结果可一键转入人工确认流程；确认仍走页面能力 / 连接边 / 资产录制流程。
-- 验证方式：Mock Driver 探索测试覆盖步数限制、黑名单、candidate source 优先级、draft 写入、crash / ANR / black screen / app exit 停止、seed 复现和 App 外恢复；Dashboard 测试覆盖稳定性探索配置、运行中状态、报告入口和草稿列表；真实 Android 手动验证一次保守策略稳定性探索。
+  1. [done] 设计统一探索策略：限制目标 App、最大步数、最大时长、允许动作、危险动作黑名单、退出条件和 seed。
+  2. [done] 拆分两个产品入口：资产录制内的“自动探索”继续用于生成 draft 页面 / 元素 / 转移候选；新增独立“稳定性探索”入口用于持续探索并发现 crash / ANR / 黑屏 / 卡死 / App 退出。
+  3. [done] 实现候选来源优先级：临时页 / 阻断页处理规则优先，其次使用已保存 PageElement / PageAbility，再使用带区域 OCR 候选、视觉安全区域和随机安全区域。
+  4. [done] 实现探索策略：保守模式执行低风险 OCR 候选；平衡模式允许视觉候选；激进模式允许随机安全区域。
+  5. [done] 探索过程不写入 active 页面资产；第一版先写 Run / StepResult / report summary，draft PageModel / PageElement / PageTransition 入库后续补。
+  6. [done] 保留 seed、动作序列、每步截图、动作来源、候选过滤原因、OCR 摘要、日志 summary 和异常事件。
+  7. [done] 稳定性探索支持启动 App、从当前页开始、重启 App、App 外按策略恢复 / 停止、App 内浅层回退 / 深度回溯、连续未知页停止、黑屏 / 长时间无变化检测；动作后会动态等待 H5 / WebView / 网络加载态稳定；同页候选执行后无实质变化时会跳过该候选并继续尝试其他安全候选；进入子页面并回退后会在父页面跳过已覆盖入口；从根页面 / 固定 Flow 终点开始后续补。
+  8. [done] Dashboard 稳定性探索入口支持配置起始方式、最大时长、最大动作数、策略、允许动作、回退策略、最大深度、危险词、App 外处理策略、运行中提示、停止和报告入口。
+  9. [todo] 探索结果可一键转入人工确认流程；确认仍走页面能力 / 连接边 / 资产录制流程。
+- 当前实现说明：已新增 `platform/apps/server/src/stability-explorer.ts`，通过 `/api/stability-explorations` 启动独立稳定性探索 Run，RunConfig 记录 `runKind=stability_exploration` 和完整探索配置；起始方式支持 `launch_app`、`current_state`、`restart_app`，默认 `restart_app`；App 外处理支持 `back_to_app`、`restart_app`、`stop`，默认 `back_to_app`；回退策略默认 `shallow`，最大深度默认 4；危险词保留默认集合，并在 Dashboard 侧按 packageName 本地保存补充危险词，同一包再次选择时自动合并回显；其中 `current_state` 校验当前前台包，不满足则写入 `start_state_failed`；每轮先执行 RuntimeInterceptor 临时页处理规则，命中已保存稳定页面资产时优先使用该页面 PageAbility，再通过 Observation + OCR / 视觉 / 随机安全候选生成动作，危险词候选跳过；动作后先短等待，再轮询 Observation，遇到 `加载中`、`正在加载`、`loading`、ProgressBar 等加载态会继续等待页面稳定；如果候选执行后页面有意义签名未变化，会在当前页面签名下标记该候选为 `repeated_no_change` 并换下一个候选；如果进入子页面达到最大深度或当前页无候选，会生成 `backtrack` 动作返回上一层，并把已覆盖入口标记为 `path_explored`；动作结果写入 StepResult metadata，结束时写入 `stability-exploration-summary.json` 并生成 HTML 报告。Dashboard 已新增“稳定性探索”导航页，支持设备选择、目标包输入 / 候选、起始方式、探索策略、seed、动作集合、App 外策略、回退策略、最大深度、危险词、执行提示、最近步骤、停止和报告入口。Report Core 已新增“稳定性探索摘要”。
+- 验证方式：已新增 `stability-explorer.test.ts` 覆盖配置默认值、危险词过滤、候选来源、启动指定包、当前页开始不重启 App、临时页优先处理、稳定页面 PageAbility 优先探索、动作后等待 H5 加载态稳定、同页无变化候选跳过、进入子页面后按最大深度回退、最大动作数、StepResult metadata 和 summary artifact；`App.test.ts` 覆盖导航、请求体和运行摘要；`report-core.test.ts` 覆盖稳定性探索报告摘要。后续补真实 Android 保守策略手动验证和 draft 资产入库。
 
 ## Phase 15：缺陷提报与外部系统集成
 
@@ -1672,3 +1677,51 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
   9. Report model / HTML 报告展示缺陷状态、fingerprint、TAPD bugId、TAPD 链接、提交失败原因和候选证据摘要。
   10. CLI / MCP adapter 返回缺陷候选和 TAPD 提报状态，供 AI / CI 在执行后获取结构化结果。
 - 验证方式：先写失败测试覆盖 candidate generation、fingerprint dedup、Tapd payload mapping、manual_review 不自动提交、auto_create 策略、TAPD auth failure、重复失败复用缺陷、报告展示和 Dashboard 审核交互；再实现服务端和 UI；使用 mock TapdClient，不在单元测试中调用真实 TAPD。
+
+## Phase 16：资产驱动巡检与候选管理
+
+### T-092：资产驱动巡检入口与执行器
+
+- 状态：planned
+- 关联需求：REQ-044、REQ-042、REQ-009、REQ-011、REQ-012、REQ-013、REQ-014、REQ-032
+- 关联设计：DES-044、DES-042、DES-016、DES-030
+- 目标平台：Dashboard + server patrol service + runner adapter + report-core
+- 修改边界：AssetPatrolPlanner、AssetPatrolRunner、PageStateFlow runner adapter、Report model、Dashboard navigation、候选管理 / 资产录制跳转
+- 产品口径：保留现有自动探索 / 稳定性探索入口；本任务新增独立“资产驱动巡检”，按已保存 PageStateFlow 资产做受控验证，不执行盲点探索，不自动写 active 资产。
+- 任务内容：
+  1. 定义 `AssetPatrolConfig`、`AssetPatrolPlan`、`AssetPatrolStep`、`AssetPatrolSummary`、`AssetPatrolFinding` shared schema，覆盖起点、页面范围、风险策略、预算、允许动作、运行期参数和报告字段。
+  2. 新增 `AssetPatrolPlanner`：输入当前 Observation / target App / page scope，稳定命中 PageModel 后生成页面健康检查、区域滚动检查、元素重定位检查、连接边验证和 PageTask dry-run 计划。
+  3. 新增 `AssetPatrolRunner`：复用 PageStateFlow 语义定位、TransitionWait、RuntimeInterceptor、性能采样、异常监听和报告证据；未知页、低置信、多候选和 App 外状态默认停止或诊断，不进入盲点点击。
+  4. 实现页面健康检查：PageMatcher 分数、critical matcher 命中、截图重点区域相似度、OCR 区域漂移、dynamic mask 效果、页面加载耗时。
+  5. 实现区域滚动检查：只在人工标注的 content / list / dynamic region 内滑动，滑动后重新识别页面并验证固定区域仍稳定。
+  6. 实现 PageElement 重定位检查：OCR、crop hash/template、视觉候选或结构定位成功才允许执行低风险动作；只有 `region_center` 时输出 `runtime_relocation_required`。
+  7. 实现 PageTransition 验证：按风险等级、最近失败率、业务优先级和预算排序；删除、支付、发布、提交、退出登录、确认等高风险动作默认 skipped，显式允许时才执行。
+  8. 实现 PageTask dry-run：默认只验证元素引用、参数解析和提交前路径；真实业务提交必须由巡检配置或测试计划显式允许。
+  9. 新增 REST API：`POST /api/asset-patrols/preview`、`POST /api/asset-patrols`、`GET /api/asset-patrols/:runId`、`POST /api/asset-patrols/:runId/stop`。
+  10. Dashboard 新增“资产驱动巡检”入口：选择设备、目标 App、起点策略、页面范围、巡检预算、风险策略和运行参数；展示计划预览、运行状态、最近步骤、停止和报告入口。
+  11. Report Core 新增资产巡检摘要：页面覆盖率、元素定位成功率、连接边成功率、PageTask 可执行性、跳过原因、失败分类、耗时分布、性能指标和异常事件。
+  12. 候选闭环：巡检发现的新页面、新元素、新边和页面变体进入 candidate queue 或报告候选区；点击候选跳转到资产录制 / 失败修复 UI，默认不能自动写入 active 资产。若修复建议来自 REQ-045 AI 诊断且满足高置信、低风险、验证通过和自动修复策略，可通过受控 AssetPatch 流程自动应用。
+- 验证方式：先写失败测试覆盖 planner 起点匹配、未知页停止、页面健康检查、区域滚动边界、元素重定位失败、region_center 禁止执行、危险边 skipped、显式允许高风险动作、PageTask dry-run、报告 summary 和 Dashboard 请求体；再实现服务端和 UI；最后用真实 Android 主流程页面跑一次资产巡检手动验证。
+
+### T-093：探索异常 AI 诊断与受控资产修复
+
+- 状态：planned
+- 关联需求：REQ-045、REQ-044、REQ-043、REQ-042、REQ-039、REQ-032、REQ-012、REQ-013、REQ-014
+- 关联设计：DES-045、DES-044、DES-043、DES-042、DES-039、DES-030
+- 目标平台：server diagnosis service + MCP / REST adapter + report-core + Dashboard repair UI
+- 修改边界：StabilityExplorer、AssetPatrolRunner、GraphRunService / AutomationRunner failure path、RunArtifactService、PageState asset storage、MCP adapter、Report model、Dashboard 报告和失败修复 UI
+- 产品口径：AI 只负责异常诊断和受控资产修复，不参与正常步骤规划，也不直接控制设备；当策略开启且满足高置信、低风险、可验证和预算约束时，AI 提出的 patch 可以由系统自动应用为新的 active 资产版本，否则保持草稿或人工确认。
+- 任务内容：
+  1. 定义 `AiDiagnosisEvidencePack`、`AiDiagnosisRequest`、`AiDiagnosisResult`、`AssetPatchCandidate`、`AssetPatchValidationResult` shared schema，并补 JSON schema / fixture 测试。
+  2. 新增 `EvidencePackBuilder`：从 Run、StepResult、Observation、matcher diagnostics、locator diagnostics、runtime events、performance samples、screenshots、logs 和 current graph assets 汇总脱敏证据包。
+  3. 新增 `RuleFailureClassifier`：优先识别 crash、ANR、黑屏、App 退出、系统弹窗、fatal log、页面未匹配、元素重定位失败、边缺失、任务参数缺失、性能劣化等确定性类型。
+  4. 新增 `AiModelClient`：第一版实现 OpenAI-compatible provider，配置 `baseUrl`、`apiKey`、`model`、`timeoutMs`、`extraHeaders`，并提供 mock provider 单元测试。
+  5. 新增 `AiDiagnosisService`：构建 prompt、调用模型、校验 JSON schema、超时 / 限流 / 解析失败 fallback 到规则诊断，并把 prompt 摘要和响应保存为 artifact。
+  6. 新增 `DiagnosisPolicyEngine`：根据分类、置信度、严重级别、策略预算和风险配置，决定 `report_defect`、`restart_and_continue`、`propose_asset_patch`、`retry_once` 或 `stop_for_review`。
+  7. 新增 `AssetPatchService`：允许 AI 提交受控 patch，覆盖 OCR 别名、截图重点区域、动态 mask、PageElement 定位、PageTransition candidate、页面变体 candidate 和 asset stale 标记；支持 `draft`、`validated`、`auto_applied`、`applied`、`rejected`、`rolled_back` 状态；禁止写平台依赖 matcher、历史 region_center 或直接删除 active 资产。
+  8. 新增 `AssetPatchValidator`：对 patch 执行页面匹配、元素重定位、连接边轻量验证或离线证据验证；验证失败保持 draft 并进入人工复核；验证通过且策略允许时可自动生成 active 资产版本并返回回滚点。
+  9. 在 `StabilityExplorer`、`AssetPatrolRunner` 和目标执行失败路径接入诊断：异常先固化证据，再调用诊断；业务异常生成缺陷候选 / 报告，资产问题按策略生成草稿或自动应用已验证 patch 后继续。
+  10. 新增 MCP / REST 工具：`get_run_context`、`get_failure_evidence`、`list_page_assets`、`get_page_asset`、`propose_page_asset_patch`、`validate_page_asset_patch`、`apply_page_asset_patch`、`rollback_page_asset_patch`、`create_defect_candidate`、`continue_exploration`。
+  11. Report Core 新增 AI 诊断区：展示分类、置信度、推荐动作、证据引用、缺陷候选、资产 patch、验证结果和继续执行策略。
+  12. Dashboard 失败修复 UI 新增“AI 诊断 / 资产修复”区域，支持查看证据、查看自动应用记录、接受 / 拒绝 patch、触发验证、回滚、继续执行或转缺陷。
+- 验证方式：先写失败测试覆盖证据脱敏、规则分类、模型 JSON 校验、模型失败 fallback、crash 不走资产修复、页面未匹配生成 asset patch、非法 patch 被拒绝、patch 验证通过后按策略自动应用并继续、低置信进入人工复核、自动应用预算、回滚、MCP 工具权限和报告展示；再实现服务端和 UI；最后用真机模拟页面未匹配、元素重定位失败和 crash 三类场景手动验证。

@@ -420,7 +420,7 @@ function summarizeActionLocator(action: { type: string; params?: Record<string, 
   if (resourceId) {
     return `resource-id: ${resourceId}`;
   }
-  const accessibilityId = stringField(action?.params, "accessibilityId");
+  const accessibilityId = stringField(action?.params, "accessibilityId") ?? stringField(action?.params, "contentDesc");
   if (accessibilityId) {
     return `accessibility/desc: ${accessibilityId}`;
   }
@@ -495,7 +495,7 @@ function summarizeAction(action: { type: string; params?: Record<string, unknown
   }
   const text = stringField(action.params, "text");
   const resourceId = stringField(action.params, "resourceId");
-  const accessibilityId = stringField(action.params, "accessibilityId");
+  const accessibilityId = stringField(action.params, "accessibilityId") ?? stringField(action.params, "contentDesc");
   const label = text ?? resourceId ?? accessibilityId;
   return label ? `${action.type}: ${label}` : action.type;
 }

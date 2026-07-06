@@ -163,6 +163,27 @@ describe("AndroidActionExecutor", () => {
     ]);
   });
 
+  it("inputs text through Android keyevents when requested", async () => {
+    const calls: string[][] = [];
+    const actions = new AndroidActionExecutor({
+      shell: vi.fn(async (_serial, args) => {
+        calls.push(args);
+        return "";
+      }),
+      sleep: async () => undefined
+    });
+
+    await actions.performAction("device-1", { type: "input_keyevents", text: "a9 Z.", intervalMs: 0 });
+
+    expect(calls).toEqual([
+      ["input", "keyevent", "KEYCODE_A"],
+      ["input", "keyevent", "KEYCODE_9"],
+      ["input", "keyevent", "KEYCODE_SPACE"],
+      ["input", "keyevent", "KEYCODE_Z"],
+      ["input", "keyevent", "KEYCODE_PERIOD"]
+    ]);
+  });
+
   it("throws when clearing app data does not report success", async () => {
     const actions = new AndroidActionExecutor({
       shell: vi.fn(async () => "Failed"),

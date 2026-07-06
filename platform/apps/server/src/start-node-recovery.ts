@@ -38,6 +38,8 @@ export type StartNodeResolution = {
   recovery?: StartNodeRecoveryRecord;
 };
 
+export type StartAppScope = "target_app" | "current_device";
+
 export type StartNodeObservationCollector = () => Promise<Observation>;
 export type StartNodeActionPerformer = (action: DeviceActionRequest) => Promise<unknown>;
 
@@ -51,6 +53,7 @@ export async function resolveReachableStartNode(input: {
   collectObservation: StartNodeObservationCollector;
   performAction: StartNodeActionPerformer;
   baselineReader?: PageMatcherBaselineReader;
+  startAppScope?: StartAppScope;
 }): Promise<StartNodeResolution> {
   try {
     const initialState = await detectRuntimeStartState(input);
@@ -141,6 +144,7 @@ export async function detectRuntimeStartState(input: {
   platform: Platform;
   collectObservation: StartNodeObservationCollector;
   baselineReader?: PageMatcherBaselineReader;
+  startAppScope?: StartAppScope;
 }): Promise<RuntimeStartState> {
   const observation = await input.collectObservation();
   const pageMatch = await matchCurrentPage({
@@ -149,7 +153,7 @@ export async function detectRuntimeStartState(input: {
     baselineReader: input.baselineReader
   });
   const match = pageMatch.match.status === "matched" ? pageMatch.match : detectNode(pageMatch.observation, input.graphVersion, input.platform);
-  const inTargetApp = isObservationInTargetApp(observation, input.targetApp, input.platform);
+  const inTargetApp = isObservationInRecoveryScope(observation, input.targetApp, input.platform, input.startAppScope);
   const nodeId = match.status === "matched" && inTargetApp ? match.node?.id : undefined;
   return {
     nodeId,
@@ -181,6 +185,13 @@ export function classifyRuntimeStartState(input: { match: NodeMatchResult; inTar
 }
 
 export function isObservationInTargetApp(observation: Observation, targetApp: GraphTargetApp | undefined, platform: Platform): boolean {
+  return isObservationInRecoveryScope(observation, targetApp, platform, "target_app");
+}
+
+function isObservationInRecoveryScope(observation: Observation, targetApp: GraphTargetApp | undefined, platform: Platform, startAppScope: StartAppScope | undefined): boolean {
+  if (startAppScope === "current_device") {
+    return true;
+  }
   if (platform === "android" && targetApp?.androidPackageName) {
     return observation.packageName === targetApp.androidPackageName;
   }

@@ -11,6 +11,13 @@ const hierarchy = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
   </node>
 </hierarchy>`;
 
+const visibleHierarchy = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2218]">
+    <node index="0" text="账号与安全" resource-id="com.demo:id/security" class="android.widget.TextView" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[160,1230][360,1280]" />
+  </node>
+</hierarchy>`;
+
 describe("ObservationService", () => {
   it("collects foreground state, screenshot metadata, UI tree elements, and OCR boxes", async () => {
     const service = new ObservationService(new FakeDriver(), new FakeOcrService());
@@ -73,6 +80,15 @@ describe("ObservationService", () => {
     expect(observation.uiElements).toEqual([]);
     expect(observation.ocrTexts).toEqual([expect.objectContaining({ text: "全部班级" })]);
     expect(observation.raw?.uiHierarchyError).toContain("uiautomator dump failed");
+  });
+
+  it("uses screenshot dimensions as the visual resolution when Android UI hierarchy is shorter", async () => {
+    const service = new ObservationService(new MismatchedScreenshotDriver(), new FakeOcrService());
+
+    const observation = await service.collect("device-1", { includeOcr: false });
+
+    expect(observation.resolution).toEqual({ width: 1080, height: 2340 });
+    expect(observation.screenshot).toEqual(expect.objectContaining({ width: 1080, height: 2340 }));
   });
 });
 
@@ -156,10 +172,30 @@ class FakeDriver implements AutomationDeviceDriver {
   }
 }
 
+class MismatchedScreenshotDriver extends FakeDriver {
+  override async screenshot(): Promise<Buffer> {
+    return pngHeaderWithSize(1080, 2340);
+  }
+
+  override async dumpUiHierarchy(): Promise<string> {
+    return visibleHierarchy;
+  }
+}
+
 class FailingUiTreeDriver extends FakeDriver {
   override async dumpUiHierarchy(): Promise<string> {
     throw new Error("uiautomator dump failed");
   }
+}
+
+function pngHeaderWithSize(width: number, height: number): Buffer {
+  const buffer = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer, 0);
+  buffer.writeUInt32BE(13, 8);
+  Buffer.from("IHDR").copy(buffer, 12);
+  buffer.writeUInt32BE(width, 16);
+  buffer.writeUInt32BE(height, 20);
+  return buffer;
 }
 
 class FakeOcrService implements OcrService {

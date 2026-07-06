@@ -6,9 +6,47 @@ type UseDeviceListOptions = {
   setMessage: (message: string) => void;
 };
 
+type DeviceSelectionStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+const selectedDeviceSerialStorageKey = "mobile-automation.selected-device-serial";
+
+export function defaultSelectedDeviceSerial(devices: DeviceInfo[], currentSerial: string): string {
+  if (devices.some((device) => device.serial === currentSerial)) {
+    return currentSerial;
+  }
+  return devices.find((device) => device.platform === "android" && device.status === "online")?.serial
+    ?? devices.find((device) => device.status === "online")?.serial
+    ?? devices[0]?.serial
+    ?? "";
+}
+
+export function loadSelectedDeviceSerial(storage: DeviceSelectionStorage | undefined = browserDeviceSelectionStorage()): string {
+  try {
+    return storage?.getItem(selectedDeviceSerialStorageKey)?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveSelectedDeviceSerial(serial: string, storage: DeviceSelectionStorage | undefined = browserDeviceSelectionStorage()): void {
+  try {
+    const trimmed = serial.trim();
+    if (!storage) {
+      return;
+    }
+    if (trimmed) {
+      storage.setItem(selectedDeviceSerialStorageKey, trimmed);
+    } else {
+      storage.removeItem(selectedDeviceSerialStorageKey);
+    }
+  } catch {
+    // Ignore storage failures; device selection can still work in memory.
+  }
+}
+
 export function useDeviceList({ setMessage }: UseDeviceListOptions) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
-  const [selectedSerial, setSelectedSerial] = useState("");
+  const [selectedSerial, setSelectedSerial] = useState(() => loadSelectedDeviceSerial());
   const [tools, setTools] = useState<ToolStatus[]>([]);
   const [scrcpyRunning, setScrcpyRunning] = useState(false);
 
@@ -22,7 +60,11 @@ export function useDeviceList({ setMessage }: UseDeviceListOptions) {
   const refreshDevices = useCallback(async (options: { silent?: boolean } = {}) => {
     const json = await apiFetchJson<{ devices: DeviceInfo[]; error?: string }>("/api/devices");
     setDevices(json.devices);
-    setSelectedSerial((current) => (json.devices.some((device) => device.serial === current) ? current : json.devices[0]?.serial || ""));
+    setSelectedSerial((current) => {
+      const next = defaultSelectedDeviceSerial(json.devices, current);
+      saveSelectedDeviceSerial(next);
+      return next;
+    });
     if (!options.silent) {
       const androidCount = json.devices.filter((device) => device.platform === "android").length;
       const iosCount = json.devices.filter((device) => device.platform === "ios").length;
@@ -42,6 +84,7 @@ export function useDeviceList({ setMessage }: UseDeviceListOptions) {
 
   const selectDevice = useCallback((device: DeviceInfo, beforeSelect?: () => void) => {
     beforeSelect?.();
+    saveSelectedDeviceSerial(device.serial);
     setSelectedSerial(device.serial);
     setScrcpyRunning(false);
   }, []);
@@ -73,4 +116,8 @@ export function useDeviceList({ setMessage }: UseDeviceListOptions) {
     refreshDevices,
     selectDevice
   };
+}
+
+function browserDeviceSelectionStorage(): DeviceSelectionStorage | undefined {
+  return typeof window === "undefined" ? undefined : window.localStorage;
 }

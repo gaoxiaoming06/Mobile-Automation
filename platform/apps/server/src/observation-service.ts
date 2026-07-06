@@ -37,8 +37,9 @@ export class ObservationService {
     ]);
 
     const { rawUiHierarchy, uiElements, uiTreeSize, uiHierarchyError } = includeUiTree && device.platform === "android" ? await this.collectUiTree(serial) : emptyUiTree();
+    const screenshotSize = screenshot ? pngDimensions(screenshot) : undefined;
     const ocrTexts = includeOcr && screenshot ? await this.collectOcrTexts(screenshot, options.lang) : [];
-    const derivedSize = uiTreeSize ?? device.resolution;
+    const derivedSize = screenshotSize ?? device.resolution ?? uiTreeSize;
 
     return {
       id: createId("observation"),
@@ -53,8 +54,8 @@ export class ObservationService {
       screenshot: screenshot
         ? {
             sizeBytes: screenshot.byteLength,
-            width: derivedSize?.width,
-            height: derivedSize?.height
+            width: screenshotSize?.width ?? derivedSize?.width,
+            height: screenshotSize?.height ?? derivedSize?.height
           }
         : undefined,
       uiElements,
@@ -129,6 +130,19 @@ function emptyUiTree(): { rawUiHierarchy?: string; uiElements: ObservationUiElem
   return {
     uiElements: []
   };
+}
+
+function pngDimensions(buffer: Buffer): { width: number; height: number } | undefined {
+  const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (buffer.length < 24 || !pngSignature.every((byte, index) => buffer[index] === byte)) {
+    return undefined;
+  }
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  if (!width || !height) {
+    return undefined;
+  }
+  return { width, height };
 }
 
 function toObservationUiElement(candidate: UiElementCandidate): ObservationUiElement {

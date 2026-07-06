@@ -25,6 +25,7 @@ import {
   detectNode,
   planRoute,
   resolveTargetNode,
+  type BusinessGraphVersion,
   type GraphTargetApp,
   type Observation,
   type RouteStrategy,
@@ -42,6 +43,7 @@ import { buildConfirmedPageAssetInput, identifyOrCreateCurrentPageDraft } from "
 import { buildGraphAssetGovernanceSummary, selectAutoPromotableGraphAssets } from "./graph-assets.js";
 import { buildNodeTestResult, collectGraphStepRecords, isGraphRun as isGraphRunResult, readStepGraphMetadata, type GraphStepResultItem, type NodeTestResult } from "./graph-node-test-result.js";
 import { pageAbilityRouteGapIssues, withPageAbilityEdges } from "./page-ability-edges.js";
+import { createVisualLocatorTemplate } from "./page-matcher.js";
 import {
   candidateActionForObservation,
   classifyExplorationResult,
@@ -64,10 +66,15 @@ import {
   type ManualPageTransitionActionKind,
   type ManualPageTransitionAvailability,
   type ManualPageAbilityType,
+  type ManualDynamicRegion,
+  type ManualItemTemplate,
+  type ManualPageElementDynamicMask,
+  type ManualPageElementLocatorKind,
   type ManualPageTransitionCompoundStep,
   type ManualPageTransitionOutcomeType,
   type ManualPageTransitionScrollProfile
 } from "./page-transition-assets.js";
+import { validatePageElementAssetQuality, type PageElementQualityResult } from "./page-element-quality.js";
 import {
   deletePageTaskAsset,
   persistPageTaskAsset,
@@ -77,12 +84,37 @@ import {
 import { ScrcpyStreamBridge } from "./scrcpy-stream.js";
 import { Storage } from "./storage.js";
 import { StructuredFlowRunner, type StartStructuredFlowRunInput } from "./structured-flow-runner.js";
+import { orderedRunStopTargets, type RunStopTarget } from "./run-stop-routing.js";
+import {
+  AssetPatrol,
+  AssetPatrolDeviceBusyError,
+  assetPatrolStartActions,
+  collectAssetRuntimeParamDefinitions,
+  normalizeAssetPatrolConfig,
+  selectAssetDrivenRecoveryTarget,
+  selectAssetDrivenExecutionTargets,
+  shouldAvoidBackRecovery,
+  type AssetDrivenReadyExecutionTarget,
+  type AssetPatrolPageScope,
+  type AssetPatrolStartInput,
+  type AssetPatrolStartMode
+} from "./asset-patrol.js";
+import {
+  StabilityExplorer,
+  StabilityExplorerDeviceBusyError,
+  type StabilityExplorerAllowedAction,
+  type StabilityExplorerAppExitPolicy,
+  type StabilityExplorerBacktrackStrategy,
+  type StabilityExplorerStartInput,
+  type StabilityExplorerStartMode,
+  type StabilityExplorerStrategy
+} from "./stability-explorer.js";
 import { ensureRapidOcrSidecar } from "./ocr-sidecar.js";
 import { createDefaultOcrService } from "./ocr.js";
 import { ObservationService } from "./observation-service.js";
 import { matchCurrentPage } from "./page-matcher.js";
-import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
-import { resolveRoutePlanStart, routePreviewBlockingIssue, summarizeRoutePlanStartDetection } from "./route-plan-preview.js";
+import { RuntimeInterceptor, type RuntimeInterceptorRule } from "./runtime-interceptor.js";
+import { resolveRoutePlanStart, routePreviewBlockingIssue, summarizeRoutePlanStartDetection, type StartAppScope } from "./route-plan-preview.js";
 import { persistRecordingStepGraphAsset } from "./recording-graph-assets.js";
 import { resolveReachableStartNode } from "./start-node-recovery.js";
 import { listSourceScanDirectories, listSourceScanRoots, pickSourceScanDirectory } from "./source-scan-roots.js";
@@ -109,9 +141,12 @@ const ocr = createDefaultOcrService();
 const runner = new AutomationRunner(storage, driver, ocr);
 const flowRunner = new StructuredFlowRunner(storage, driver, ocr);
 const graphRunner = new GraphRunService(storage, driver, ocr);
+const stabilityExplorer = new StabilityExplorer(storage, driver, ocr);
+const assetPatrol = new AssetPatrol(storage, driver, ocr, readPageAssetBaselineArtifact);
 const observationService = new ObservationService(driver, ocr);
 const scrcpyStreamBridge = new ScrcpyStreamBridge();
 const artifactCleanupScheduler = new ArtifactCleanupScheduler(storage);
+const activeAssetDrivenExecutionQueues = new Map<string, { runId: string; promise: Promise<void> }>();
 
 await storage.ensureDirs();
 const builtinCaseSeedResult = seedBuiltinCases(storage);
@@ -741,7 +776,8 @@ app.post("/api/graphs/:versionId/route-plan", async (req, res) => {
                 includeOcr: true
               }),
             performAction: (action) => driver.performAction(body.deviceSerial!, action),
-            baselineReader: readPageAssetBaselineArtifact
+            baselineReader: readPageAssetBaselineArtifact,
+            startAppScope: body.startAppScope
           })
         : undefined;
     const observation =
@@ -762,7 +798,8 @@ app.post("/api/graphs/:versionId/route-plan", async (req, res) => {
           platform: body.platform,
           requestedStartNodeId: body.startNodeId,
           observation,
-          baselineReader: readPageAssetBaselineArtifact
+          baselineReader: readPageAssetBaselineArtifact,
+          startAppScope: body.startAppScope
         });
     const routePlan = planRoute({
       graphVersion: planningGraphVersion,
@@ -1039,6 +1076,37 @@ app.post("/api/graphs/:versionId/assets/page-elements", (req, res) => {
   }
 });
 
+app.post("/api/graphs/:versionId/assets/page-elements/validate", async (req, res) => {
+  try {
+    const graphVersion = storage.getBusinessGraphVersion(req.params.versionId);
+    if (!graphVersion) {
+      res.status(404).json({ error: "Graph version not found" });
+      return;
+    }
+    const body = readManualPageElementRequest(req.body);
+    const observation = await resolvePageElementQualityObservation(req.body);
+    const sourceNode = storage.findBusinessNodeById(graphVersion.id, body.sourceNodeId);
+    const region = parsePercentRegionFromLocator(body.locator);
+    const quality = validatePageElementAssetQuality({
+      element: {
+        elementId: body.elementId,
+        locator: body.locator,
+        actionKind: body.actionKind,
+        elementLabel: body.elementLabel,
+        targetText: body.targetText,
+        semanticArea: body.semanticArea,
+        region
+      },
+      observation,
+      existingElements: readManualElementsForQuality(sourceNode?.metadata?.assetRecordingManualElements)
+    });
+    const visualLocator = region ? await createPageElementVisualLocator(observation, region) : undefined;
+    res.json({ quality, visualLocator, observation });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 app.delete("/api/graphs/:versionId/assets/page-elements/:sourceNodeId/:elementId", (req, res) => {
   try {
     const graphVersion = storage.getBusinessGraphVersion(req.params.versionId);
@@ -1237,6 +1305,14 @@ app.post("/api/graph-runs", async (req, res) => {
     const activeLegacyRun = runner.getActiveRunForDevice(body.deviceSerial);
     if (activeLegacyRun) {
       throw new DeviceBusyError(body.deviceSerial, activeLegacyRun.runId);
+    }
+    const activeStabilityRun = stabilityExplorer.getActiveRunForDevice(body.deviceSerial);
+    if (activeStabilityRun) {
+      throw new StabilityExplorerDeviceBusyError(body.deviceSerial, activeStabilityRun.runId);
+    }
+    const activeAssetPatrolRun = assetPatrol.getActiveRunForDevice(body.deviceSerial);
+    if (activeAssetPatrolRun) {
+      throw new AssetPatrolDeviceBusyError(body.deviceSerial, activeAssetPatrolRun.runId);
     }
     const started = await graphRunner.start(body);
     const run = storage.getRun(started.run.id) ?? started.run;
@@ -1600,6 +1676,227 @@ app.get("/api/runs", (req, res) => {
   res.json({ runs: storage.listRuns(limit, offset), limit, offset });
 });
 
+app.post("/api/stability-explorations", (req, res) => {
+  try {
+    const body = readStabilityExplorerRequest(req.body);
+    if (!body.deviceSerial) {
+      res.status(400).json({ error: "deviceSerial is required" });
+      return;
+    }
+    if (!body.packageName) {
+      res.status(400).json({ error: "packageName is required" });
+      return;
+    }
+    const activeLegacyRun = runner.getActiveRunForDevice(body.deviceSerial) ?? flowRunner.getActiveRunForDevice(body.deviceSerial);
+    if (activeLegacyRun) {
+      throw new DeviceBusyError(body.deviceSerial, activeLegacyRun.runId);
+    }
+    const activeGraphRun = graphRunner.getActiveRunForDevice(body.deviceSerial);
+    if (activeGraphRun) {
+      throw new GraphDeviceBusyError(body.deviceSerial, activeGraphRun.runId);
+    }
+    const activeAssetPatrolRun = assetPatrol.getActiveRunForDevice(body.deviceSerial);
+    if (activeAssetPatrolRun) {
+      throw new AssetPatrolDeviceBusyError(body.deviceSerial, activeAssetPatrolRun.runId);
+    }
+    const run = stabilityExplorer.start(body);
+    res.status(202).json({ run, active: stabilityExplorer.isRunning(run.id) });
+  } catch (error) {
+    if (sendKnownError(res, error)) {
+      return;
+    }
+    sendError(res, error);
+  }
+});
+
+app.post("/api/asset-patrols/preview", async (req, res) => {
+  try {
+    const body = readAssetPatrolRequest(req.body);
+    if (!body.deviceSerial) {
+      res.status(400).json({ error: "deviceSerial is required" });
+      return;
+    }
+    if (!body.packageName) {
+      res.status(400).json({ error: "packageName is required" });
+      return;
+    }
+    const plan = await assetPatrol.preview(body);
+    res.json({ plan });
+  } catch (error) {
+    if (sendKnownError(res, error)) {
+      return;
+    }
+    sendError(res, error);
+  }
+});
+
+app.get("/api/asset-patrols/runtime-params", (req, res) => {
+  try {
+    const packageName = typeof req.query.packageName === "string" ? req.query.packageName.trim() : "";
+    const graphVersionId = typeof req.query.graphVersionId === "string" ? req.query.graphVersionId.trim() : "";
+    if (!packageName && !graphVersionId) {
+      res.status(400).json({ error: "packageName or graphVersionId is required" });
+      return;
+    }
+    const graphVersion = findAssetPatrolGraphVersion(packageName, graphVersionId || undefined);
+    if (!graphVersion) {
+      res.status(404).json({ error: "没有找到当前包名对应的 active PageStateFlow 版本。" });
+      return;
+    }
+    const parameters = collectAssetRuntimeParamDefinitions(graphVersion);
+    res.json({
+      graphVersionId: graphVersion.id,
+      parameters,
+      templateText: parameters.map((item) => `${item.key}=`).join("\n")
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post("/api/asset-patrols", (req, res) => {
+  try {
+    const body = readAssetPatrolRequest(req.body);
+    if (!body.deviceSerial) {
+      res.status(400).json({ error: "deviceSerial is required" });
+      return;
+    }
+    if (!body.packageName) {
+      res.status(400).json({ error: "packageName is required" });
+      return;
+    }
+    const activeLegacyRun = runner.getActiveRunForDevice(body.deviceSerial) ?? flowRunner.getActiveRunForDevice(body.deviceSerial);
+    if (activeLegacyRun) {
+      throw new DeviceBusyError(body.deviceSerial, activeLegacyRun.runId);
+    }
+    const activeGraphRun = graphRunner.getActiveRunForDevice(body.deviceSerial);
+    if (activeGraphRun) {
+      throw new GraphDeviceBusyError(body.deviceSerial, activeGraphRun.runId);
+    }
+    const activeAssetDrivenQueue = activeAssetDrivenExecutionQueues.get(body.deviceSerial);
+    if (activeAssetDrivenQueue) {
+      throw new GraphDeviceBusyError(body.deviceSerial, activeAssetDrivenQueue.runId);
+    }
+    const activeStabilityRun = stabilityExplorer.getActiveRunForDevice(body.deviceSerial);
+    if (activeStabilityRun) {
+      throw new StabilityExplorerDeviceBusyError(body.deviceSerial, activeStabilityRun.runId);
+    }
+    const run = assetPatrol.start(body);
+    res.status(202).json({ run, active: assetPatrol.isRunning(run.id) });
+  } catch (error) {
+    if (sendKnownError(res, error)) {
+      return;
+    }
+    sendError(res, error);
+  }
+});
+
+app.post("/api/asset-patrols/execute", async (req, res) => {
+  try {
+    const body = readAssetPatrolRequest(req.body);
+    if (!body.deviceSerial) {
+      res.status(400).json({ error: "deviceSerial is required" });
+      return;
+    }
+    if (!body.packageName) {
+      res.status(400).json({ error: "packageName is required" });
+      return;
+    }
+    const activeLegacyRun = runner.getActiveRunForDevice(body.deviceSerial) ?? flowRunner.getActiveRunForDevice(body.deviceSerial);
+    if (activeLegacyRun) {
+      throw new DeviceBusyError(body.deviceSerial, activeLegacyRun.runId);
+    }
+    const activeGraphRun = graphRunner.getActiveRunForDevice(body.deviceSerial);
+    if (activeGraphRun) {
+      throw new GraphDeviceBusyError(body.deviceSerial, activeGraphRun.runId);
+    }
+    const activeStabilityRun = stabilityExplorer.getActiveRunForDevice(body.deviceSerial);
+    if (activeStabilityRun) {
+      throw new StabilityExplorerDeviceBusyError(body.deviceSerial, activeStabilityRun.runId);
+    }
+    const activeAssetPatrolRun = assetPatrol.getActiveRunForDevice(body.deviceSerial);
+    if (activeAssetPatrolRun) {
+      throw new AssetPatrolDeviceBusyError(body.deviceSerial, activeAssetPatrolRun.runId);
+    }
+    const config = normalizeAssetPatrolConfig(body);
+    const startActions = assetPatrolStartActions(config);
+    for (const action of startActions) {
+      await driver.performAction(body.deviceSerial, action);
+      if (action.type === "close_app") {
+        await delay(300);
+      }
+    }
+    if (startActions.some((action) => action.type === "launch_app")) {
+      await delay(800);
+    }
+    await handleAssetDrivenRuntimeInterceptors(body.deviceSerial, config.packageName);
+    const plan = await assetPatrol.preview(body);
+    const graphVersion = plan.graphVersionId ? storage.getBusinessGraphVersion(plan.graphVersionId) : undefined;
+    if (!graphVersion) {
+      res.status(422).json({ error: plan.issues[0]?.message ?? "没有找到可执行的 PageStateFlow 版本。", plan });
+      return;
+    }
+    const executionTargets = selectAssetDrivenExecutionTargets({ plan, graphVersion, config });
+    if (executionTargets.status === "blocked") {
+      res.status(422).json({ error: executionTargets.message, executionTarget: executionTargets, executionTargets, plan });
+      return;
+    }
+    const executionTarget = executionTargets.targets[0];
+    if (!executionTarget) {
+      res.status(422).json({
+        error: "当前页面没有可真实执行的 ready 连接边或页面任务，请先补充页面能力/连接边资产。",
+        executionTargets,
+        plan
+      });
+      return;
+    }
+    const started = await startAssetDrivenGraphTarget(body.deviceSerial, executionTarget);
+    const queueState = { runId: started.run.id, promise: Promise.resolve() };
+    const queuePromise = continueAssetDrivenExecutionQueue({
+      body,
+      config,
+      startNodeId: executionTargets.startNodeId,
+      targets: executionTargets.targets,
+      firstRunId: started.run.id,
+      queueState
+    })
+      .catch((error) => {
+        console.error("Asset-driven execution queue failed", error);
+      })
+      .finally(() => {
+        if (activeAssetDrivenExecutionQueues.get(body.deviceSerial)?.promise === queuePromise) {
+          activeAssetDrivenExecutionQueues.delete(body.deviceSerial);
+        }
+      });
+    queueState.promise = queuePromise;
+    activeAssetDrivenExecutionQueues.set(body.deviceSerial, queueState);
+    const run = storage.getRun(started.run.id) ?? started.run;
+    res.status(202).json({
+      run,
+      active: graphRunner.isRunning(started.run.id),
+      routePlanId: started.routePlanId,
+      executionPlanId: started.executionPlanId,
+      graphVersionId: started.graphVersionId,
+      targetNodeId: started.targetNodeId,
+      targetResolution: started.targetResolution,
+      executionTarget,
+      executionTargets,
+      assetDrivenQueue: {
+        total: executionTargets.targets.length,
+        started: 1,
+        remaining: Math.max(0, executionTargets.targets.length - 1)
+      },
+      plan,
+      nodeTestResult: buildNodeTestResult(run, graphRunner.isRunning(started.run.id))
+    });
+  } catch (error) {
+    if (sendKnownError(res, error)) {
+      return;
+    }
+    sendError(res, error);
+  }
+});
+
 app.post("/api/runs", (req, res) => {
   try {
     const body = req.body as {
@@ -1633,6 +1930,14 @@ app.post("/api/runs", (req, res) => {
     const activeGraphRun = graphRunner.getActiveRunForDevice(body.deviceSerial);
     if (activeGraphRun) {
       throw new GraphDeviceBusyError(body.deviceSerial, activeGraphRun.runId);
+    }
+    const activeStabilityRun = stabilityExplorer.getActiveRunForDevice(body.deviceSerial);
+    if (activeStabilityRun) {
+      throw new StabilityExplorerDeviceBusyError(body.deviceSerial, activeStabilityRun.runId);
+    }
+    const activeAssetPatrolRun = assetPatrol.getActiveRunForDevice(body.deviceSerial);
+    if (activeAssetPatrolRun) {
+      throw new AssetPatrolDeviceBusyError(body.deviceSerial, activeAssetPatrolRun.runId);
     }
     const run = runner.start({
       deviceSerial: body.deviceSerial,
@@ -1678,6 +1983,14 @@ app.post("/api/flow-runs", async (req, res) => {
     if (activeGraphRun) {
       throw new GraphDeviceBusyError(body.deviceSerial, activeGraphRun.runId);
     }
+    const activeStabilityRun = stabilityExplorer.getActiveRunForDevice(body.deviceSerial);
+    if (activeStabilityRun) {
+      throw new StabilityExplorerDeviceBusyError(body.deviceSerial, activeStabilityRun.runId);
+    }
+    const activeAssetPatrolRun = assetPatrol.getActiveRunForDevice(body.deviceSerial);
+    if (activeAssetPatrolRun) {
+      throw new AssetPatrolDeviceBusyError(body.deviceSerial, activeAssetPatrolRun.runId);
+    }
     const run = await flowRunner.start({
       flowId: body.flowId,
       deviceSerial: body.deviceSerial,
@@ -1706,7 +2019,7 @@ app.get("/api/runs/:id", (req, res) => {
     res.status(404).json({ error: "Run not found" });
     return;
   }
-  res.json({ run, active: runner.isRunning(req.params.id) || flowRunner.isRunning(req.params.id) || graphRunner.isRunning(req.params.id) });
+  res.json({ run, active: runner.isRunning(req.params.id) || flowRunner.isRunning(req.params.id) || graphRunner.isRunning(req.params.id) || stabilityExplorer.isRunning(req.params.id) || assetPatrol.isRunning(req.params.id) });
 });
 
 app.get("/api/flow-runs/:id", (req, res) => {
@@ -1719,11 +2032,38 @@ app.get("/api/flow-runs/:id", (req, res) => {
   res.json({ run, active, flowRun: summarizeRun(run, active) });
 });
 
+async function stopRunByKind(runId: string, runKind: TestRun["config"]["runKind"] | undefined): Promise<boolean> {
+  for (const target of orderedRunStopTargets(runKind)) {
+    const stopped = await stopRunTarget(target, runId);
+    if (stopped) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function stopRunTarget(target: RunStopTarget, runId: string): Promise<boolean> {
+  if (target === "asset_patrol") {
+    return assetPatrol.stop(runId);
+  }
+  if (target === "stability") {
+    return stabilityExplorer.stop(runId);
+  }
+  if (target === "graph") {
+    return graphRunner.stop(runId);
+  }
+  if (target === "flow") {
+    return flowRunner.stop(runId);
+  }
+  return runner.stop(runId);
+}
+
 app.post("/api/runs/:id/stop", async (req, res) => {
   try {
-    const stopped = (await runner.stop(req.params.id)) || (await flowRunner.stop(req.params.id)) || (await graphRunner.stop(req.params.id));
+    const runBeforeStop = storage.getRun(req.params.id);
+    const stopped = await stopRunByKind(req.params.id, runBeforeStop?.config.runKind);
     const run = storage.getRun(req.params.id);
-    res.json({ stopped, run, active: runner.isRunning(req.params.id) || flowRunner.isRunning(req.params.id) || graphRunner.isRunning(req.params.id) });
+    res.json({ stopped, run, active: runner.isRunning(req.params.id) || flowRunner.isRunning(req.params.id) || graphRunner.isRunning(req.params.id) || stabilityExplorer.isRunning(req.params.id) || assetPatrol.isRunning(req.params.id) });
   } catch (error) {
     sendError(res, error);
   }
@@ -1864,7 +2204,7 @@ server.listen(port, () => {
 
 async function shutdown(): Promise<void> {
   artifactCleanupScheduler.stop();
-  await Promise.all([runner.stopAll(), flowRunner.stopAll(), graphRunner.stopAll(), scrcpyStreamBridge.closeAll(), ocrSidecar.stop()]);
+  await Promise.all([runner.stopAll(), flowRunner.stopAll(), graphRunner.stopAll(), stabilityExplorer.stopAll(), assetPatrol.stopAll(), scrcpyStreamBridge.closeAll(), ocrSidecar.stop()]);
 }
 
 function sendError(res: express.Response, error: unknown): void {
@@ -1889,6 +2229,22 @@ function sendKnownError(res: express.Response, error: unknown): boolean {
     });
     return true;
   }
+  if (error instanceof StabilityExplorerDeviceBusyError) {
+    res.status(409).json({
+      error: "设备正在执行稳定性探索，请等待当前执行结束或先停止当前执行。",
+      activeRunId: error.activeRunId,
+      deviceSerial: error.deviceSerial
+    });
+    return true;
+  }
+  if (error instanceof AssetPatrolDeviceBusyError) {
+    res.status(409).json({
+      error: "设备正在执行资产驱动巡检，请等待当前执行结束或先停止当前执行。",
+      activeRunId: error.activeRunId,
+      deviceSerial: error.deviceSerial
+    });
+    return true;
+  }
   if (error instanceof GraphTargetResolutionError) {
     res.status(422).json({
       error: error.message,
@@ -1897,6 +2253,141 @@ function sendKnownError(res: express.Response, error: unknown): boolean {
     return true;
   }
   return false;
+}
+
+function readAssetPatrolRequest(body: unknown): AssetPatrolStartInput {
+  const input = (body ?? {}) as {
+    deviceSerial?: string;
+    packageName?: string;
+    graphVersionId?: string;
+    startMode?: string;
+    pageScope?: string;
+    maxDurationMs?: unknown;
+    maxTransitions?: unknown;
+    allowRiskyActions?: unknown;
+    allowBusinessSubmit?: unknown;
+    dangerousTextPatterns?: unknown;
+    runtimeParams?: unknown;
+  };
+  return {
+    deviceSerial: input.deviceSerial?.trim() ?? "",
+    packageName: input.packageName?.trim() ?? "",
+    graphVersionId: input.graphVersionId?.trim() || undefined,
+    startMode: readAssetPatrolStartMode(input.startMode),
+    pageScope: readAssetPatrolPageScope(input.pageScope),
+    maxDurationMs: typeof input.maxDurationMs === "number" || typeof input.maxDurationMs === "string" ? Number(input.maxDurationMs) : undefined,
+    maxTransitions: typeof input.maxTransitions === "number" || typeof input.maxTransitions === "string" ? Number(input.maxTransitions) : undefined,
+    allowRiskyActions: readOptionalBoolean(input.allowRiskyActions),
+    allowBusinessSubmit: readOptionalBoolean(input.allowBusinessSubmit),
+    dangerousTextPatterns: readRawStringArray(input.dangerousTextPatterns),
+    runtimeParams: readAssetPatrolRuntimeParams(input.runtimeParams)
+  };
+}
+
+function findAssetPatrolGraphVersion(packageName: string, graphVersionId?: string): BusinessGraphVersion | undefined {
+  if (graphVersionId) {
+    return storage.getBusinessGraphVersion(graphVersionId);
+  }
+  const normalizedPackageName = packageName.trim();
+  if (!normalizedPackageName) {
+    return undefined;
+  }
+  const graph = storage.listBusinessGraphs().find((item) => item.status === "active" && item.targetApp?.androidPackageName === normalizedPackageName && item.activeVersionId)
+    ?? storage.listBusinessGraphs().find((item) => item.status === "active" && item.appId === normalizedPackageName && item.activeVersionId);
+  return graph?.activeVersionId ? storage.getBusinessGraphVersion(graph.activeVersionId) : undefined;
+}
+
+function readAssetPatrolStartMode(value: string | undefined): AssetPatrolStartMode | undefined {
+  return value === "current_state" || value === "launch_app" || value === "restart_app" ? value : undefined;
+}
+
+function readAssetPatrolPageScope(value: string | undefined): AssetPatrolPageScope | undefined {
+  return value === "current_page" || value === "reachable_pages" || value === "tagged_pages" || value === "all_active_pages" ? value : undefined;
+}
+
+function readStabilityExplorerRequest(body: unknown): StabilityExplorerStartInput {
+  const input = (body ?? {}) as {
+    deviceSerial?: string;
+    packageName?: string;
+    maxDurationMs?: unknown;
+    maxActions?: unknown;
+    strategy?: string;
+    startMode?: string;
+    allowedActions?: unknown;
+    seed?: string;
+    appExitPolicy?: string;
+    backtrackStrategy?: string;
+    maxDepth?: unknown;
+    dangerousTextPatterns?: unknown;
+    stopOnCrash?: unknown;
+    stopOnAnr?: unknown;
+    stopOnBlackScreen?: unknown;
+    stopOnUnknownPageStuck?: unknown;
+  };
+  return {
+    deviceSerial: input.deviceSerial?.trim() ?? "",
+    packageName: input.packageName?.trim() ?? "",
+    maxDurationMs: typeof input.maxDurationMs === "number" || typeof input.maxDurationMs === "string" ? Number(input.maxDurationMs) : undefined,
+    maxActions: typeof input.maxActions === "number" || typeof input.maxActions === "string" ? Number(input.maxActions) : undefined,
+    strategy: readStabilityExplorerStrategy(input.strategy),
+    startMode: readStabilityStartMode(input.startMode),
+    allowedActions: readStabilityAllowedActions(input.allowedActions),
+    seed: input.seed?.trim() || undefined,
+    appExitPolicy: readStabilityAppExitPolicy(input.appExitPolicy),
+    backtrackStrategy: readStabilityBacktrackStrategy(input.backtrackStrategy),
+    maxDepth: typeof input.maxDepth === "number" || typeof input.maxDepth === "string" ? Number(input.maxDepth) : undefined,
+    dangerousTextPatterns: readRawStringArray(input.dangerousTextPatterns),
+    stopOnCrash: readOptionalBoolean(input.stopOnCrash),
+    stopOnAnr: readOptionalBoolean(input.stopOnAnr),
+    stopOnBlackScreen: readOptionalBoolean(input.stopOnBlackScreen),
+    stopOnUnknownPageStuck: readOptionalBoolean(input.stopOnUnknownPageStuck)
+  };
+}
+
+function readStabilityExplorerStrategy(value: string | undefined): StabilityExplorerStrategy | undefined {
+  return value === "conservative" || value === "balanced" || value === "aggressive" ? value : undefined;
+}
+
+function readStabilityStartMode(value: string | undefined): StabilityExplorerStartMode | undefined {
+  return value === "launch_app" || value === "current_state" || value === "restart_app" ? value : undefined;
+}
+
+function readStabilityAppExitPolicy(value: string | undefined): StabilityExplorerAppExitPolicy | undefined {
+  return value === "back_to_app" || value === "restart_app" || value === "stop" ? value : undefined;
+}
+
+function readStabilityBacktrackStrategy(value: string | undefined): StabilityExplorerBacktrackStrategy | undefined {
+  return value === "none" || value === "shallow" || value === "depth_first" ? value : undefined;
+}
+
+function readStabilityAllowedActions(value: unknown): StabilityExplorerAllowedAction[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.filter((item): item is StabilityExplorerAllowedAction => item === "tap" || item === "swipe" || item === "back" || item === "wait");
+}
+
+function readRawStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readAssetPatrolRuntimeParams(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string")
+      .map(([key, item]) => [key.trim(), item])
+      .filter(([key]) => Boolean(key))
+  );
 }
 
 function parsePositiveInt(value: unknown, fallback: number, min: number, max: number): number {
@@ -2154,6 +2645,103 @@ function autoExploreBlockedReport(message: string, maxDepth: number, maxActions:
   };
 }
 
+async function startAssetDrivenGraphTarget(deviceSerial: string, target: AssetDrivenReadyExecutionTarget) {
+  return graphRunner.start({
+    deviceSerial,
+    graphVersionId: target.graphVersionId,
+    startNodeId: target.startNodeId,
+    targetNodeId: target.targetNodeId,
+    startStrategy: "keep_current",
+    startAppScope: "current_device",
+    executionProfile: "fast_visual",
+    stopOnFailure: true,
+    overlay: target.overlay
+  });
+}
+
+async function continueAssetDrivenExecutionQueue(input: {
+  body: AssetPatrolStartInput;
+  config: ReturnType<typeof normalizeAssetPatrolConfig>;
+  startNodeId: string;
+  targets: AssetDrivenReadyExecutionTarget[];
+  firstRunId: string;
+  queueState: { runId: string; promise: Promise<void> };
+}): Promise<void> {
+  let previousRunId = input.firstRunId;
+  await graphRunner.waitForRun(previousRunId);
+  for (const target of input.targets.slice(1)) {
+    const previousRun = storage.getRun(previousRunId);
+    if (previousRun?.status !== "passed") {
+      return;
+    }
+    const restored = await recoverAssetDrivenStartPage({
+      body: input.body,
+      packageName: input.config.packageName,
+      startNodeId: input.startNodeId
+    });
+    if (!restored) {
+      return;
+    }
+    await handleAssetDrivenRuntimeInterceptors(input.body.deviceSerial, input.config.packageName);
+    const started = await startAssetDrivenGraphTarget(input.body.deviceSerial, target);
+    previousRunId = started.run.id;
+    input.queueState.runId = previousRunId;
+    await graphRunner.waitForRun(previousRunId);
+  }
+}
+
+async function recoverAssetDrivenStartPage(input: {
+  body: AssetPatrolStartInput;
+  packageName: string;
+  startNodeId: string;
+  maxBacks?: number;
+}): Promise<boolean> {
+  const maxBacks = input.maxBacks ?? 3;
+  for (let attempt = 0; attempt <= maxBacks; attempt += 1) {
+    await handleAssetDrivenRuntimeInterceptors(input.body.deviceSerial, input.packageName);
+    const plan = await assetPatrol.preview({
+      ...input.body,
+      startMode: "current_state",
+      pageScope: "current_page"
+    });
+    if (plan.status === "ready" && plan.startPage?.id === input.startNodeId) {
+      return true;
+    }
+    const graphVersion = plan.graphVersionId ? storage.getBusinessGraphVersion(plan.graphVersionId) : undefined;
+    const recoveryTarget = graphVersion && plan.status === "ready" && plan.startPage?.id
+      ? selectAssetDrivenRecoveryTarget({
+          graphVersion,
+          currentNodeId: plan.startPage.id,
+          startNodeId: input.startNodeId,
+          runtimeParams: input.body.runtimeParams
+        })
+      : undefined;
+    if (recoveryTarget) {
+      const started = await startAssetDrivenGraphTarget(input.body.deviceSerial, recoveryTarget);
+      await graphRunner.waitForRun(started.run.id);
+      if (storage.getRun(started.run.id)?.status !== "passed") {
+        return false;
+      }
+      await delay(500);
+      continue;
+    }
+    if (
+      graphVersion &&
+      plan.status === "ready" &&
+      plan.startPage?.id &&
+      shouldAvoidBackRecovery({ graphVersion, currentNodeId: plan.startPage.id, startNodeId: input.startNodeId })
+    ) {
+      return false;
+    }
+    if (attempt >= maxBacks) {
+      break;
+    }
+    await driver.performAction(input.body.deviceSerial, { type: "back" });
+    await delay(700);
+  }
+  return false;
+}
+
 function isObservationInTargetApp(observation: Observation, targetApp: GraphTargetApp | undefined): boolean {
   if (!targetApp?.androidPackageName && !targetApp?.iosBundleId) {
     return true;
@@ -2165,6 +2753,43 @@ function isObservationInTargetApp(observation: Observation, targetApp: GraphTarg
     return observation.bundleId === targetApp.iosBundleId;
   }
   return true;
+}
+
+async function handleAssetDrivenRuntimeInterceptors(deviceSerial: string, packageName: string): Promise<void> {
+  const interceptor = new RuntimeInterceptor({
+    observe: () => observationService.collect(deviceSerial, {
+      includeScreenshot: true,
+      includeUiTree: true,
+      includeOcr: true
+    }),
+    performAction: async (action) => {
+      await driver.performAction(deviceSerial, runtimeInterceptorActionStepToDeviceAction(action));
+      await delay(500);
+    }
+  }, storage.listRuntimeInterceptorRules({
+    enabledOnly: true,
+    platform: "android",
+    appPackageName: packageName
+  }));
+  await interceptor.handle({ phase: "precondition", maxPasses: 2 });
+}
+
+function runtimeInterceptorActionStepToDeviceAction(action: ActionStep): DeviceActionRequest {
+  if (
+    (action.type === "tap_on_text" || action.type === "tap_on_element") &&
+    typeof action.coordinate?.x === "number" &&
+    typeof action.coordinate.y === "number"
+  ) {
+    return {
+      type: "tap",
+      x: Math.round(action.coordinate.x),
+      y: Math.round(action.coordinate.y)
+    };
+  }
+  if (action.type === "back") {
+    return { type: "back" };
+  }
+  throw new Error(`Unsupported runtime interceptor action for asset-driven test: ${action.type}`);
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -2182,7 +2807,7 @@ function readManualPageTransitionRequest(body: unknown): {
   actionKind: ManualPageTransitionActionKind;
   locator: string;
   semanticArea?: "top" | "content" | "bottom" | "unknown";
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   elementLabel: string;
   targetText?: string;
   availability: ManualPageTransitionAvailability;
@@ -2192,6 +2817,13 @@ function readManualPageTransitionRequest(body: unknown): {
   abilityType?: ManualPageAbilityType;
   scrollProfile?: ManualPageTransitionScrollProfile;
   compoundSteps?: ManualPageTransitionCompoundStep[];
+  locatorKind?: ManualPageElementLocatorKind;
+  dynamicMasks?: ManualPageElementDynamicMask[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegion?: ManualDynamicRegion;
+  itemTemplate?: ManualItemTemplate;
+  transitionKind?: "static" | "parameterized";
+  parameterMapping?: Record<string, string>;
 } {
   const input = (body ?? {}) as {
     sourceNodeId?: string;
@@ -2209,6 +2841,13 @@ function readManualPageTransitionRequest(body: unknown): {
     abilityType?: string;
     scrollProfile?: unknown;
     compoundSteps?: unknown;
+    locatorKind?: unknown;
+    dynamicMasks?: unknown;
+    structuralLocator?: unknown;
+    dynamicRegion?: unknown;
+    itemTemplate?: unknown;
+    transitionKind?: unknown;
+    parameterMapping?: unknown;
   };
   const sourceNodeId = input.sourceNodeId?.trim();
   const targetNodeId = input.targetNodeId?.trim();
@@ -2238,7 +2877,14 @@ function readManualPageTransitionRequest(body: unknown): {
     platformScope: input.platformScope === "ios" || input.platformScope === "mobile-both" ? input.platformScope : "android",
     abilityType: readManualAbilityType(input.abilityType),
     scrollProfile: readManualScrollProfile(input.scrollProfile),
-    compoundSteps: readManualCompoundSteps(input.compoundSteps)
+    compoundSteps: readManualCompoundSteps(input.compoundSteps),
+    locatorKind: readManualLocatorKind(input.locatorKind),
+    dynamicMasks: readManualDynamicMasks(input.dynamicMasks),
+    structuralLocator: readPlainRecord(input.structuralLocator),
+    dynamicRegion: readManualDynamicRegion(input.dynamicRegion),
+    itemTemplate: readManualItemTemplate(input.itemTemplate),
+    transitionKind: readManualTransitionKind(input.transitionKind),
+    parameterMapping: readStringRecord(input.parameterMapping)
   };
 }
 
@@ -2355,7 +3001,7 @@ function readManualPageElementRequest(body: unknown): {
   actionKind: ManualPageTransitionActionKind;
   locator: string;
   semanticArea?: "top" | "content" | "bottom" | "unknown";
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   elementLabel: string;
   targetText?: string;
   availability: ManualPageTransitionAvailability;
@@ -2366,7 +3012,17 @@ function readManualPageElementRequest(body: unknown): {
   targetLabel?: string;
   abilityType?: ManualPageAbilityType;
   scrollProfile?: ManualPageTransitionScrollProfile;
+  tapPointPercent?: { x: number; y: number };
   compoundSteps?: ManualPageTransitionCompoundStep[];
+  quality?: PageElementQualityResult;
+  visualLocator?: Record<string, unknown>;
+  locatorKind?: ManualPageElementLocatorKind;
+  dynamicMasks?: ManualPageElementDynamicMask[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegion?: ManualDynamicRegion;
+  itemTemplate?: ManualItemTemplate;
+  transitionKind?: "static" | "parameterized";
+  parameterMapping?: Record<string, string>;
 } {
   const input = (body ?? {}) as {
     elementId?: string;
@@ -2385,7 +3041,17 @@ function readManualPageElementRequest(body: unknown): {
     targetLabel?: string;
     abilityType?: string;
     scrollProfile?: unknown;
+    tapPointPercent?: unknown;
     compoundSteps?: unknown;
+    quality?: unknown;
+    visualLocator?: unknown;
+    locatorKind?: unknown;
+    dynamicMasks?: unknown;
+    structuralLocator?: unknown;
+    dynamicRegion?: unknown;
+    itemTemplate?: unknown;
+    transitionKind?: unknown;
+    parameterMapping?: unknown;
   };
   const sourceNodeId = input.sourceNodeId?.trim();
   const locator = input.locator?.trim();
@@ -2413,8 +3079,254 @@ function readManualPageElementRequest(body: unknown): {
     targetLabel: input.targetLabel?.trim() || undefined,
     abilityType: readManualAbilityType(input.abilityType),
     scrollProfile: readManualScrollProfile(input.scrollProfile),
-    compoundSteps: readManualCompoundSteps(input.compoundSteps)
+    tapPointPercent: readManualTapPointPercent(input.tapPointPercent),
+    compoundSteps: readManualCompoundSteps(input.compoundSteps),
+    quality: readPageElementQuality(input.quality),
+    visualLocator: readPlainRecord(input.visualLocator),
+    locatorKind: readManualLocatorKind(input.locatorKind),
+    dynamicMasks: readManualDynamicMasks(input.dynamicMasks),
+    structuralLocator: readPlainRecord(input.structuralLocator),
+    dynamicRegion: readManualDynamicRegion(input.dynamicRegion),
+    itemTemplate: readManualItemTemplate(input.itemTemplate),
+    transitionKind: readManualTransitionKind(input.transitionKind),
+    parameterMapping: readStringRecord(input.parameterMapping)
   };
+}
+
+async function createPageElementVisualLocator(
+  observation: Observation | undefined,
+  region: { x: number; y: number; width: number; height: number }
+): Promise<Record<string, unknown> | undefined> {
+  const screenshotBase64 = observation?.raw?.screenshotBase64;
+  if (typeof screenshotBase64 !== "string" || !screenshotBase64) {
+    return undefined;
+  }
+  const template = await createVisualLocatorTemplate({
+    screenshot: Buffer.from(screenshotBase64, "base64"),
+    percentRegion: region,
+    resolution: observation.resolution,
+    sampleSize: 16
+  });
+  if (!template) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    strategy: "recorded_crop_template",
+    minTemplateSimilarity: 0.82,
+    template
+  };
+}
+
+async function resolvePageElementQualityObservation(body: unknown): Promise<Observation | undefined> {
+  const input = (body ?? {}) as {
+    observation?: Observation;
+    deviceSerial?: string;
+    includeOcr?: boolean;
+    lang?: string;
+  };
+  if (input.observation && typeof input.observation === "object") {
+    return input.observation;
+  }
+  const deviceSerial = input.deviceSerial?.trim();
+  if (!deviceSerial) {
+    return undefined;
+  }
+  return observationService.collect(deviceSerial, {
+    includeScreenshot: true,
+    includeUiTree: true,
+    includeOcr: input.includeOcr ?? true,
+    lang: input.lang
+  });
+}
+
+function readManualElementsForQuality(value: unknown): Array<{ id?: string; label?: string; locator?: string; actionKind?: string }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item): { id?: string; label?: string; locator?: string; actionKind?: string } | undefined => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return undefined;
+      }
+      const record = item as Record<string, unknown>;
+      return {
+        id: nonEmptyString(record.id),
+        label: nonEmptyString(record.label),
+        locator: nonEmptyString(record.locator),
+        actionKind: nonEmptyString(record.actionKind)
+      };
+    })
+    .filter((item): item is { id?: string; label?: string; locator?: string; actionKind?: string } => Boolean(item));
+}
+
+function readPageElementQuality(value: unknown): PageElementQualityResult | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  const status = input.status === "pass" || input.status === "needs_review" || input.status === "fail" ? input.status : undefined;
+  const score = typeof input.score === "number" && Number.isFinite(input.score) ? input.score : undefined;
+  if (!status || score === undefined) {
+    return undefined;
+  }
+  return {
+    status,
+    score,
+    warnings: Array.isArray(input.warnings) ? input.warnings.filter(isQualityWarning) : [],
+    candidates: Array.isArray(input.candidates) ? input.candidates.filter(isQualityCandidate) : [],
+    evidence: input.evidence && typeof input.evidence === "object" && !Array.isArray(input.evidence) ? input.evidence as PageElementQualityResult["evidence"] : {
+      uniqueCandidate: false,
+      candidateCount: 0
+    }
+  };
+}
+
+function readPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function readPlainRecordArray(value: unknown): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const records = value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+  return records.length ? records : undefined;
+}
+
+function readStringRecord(value: unknown): Record<string, string> | undefined {
+  const record = readPlainRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const entries = Object.entries(record)
+    .map(([key, entryValue]) => [key.trim(), typeof entryValue === "string" ? entryValue.trim() : ""] as const)
+    .filter(([key, entryValue]) => Boolean(key && entryValue));
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function readManualLocatorKind(value: unknown): ManualPageElementLocatorKind | undefined {
+  return value === "text_locator" ||
+    value === "visual_locator" ||
+    value === "structural_locator" ||
+    value === "collection_item_locator"
+    ? value
+    : undefined;
+}
+
+function readManualTransitionKind(value: unknown): "static" | "parameterized" | undefined {
+  return value === "static" || value === "parameterized" ? value : undefined;
+}
+
+function readPercentRect(value: unknown): { x: number; y: number; width: number; height: number } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  const x = readManualPercent(input.x);
+  const y = readManualPercent(input.y);
+  const width = readManualPercent(input.width);
+  const height = readManualPercent(input.height);
+  if (x === undefined || y === undefined || width === undefined || height === undefined || width <= 0 || height <= 0) {
+    return undefined;
+  }
+  return { x, y, width, height };
+}
+
+function readManualDynamicMasks(value: unknown): ManualPageElementDynamicMask[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const masks = value
+    .map((item): ManualPageElementDynamicMask | undefined => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return undefined;
+      }
+      const input = item as Record<string, unknown>;
+      const region = readPercentRect(input.region);
+      if (!region) {
+        return undefined;
+      }
+      return {
+        kind: readDynamicMaskKind(input.kind),
+        label: typeof input.label === "string" && input.label.trim() ? input.label.trim() : undefined,
+        region,
+        reason: typeof input.reason === "string" && input.reason.trim() ? input.reason.trim() : undefined
+      };
+    })
+    .filter((item): item is ManualPageElementDynamicMask => Boolean(item));
+  return masks.length ? masks : undefined;
+}
+
+function readDynamicMaskKind(value: unknown): ManualPageElementDynamicMask["kind"] {
+  return value === "avatar" || value === "text" || value === "image" || value === "number" ? value : "custom";
+}
+
+function readManualDynamicRegion(value: unknown): ManualDynamicRegion | undefined {
+  const input = readPlainRecord(value);
+  const id = typeof input?.id === "string" ? input.id.trim() : "";
+  const label = typeof input?.label === "string" ? input.label.trim() : "";
+  const region = readPercentRect(input?.region);
+  if (!input || !id || !label || !region) {
+    return undefined;
+  }
+  const itemTemplateId = typeof input.itemTemplateId === "string" && input.itemTemplateId.trim() ? input.itemTemplateId.trim() : undefined;
+  return {
+    id,
+    label,
+    kind: readManualDynamicRegionKind(input.kind),
+    region,
+    ...(itemTemplateId ? { itemTemplateId } : {}),
+    ...(readPlainRecordArray(input.dynamicFieldRules) ? { dynamicFieldRules: readPlainRecordArray(input.dynamicFieldRules) } : {})
+  };
+}
+
+function readManualDynamicRegionKind(value: unknown): ManualDynamicRegion["kind"] {
+  return value === "grid" || value === "feed" || value === "form_group" ? value : "list";
+}
+
+function readManualItemTemplate(value: unknown): ManualItemTemplate | undefined {
+  const input = readPlainRecord(value);
+  const id = typeof input?.id === "string" ? input.id.trim() : "";
+  const label = typeof input?.label === "string" ? input.label.trim() : "";
+  if (!input || !id || !label) {
+    return undefined;
+  }
+  return {
+    id,
+    label,
+    ...(readPercentRect(input.region) ? { region: readPercentRect(input.region) } : {}),
+    ...(readPercentRect(input.actionArea) ? { actionArea: readPercentRect(input.actionArea) } : {}),
+    ...(readPlainRecord(input.stableStructure) ? { stableStructure: readPlainRecord(input.stableStructure) } : {}),
+    ...(readPlainRecordArray(input.stableAnchors) ? { stableAnchors: readPlainRecordArray(input.stableAnchors) } : {}),
+    ...(readPlainRecordArray(input.dynamicFields) ? { dynamicFields: readPlainRecordArray(input.dynamicFields) } : {})
+  };
+}
+
+function isQualityWarning(value: unknown): value is PageElementQualityResult["warnings"][number] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const input = value as Record<string, unknown>;
+  return typeof input.code === "string" && typeof input.message === "string" && (input.severity === "info" || input.severity === "warning" || input.severity === "error");
+}
+
+function isQualityCandidate(value: unknown): value is PageElementQualityResult["candidates"][number] {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function parsePercentRegionFromLocator(locator: string): { x: number; y: number; width: number; height: number } | undefined {
+  if (!locator.startsWith("image-region:")) {
+    return undefined;
+  }
+  const [x, y, width, height] = locator
+    .replace(/^image-region:\s*/, "")
+    .split(",")
+    .map((part) => Number(part.trim()));
+  if (![x, y, width, height].every((value) => Number.isFinite(value)) || width <= 0 || height <= 0) {
+    return undefined;
+  }
+  return { x, y, width, height };
 }
 
 function readVisualSemanticArea(value: unknown): "top" | "content" | "bottom" | "unknown" | undefined {
@@ -2426,8 +3338,8 @@ function readVisualSemanticArea(value: unknown): "top" | "content" | "bottom" | 
     : undefined;
 }
 
-function readCoordinateSpace(value: unknown): "screen" | "app_viewport" | "region" | undefined {
-  return value === "screen" || value === "app_viewport" || value === "region" ? value : undefined;
+function readCoordinateSpace(value: unknown): "screen" | "app_viewport" | "region" | "runtime" | undefined {
+  return value === "screen" || value === "app_viewport" || value === "region" || value === "runtime" ? value : undefined;
 }
 
 function readManualElementOutcomeType(value: unknown): ManualPageTransitionOutcomeType | undefined {
@@ -2529,6 +3441,19 @@ function readManualPercent(value: unknown): number | undefined {
     return undefined;
   }
   return Math.max(0, Math.min(100, numberValue!));
+}
+
+function readManualTapPointPercent(value: unknown): { x: number; y: number } | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  const x = readManualPercent(input.x);
+  const y = readManualPercent(input.y);
+  if (x === undefined || y === undefined) {
+    return undefined;
+  }
+  return { x, y };
 }
 
 function readManualClickSafePoint(value: unknown): { xPercent: number; yPercent: number } | undefined {
@@ -2709,6 +3634,7 @@ function readRoutePlanRequest(body: unknown): {
   strategy?: RouteStrategy;
   persist?: boolean;
   executionProfile?: "full" | "fast_visual";
+  startAppScope?: StartAppScope;
 } {
   const input = (body ?? {}) as {
     targetNodeId?: string;
@@ -2719,6 +3645,7 @@ function readRoutePlanRequest(body: unknown): {
     strategy?: string;
     persist?: boolean;
     executionProfile?: string;
+    startAppScope?: string;
   };
   const platform = input.platform === "ios" ? "ios" : input.platform === "android" ? "android" : undefined;
   if (!platform) {
@@ -2736,7 +3663,8 @@ function readRoutePlanRequest(body: unknown): {
     platform,
     strategy: readRouteStrategy(input.strategy),
     persist: typeof input.persist === "boolean" ? input.persist : undefined,
-    executionProfile: readExecutionProfile(input.executionProfile)
+    executionProfile: readExecutionProfile(input.executionProfile),
+    startAppScope: readStartAppScope(input.startAppScope)
   };
 }
 
@@ -2928,8 +3856,10 @@ function readGraphRunRequest(body: unknown): {
   strategy?: RouteStrategy;
   stopOnFailure?: boolean;
   startStrategy?: FlowStartStrategy;
+  startAppPackageName?: string;
   overlay?: RuntimeOverlay;
   executionProfile?: "full" | "fast_visual";
+  startAppScope?: StartAppScope;
 } {
   const input = (body ?? {}) as {
     deviceSerial?: string;
@@ -2942,8 +3872,10 @@ function readGraphRunRequest(body: unknown): {
     strategy?: string;
     stopOnFailure?: boolean;
     startStrategy?: string;
+    startAppPackageName?: string;
     overlay?: RuntimeOverlay;
     executionProfile?: string;
+    startAppScope?: string;
   };
   if (!input.deviceSerial?.trim()) {
     throw new Error("deviceSerial is required");
@@ -2966,8 +3898,10 @@ function readGraphRunRequest(body: unknown): {
     strategy: readRouteStrategy(input.strategy),
     stopOnFailure: typeof input.stopOnFailure === "boolean" ? input.stopOnFailure : undefined,
     startStrategy: readFlowStartStrategy(input.startStrategy),
+    startAppPackageName: input.startAppPackageName?.trim() || undefined,
     overlay: readRuntimeOverlay(input.overlay),
-    executionProfile: readExecutionProfile(input.executionProfile)
+    executionProfile: readExecutionProfile(input.executionProfile),
+    startAppScope: readStartAppScope(input.startAppScope)
   };
 }
 
@@ -3187,6 +4121,10 @@ function readExecutionProfile(value: string | undefined): "full" | "fast_visual"
   return value === "fast_visual" || value === "full" ? value : undefined;
 }
 
+function readStartAppScope(value: string | undefined): StartAppScope | undefined {
+  return value === "current_device" || value === "target_app" ? value : undefined;
+}
+
 function positiveNumber(value: unknown, fallback: number): number {
   const parsed = typeof value === "string" ? Number(value) : value;
   return typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -3270,6 +4208,7 @@ type GraphRunSummary = {
     beforeMatch?: unknown;
     afterMatch?: unknown;
     actionPolicy?: unknown;
+    semantic?: unknown;
     action?: GraphStepResultItem["action"];
     matches?: GraphStepResultItem["matches"];
     retry?: GraphStepResultItem["retry"];
@@ -3368,6 +4307,7 @@ function summarizeGraphRun(run: TestRun, active: boolean): GraphRunSummary {
       beforeMatch: graph?.beforeMatch,
       afterMatch: graph?.afterMatch,
       actionPolicy: graph?.actionPolicy,
+      semantic: step.metadata?.semantic,
       action: structuredStep?.action,
       matches: structuredStep?.matches,
       retry: structuredStep?.retry,

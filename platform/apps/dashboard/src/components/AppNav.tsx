@@ -8,11 +8,12 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
+  Radar,
   Settings,
   Smartphone
 } from "lucide-react";
 
-export type AppNavItemId = "devices" | "caseLibrary" | "recording" | "assetRecording" | "pageAssets" | "runs" | "graphs" | "packages" | "reports" | "settings";
+export type AppNavItemId = "devices" | "caseLibrary" | "recording" | "assetRecording" | "pageAssets" | "assetPatrol" | "stability" | "runs" | "graphs" | "packages" | "reports" | "settings";
 
 type AppNavProps = {
   activeNavItem: AppNavItemId;
@@ -23,6 +24,8 @@ type AppNavProps = {
   openCaseLibrary: () => void;
   openAssetRecording: () => void;
   openPageAssets: () => void;
+  openAssetPatrol: () => void;
+  openStability: () => void;
   openRuns: () => void;
   openGraphs: () => void;
 };
@@ -36,6 +39,8 @@ export function AppNav({
   openCaseLibrary,
   openAssetRecording,
   openPageAssets,
+  openAssetPatrol,
+  openStability,
   openRuns,
   openGraphs
 }: AppNavProps) {
@@ -65,6 +70,14 @@ export function AppNav({
         <button className={navButtonClass(activeNavItem, "pageAssets")} onClick={openPageAssets} title="页面资产库" type="button">
           <FileText size={18} />
           <span>页面资产库</span>
+        </button>
+        <button className={navButtonClass(activeNavItem, "assetPatrol")} onClick={openAssetPatrol} title="资产驱动巡检" type="button">
+          <Radar size={18} />
+          <span>资产驱动巡检</span>
+        </button>
+        <button className={navButtonClass(activeNavItem, "stability")} onClick={openStability} title="稳定性探索" type="button">
+          <Radar size={18} />
+          <span>稳定性探索</span>
         </button>
         <button className={navButtonClass(activeNavItem, "runs")} onClick={openRuns} title="执行结果" type="button">
           <PlayCircle size={18} />

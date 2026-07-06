@@ -1,5 +1,6 @@
 import type { ActionPolicy, BusinessGraphVersion, BusinessNode, OperationEdge, PlatformScope } from "@mobile-automation/graph-core";
 import { createId, nowIso, type ActionStep, type StepExpectation } from "@mobile-automation/shared";
+import type { PageElementQualityResult } from "./page-element-quality.js";
 
 export type ManualPageTransitionOutcomeType = "navigate" | "compound_navigation" | "show_inline_state" | "local_state_change" | "no_visible_change";
 export type ManualPageTransitionActionKind = "tap" | "scroll" | "long_press" | "input";
@@ -8,12 +9,36 @@ export type ManualPageTransitionCompoundStep = {
   locator: string;
   elementLabel: string;
   semanticArea?: "top" | "content" | "bottom" | "unknown";
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   waitTimeoutMs?: number;
   intervalMs?: number;
 };
 export type ManualPageTransitionAvailability = "visible" | "after_scroll" | "conditional";
 export type ManualPageAbilityType = "scroll_candidate" | "grid_candidate" | "conditional_tap";
+export type ManualPageElementLocatorKind = "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator";
+export type ManualPageElementDynamicMask = {
+  kind: "avatar" | "text" | "image" | "number" | "custom";
+  label?: string;
+  region: { x: number; y: number; width: number; height: number };
+  reason?: string;
+};
+export type ManualDynamicRegion = {
+  id: string;
+  label: string;
+  kind: "list" | "grid" | "feed" | "form_group";
+  region: { x: number; y: number; width: number; height: number };
+  itemTemplateId?: string;
+  dynamicFieldRules?: Record<string, unknown>[];
+};
+export type ManualItemTemplate = {
+  id: string;
+  label: string;
+  region?: { x: number; y: number; width: number; height: number };
+  actionArea?: { x: number; y: number; width: number; height: number };
+  stableStructure?: Record<string, unknown>;
+  stableAnchors?: Record<string, unknown>[];
+  dynamicFields?: Record<string, unknown>[];
+};
 export type ManualPageTransitionScrollProfile = {
   containerKind: "list" | "grid_list" | "tab_bar" | "carousel" | "scroll_area";
   direction: "vertical" | "horizontal";
@@ -52,7 +77,7 @@ export type PersistManualPageTransitionInput = {
   actionKind: ManualPageTransitionActionKind;
   locator: string;
   semanticArea?: "top" | "content" | "bottom" | "unknown";
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   elementLabel: string;
   targetText?: string;
   availability: ManualPageTransitionAvailability;
@@ -61,7 +86,17 @@ export type PersistManualPageTransitionInput = {
   platformScope?: PlatformScope;
   abilityType?: ManualPageAbilityType;
   scrollProfile?: ManualPageTransitionScrollProfile;
+  tapPointPercent?: { x: number; y: number };
   compoundSteps?: ManualPageTransitionCompoundStep[];
+  quality?: PageElementQualityResult;
+  visualLocator?: Record<string, unknown>;
+  locatorKind?: ManualPageElementLocatorKind;
+  dynamicMasks?: ManualPageElementDynamicMask[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegion?: ManualDynamicRegion;
+  itemTemplate?: ManualItemTemplate;
+  transitionKind?: "static" | "parameterized";
+  parameterMapping?: Record<string, string>;
 };
 
 export type PersistPageTaskNavigationTransitionInput = {
@@ -82,7 +117,7 @@ export type PersistManualPageElementInput = {
   actionKind: ManualPageTransitionActionKind;
   locator: string;
   semanticArea?: "top" | "content" | "bottom" | "unknown";
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   elementLabel: string;
   targetText?: string;
   availability: ManualPageTransitionAvailability;
@@ -93,7 +128,17 @@ export type PersistManualPageElementInput = {
   targetLabel?: string;
   abilityType?: ManualPageAbilityType;
   scrollProfile?: ManualPageTransitionScrollProfile;
+  tapPointPercent?: { x: number; y: number };
   compoundSteps?: ManualPageTransitionCompoundStep[];
+  quality?: PageElementQualityResult;
+  visualLocator?: Record<string, unknown>;
+  locatorKind?: ManualPageElementLocatorKind;
+  dynamicMasks?: ManualPageElementDynamicMask[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegion?: ManualDynamicRegion;
+  itemTemplate?: ManualItemTemplate;
+  transitionKind?: "static" | "parameterized";
+  parameterMapping?: Record<string, string>;
 };
 
 export type PersistManualPageTransitionResult = {
@@ -244,7 +289,17 @@ export function persistManualPageElementAsset(input: PersistManualPageElementInp
         platformScope: input.platformScope,
         abilityType: input.abilityType,
         scrollProfile: input.scrollProfile,
-        compoundSteps: input.compoundSteps
+        tapPointPercent: input.tapPointPercent,
+        compoundSteps: input.compoundSteps,
+        quality: input.quality,
+        visualLocator: input.visualLocator,
+        locatorKind: input.locatorKind,
+        dynamicMasks: input.dynamicMasks,
+        structuralLocator: input.structuralLocator,
+        dynamicRegion: input.dynamicRegion,
+        itemTemplate: input.itemTemplate,
+        transitionKind: input.transitionKind,
+        parameterMapping: input.parameterMapping
       });
       return { status: "saved", element: manualPageElement(input, targetNode) };
     }
@@ -253,11 +308,7 @@ export function persistManualPageElementAsset(input: PersistManualPageElementInp
   const existingElements = readManualPageElements(sourceNode.metadata?.assetRecordingManualElements);
   const nextElements = upsertManualPageElement(existingElements, nextElement);
   input.storage.updateBusinessNodeDetails(sourceNode.id, {
-    metadata: {
-      ...(sourceNode.metadata ?? {}),
-      assetRecordingManualElements: nextElements,
-      updatedAt: nowIso()
-    }
+    metadata: manualPageAssetMetadata(sourceNode.metadata, nextElements, input)
   });
   return { status: "saved", element: nextElement };
 }
@@ -339,11 +390,7 @@ function persistManualPageElement(input: PersistManualPageTransitionInput, sourc
   const existingElements = readManualPageElements(sourceNode.metadata?.assetRecordingManualElements);
   const nextElements = upsertManualPageElement(existingElements, nextElement);
   input.storage.updateBusinessNodeDetails(sourceNode.id, {
-    metadata: {
-      ...(sourceNode.metadata ?? {}),
-      assetRecordingManualElements: nextElements,
-      updatedAt: nowIso()
-    }
+    metadata: manualPageAssetMetadata(sourceNode.metadata, nextElements, input)
   });
 }
 
@@ -354,6 +401,7 @@ function manualPageElement(input: PersistManualPageElementInput, targetNode?: Bu
     label: input.elementLabel || input.locator,
     ...(input.targetText ? { targetText: input.targetText } : {}),
     locator: input.locator,
+    ...(input.locatorKind ? { locatorKind: input.locatorKind } : {}),
     semanticArea: input.semanticArea ?? (region ? semanticAreaForRegion(region) : undefined),
     coordinateSpace: input.coordinateSpace ?? (region ? "screen" : undefined),
     action: input.actionKind,
@@ -361,14 +409,65 @@ function manualPageElement(input: PersistManualPageElementInput, targetNode?: Bu
     ...(input.abilityType ? { abilityType: input.abilityType } : {}),
     availability: input.availability,
     ...(region ? { region } : {}),
+    ...(input.tapPointPercent ? { tapPointPercent: input.tapPointPercent } : {}),
     ...(input.targetNodeId ? { targetNodeId: input.targetNodeId } : targetNode ? { targetNodeId: targetNode.id } : {}),
     ...("targetLabel" in input && input.targetLabel ? { targetLabel: input.targetLabel } : targetNode ? { targetLabel: targetNode.name } : {}),
     ...("outcomeType" in input ? { outcomeType: input.outcomeType } : {}),
     ...("outcomeLabel" in input && input.outcomeLabel ? { outcomeLabel: input.outcomeLabel } : {}),
     platformScope: input.platformScope ?? "android",
     ...(input.scrollProfile ? { scrollProfile: input.scrollProfile } : {}),
-    ...(input.compoundSteps?.length ? { compoundSteps: input.compoundSteps, compoundSignature: compoundStepsSignature(input.compoundSteps) } : {})
+    ...(input.compoundSteps?.length ? { compoundSteps: input.compoundSteps, compoundSignature: compoundStepsSignature(input.compoundSteps) } : {}),
+    ...(input.quality ? { quality: input.quality } : {}),
+    ...(input.visualLocator ? { visualLocator: input.visualLocator } : {}),
+    ...(input.structuralLocator ? { structuralLocator: input.structuralLocator } : {}),
+    ...(input.dynamicMasks?.length ? { dynamicMasks: input.dynamicMasks } : {}),
+    ...(input.dynamicRegion?.id ? { dynamicRegionId: input.dynamicRegion.id } : {}),
+    ...(input.itemTemplate?.id ? { itemTemplateId: input.itemTemplate.id } : input.dynamicRegion?.itemTemplateId ? { itemTemplateId: input.dynamicRegion.itemTemplateId } : {}),
+    ...(input.transitionKind ? { transitionKind: input.transitionKind } : {}),
+    ...(input.parameterMapping ? { parameterMapping: input.parameterMapping } : {})
   };
+}
+
+function manualPageAssetMetadata(
+  currentMetadata: Record<string, unknown> | undefined,
+  nextElements: Record<string, unknown>[],
+  input: Pick<PersistManualPageElementInput, "dynamicRegion" | "itemTemplate">
+): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {
+    ...(currentMetadata ?? {}),
+    assetRecordingManualElements: nextElements,
+    updatedAt: nowIso()
+  };
+  if (input.dynamicRegion) {
+    metadata.assetRecordingDynamicRegions = upsertRecordByStableId(
+      readRecordArray(currentMetadata?.assetRecordingDynamicRegions),
+      input.dynamicRegion
+    );
+  }
+  if (input.itemTemplate) {
+    metadata.assetRecordingItemTemplates = upsertRecordByStableId(
+      readRecordArray(currentMetadata?.assetRecordingItemTemplates),
+      input.itemTemplate
+    );
+  }
+  return metadata;
+}
+
+function upsertRecordByStableId(existing: Record<string, unknown>[], next: Record<string, unknown> & { id?: string }): Record<string, unknown>[] {
+  const nextId = typeof next.id === "string" ? next.id : undefined;
+  if (!nextId) {
+    return [...existing, next];
+  }
+  return [
+    ...existing.filter((item) => item.id !== nextId),
+    next
+  ];
+}
+
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    : [];
 }
 
 function upsertManualPageElement(
@@ -377,16 +476,80 @@ function upsertManualPageElement(
 ): Record<string, unknown>[] {
   return [
     ...existingElements.filter((element) => {
-      if (element.id && nextElement.id && element.id === nextElement.id) {
+      if (manualPageElementMatchesForUpsert(element, nextElement)) {
         return false;
       }
-      return !(element.locator === nextElement.locator && element.actionKind === nextElement.actionKind && element.compoundSignature === nextElement.compoundSignature);
+      return true;
     }),
     {
-      ...existingElements.find((element) => (element.id && nextElement.id && element.id === nextElement.id) || (element.locator === nextElement.locator && element.actionKind === nextElement.actionKind && element.compoundSignature === nextElement.compoundSignature)),
+      ...existingElements.find((element) => manualPageElementMatchesForUpsert(element, nextElement)),
       ...nextElement
     }
   ];
+}
+
+function manualPageElementMatchesForUpsert(
+  existing: Record<string, unknown> & { locator?: unknown; actionKind?: unknown; compoundSignature?: unknown },
+  next: Record<string, unknown>
+): boolean {
+  if (existing.id && next.id && existing.id === next.id) {
+    return true;
+  }
+  if (existing.locator === next.locator && existing.actionKind === next.actionKind && existing.compoundSignature === next.compoundSignature) {
+    return true;
+  }
+  return Boolean(
+    existing.label &&
+      next.label &&
+      existing.label === next.label &&
+      existing.actionKind === next.actionKind &&
+      existing.compoundSignature === next.compoundSignature &&
+      manualPageElementRegionsRepresentSameTarget(existing, next)
+  );
+}
+
+function manualPageElementRegionsRepresentSameTarget(existing: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  const existingRegion = readManualPageElementRegion(existing);
+  const nextRegion = readManualPageElementRegion(next);
+  return Boolean(existingRegion && nextRegion && rectsRepresentSameMarkedTarget(existingRegion, nextRegion));
+}
+
+function readManualPageElementRegion(record: Record<string, unknown>): { x: number; y: number; width: number; height: number } | undefined {
+  const region = record.region;
+  if (region && typeof region === "object" && !Array.isArray(region)) {
+    const value = region as Record<string, unknown>;
+    if (
+      typeof value.x === "number" &&
+      typeof value.y === "number" &&
+      typeof value.width === "number" &&
+      typeof value.height === "number" &&
+      value.width > 0 &&
+      value.height > 0
+    ) {
+      return { x: value.x, y: value.y, width: value.width, height: value.height };
+    }
+  }
+  return typeof record.locator === "string" ? parseImageRegionLocator(record.locator) : undefined;
+}
+
+function rectsRepresentSameMarkedTarget(
+  left: { x: number; y: number; width: number; height: number },
+  right: { x: number; y: number; width: number; height: number }
+): boolean {
+  const overlapWidth = Math.max(0, Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
+  const overlapHeight = Math.max(0, Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y));
+  const overlapArea = overlapWidth * overlapHeight;
+  const minArea = Math.max(1, Math.min(left.width * left.height, right.width * right.height));
+  return overlapArea / minArea >= 0.45 || rectCenterInside(left, right) || rectCenterInside(right, left);
+}
+
+function rectCenterInside(
+  rect: { x: number; y: number; width: number; height: number },
+  container: { x: number; y: number; width: number; height: number }
+): boolean {
+  const centerX = rect.x + rect.width / 2;
+  const centerY = rect.y + rect.height / 2;
+  return centerX >= container.x && centerX <= container.x + container.width && centerY >= container.y && centerY <= container.y + container.height;
 }
 
 function readManualPageElements(value: unknown): Array<Record<string, unknown> & { locator?: unknown; actionKind?: unknown; compoundSignature?: unknown }> {
@@ -513,11 +676,24 @@ function compoundActionTypeFor(step: ManualPageTransitionCompoundStep): ActionSt
 function manualAbilityActionParams(input: PersistManualPageTransitionInput): Record<string, unknown> {
   const base: Record<string, unknown> = {
     ...(input.semanticArea ? { semanticArea: input.semanticArea } : input.locator.startsWith("image-region:") ? { semanticArea: semanticAreaForLocator(input.locator) } : {}),
-    ...(input.coordinateSpace ? { coordinateSpace: input.coordinateSpace } : input.locator.startsWith("image-region:") ? { coordinateSpace: "screen" } : {})
+    ...(input.coordinateSpace ? { coordinateSpace: input.coordinateSpace } : input.locator.startsWith("image-region:") ? { coordinateSpace: "screen" } : {}),
+    ...(input.locatorKind ? { locatorKind: input.locatorKind } : {}),
+    ...(input.structuralLocator ? { structuralLocator: input.structuralLocator } : {}),
+    ...(input.dynamicMasks?.length ? { dynamicMasks: input.dynamicMasks } : {}),
+    ...(input.dynamicRegion?.id ? { dynamicRegionId: input.dynamicRegion.id } : {}),
+    ...(input.itemTemplate?.id ? { itemTemplateId: input.itemTemplate.id } : input.dynamicRegion?.itemTemplateId ? { itemTemplateId: input.dynamicRegion.itemTemplateId } : {}),
+    ...(input.transitionKind ? { transitionKind: input.transitionKind } : {}),
+    ...(input.parameterMapping ? { parameterMapping: input.parameterMapping } : {})
   };
-  const targetText = input.targetText?.trim() || input.elementLabel;
-  if (input.locator.startsWith("image-region:") && input.abilityType !== "grid_candidate" && targetText) {
+  const targetText = input.targetText?.trim();
+  if ((input.locator.startsWith("image-region:") || input.locator.startsWith("runtime-locator:")) && input.abilityType !== "grid_candidate" && targetText) {
     base.targetText = targetText;
+  }
+  if (input.locator.startsWith("image-region:") && input.tapPointPercent) {
+    base.tapPointPercent = input.tapPointPercent;
+  }
+  if (input.locator.startsWith("image-region:") && input.visualLocator) {
+    base.visualLocator = input.visualLocator;
   }
   if (input.abilityType !== "grid_candidate" || input.scrollProfile?.containerKind !== "grid_list") {
     return base;
@@ -585,6 +761,9 @@ function actionTypeForLocator(actionKind: ManualPageTransitionActionKind, locato
   if (actionKind === "input") {
     return "input_text_to_element";
   }
+  if (locator.startsWith("runtime-locator:")) {
+    return "tap_on_image";
+  }
   if (locator.startsWith("image-region:")) {
     return "tap_on_image";
   }
@@ -638,7 +817,7 @@ function readStoredSemanticArea(value: unknown): ManualPageTransitionCompoundSte
 }
 
 function readStoredCoordinateSpace(value: unknown): ManualPageTransitionCompoundStep["coordinateSpace"] {
-  return value === "screen" || value === "app_viewport" || value === "region" ? value : undefined;
+  return value === "screen" || value === "app_viewport" || value === "region" || value === "runtime" ? value : undefined;
 }
 
 function compoundStepsSignature(steps: ManualPageTransitionCompoundStep[] | undefined): string | undefined {
@@ -670,7 +849,7 @@ function locatorParams(locator: string): Record<string, unknown> {
   }
   if (locator.startsWith("accessibility/desc:")) {
     const accessibilityId = locator.replace(/^accessibility\/desc:\s*/, "").trim();
-    return { accessibilityId };
+    return { accessibilityId, contentDesc: accessibilityId };
   }
   if (locator.startsWith("text:")) {
     return { text: locator.replace(/^text:\s*/, "").trim() };

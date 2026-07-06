@@ -13,10 +13,10 @@ The workflow intentionally borrows the useful execution discipline from GitHub `
 
 Current product mainline:
 
-- Default new product work goes to `StructuredFlow` / Smart Recorded Flow.
-- StructuredFlow means: beforeState -> semantic action -> afterExpectations -> systemGuards -> dynamic wait -> evidence.
-- BusinessGraph upper-layer capabilities are frozen as experimental: source scanning to global graph, candidate graph governance, target-node route planning, graph-runs, and auto-promotion.
-- Do not expand BusinessGraph upper-layer work unless the user explicitly reopens that product direction.
+- Default new product work goes to `PageStateFlow`.
+- PageStateFlow means: PageModel -> PageElement -> PageTransition/PageTask -> semantic execution -> repair evidence -> reportable result.
+- `StructuredFlow` / Smart Recorded Flow remains a compatible linear replay artifact for concrete step execution, but it is not the product-level source of truth.
+- Old source-code global graph capabilities are frozen as experimental: source scanning to global graph, candidate graph governance, graph quality, and auto-promotion.
 - Reuse the lower-level primitives already extracted from graph work: `TestRuleStep`, `StateMatcher` / `FlowStateAnchor`, semantic locators, `RuntimeOverlay`, dynamic wait, `RuntimeInterceptor`, screenshots, video, logs, metrics, and report evidence.
 
 Before code changes, classify the user's request:
@@ -40,7 +40,7 @@ Before code changes, classify the user's request:
 - Do not close a task only because code was changed. Closure requires test evidence, docs sync, and visible residual risk.
 - Do not require git worktrees in this project unless the workspace is confirmed to be a git repository.
 - Do not apply Superpowers as a replacement for the current spec hierarchy; apply it as execution discipline.
-- Do not treat graph-runs or target-node planning as the default flow for new features; prefer `/api/flow-runs`, StructuredFlow storage, and the case library unless the task explicitly says graph experiment.
+- Do not treat old source-scan graph flows as the default for new features; prefer PageStateFlow assets, semantic locators, page tasks, and route planning from saved page assets.
 - When a decision becomes stable, ask for or create an ADR.
 - Keep changelog entries in either the feature spec changelog or `docs/changelog/`.
 - P0 regressions may use the fast-track flow in `docs/guides/ai-development-workflow.md`, but new product capabilities must not skip spec updates.

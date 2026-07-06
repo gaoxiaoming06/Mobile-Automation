@@ -282,6 +282,7 @@ export type GraphExpectationEvaluationInput = {
   phase: Exclude<GraphExecutionPhase, "action" | "state_transition" | "device">;
   step: ExecutionPlanStep;
   observation?: Observation;
+  nodeMatch?: NodeMatchResult;
 };
 
 export type GraphRunnerDriver = {
@@ -500,7 +501,7 @@ export class GraphRunner {
       });
     }
 
-    const preconditionResults = await this.evaluateExpectations(step.preconditions, step, "precondition", before);
+    const preconditionResults = await this.evaluateExpectations(step.preconditions, step, "precondition", before, beforeMatch);
     base.preconditionResults = preconditionResults;
     const failedPrecondition = firstBlockingFailure(preconditionResults);
     if (failedPrecondition) {
@@ -514,7 +515,7 @@ export class GraphRunner {
     }
 
     if (step.executionMode === "noop") {
-      const expectationResults = await this.evaluateExpectations(step.expectations, step, "expectation", before);
+      const expectationResults = await this.evaluateExpectations(step.expectations, step, "expectation", before, beforeMatch);
       base.expectationResults = expectationResults;
       const failedExpectation = firstBlockingFailure(expectationResults);
       if (failedExpectation) {
@@ -527,7 +528,7 @@ export class GraphRunner {
         });
       }
 
-      const systemGuardResults = await this.evaluateExpectations(step.systemGuards, step, "system_guard", before);
+      const systemGuardResults = await this.evaluateExpectations(step.systemGuards, step, "system_guard", before, beforeMatch);
       base.systemGuardResults = systemGuardResults;
       const failedSystemGuard = firstBlockingFailure(systemGuardResults);
       if (failedSystemGuard) {
@@ -627,7 +628,7 @@ export class GraphRunner {
       });
     }
 
-    const expectationResults = await this.evaluateExpectations(step.expectations, step, "expectation", after);
+    const expectationResults = await this.evaluateExpectations(step.expectations, step, "expectation", after, afterMatch);
     base.expectationResults = expectationResults;
     const failedExpectation = firstBlockingFailure(expectationResults);
     if (failedExpectation) {
@@ -640,7 +641,7 @@ export class GraphRunner {
       });
     }
 
-    const systemGuardResults = await this.evaluateExpectations(step.systemGuards, step, "system_guard", after);
+    const systemGuardResults = await this.evaluateExpectations(step.systemGuards, step, "system_guard", after, afterMatch);
     base.systemGuardResults = systemGuardResults;
     const failedSystemGuard = firstBlockingFailure(systemGuardResults);
     if (failedSystemGuard) {
@@ -663,7 +664,8 @@ export class GraphRunner {
     expectations: StepExpectation[],
     step: ExecutionPlanStep,
     phase: GraphExpectationEvaluationInput["phase"],
-    observation: Observation
+    observation: Observation,
+    nodeMatch?: NodeMatchResult
   ): Promise<StepExpectationResult[]> {
     const enabled = expectations.filter((expectation) => expectation.enabled);
     const results: StepExpectationResult[] = [];
@@ -673,7 +675,8 @@ export class GraphRunner {
           expectation,
           phase,
           step,
-          observation
+          observation,
+          nodeMatch
         })
       );
     }

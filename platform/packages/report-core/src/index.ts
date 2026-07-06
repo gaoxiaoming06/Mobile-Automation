@@ -149,6 +149,8 @@ export function renderReportHtml(run: TestRun): string {
     </section>
 
     ${renderGraphReport(run)}
+    ${renderStabilityReport(run)}
+    ${renderAssetPatrolReport(run)}
 
     <h2>性能摘要</h2>
     <section class="summary">
@@ -173,7 +175,7 @@ export function renderReportHtml(run: TestRun): string {
             const videoOffset = primaryVideo ? videoOffsetSeconds(primaryVideo.createdAt, step.startedAt) : undefined;
             return `<tr>
               <td>${step.stepOrder}</td>
-              <td>${escapeHtml(step.type)}</td>
+              <td>${renderStepActionCell(step)}</td>
               <td>${renderStepStatus(step.status)}${renderPreconditionDetail(step.metadata)}${renderConditionDetail(step.metadata)}</td>
               <td>${renderExpectationSummary(step.expectationResults ?? [])}</td>
               <td>${step.durationMs ?? "-"} ms</td>
@@ -364,6 +366,74 @@ type GraphActionPolicySummary = {
   };
 };
 
+function renderStabilityReport(run: TestRun): string {
+  const config = run.config.stabilityExploration;
+  if (!config) {
+    return "";
+  }
+  const latestStep = run.stepResults.at(-1);
+  const latestMetadata = readStabilityMetadata(latestStep?.metadata);
+  const failedSteps = run.stepResults.filter((step) => step.status === "failed").length;
+  const skippedSteps = run.stepResults.filter((step) => step.status === "skipped").length;
+  const skippedCandidates = run.stepResults.reduce((sum, step) => sum + (readStabilityMetadata(step.metadata)?.skippedCandidates?.length ?? 0), 0);
+
+  return `<h2>稳定性探索摘要</h2>
+    <section class="graph-panel">
+      <section class="summary">
+        <div class="metric"><span>目标包</span><strong>${escapeHtml(config.packageName)}</strong></div>
+        <div class="metric"><span>Seed</span><strong>${escapeHtml(config.seed)}</strong></div>
+        <div class="metric"><span>策略</span><strong>${escapeHtml(config.strategy)}</strong></div>
+        <div class="metric"><span>动作进度</span><strong>${run.stepResults.length} / ${config.maxActions}</strong></div>
+        <div class="metric"><span>最大时长</span><strong>${formatDuration(Math.round(config.maxDurationMs / 1000))}</strong></div>
+        <div class="metric"><span>App 外处理</span><strong>${escapeHtml(config.appExitPolicy)}</strong></div>
+        <div class="metric"><span>失败动作</span><strong>${failedSteps}</strong></div>
+        <div class="metric"><span>跳过动作</span><strong>${skippedSteps}</strong></div>
+        <div class="metric"><span>过滤候选</span><strong>${skippedCandidates}</strong></div>
+        <div class="metric"><span>最近动作</span><strong>${escapeHtml(latestMetadata?.candidateLabel ?? "-")}</strong></div>
+      </section>
+      <div class="graph-diagnostics">
+        <div><strong>允许动作</strong><span>${escapeHtml(config.allowedActions.join(", "))}</span></div>
+        <div><strong>危险词</strong><span>${escapeHtml(config.dangerousTextPatterns.join(", "))}</span></div>
+        <div><strong>最近来源</strong><span>${escapeHtml(latestMetadata?.candidateSource ?? "-")} · ${escapeHtml(latestMetadata?.currentPackage ?? config.packageName)}</span></div>
+      </div>
+    </section>`;
+}
+
+function renderAssetPatrolReport(run: TestRun): string {
+  const config = run.config.assetPatrol;
+  if (!config) {
+    return "";
+  }
+  const latestStep = run.stepResults.at(-1);
+  const latestMetadata = readAssetPatrolMetadata(latestStep?.metadata);
+  const assetSteps = run.stepResults
+    .map((step) => ({ step, metadata: readAssetPatrolMetadata(step.metadata) }))
+    .filter((item): item is { step: StepResult; metadata: NonNullable<ReturnType<typeof readAssetPatrolMetadata>> } => Boolean(item.metadata));
+  const failedSteps = assetSteps.filter(({ step }) => step.status === "failed").length;
+  const skippedSteps = assetSteps.filter(({ step }) => step.status === "skipped").length;
+  const needsRepair = assetSteps.filter(({ metadata }) => metadata.status === "needs_repair" || metadata.skipReason === "runtime_relocation_required").length;
+
+  return `<h2>资产驱动巡检摘要</h2>
+    <section class="graph-panel">
+      <section class="summary">
+        <div class="metric"><span>目标包</span><strong>${escapeHtml(config.packageName)}</strong></div>
+        <div class="metric"><span>启动方式</span><strong>${escapeHtml(config.startMode)}</strong></div>
+        <div class="metric"><span>巡检范围</span><strong>${escapeHtml(config.pageScope)}</strong></div>
+        <div class="metric"><span>检查项</span><strong>${assetSteps.length}</strong></div>
+        <div class="metric"><span>失败检查</span><strong>${failedSteps}</strong></div>
+        <div class="metric"><span>跳过检查</span><strong>${skippedSteps}</strong></div>
+        <div class="metric"><span>建议修复</span><strong>${needsRepair}</strong></div>
+        <div class="metric"><span>当前页</span><strong>${escapeHtml(latestMetadata?.pageModelName ?? latestMetadata?.startPage?.name ?? "-")}</strong></div>
+        <div class="metric"><span>最近检查</span><strong>${escapeHtml(latestMetadata?.label ?? "-")}</strong></div>
+      </section>
+      <div class="graph-diagnostics">
+        <div><strong>危险词</strong><span>${escapeHtml(config.dangerousTextPatterns.join(", "))}</span></div>
+        <div><strong>最近原因</strong><span>${escapeHtml(latestMetadata?.skipReason ?? "-")}</span></div>
+        <div><strong>执行模式</strong><span>${escapeHtml(latestMetadata?.executionMode ?? "diagnostic")}</span></div>
+      </div>
+    </section>`;
+}
+
 function renderGraphReport(run: TestRun): string {
   const graphSteps = collectGraphSteps(run);
   if (!graphSteps.length) {
@@ -450,7 +520,7 @@ function renderGraphStepRow(run: TestRun, step: StepResult, graph: GraphStepMeta
     <td>${escapeHtml(graph.fromNodeName ?? graph.fromNodeId ?? "-")}<br /><span class="muted">→</span> ${escapeHtml(graph.toNodeName ?? graph.toNodeId ?? "-")}</td>
     <td>${renderStepStatus(step.status)}<div class="graph-meta">${escapeHtml(graph.phase ?? "-")}</div>${renderGraphRecovery(graph)}${step.errorMessage ? `<div class="expectation-reason">${escapeHtml(step.errorMessage)}</div>` : ""}</td>
     <td>${renderGraphMatch("Before", graph.beforeMatch)}${renderGraphMatch("After", graph.afterMatch)}</td>
-    <td>${renderGraphActionPolicy(step, graph)}</td>
+    <td>${renderGraphActionPolicy(step, graph)}${renderSemanticLocatorEvidence(step.metadata?.semantic)}</td>
     <td>${renderGraphExpectationGroups(step.expectationResults ?? [], graph)}${renderGraphInterceptors(graph.interceptors)}${renderGraphDeviations(graph.deviations)}</td>
     <td>${renderEvidenceLinks(artifacts)}</td>
   </tr>`;
@@ -573,6 +643,66 @@ function renderGraphActionPolicy(step: StepResult, graph: GraphStepMetadata): st
   </div>`;
 }
 
+function renderSemanticLocatorEvidence(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
+  const semantic = value as Record<string, unknown>;
+  const rows = [
+    textValue(semantic.relocatedBy) ? `resolvedBy=${textValue(semantic.relocatedBy)}` : "",
+    textValue(semantic.focusResolvedBy) ? `focus=${textValue(semantic.focusResolvedBy)}` : "",
+    textValue(semantic.fallback) ? `fallback=${textValue(semantic.fallback)}` : "",
+    textValue(semantic.targetText) ? `target=${textValue(semantic.targetText)}` : "",
+    typeof semantic.inputVerified === "boolean" ? `inputVerified=${semantic.inputVerified}` : "",
+    textValue(semantic.verificationStrategy) ? `verify=${textValue(semantic.verificationStrategy)}` : ""
+  ].filter(Boolean);
+  const visualCandidate = readSemanticObject(semantic.visualCandidate);
+  if (visualCandidate) {
+    rows.push(
+      [
+        "candidate",
+        textValue(visualCandidate.label),
+        textValue(visualCandidate.role),
+        typeof visualCandidate.score === "number" ? `score=${visualCandidate.score}` : "",
+        textValue(visualCandidate.semanticArea)
+      ].filter(Boolean).join(" · ")
+    );
+  }
+  const visualTemplate = readSemanticObject(semantic.visualTemplate);
+  if (visualTemplate) {
+    rows.push(
+      [
+        "template",
+        textValue(visualTemplate.hash) ? `hash=${textValue(visualTemplate.hash)}` : "",
+        typeof visualTemplate.similarity === "number" ? `similarity=${visualTemplate.similarity}` : ""
+      ].filter(Boolean).join(" · ")
+    );
+  }
+  const visualRelocation = readSemanticObject(semantic.visualRelocation);
+  if (visualRelocation) {
+    rows.push(
+      [
+        "relocation",
+        textValue(visualRelocation.reason),
+        typeof visualRelocation.minScore === "number" ? `min=${visualRelocation.minScore}` : "",
+        typeof visualRelocation.candidateCount === "number" ? `candidates=${visualRelocation.candidateCount}` : ""
+      ].filter(Boolean).join(" · ")
+    );
+  }
+  if (!rows.length) {
+    rows.push(formatUnknownValue(semantic));
+  }
+  return `<div class="graph-diagnostics semantic-locator-evidence"><div><strong>定位证据</strong><span>${escapeHtml(rows.join("；"))}</span></div></div>`;
+}
+
+function readSemanticObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function textValue(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
 function renderGraphExpectationGroups(results: StepExpectationResult[], graph: GraphStepMetadata): string {
   if (!results.length) {
     return '<span class="muted">未配置</span>';
@@ -599,6 +729,60 @@ function readGraphMetadata(metadata: Record<string, unknown> | undefined): Graph
     return undefined;
   }
   return graph as GraphStepMetadata;
+}
+
+function readStabilityMetadata(metadata: Record<string, unknown> | undefined): {
+  candidateLabel?: string;
+  candidateSource?: string;
+  currentPackage?: string;
+  skippedCandidates?: Array<{ label?: string; skipReason?: string }>;
+} | undefined {
+  const value = metadata?.stabilityExploration;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as {
+        candidateLabel?: string;
+        candidateSource?: string;
+        currentPackage?: string;
+        skippedCandidates?: Array<{ label?: string; skipReason?: string }>;
+      })
+    : undefined;
+}
+
+function readAssetPatrolMetadata(metadata: Record<string, unknown> | undefined): {
+  kind?: string;
+  label?: string;
+  status?: string;
+  executionMode?: string;
+  pageModelName?: string;
+  skipReason?: string;
+  startPage?: { name?: string };
+} | undefined {
+  const value = metadata?.assetPatrol;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as {
+        kind?: string;
+        label?: string;
+        status?: string;
+        executionMode?: string;
+        pageModelName?: string;
+        skipReason?: string;
+        startPage?: { name?: string };
+      })
+    : undefined;
+}
+
+function renderStepActionCell(step: StepResult): string {
+  const assetPatrol = readAssetPatrolMetadata(step.metadata);
+  if (!assetPatrol) {
+    return escapeHtml(step.type);
+  }
+  const label = assetPatrol.label || assetPatrol.kind || step.type;
+  const detail = [assetPatrol.kind, assetPatrol.status, assetPatrol.skipReason].filter(isNonEmptyString).join(" · ");
+  return `<strong>${escapeHtml(label)}</strong>${detail ? `<div class="graph-meta">${escapeHtml(detail)}</div>` : ""}`;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function graphRouteNodes(graphSteps: GraphStepReport[]): string[] {

@@ -76,6 +76,61 @@ describe("page ability route edges", () => {
     );
   });
 
+  it("keeps top bar icon locator metadata on generated page ability edges", () => {
+    const home = pageNode("node-home", "classin.home", "主页", {
+      assetRecordingManualElements: [
+        {
+          id: "manual_add",
+          label: "打开更多菜单并选择添加好友",
+          locator: "top-bar-icon:add",
+          locatorKind: "top_bar_icon_locator",
+          actionKind: "tap",
+          semanticArea: "top",
+          coordinateSpace: "runtime",
+          role: "add",
+          slot: "trailing",
+          orderFromRight: 1,
+          anchorText: "主页",
+          visualLocator: {
+            candidates: [
+              { role: "search", label: "搜索", score: 0.94, semanticArea: "top", region: { x: 84, y: 6.6, width: 4, height: 3.8 } },
+              { role: "add", label: "加号", score: 0.95, semanticArea: "top", region: { x: 91.2, y: 6.5, width: 4.2, height: 4 } }
+            ]
+          },
+          outcomeType: "navigate",
+          targetNodeId: "node-add-friend",
+          targetLabel: "添加好友"
+        }
+      ]
+    });
+    const addFriend = pageNode("node-add-friend", "classin.add-friend", "添加好友");
+    const graphVersion = graph([home, addFriend]);
+
+    const nextGraphVersion = withPageAbilityEdges(graphVersion, "android");
+    const action = nextGraphVersion.edges[0]?.actionPolicies[0]?.action;
+
+    expect(action).toEqual(
+      expect.objectContaining({
+        type: "tap_on_image",
+        params: expect.objectContaining({
+          locator: "top-bar-icon:add",
+          locatorKind: "top_bar_icon_locator",
+          semanticArea: "top",
+          coordinateSpace: "runtime",
+          role: "add",
+          slot: "trailing",
+          orderFromRight: 1,
+          anchorText: "主页",
+          visualLocator: expect.objectContaining({
+            candidates: expect.arrayContaining([
+              expect.objectContaining({ role: "add" })
+            ])
+          })
+        })
+      })
+    );
+  });
+
   it("reports navigable page abilities that cannot become route edges yet", () => {
     const home = pageNode("node-home", "classin.home", "主页", {
       assetRecordingManualElements: [
@@ -175,6 +230,49 @@ describe("page ability route edges", () => {
           targetText: "发布",
           semanticArea: "bottom",
           coordinateSpace: "screen"
+        })
+      })
+    );
+  });
+
+  it("plans runtime structural tap abilities through the visual semantic resolver", () => {
+    const login = pageNode("node-login", "classin.login", "登录", {
+      assetRecordingManualElements: [
+        {
+          id: "manual-login-submit",
+          label: "登录按钮",
+          targetText: "登录",
+          locator: "runtime-locator:primary_login_button",
+          locatorKind: "structural_locator",
+          actionKind: "tap",
+          semanticArea: "content",
+          coordinateSpace: "runtime",
+          availability: "visible",
+          outcomeType: "navigate",
+          targetNodeId: "node-home",
+          targetLabel: "主页",
+          structuralLocator: {
+            strategy: "ocr_text",
+            role: "primary_button",
+            text: "登录"
+          }
+        }
+      ]
+    });
+    const home = pageNode("node-home", "classin.home", "主页");
+
+    const nextGraphVersion = withPageAbilityEdges(graph([login, home]), "android");
+
+    expect(nextGraphVersion.edges[0]?.actionPolicies[0]?.action).toEqual(
+      expect.objectContaining({
+        type: "tap_on_image",
+        params: expect.objectContaining({
+          locator: "runtime-locator:primary_login_button",
+          locatorKind: "structural_locator",
+          targetText: "登录",
+          structuralLocator: expect.objectContaining({
+            role: "primary_button"
+          })
         })
       })
     );

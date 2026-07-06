@@ -342,6 +342,7 @@ describe("AndroidDriver actions", () => {
     await driver.performAction("device-1", { type: "clear_text" });
 
     expect(calls).toEqual([
+      ["ime", "list", "-s"],
       ["input", "keyevent", "KEYCODE_CTRL_A"],
       ["input", "keyevent", "KEYCODE_DEL"]
     ]);

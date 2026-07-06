@@ -4,7 +4,7 @@ doc_type: acceptance
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-06-25
+updated_at: 2026-07-02
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -536,8 +536,8 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 - 前置条件：目标 App 已配置；至少存在一个可识别 PageModel 或可从固定 Flow 执行到稳定页面。
 - 操作步骤：
   1. 打开稳定性探索入口。
-  2. 配置探索 seed、最大时长、最大动作数、策略、允许动作和危险词黑名单。
-  3. 选择从当前页、根页面或固定 Flow 终点开始探索。
+  2. 选择设备并输入 / 选择目标包名。
+  3. 配置探索 seed、起始方式、最大时长、最大动作数、策略、允许动作、危险词黑名单和 App 外处理策略。
   4. 启动探索。
   5. 使用相同 seed 再次执行。
   6. 人为触发或模拟 crash / ANR / 黑屏 / App 退出 / 未知页卡住。
@@ -550,6 +550,11 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
   5. crash / ANR / 黑屏 / App 退出 / 设备断连 / 未知页卡住时停止探索或按配置恢复，并保留证据。
   6. 新页面、新元素和新边只进入 draft / candidate，不直接写入 active 页面资产。
   7. 探索路径可导出为可复现 Flow。
+  8. Dashboard 执行中展示当前 run、进度、当前包、最近动作、动作来源、过滤候选数和最近步骤时间线。
+  9. HTML 报告展示稳定性探索摘要，包括目标包、seed、策略、动作进度、App 外处理、过滤候选和最近动作。
+  10. 同一候选动作执行后页面无实质变化时，后续同页探索应跳过该候选并在过滤候选中展示 `repeated_no_change`。
+  11. 配置浅层回退和最大深度后，探索进入子页面达到深度上限时应执行 `backtrack` 返回；回到父页面后应跳过已覆盖入口并继续探索其它候选。
+  12. 选择“当前页开始”时，目标 App 已在前台则不得重新启动 App；前台包不匹配时应停止并记录 `start_state_failed`。
 - 验证方式：Mock Driver PoC 测试 + 真实 Android 手动验证。
 - 回归范围：Exploration engine、Runner、Report。
 
@@ -939,7 +944,8 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 - AND 平台必须识别动作后的 outcome：导航到目标页面、打开弹层、局部状态变化或无可见变化。
 - AND 平台必须生成 PageTransition candidate，并保存 source page、action element、target page / overlay、afterExpectation 和证据。
 - AND 用户在截图上手工圈选动作区域并保存时，平台必须把该区域同时沉淀为源 PageModel 的 PageElement 和 PageTransition action；再次识别该页面时必须回显该手工动作区域。
-- AND `tap_on_image` 使用人工 `image-region` 时，执行器必须按当前设备分辨率换算区域中心点执行，并在报告 / metadata 中记录 region 和执行坐标。
+- AND `tap_on_image` 使用人工 `image-region` 时，执行器必须先通过 OCR、crop hash/template、视觉候选或结构候选完成运行时重定位；命中后点击运行时目标中心或安全点，并在报告 / metadata 中记录定位证据。
+- AND 如果只有人工 `region` / `region_center` 而没有重定位证据，执行器必须失败并在报告 / 修复 UI 暴露记录区域、记录中心点和 `runtime_relocation_required`，不得默认点击区域中心。
 - GIVEN 用户在连接边 / 页面能力中配置 `compound_navigation`。
 - WHEN 用户保存“点击右上角 + -> 等待添加好友文字 -> 点击添加好友 -> 跳转添加好友页”。
 - THEN 平台必须保存 `compoundSteps`，并把该转移作为 active PageTransition 纳入路径规划。
@@ -1020,3 +1026,76 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 - THEN API / MCP 响应必须包含缺陷候选 ID、提报状态、TAPD 链接或提交失败原因，便于 AI / CI 继续处理。
 - 验证方式：server defect service 单元测试 + TAPD mock client 集成测试 + report-core 测试 + Dashboard 组件测试 + REST / MCP mock 测试。
 - 回归范围：Runner result、Report、Artifact storage、Notification / external API、Dashboard 报告详情、缺陷候选队列。
+
+### AC-046：资产驱动巡检
+
+- 关联需求：REQ-044
+- 目标平台：Backend + Web Dashboard + Report + Android first，iOS follow-up
+- GIVEN Dashboard 主导航已加载。
+- WHEN 用户查看测试入口。
+- THEN 平台必须保留现有“自动探索 / 稳定性探索”入口。
+- AND 平台必须新增独立“资产驱动巡检”入口，不能把它和盲目探索混成同一个默认按钮。
+- GIVEN 用户选择“从当前页面开始巡检”。
+- WHEN 当前设备页面稳定命中 active PageModel。
+- THEN 平台必须生成 AssetPatrolPlan，包含页面健康检查、区域滚动检查、PageElement 重定位检查、PageTransition 验证和 PageTask dry-run。
+- AND 计划预览必须展示将要巡检的页面、区域、元素、连接边、页内任务、预计风险和跳过项。
+- GIVEN 当前设备页面未知、低置信、多候选或处于目标 App 外。
+- WHEN 用户触发资产驱动巡检。
+- THEN 平台必须停止或进入只读诊断，不得继续随机点击 OCR / UI 候选。
+- GIVEN PageModel 中存在用户标注的 content / list / dynamic region。
+- WHEN 巡检执行区域滚动检查。
+- THEN Runner 只能在这些区域内滑动，并在滑动后重新识别当前页面。
+- AND 标题栏、底部导航、系统栏和危险操作区域不得被用于滚动。
+- GIVEN 某个 PageElement 只有历史 region / region_center，没有 OCR、视觉模板、结构定位或候选重定位证据。
+- WHEN 巡检执行元素检查。
+- THEN 该元素必须标记为 `runtime_relocation_required` 或需要修复，不得点击历史中心点。
+- GIVEN 巡检计划包含 PageTransition。
+- WHEN PageTransition 文案或 action 被识别为删除、支付、发布、提交、退出登录、确认等高风险动作。
+- THEN 默认必须 skipped，并在报告中展示跳过原因。
+- AND 只有巡检配置或测试计划显式允许高风险动作时才可以执行。
+- GIVEN 巡检计划包含 PageTask。
+- WHEN `allowBusinessSubmit=false`。
+- THEN Runner 默认只执行 dry-run / 轻量验证，检查元素引用、参数解析和提交前路径，不得真实提交业务数据。
+- GIVEN 巡检执行完成。
+- THEN 报告必须展示页面覆盖率、元素定位成功率、连接边成功率、PageTask 可执行性、跳过原因、失败分类、耗时分布、性能指标、异常事件和修复入口。
+- AND 每个失败项必须关联到具体 PageModel / PageElement / PageTransition / PageTask。
+- GIVEN 巡检过程中发现新页面、新元素、新边、页面变体或定位修复建议。
+- WHEN Run 结束。
+- THEN 新页面、新元素、新边和页面变体默认只能进入候选管理 / 报告候选区 / 资产录制确认流程，不得自动写入 active 页面资产。
+- AND 定位修复建议只有在满足 REQ-045 的 AI 高置信、低风险、验证通过和自动修复策略时，才可以通过受控 AssetPatch 流程自动应用为新的 active 资产版本。
+- 验证方式：AssetPatrolPlanner / Runner 单元测试 + server API 集成测试 + report-core 测试 + Dashboard 组件测试 + Android 真机主流程巡检手动验证。
+- 回归范围：PageMatcher、SemanticLocator、PageTransition execution、PageTask dry-run、RuntimeInterceptor、Report、Dashboard 资产录制和稳定性探索入口。
+
+### AC-047：探索异常 AI 诊断与受控资产修复
+
+- 关联需求：REQ-045
+- 目标平台：Backend + MCP / REST adapter + Report + Dashboard，Android first，iOS follow-up
+- GIVEN 稳定性探索、资产驱动巡检或目标执行过程中发生 crash / ANR / 黑屏 / App 退出。
+- WHEN Runner 进入失败处理。
+- THEN 平台必须先固化截图、日志、性能采样、动作序列和运行事件，再生成 AI 诊断证据包。
+- AND AI 诊断结果必须把该问题归类为运行 / 业务异常或 `unsafe_to_decide`，不得自动生成 active 资产更新。
+- GIVEN 执行失败原因是当前页面未匹配、PageElement 重定位失败或连接边缺失。
+- WHEN 规则分类和 AI 诊断判断更可能是资产过期或测试计划缺口。
+- THEN 平台必须生成 `AssetPatchCandidate` 或候选建议，并在报告和失败修复 UI 中展示 patch 内容、依据和置信度。
+- AND patch 默认必须是 draft，不得绕过资产质量校验、验证结果、风险策略和预算直接写入 active PageStateFlow。
+- GIVEN AI 提交了资产修复草稿。
+- WHEN 系统验证该草稿。
+- THEN 验证必须至少重新执行页面匹配、元素重定位或连接边轻量验证中的相关项。
+- AND 验证失败或置信度不足时必须进入人工复核，不得继续盲点点击。
+- GIVEN AI 诊断高置信判断为资产问题，patch 类型属于低风险白名单，证据完整，且 `auto_apply_verified_patch` 策略开启。
+- WHEN 资产修复 patch 通过系统验证，且单次 Run 自动修复预算未耗尽。
+- THEN 平台可以通过受控 MCP / REST 工具自动应用 patch，生成新的 active 资产版本，并继续本次执行。
+- AND 报告必须展示 AI 诊断、patch 内容、验证结果、应用策略、新旧版本、回滚入口和继续执行结果。
+- GIVEN 资产修复草稿验证通过，但策略未开启自动应用或 patch 风险较高。
+- WHEN Runner 继续探索或巡检。
+- THEN patch 必须保持 draft / validated，等待人工确认后才能进入 active；Runner 不得把该资产问题静默当作通过。
+- GIVEN 外部 AI 通过 MCP / REST 工具请求更新资产。
+- WHEN 工具调用 `propose_page_asset_patch`。
+- THEN 系统必须创建受控 patch，并校验 patch 类型、资产范围、证据引用、风险等级、预算和权限。
+- AND 只有调用 `apply_page_asset_patch` 且策略 / 验证均通过时，patch 才能进入 active。
+- AND 工具不得允许 AI 直接控制设备、删除 active 资产、写入平台依赖 matcher、启用历史 `region_center` 点击或绕过回滚记录。
+- GIVEN 模型调用超时、返回非 JSON、schema 校验失败或低置信。
+- WHEN Runner 处理诊断结果。
+- THEN 平台必须回退到规则诊断并保留原始失败，不得把 Run 标记为通过。
+- 验证方式：server diagnosis 单元测试 + mock OpenAI-compatible client 测试 + MCP adapter contract 测试 + report-core 测试 + Dashboard 失败修复 UI 测试 + Android 真机三类失败手动验证。
+- 回归范围：StabilityExplorer、AssetPatrolRunner、GraphRunService、RunArtifact、DefectCandidate、PageState asset storage、MCP adapter、Report、Dashboard repair UI。

@@ -17,6 +17,8 @@ describe("AppNav", () => {
         openCaseLibrary: noop,
         openAssetRecording: noop,
         openPageAssets: noop,
+        openAssetPatrol: noop,
+        openStability: noop,
         openRuns: noop,
         openGraphs: noop
       })
@@ -27,6 +29,8 @@ describe("AppNav", () => {
     expect(markup).toContain("用例库");
     expect(markup).toContain("资产录制");
     expect(markup).toContain("页面资产库");
+    expect(markup).toContain("资产驱动巡检");
+    expect(markup).toContain("稳定性探索");
     expect(markup).toContain("执行结果");
     expect(markup).toContain("实验能力");
     expect(markup).toContain("业务图谱上层能力已冻结");

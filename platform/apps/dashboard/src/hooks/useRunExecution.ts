@@ -296,6 +296,7 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
     setStartStrategy,
     setStartAppPackageName,
     setStartSetupScope,
+    refreshRuns,
     startRun,
     startFlowRun,
     stopCurrentRun,

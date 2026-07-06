@@ -748,6 +748,94 @@ describe("PageMatcher", () => {
     expect(result.match.status).toBe("matched");
     expect(result.observation.imageRegions?.[0]?.similarity).toBeGreaterThanOrEqual(0.9);
   });
+
+  it("reuses the same visual baseline within a page matching pass", async () => {
+    const baseline = Buffer.from("same-region");
+    let baselineReads = 0;
+    const region = { x: 20, y: 8, width: 30, height: 8 };
+    const home = node({
+      id: "node-home",
+      key: "classin.home",
+      name: "主页",
+      tags: ["page-asset", "asset-recording"],
+      matchers: [
+        {
+          ...matcher("image_region", "screenshot-region:home-title:%E4%B8%BB%E9%A1%B5", 3, true, "mobile-both"),
+          threshold: 0.9,
+          region,
+          source: { sourceType: "manual_edit", artifactId: "artifact-home-title" }
+        },
+        {
+          ...matcher("semantic_image_region", "semantic-image-region:home-title:%E4%B8%BB%E9%A1%B5", 2.2, false, "mobile-both"),
+          threshold: 0.68,
+          region,
+          source: { sourceType: "manual_edit", artifactId: "artifact-home-title" }
+        }
+      ],
+      metadata: { assetRecordingConfirmed: true }
+    });
+
+    await matchCurrentPage({
+      graphVersion: graph([home]),
+      observation: observation({
+        screenshotBase64: baseline.toString("base64"),
+        resolution: { width: 1080, height: 2400 }
+      }),
+      baselineReader: async (artifactId) => {
+        baselineReads += 1;
+        return artifactId === "artifact-home-title" ? baseline : undefined;
+      }
+    });
+
+    expect(baselineReads).toBe(1);
+  });
+
+  it("limits visual enrichment to requested candidate nodes", async () => {
+    const baseline = pgm(2, 2, [0, 0, 0, 0]);
+    let baselineReads = 0;
+    const target = node({
+      id: "node-target",
+      key: "classin.target",
+      name: "目标页",
+      tags: ["page-asset", "asset-recording"],
+      matchers: [matcher("package", "cn.eeo.classin", 2, true, "android"), matcher("text", "目标页", 2, true, "android"), matcher("ocr_text", "目标页", 2, true, "mobile-both")],
+      metadata: { assetRecordingConfirmed: true }
+    });
+    const unrelated = node({
+      id: "node-unrelated",
+      key: "classin.unrelated",
+      name: "无关页",
+      tags: ["page-asset", "asset-recording"],
+      matchers: [
+        {
+          ...matcher("image_region", "screenshot-region:unrelated:%E6%97%A0%E5%85%B3", 3, true, "mobile-both"),
+          threshold: 0.9,
+          region: { x: 0, y: 0, width: 100, height: 100 },
+          source: { sourceType: "manual_edit", artifactId: "artifact-unrelated" }
+        }
+      ],
+      metadata: { assetRecordingConfirmed: true }
+    });
+
+    const result = await matchCurrentPage({
+      graphVersion: graph([target, unrelated]),
+      candidateNodeIds: ["node-target"],
+      observation: observation({
+        uiTexts: ["目标页"],
+        ocrTexts: ["目标页"],
+        screenshotBase64: baseline.toString("base64"),
+        resolution: { width: 2, height: 2 }
+      }),
+      baselineReader: async (artifactId) => {
+        baselineReads += 1;
+        return artifactId === "artifact-unrelated" ? baseline : undefined;
+      }
+    });
+
+    expect(result.match.status).toBe("matched");
+    expect(result.match.node?.id).toBe("node-target");
+    expect(baselineReads).toBe(0);
+  });
 });
 
 function graph(nodes: BusinessNode[]): BusinessGraphVersion {

@@ -7,9 +7,9 @@ description: "Mobile-Automation test role. Use when creating test stubs, regress
 
 ## Priority Areas
 
-- StructuredFlow / Smart Recorded Flow is the current product mainline.
-- Test `StructuredFlowRunner`, `TestRuleStep` adapters, case library behavior, Flow REST APIs, semantic locators, dynamic wait, RuntimeOverlay, RuntimeInterceptor, screenshots, video, logs, metrics, and reports first.
-- BusinessGraph upper-layer tests remain regression coverage for experimental code, not the default acceptance gate for new product features.
+- PageStateFlow is the current product mainline.
+- Test PageModel/PageElement/PageTransition/PageTask assets, semantic locators, route planning from page assets, repair evidence, `TestRuleStep` adapters, dynamic wait, RuntimeOverlay, RuntimeInterceptor, screenshots, video, logs, metrics, and reports first.
+- Old source-code global graph tests remain regression coverage for experimental code, not the default acceptance gate for new product features.
 - Step schema.
 - Coordinate conversion.
 - Recorder lifecycle.

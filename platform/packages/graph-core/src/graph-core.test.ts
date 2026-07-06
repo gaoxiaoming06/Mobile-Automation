@@ -698,6 +698,74 @@ describe("graph-core state detector", () => {
     );
   });
 
+  it("accepts OCR evidence for an equivalent critical UI text matcher when the UI tree is unavailable", () => {
+    const graphVersion = graph({
+      nodes: [
+        node(
+          "login",
+          "page",
+          { ...matcher("activity", "cn.eeo.startup.newui.LoginActivity", 2), critical: true },
+          { ...matcher("text", "立即注册", 2), critical: true },
+          { ...matcher("package", "cn.eeo.classin", 1), critical: true },
+          matcher("text", "登录", 1),
+          matcher("ocr_text", "立即注册", 0.5),
+          matcher("ocr_text", "登录", 0.5)
+        )
+      ],
+      edges: []
+    });
+
+    const result = detectNode(
+      {
+        ...observation(),
+        packageName: "cn.eeo.classin",
+        activityName: "cn.eeo.startup.newui.LoginActivity",
+        uiElements: [],
+        ocrTexts: [
+          { text: "立即注册", confidence: 0.9, source: "ocr" },
+          { text: "登录", confidence: 0.9, source: "ocr" }
+        ]
+      },
+      graphVersion,
+      "android"
+    );
+
+    expect(result.status).toBe("matched");
+    expect(result.node?.id).toBe("login");
+    expect(result.candidates[0]?.quality.missingCriticalMatcherIds).toEqual([]);
+  });
+
+  it("does not accept UI tree text as a substitute for required OCR evidence", () => {
+    const graphVersion = graph({
+      nodes: [
+        node(
+          "login",
+          "page",
+          { ...matcher("activity", "cn.eeo.startup.newui.LoginActivity", 2), critical: true },
+          { ...matcher("ocr_text", "立即注册", 2), critical: true },
+          { ...matcher("package", "cn.eeo.classin", 1), critical: true },
+          matcher("text", "立即注册", 0.5)
+        )
+      ],
+      edges: []
+    });
+
+    const result = detectNode(
+      {
+        ...observation(),
+        packageName: "cn.eeo.classin",
+        activityName: "cn.eeo.startup.newui.LoginActivity",
+        uiElements: [{ text: "立即注册" }],
+        ocrTexts: []
+      },
+      graphVersion,
+      "android"
+    );
+
+    expect(result.status).toBe("unknown");
+    expect(result.candidates[0]?.quality.missingCriticalMatcherIds).toContain("ocr_text-立即注册");
+  });
+
   it("returns unknown when no candidate reaches the minimum score", () => {
     const graphVersion = graph({
       nodes: [node("home", "page", matcher("activity", "HomeActivity", 2), matcher("resource_id", "com.demo:id/home", 2))],
@@ -1215,6 +1283,46 @@ describe("graph-core state detector", () => {
         reasons: []
       })
     );
+  });
+
+  it("treats a selected bottom navigation item visual anchor as page identity", () => {
+    const selectedHomeRegion = { x: 0, y: 90.34, width: 16.67, height: 9.66 };
+    const selectedHomeSignature = "screenshot-region:home-bottom-selected-tab:%E4%B8%BB%E9%A1%B5%7Chome_selected_tab";
+    const graphVersion = graph({
+      nodes: [
+        {
+          ...node("home", "page"),
+          matchers: [
+            {
+              ...matcher("image_region", selectedHomeSignature, 3),
+              critical: true,
+              region: selectedHomeRegion,
+              threshold: 0.9
+            }
+          ]
+        }
+      ],
+      edges: []
+    });
+
+    const result = detectNode(
+      {
+        ...observation(),
+        imageRegions: [
+          {
+            value: selectedHomeSignature,
+            region: selectedHomeRegion,
+            similarity: 0.99
+          }
+        ]
+      },
+      graphVersion,
+      "android"
+    );
+
+    expect(result.status).toBe("matched");
+    expect(result.node?.id).toBe("home");
+    expect(result.candidates[0]?.quality.reasons).toEqual([]);
   });
 
   it("matches OCR text only inside the configured relative title region", () => {

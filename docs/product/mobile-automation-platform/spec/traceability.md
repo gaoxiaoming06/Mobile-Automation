@@ -4,7 +4,7 @@ doc_type: traceability
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-06-25
+updated_at: 2026-07-02
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -60,6 +60,8 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | REQ-041 结构化录制用例与路径快照 | DES-041、DES-034、DES-035、DES-038、DES-039 | T-078、T-079、T-080、T-081、T-082、T-083、R-033 | PageStateFlow 的线性路径快照：`StructuredFlow` model / storage / runner / case library / TestRuleCore adapter | AC-043 |
 | REQ-042 PageStateFlow 页面状态资产主线 | DES-042、DES-034、DES-035、DES-039、DES-041 | T-084、T-085、T-086、T-087、T-087A、T-088、T-088A、T-089、T-090、R-034 | 当前主要项目目标：跨平台逻辑页面资产库、Android/iOS platform profile、页面元素、页面转移、路径规划、资产录制、目标执行和 StructuredFlow 快照 | AC-044 |
 | REQ-043 自动缺陷提报与 TAPD 集成 | DES-043、DES-016、DES-029、DES-033 | T-091 | 从测试失败报告生成缺陷候选，去重后按 manual_review / auto_create 策略提交 TAPD，并在报告和外部 API 返回缺陷状态 | AC-045 |
+| REQ-044 资产驱动巡检 | DES-044、DES-042、DES-016、DES-030 | T-092 | 基于 active PageStateFlow 资产验证页面健康、元素重定位、连接边稳定性、PageTask 可执行性和性能异常；保留自动探索 / 稳定性探索为独立发现入口 | AC-046 |
+| REQ-045 探索异常 AI 诊断与受控资产修复 | DES-045、DES-044、DES-043、DES-042、DES-030 | T-093 | 执行异常先固化证据并脱敏，再由规则和 AI 诊断分类；业务异常生成报告 / 缺陷候选并按策略重启继续，资产问题默认生成受控 patch，高置信低风险且验证通过时可自动应用为新的 active 资产版本并继续 | AC-047 |
 
 ## 设计到任务
 
@@ -108,6 +110,8 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | DES-041 结构化录制用例设计 | T-078、T-079、T-080、T-081、T-082、T-083、R-033 | StructuredFlow 路径快照、TestRuleStep、用例库主入口、执行到中间步骤、Flow REST / CLI / MCP 和统一执行适配层 |
 | DES-042 PageStateFlow 页面状态资产设计 | T-084、T-085、T-086、T-087、T-087A、T-088、T-088A、T-089、T-090、R-034 | PageStateLibrary、PageModel、PageElement、PageTransition、PathPlan、页面资产库 UI、资产录制、目标执行和外部调用入口 |
 | DES-043 缺陷候选与 TAPD 提报集成设计 | T-091 | DefectCandidate、DefectFingerprint、TAPD payload、人工审核、自动提报、去重、防刷、报告和 Dashboard 缺陷队列 |
+| DES-044 资产驱动巡检设计 | T-092 | AssetPatrolPlan、页面健康检查、区域滚动检查、元素重定位检查、连接边验证、PageTask dry-run、巡检报告和候选修复闭环 |
+| DES-045 探索异常 AI 诊断与受控资产修复设计 | T-093 | EvidencePackBuilder、RuleFailureClassifier、AiDiagnosisService、DiagnosisPolicyEngine、AssetPatchCandidate、MCP / REST 工具和报告诊断区 |
 
 ## 开放问题追踪
 
@@ -144,3 +148,4 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | Q-029 Android 核心执行是否长期依赖裸 ADB | REQ-035、REQ-038 | DES-005、DES-035、DES-038 | resolved: ADB 是设备管理和 fallback 底座；业务图谱主执行路径升级为 UIAutomator2 / Appium-compatible 语义 driver，裸 `adb shell input` 使用时必须记录 fallback |
 | Q-030 业务图谱是否仍作为当前主线 | REQ-036、REQ-037、REQ-038、REQ-041、REQ-042 | DES-036、DES-037、DES-038、DES-041、DES-042 | resolved: 不作为当前主线。当前主线为 PageStateFlow；StructuredFlow 是线性路径快照；BusinessGraph 上层、源码扫描、候选治理、目标节点规划冻结为实验能力，底层 StateMatcher / ActionPolicy / Observation / RuntimeOverlay / 动态等待继续复用 |
 | Q-031 当前主要项目目标如何命名和收敛 | REQ-042、REQ-041、REQ-036 | DES-042、DES-041、DES-036 | resolved: 命名为 PageStateFlow，中文为“页面状态资产驱动的移动端智能回放测试平台”；页面资产库成为当前主线，StructuredFlow 是路径快照，BusinessGraph 上层继续 experimental |
+| Q-032 资产驱动巡检是否替代自动探索 / 稳定性探索 | REQ-044、REQ-032、REQ-042 | DES-044、DES-030、DES-042 | resolved: 不替代。资产驱动巡检按 active 页面资产验证稳定性和覆盖面；自动探索 / 稳定性探索继续作为未知页面、异常状态和 crash / ANR 发现入口，二者入口、策略和资产写入权限隔离 |

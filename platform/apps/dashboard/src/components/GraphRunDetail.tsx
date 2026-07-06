@@ -79,6 +79,7 @@ export type GraphRunStep = {
   beforeMatch?: unknown;
   afterMatch?: unknown;
   actionPolicy?: unknown;
+  semantic?: unknown;
   action?: {
     label?: string;
     type?: string;
@@ -248,6 +249,7 @@ function GraphRunStepCard({ step }: { step: GraphRunStep }) {
         </span>
         <small>{step.phase || "graph"} · {step.type}</small>
         <GraphActionReadableSummary step={step} />
+        <SemanticLocatorEvidence value={step.semantic} />
         <ActionPolicySummary value={step.actionPolicy} stepType={step.type} />
         {readCompoundStepRecords(step.compound).length > 0 && (
           <div className="graph-compound-step-list">
@@ -315,6 +317,14 @@ function GraphActionReadableSummary({ step }: { step: GraphRunStep }) {
     action.targetLabel ? `目标 ${action.targetLabel}` : undefined
   ].filter(Boolean);
   return <small className="graph-action-readable">执行 {parts.join(" · ")}</small>;
+}
+
+function SemanticLocatorEvidence({ value }: { value: unknown }) {
+  const evidence = readSemanticLocatorEvidence(value);
+  if (!evidence.length) {
+    return null;
+  }
+  return <small className="graph-semantic-evidence">定位证据 · {evidence.join("；")}</small>;
 }
 
 function NodeMatchPill({ label, value }: { label: string; value: unknown }) {
@@ -530,6 +540,54 @@ function readActionPolicy(value: unknown): {
     coordinateText: formatUnknown(action.coordinate),
     timingText: formatUnknown(action.timing)
   };
+}
+
+function readSemanticLocatorEvidence(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  const input = value as Record<string, unknown>;
+  const visualCandidate = readObject(input.visualCandidate);
+  const visualTemplate = readObject(input.visualTemplate);
+  const visualRelocation = readObject(input.visualRelocation);
+  return [
+    textValue(input.relocatedBy) ? `resolvedBy=${textValue(input.relocatedBy)}` : undefined,
+    textValue(input.focusResolvedBy) ? `focus=${textValue(input.focusResolvedBy)}` : undefined,
+    textValue(input.fallback) ? `fallback=${textValue(input.fallback)}` : undefined,
+    textValue(input.targetText) ? `target=${textValue(input.targetText)}` : undefined,
+    visualCandidate
+      ? [
+          "candidate",
+          textValue(visualCandidate.label),
+          textValue(visualCandidate.role),
+          typeof visualCandidate.score === "number" ? `score=${visualCandidate.score.toFixed(2)}` : undefined,
+          textValue(visualCandidate.semanticArea)
+        ].filter(Boolean).join(" · ")
+      : undefined,
+    visualTemplate
+      ? [
+          "template",
+          textValue(visualTemplate.hash) ? `hash=${textValue(visualTemplate.hash)}` : undefined,
+          typeof visualTemplate.similarity === "number" ? `similarity=${visualTemplate.similarity.toFixed(2)}` : undefined
+        ].filter(Boolean).join(" · ")
+      : undefined,
+    visualRelocation
+      ? [
+          "relocation",
+          textValue(visualRelocation.reason),
+          typeof visualRelocation.minScore === "number" ? `min=${visualRelocation.minScore.toFixed(2)}` : undefined,
+          typeof visualRelocation.candidateCount === "number" ? `candidates=${visualRelocation.candidateCount}` : undefined
+        ].filter(Boolean).join(" · ")
+      : undefined
+  ].filter((item): item is string => Boolean(item));
+}
+
+function readObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function textValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function formatUnknown(value: unknown): string | undefined {

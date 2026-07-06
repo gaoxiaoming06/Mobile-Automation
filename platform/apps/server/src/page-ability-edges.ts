@@ -7,7 +7,7 @@ type ManualPageAbilityElement = {
   targetText?: string;
   locator?: string;
   semanticArea?: "top" | "content" | "bottom" | "unknown";
-  coordinateSpace?: "screen" | "app_viewport" | "region";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   actionKind?: "tap" | "scroll" | "long_press" | "input";
   abilityType?: "scroll_candidate" | "grid_candidate" | "conditional_tap";
   availability?: "visible" | "after_scroll" | "conditional";
@@ -35,10 +35,22 @@ type ManualPageAbilityElement = {
     locator?: string;
     elementLabel?: string;
     semanticArea?: "top" | "content" | "bottom" | "unknown";
-    coordinateSpace?: "screen" | "app_viewport" | "region";
+    coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
     waitTimeoutMs?: number;
     intervalMs?: number;
   }>;
+  locatorKind?: "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator" | "top_bar_icon_locator";
+  visualLocator?: Record<string, unknown>;
+  anchorText?: string;
+  role?: string;
+  slot?: "leading" | "trailing";
+  orderFromRight?: number;
+  dynamicMasks?: Record<string, unknown>[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegionId?: string;
+  itemTemplateId?: string;
+  transitionKind?: "static" | "parameterized";
+  parameterMapping?: Record<string, unknown>;
 };
 
 export function withPageAbilityEdges(graphVersion: BusinessGraphVersion, platform: PlatformScope = "android"): BusinessGraphVersion {
@@ -392,6 +404,12 @@ function actionTypeFor(actionKind: NonNullable<ManualPageAbilityElement["actionK
   if (actionKind === "input") {
     return "input_text_to_element";
   }
+  if (locator.startsWith("runtime-locator:")) {
+    return "tap_on_image";
+  }
+  if (locator.startsWith("top-bar-icon:")) {
+    return "tap_on_image";
+  }
   if (locator.startsWith("image-region:")) {
     return "tap_on_image";
   }
@@ -408,10 +426,17 @@ function locatorParams(locator: string): Record<string, unknown> {
   }
   if (locator.startsWith("accessibility/desc:")) {
     const accessibilityId = locator.replace(/^accessibility\/desc:\s*/, "").trim();
-    return { accessibilityId };
+    return { accessibilityId, contentDesc: accessibilityId };
   }
   if (locator.startsWith("text:")) {
     return { text: locator.replace(/^text:\s*/, "").trim() };
+  }
+  if (locator.startsWith("top-bar-icon:")) {
+    return {
+      targetMode: "top_bar_icon",
+      semanticArea: "top",
+      coordinateSpace: "runtime"
+    };
   }
   if (locator.startsWith("image-region:")) {
     const region = parseImageRegionLocator(locator);
@@ -429,12 +454,24 @@ function locatorParams(locator: string): Record<string, unknown> {
 
 function abilityActionParams(element: ManualPageAbilityElement): Record<string, unknown> {
   const semanticArea = element.semanticArea ?? semanticAreaForLocator(element.locator ?? "");
-  const targetText = stringValue(element.targetText).trim() || stringValue(element.label).trim();
+  const targetText = (stringValue(element.targetText).trim() || stringValue(element.label).trim());
   const base: Record<string, unknown> = {
     ...(semanticArea ? { semanticArea } : {}),
-    ...(element.coordinateSpace ? { coordinateSpace: element.coordinateSpace } : {})
+    ...(element.coordinateSpace ? { coordinateSpace: element.coordinateSpace } : {}),
+    ...(element.locatorKind ? { locatorKind: element.locatorKind } : {}),
+    ...(element.visualLocator ? { visualLocator: element.visualLocator } : {}),
+    ...(element.anchorText ? { anchorText: element.anchorText } : {}),
+    ...(element.role ? { role: element.role } : {}),
+    ...(element.slot ? { slot: element.slot } : {}),
+    ...(typeof element.orderFromRight === "number" ? { orderFromRight: element.orderFromRight } : {}),
+    ...(element.dynamicMasks?.length ? { dynamicMasks: element.dynamicMasks } : {}),
+    ...(element.structuralLocator ? { structuralLocator: element.structuralLocator } : {}),
+    ...(element.dynamicRegionId ? { dynamicRegionId: element.dynamicRegionId } : {}),
+    ...(element.itemTemplateId ? { itemTemplateId: element.itemTemplateId } : {}),
+    ...(element.transitionKind ? { transitionKind: element.transitionKind } : {}),
+    ...(element.parameterMapping ? { parameterMapping: element.parameterMapping } : {})
   };
-  if (element.locator?.startsWith("image-region:") && element.abilityType !== "grid_candidate" && targetText) {
+  if ((element.locator?.startsWith("image-region:") || element.locator?.startsWith("runtime-locator:")) && element.abilityType !== "grid_candidate" && targetText) {
     base.targetText = targetText;
   }
   if (

@@ -19,10 +19,11 @@ description: "Mobile-Automation architecture role. Use when designing modules, A
 - Step expectations are first-class execution results and must flow into report-core.
 - OCR uses a replaceable service, with Tesseract first and macOS Vision fallback.
 - Android driver is dependency-injected for shell execution so launch and input behavior can be unit-tested.
-- Semantic locator work is planned through REQ-035/DES-035/T-050: UIAutomator element targets first, then OCR text, image/region, and iOS WDA source later.
-- Current product mainline is `StructuredFlow` / Smart Recorded Flow. New execution design should default to StructuredFlow, FlowRunner, case library, Flow REST / CLI / MCP, and TestRuleCore.
-- BusinessGraph upper-layer work is frozen as experimental: global graph construction, source scanning to graph, candidate governance, target-node route planning, graph-runs, and auto-promotion. Keep existing code stable, but do not expand it without explicit product approval.
-- Preserve reusable primitives from graph work: `TestRuleStep`, `StateMatcher` / `FlowStateAnchor`, semantic locator models, `RuntimeOverlay`, transition wait, `RuntimeInterceptor`, and report evidence. These are architecture assets for StructuredFlow, not reasons to keep graph planning as the default product flow.
+- Semantic locator work is part of the PageStateFlow mainline: UIAutomator element targets first, then OCR text, image/region relocation, and iOS WDA source later.
+- Current product mainline is `PageStateFlow`. New execution design should default to PageModel/PageElement/PageTransition/PageTask assets, semantic locators, route planning, repair evidence, and reportable execution results.
+- `StructuredFlow` / Smart Recorded Flow remains a compatible linear execution artifact for replaying concrete steps, but it is no longer the product-level source of truth.
+- `BusinessGraph` remains the lower-level graph storage and route-planning model behind PageStateFlow. Keep source-code global graph expansion, old candidate governance, auto-promotion, and graph-first UX out of the primary product path unless explicitly approved.
+- Preserve reusable primitives from graph work: `TestRuleStep`, `StateMatcher` / `FlowStateAnchor`, semantic locator models, `RuntimeOverlay`, transition wait, `RuntimeInterceptor`, and report evidence. These are architecture assets for PageStateFlow.
 
 ## Required Artifacts
 
@@ -36,4 +37,4 @@ description: "Mobile-Automation architecture role. Use when designing modules, A
 - Keep shared schemas in `platform/packages/shared`.
 - Keep test helpers in `platform/packages/test-support`.
 - Keep runtime DBs and artifacts outside the repo by default through `DATA_DIR`.
-- Keep BusinessGraph routes and UI clearly marked experimental. Do not put graph modules into primary navigation or primary API examples.
+- Keep old graph-first routes and source-scan UI clearly marked experimental. Primary navigation and API examples should describe PageStateFlow assets and semantic execution.

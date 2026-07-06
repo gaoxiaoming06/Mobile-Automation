@@ -30,6 +30,190 @@ describe("renderReportHtml", () => {
     expect(renderReportHtml(run)).toContain("passed");
   });
 
+  it("renders stability exploration config and runtime summary", () => {
+    const run: TestRun = {
+      id: "run-stability",
+      caseName: "稳定性探索：com.demo",
+      deviceSerial: "device-1",
+      status: "passed",
+      config: {
+        deviceSerial: "device-1",
+        runKind: "stability_exploration",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 350,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false,
+        stabilityExploration: {
+          packageName: "com.demo",
+          strategy: "balanced",
+          startMode: "launch_app",
+          seed: "seed-42",
+          maxDurationMs: 180_000,
+          maxActions: 20,
+          allowedActions: ["tap", "swipe", "wait"],
+          appExitPolicy: "restart_app",
+          backtrackStrategy: "shallow",
+          maxDepth: 2,
+          dangerousTextPatterns: ["删除", "支付"],
+          stopOnCrash: true,
+          stopOnAnr: true,
+          stopOnBlackScreen: true,
+          stopOnUnknownPageStuck: true
+        }
+      },
+      steps: [],
+      stepResults: [
+        {
+          id: "step-result-1",
+          runId: "run-stability",
+          iterationIndex: 0,
+          stepId: "stability_step_1",
+          stepOrder: 1,
+          type: "tap",
+          status: "passed",
+          startedAt: "2026-06-25T10:00:05.000Z",
+          durationMs: 320,
+          artifacts: [],
+          metadata: {
+            stabilityExploration: {
+              candidateLabel: "添加好友",
+              candidateSource: "ocr_text",
+              currentPackage: "com.demo",
+              skippedCandidates: [{ label: "删除", skipReason: "dangerous_text" }]
+            }
+          }
+        }
+      ],
+      metrics: [],
+      events: [],
+      artifacts: [],
+      startedAt: "2026-06-25T10:00:00.000Z",
+      endedAt: "2026-06-25T10:03:00.000Z"
+    };
+
+    const html = renderReportHtml(run);
+
+    expect(html).toContain("稳定性探索摘要");
+    expect(html).toContain("com.demo");
+    expect(html).toContain("seed-42");
+    expect(html).toContain("balanced");
+    expect(html).toContain("添加好友");
+    expect(html).toContain("过滤候选");
+  });
+
+  it("renders asset patrol semantic labels in the generic step table", () => {
+    const run: TestRun = {
+      id: "run-asset-patrol",
+      caseName: "资产驱动巡检：cn.eeo.classin",
+      deviceSerial: "device-1",
+      status: "passed",
+      config: {
+        deviceSerial: "device-1",
+        runKind: "asset_patrol",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 0,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false,
+        assetPatrol: {
+          packageName: "cn.eeo.classin",
+          startMode: "current_state",
+          pageScope: "current_page",
+          maxDurationMs: 120_000,
+          maxTransitions: 8,
+          allowRiskyActions: false,
+          allowBusinessSubmit: false,
+          dangerousTextPatterns: [],
+          runtimeParams: {}
+        }
+      },
+      steps: [],
+      stepResults: [
+        {
+          id: "step-page-match",
+          runId: "run-asset-patrol",
+          iterationIndex: 0,
+          stepId: "step-page-match",
+          stepOrder: 1,
+          type: "wait",
+          status: "passed",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          durationMs: 0,
+          artifacts: [],
+          metadata: {
+            assetPatrol: {
+              kind: "page_match",
+              label: "页面匹配：登录",
+              status: "ready",
+              executionMode: "diagnostic",
+              pageModelName: "登录"
+            }
+          }
+        },
+        {
+          id: "step-element",
+          runId: "run-asset-patrol",
+          iterationIndex: 0,
+          stepId: "step-element",
+          stepOrder: 2,
+          type: "wait",
+          status: "passed",
+          startedAt: "2026-06-30T00:00:01.000Z",
+          durationMs: 0,
+          artifacts: [],
+          metadata: {
+            assetPatrol: {
+              kind: "element_relocation",
+              label: "元素可重定位：登录按钮",
+              status: "ready",
+              executionMode: "diagnostic",
+              pageModelName: "登录"
+            }
+          }
+        },
+        {
+          id: "step-task",
+          runId: "run-asset-patrol",
+          iterationIndex: 0,
+          stepId: "step-task",
+          stepOrder: 3,
+          type: "wait",
+          status: "skipped",
+          startedAt: "2026-06-30T00:00:02.000Z",
+          durationMs: 0,
+          artifacts: [],
+          metadata: {
+            assetPatrol: {
+              kind: "task_dry_run",
+              label: "任务编排体检：账号密码登录",
+              status: "skipped",
+              executionMode: "diagnostic",
+              pageModelName: "登录",
+              skipReason: "business_submit_disabled"
+            }
+          }
+        }
+      ],
+      metrics: [],
+      events: [],
+      artifacts: [],
+      startedAt: "2026-06-30T00:00:00.000Z",
+      endedAt: "2026-06-30T00:00:06.000Z"
+    };
+
+    const html = renderReportHtml(run);
+
+    expect(html).toContain("资产驱动巡检摘要");
+    expect(html).toContain("页面匹配：登录");
+    expect(html).toContain("元素可重定位：登录按钮");
+    expect(html).toContain("任务编排体检：账号密码登录");
+    expect(html).toContain("task_dry_run · skipped · business_submit_disabled");
+    expect(html).not.toContain("<td>wait</td>");
+  });
+
   it("links step screenshots to video timestamps when a video artifact exists", () => {
     const run: TestRun = {
       id: "run-1",
@@ -456,6 +640,29 @@ describe("renderReportHtml", () => {
             }
           ],
           metadata: {
+            semantic: {
+              type: "image_region",
+              action: "tap",
+              relocatedBy: "visual_candidate",
+              targetText: "更多",
+              fallback: "region_center_disabled",
+              visualCandidate: {
+                label: "更多按钮",
+                role: "button",
+                score: 0.91,
+                semanticArea: "top"
+              },
+              visualTemplate: {
+                hash: "crop-hash",
+                similarity: 0.94
+              },
+              visualRelocation: {
+                reason: "candidate_selected",
+                minScore: 0.72,
+                candidateCount: 2
+              },
+              evidenceArtifactIds: ["artifact-shot"]
+            },
             graph: {
               versionId: "graph-version-1",
               planStepId: "plan-step-1",
@@ -617,6 +824,13 @@ describe("renderReportHtml", () => {
     expect(html).toContain("policy-tap-classroom");
     expect(html).toContain("resourceId");
     expect(html).toContain("cn.eeo.classin:id/create_lesson");
+    expect(html).toContain("定位证据");
+    expect(html).toContain("visual_candidate");
+    expect(html).toContain("更多按钮");
+    expect(html).toContain("template");
+    expect(html).toContain("crop-hash");
+    expect(html).toContain("candidate_selected");
+    expect(html).toContain("fallback=region_center_disabled");
     expect(html).toContain("命中 6 / 7");
     expect(html).toContain("质量 low_confidence");
     expect(html).toContain("strong_state_anchor_missing");

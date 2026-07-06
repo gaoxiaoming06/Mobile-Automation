@@ -44,6 +44,13 @@ describe("StepsPanel", () => {
     expect(markup).toContain("缺失 m-missing");
     expect(markup).toContain("m-missing");
     expect(markup).toContain("执行 点击班级列表 · tap_on_image · grid_candidate · 候选 #1");
+    expect(markup).toContain("定位证据");
+    expect(markup).toContain("visual_candidate");
+    expect(markup).toContain("更多按钮");
+    expect(markup).toContain("template");
+    expect(markup).toContain("crop-hash");
+    expect(markup).toContain("candidate_selected");
+    expect(markup).toContain("fallback=region_center_disabled");
     expect(markup).toContain("复合 2 · wait_until_state · 等待添加好友菜单出现 · 完成");
     expect(markup).toContain("grid_candidate_downstream_failed");
     expect(markup).toContain("cn.eeo.classin:id/create_lesson");
@@ -54,6 +61,21 @@ describe("StepsPanel", () => {
     expect(markup).toContain("状态等待");
     expect(markup).toContain("路径恢复");
     expect(markup).toContain("Graph run bootstrapped target app before route planning");
+  });
+
+  it("renders asset patrol semantic step labels instead of internal wait actions", () => {
+    const assetPatrolRun = createAssetPatrolRun();
+    const markup = renderStepsPanel(false, {
+      activeTab: "runs",
+      currentRun: assetPatrolRun,
+      runs: [assetPatrolRun]
+    });
+
+    expect(markup).toContain("页面匹配：登录");
+    expect(markup).toContain("元素可重定位：登录按钮");
+    expect(markup).toContain("任务编排体检：账号密码登录");
+    expect(markup).toContain("task_dry_run · business_submit_disabled");
+    expect(markup).not.toContain("<strong>wait</strong>");
   });
 });
 
@@ -289,6 +311,27 @@ function createGraphRunSummary(): GraphRunSummary {
           abilityType: "grid_candidate",
           candidateIndex: 1
         },
+        semantic: {
+          type: "image_region",
+          action: "tap",
+          relocatedBy: "visual_candidate",
+          fallback: "region_center_disabled",
+          visualCandidate: {
+            label: "更多按钮",
+            role: "button",
+            score: 0.91,
+            semanticArea: "top"
+          },
+          visualTemplate: {
+            hash: "crop-hash",
+            similarity: 0.94
+          },
+          visualRelocation: {
+            reason: "candidate_selected",
+            minScore: 0.72,
+            candidateCount: 2
+          }
+        },
         retry: {
           attempt: 1,
           reason: "grid_candidate_downstream_failed",
@@ -342,6 +385,86 @@ function createGraphRunSummary(): GraphRunSummary {
         artifactIds: ["shot-1"]
       }
     ]
+  };
+}
+
+function createAssetPatrolRun(): TestRun {
+  return {
+    id: "run-asset-patrol",
+    caseName: "资产驱动巡检：cn.eeo.classin",
+    deviceSerial: "android-serial",
+    status: "passed",
+    config: {
+      deviceSerial: "android-serial",
+      runKind: "asset_patrol",
+      mode: "once",
+      repeatCount: 1,
+      stepIntervalMs: 0,
+      stopOnFailure: true,
+      recordVideo: false,
+      keepVideoOnSuccess: false,
+      assetPatrol: {
+        packageName: "cn.eeo.classin",
+        startMode: "current_state",
+        pageScope: "current_page",
+        maxDurationMs: 120_000,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: false,
+        dangerousTextPatterns: [],
+        runtimeParams: {}
+      }
+    },
+    steps: [],
+    stepResults: [
+      assetPatrolStep(1, "passed", {
+        kind: "page_match",
+        label: "页面匹配：登录",
+        status: "ready",
+        executionMode: "diagnostic",
+        pageModelName: "登录"
+      }),
+      assetPatrolStep(2, "passed", {
+        kind: "element_relocation",
+        label: "元素可重定位：登录按钮",
+        status: "ready",
+        executionMode: "diagnostic",
+        pageModelName: "登录"
+      }),
+      assetPatrolStep(3, "skipped", {
+        kind: "task_dry_run",
+        label: "任务编排体检：账号密码登录",
+        status: "skipped",
+        executionMode: "diagnostic",
+        pageModelName: "登录",
+        skipReason: "business_submit_disabled"
+      })
+    ],
+    metrics: [],
+    events: [],
+    artifacts: [],
+    startedAt: "2026-06-30T00:00:00.000Z",
+    endedAt: "2026-06-30T00:00:06.000Z"
+  };
+}
+
+function assetPatrolStep(
+  order: number,
+  status: TestRun["stepResults"][number]["status"],
+  assetPatrol: Record<string, unknown>
+): TestRun["stepResults"][number] {
+  return {
+    id: `asset-step-${order}`,
+    runId: "run-asset-patrol",
+    iterationIndex: 0,
+    stepId: `asset-step-${order}`,
+    stepOrder: order,
+    type: "wait",
+    status,
+    startedAt: "2026-06-30T00:00:00.000Z",
+    durationMs: 0,
+    artifacts: [],
+    metadata: { assetPatrol }
   };
 }
 

@@ -56,6 +56,7 @@ export type ActionType =
   | "home"
   | "recent_apps"
   | "input_text"
+  | "input_keyevents"
   | "clear_text"
   | "wait"
   | "screenshot"
@@ -292,6 +293,7 @@ export type StructuredFlow = {
 export type RunConfig = {
   caseId?: string;
   deviceSerial: string;
+  runKind?: "case" | "structured_flow" | "business_graph" | "stability_exploration" | "asset_patrol";
   mode: RunMode;
   repeatCount: number;
   stepIntervalMs: number;
@@ -303,6 +305,35 @@ export type RunConfig = {
   startAppPackageName?: string;
   startSetupScope?: FlowStartSetupScope;
   executionProfile?: "full" | "fast_visual";
+  stabilityExploration?: {
+    packageName: string;
+    strategy: "conservative" | "balanced" | "aggressive";
+    startMode: "launch_app" | "current_state" | "restart_app";
+    seed: string;
+    maxDurationMs: number;
+    maxActions: number;
+    allowedActions: Array<"tap" | "swipe" | "back" | "wait">;
+    appExitPolicy: "back_to_app" | "restart_app" | "stop";
+    backtrackStrategy: "none" | "shallow" | "depth_first";
+    maxDepth: number;
+    dangerousTextPatterns: string[];
+    stopOnCrash: boolean;
+    stopOnAnr: boolean;
+    stopOnBlackScreen: boolean;
+    stopOnUnknownPageStuck: boolean;
+  };
+  assetPatrol?: {
+    packageName: string;
+    graphVersionId?: string;
+    startMode: "current_state" | "launch_app" | "restart_app";
+    pageScope: "current_page" | "reachable_pages" | "tagged_pages" | "all_active_pages";
+    maxDurationMs: number;
+    maxTransitions: number;
+    allowRiskyActions: boolean;
+    allowBusinessSubmit: boolean;
+    dangerousTextPatterns: string[];
+    runtimeParams: Record<string, string>;
+  };
 };
 
 export type RunStatus = "pending" | "running" | "paused" | "passed" | "failed" | "stopped" | "timeout" | "device_lost";
@@ -342,7 +373,20 @@ export type DeviceEvent = {
   runId: string;
   stepResultId?: string;
   deviceSerial: string;
-  type: "crash" | "anr" | "command_failed" | "device_lost" | "preview_lost" | "runner_error" | "video_unavailable" | "start_state_failed";
+  type:
+    | "crash"
+    | "anr"
+    | "command_failed"
+    | "device_lost"
+    | "preview_lost"
+    | "runner_error"
+    | "video_unavailable"
+    | "start_state_failed"
+    | "app_exit"
+    | "black_screen"
+    | "unknown_page_stuck"
+    | "stability_exploration"
+    | "asset_patrol";
   severity: "info" | "warning" | "error";
   occurredAt: string;
   summary: string;
@@ -401,6 +445,7 @@ export type DeviceActionRequest =
   | { type: "home" }
   | { type: "recent_apps" }
   | { type: "input_text"; text: string }
+  | { type: "input_keyevents"; text: string; intervalMs?: number }
   | { type: "clear_text" }
   | { type: "wait"; durationMs: number }
   | { type: "screenshot" }

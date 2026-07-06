@@ -149,6 +149,59 @@ describe("RuntimeInterceptor", () => {
       })
     ]);
   });
+
+  it("accepts the built-in ClassIn service agreement startup dialog", async () => {
+    const actions: ActionStep[] = [];
+    const observations = [
+      observation({
+        packageName: "cn.eeo.classin",
+        activityName: "cn.eeo.startup.newui.LoginActivity",
+        texts: ["ClassIn服务协议", "欢迎你使用ClassIn！", "不同意", "同意"],
+        elements: [
+          { resourceId: "cn.eeo.classin:id/title_bar", text: "ClassIn服务协议", bounds: { x: 0, y: 160, width: 1080, height: 120 } },
+          { resourceId: "cn.eeo.classin:id/btn_disagree", text: "不同意", bounds: { x: 90, y: 2100, width: 360, height: 96 } },
+          { resourceId: "cn.eeo.classin:id/btn_agree", text: "同意", bounds: { x: 630, y: 2100, width: 360, height: 96 } }
+        ]
+      }),
+      observation({
+        packageName: "cn.eeo.classin",
+        activityName: "cn.eeo.startup.newui.LoginActivity",
+        texts: ["ClassIn", "立即注册", "登录"]
+      })
+    ];
+    const interceptor = new RuntimeInterceptor({
+      observe: async () => observations.shift() ?? observation({ texts: ["ClassIn", "登录"] }),
+      performAction: async (action) => {
+        actions.push(action);
+      }
+    });
+
+    const outcome = await interceptor.handle({ phase: "precondition", maxPasses: 1 });
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        type: "tap_on_element",
+        params: expect.objectContaining({
+          source: "runtime_interceptor",
+          ruleId: "classin-service-agreement",
+          locator: expect.objectContaining({
+            resourceId: "cn.eeo.classin:id/btn_agree",
+            text: "同意"
+          })
+        }),
+        coordinate: { x: 810, y: 2148 }
+      })
+    ]);
+    expect(outcome.records).toEqual([
+      expect.objectContaining({
+        ruleId: "classin-service-agreement",
+        ruleName: "ClassIn 服务协议弹窗",
+        matchedText: "同意",
+        action: { type: "tap", x: 810, y: 2148 }
+      })
+    ]);
+    expect(outcome.observation.ocrTexts.map((text) => text.text)).toContain("登录");
+  });
 });
 
 function observation(input: {

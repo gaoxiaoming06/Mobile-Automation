@@ -447,6 +447,7 @@ describe("PageAssetsPanel", () => {
       targetNodeId: "node-create",
       startStrategy: "keep_current",
       startNodeId: "node-home",
+      startAppScope: "current_device",
       overlay: undefined,
       executionProfile: "fast_visual"
     });

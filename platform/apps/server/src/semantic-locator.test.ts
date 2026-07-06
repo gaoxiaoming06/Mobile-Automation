@@ -126,6 +126,242 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("relocates an OCR anchor and taps a configured offset from it", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "主页",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: [
+          { text: "主页", confidence: 0.96, x: 200, y: 180, width: 120, height: 80 }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "ocr-anchor:主页@offset(-14,0)",
+        locatorKind: "ocr_anchor_offset",
+        anchorText: "主页",
+        targetText: "主页",
+        anchorOffsetPercent: { x: -14, y: 0 },
+        semanticArea: "top"
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 120, y: 220 }]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          type: "ocr_anchor_offset",
+          action: "tap",
+          relocatedBy: "ocr_anchor_offset",
+          actual: "主页",
+          offsetPercent: { x: -14, y: 0 }
+        })
+      })
+    );
+  });
+
+  it("does not tap a top bar icon when only a recorded candidate region exists", async () => {
+    const performAction = vi.fn();
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(topBarLayout()),
+      performAction,
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "top-bar-icon:avatar",
+        locatorKind: "top_bar_icon_locator",
+        role: "avatar",
+        slot: "leading",
+        anchorText: "主页",
+        semanticArea: "top",
+        visualLocator: {
+          candidates: [
+            { role: "avatar", label: "头像", score: 0.93, semanticArea: "top", region: { x: 4.2, y: 6.1, width: 5, height: 5 } },
+            { role: "search", label: "搜索", score: 0.94, semanticArea: "top", region: { x: 84.5, y: 5.9, width: 4, height: 4 } }
+          ]
+        }
+      })
+    });
+
+    expect(performAction).not.toHaveBeenCalled();
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: false,
+        message: "Top bar icon \"avatar\" could not be visually relocated in the current screenshot.",
+        metadata: expect.objectContaining({
+          type: "top_bar_icon_locator",
+          action: "fail",
+          reason: "current_visual_icon_not_found",
+          role: "avatar",
+          slot: "leading",
+          fallback: "candidate_center_disabled"
+        })
+      })
+    );
+  });
+
+  it("resolves top bar trailing icons from current screenshot visuals instead of candidate centers", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(topBarLayout()),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: topBarIconScreenshot(1200, 2000, [
+          { role: "search", centerX: 985, centerY: 210 },
+          { role: "add", centerX: 1064, centerY: 214 }
+        ])
+      })
+    });
+
+    const searchOutcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-search",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "top-bar-icon:search",
+        locatorKind: "top_bar_icon_locator",
+        role: "search",
+        slot: "trailing",
+        orderFromRight: 2,
+        anchorText: "主页",
+        semanticArea: "top",
+        visualLocator: {
+          candidates: [
+            { role: "search", label: "搜索", score: 0.94, semanticArea: "top", region: { x: 84, y: 6.6, width: 4, height: 3.8 } },
+            { role: "add", label: "加号", score: 0.95, semanticArea: "top", region: { x: 91.2, y: 6.5, width: 4.2, height: 4 } }
+          ]
+        }
+      })
+    });
+
+    const addOutcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-add",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "top-bar-icon:add",
+        locatorKind: "top_bar_icon_locator",
+        role: "add",
+        slot: "trailing",
+        orderFromRight: 1,
+        anchorText: "主页",
+        semanticArea: "top",
+        visualLocator: {
+          candidates: [
+            { role: "search", label: "搜索", score: 0.94, semanticArea: "top", region: { x: 84, y: 6.6, width: 4, height: 3.8 } },
+            { role: "add", label: "加号", score: 0.95, semanticArea: "top", region: { x: 91.2, y: 6.5, width: 4.2, height: 4 } }
+          ]
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 987, y: 212 },
+      { type: "tap", x: 1065, y: 215 }
+    ]);
+    expect(actions).not.toContainEqual({ type: "tap", x: 1119, y: 170 });
+    expect(searchOutcome?.metadata).toEqual(
+      expect.objectContaining({
+        role: "search",
+        slot: "trailing",
+        orderFromRight: 2,
+        relocatedBy: "top_bar_current_visual"
+      })
+    );
+    expect(addOutcome?.metadata).toEqual(
+      expect.objectContaining({
+        role: "add",
+        slot: "trailing",
+        orderFromRight: 1,
+        relocatedBy: "top_bar_current_visual"
+      })
+    );
+  });
+
+  it("uses the current top bar visual order when a recorded search candidate is stale", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(topBarLayout()),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: topBarIconScreenshot(1200, 2000, [
+          { role: "search", centerX: 985, centerY: 210 },
+          { role: "add", centerX: 1064, centerY: 214 }
+        ])
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-search",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "top-bar-icon:search",
+        locatorKind: "top_bar_icon_locator",
+        role: "search",
+        slot: "trailing",
+        orderFromRight: 2,
+        anchorText: "主页",
+        semanticArea: "top",
+        visualLocator: {
+          candidates: [
+            { role: "search", label: "搜索", score: 0.94, semanticArea: "top", region: { x: 88.2, y: 6.5, width: 4, height: 3.8 } },
+            { role: "add", label: "加号", score: 0.95, semanticArea: "top", region: { x: 91.2, y: 6.5, width: 4.2, height: 4 } }
+          ]
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 987, y: 212 }]);
+    expect(actions).not.toContainEqual({ type: "tap", x: 1065, y: 215 });
+    expect(outcome?.metadata).toEqual(
+      expect.objectContaining({
+        role: "search",
+        slot: "trailing",
+        orderFromRight: 2,
+        relocatedBy: "top_bar_current_visual"
+      })
+    );
+  });
+
   it("resolves tap_on_text using configured text alternatives", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -228,6 +464,58 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("treats accessibilityId params as Android content-desc locators", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("主页")),
+      dumpUiHierarchy: async () => `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" bounds="[0,0][1080,2400]">
+    <node index="0" text="" resource-id="" class="android.widget.ImageView" package="cn.eeo.classin" content-desc="user avatar" clickable="true" enabled="true" focusable="true" bounds="[48,156][192,300]" />
+    <node index="1" text="主页" resource-id="" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" bounds="[198,180][318,276]" />
+  </node>
+</hierarchy>`,
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: semanticStep("tap_on_element", {
+        accessibilityId: "user avatar",
+        locator: "accessibility/desc: user avatar",
+        semanticArea: "top",
+        elementLabel: "个人入口"
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 120, y: 228 }]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          type: "element",
+          action: "tap",
+          locator: expect.objectContaining({
+            contentDesc: "user avatar"
+          }),
+          resolvedLocator: expect.objectContaining({
+            contentDesc: "user avatar"
+          })
+        })
+      })
+    );
+  });
+
   it("prefers the semantic Android backend for tap_on_element when available", async () => {
     const semanticActions: SemanticDeviceActionRequest[] = [];
     const fallbackActions: DeviceActionRequest[] = [];
@@ -292,7 +580,16 @@ describe("SemanticStepResolver", () => {
   it("resolves input_text_to_element by focusing a semantic element before typing", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
-      ocr: new LayoutOcrService(layout("hello class")),
+      ocr: new LayoutOcrService({
+        text: "hello class",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1080,
+        height: 2400,
+        boxes: [
+          { text: "hello class", confidence: 0.98, x: 130, y: 220, width: 180, height: 40 }
+        ]
+      }),
       dumpUiHierarchy: async () => hierarchy("com.demo:id/search_box"),
       performAction: async (_serial, action) => {
         actions.push(action);
@@ -340,17 +637,17 @@ describe("SemanticStepResolver", () => {
     );
   });
 
-  it("resolves input_text_to_element from a manually marked image region before typing", async () => {
+  it("resolves input_text_to_element by OCR semantic text even when the marked region is stale", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
       ocr: new LayoutOcrService({
-        text: "自动化课堂",
+        text: "请输入课程名称",
         engine: "fake-layout",
         lang: "test",
         width: 1000,
         height: 2000,
         boxes: [
-          { text: "自动化课堂", confidence: 0.98, x: 180, y: 440, width: 240, height: 56 }
+          { text: "请输入课程名称", confidence: 0.98, x: 180, y: 440, width: 240, height: 56 }
         ]
       }),
       performAction: async (_serial, action) => {
@@ -370,14 +667,16 @@ describe("SemanticStepResolver", () => {
       step: semanticStep("input_text_to_element", {
         text: "自动化课堂",
         clearFirst: true,
-        region: { x: 10, y: 20, width: 60, height: 8 },
+        targetText: "请输入课程名称",
+        verifyInputText: false,
+        region: { x: 80, y: 80, width: 5, height: 5 },
         semanticArea: "content",
         coordinateSpace: "screen"
       })
     });
 
     expect(actions).toEqual([
-      { type: "tap", x: 400, y: 480 },
+      { type: "tap", x: 300, y: 468 },
       { type: "clear_text" },
       { type: "input_text", text: "自动化课堂" }
     ]);
@@ -389,14 +688,223 @@ describe("SemanticStepResolver", () => {
           type: "element_input",
           action: "input_text",
           resolvedBy: "image_region",
+          focusResolvedBy: "ocr_text_semantic",
           textLength: 5,
-          region: { x: 10, y: 20, width: 60, height: 8 }
+          region: { x: 80, y: 80, width: 5, height: 5 }
         })
       })
     );
   });
 
-  it("fails input_text_to_element from a manually marked image region when OCR cannot verify the typed text", async () => {
+  it("verifies input text inside the runtime OCR focus candidate when the marked region is stale", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "+86√请输入手机号/邮箱",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "+86√请输入手机号/邮箱", confidence: 0.98, x: 80, y: 395, width: 335, height: 30 }
+          ]
+        },
+        {
+          text: "+86 18743085313",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "18743085313", confidence: 0.98, x: 180, y: 395, width: 180, height: 30 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "18743085313",
+        clearFirst: true,
+        focusDelayMs: 1,
+        inputVerificationDelayMs: 1,
+        targetText: "请输入手机号/邮箱",
+        valueParamKey: "phone",
+        region: { x: 10, y: 60, width: 80, height: 6.7 },
+        semanticArea: "content",
+        coordinateSpace: "screen"
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 248, y: 410 },
+      { type: "clear_text" },
+      { type: "input_text", text: "18743085313" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          type: "element_input",
+          action: "input_text",
+          focusResolvedBy: "ocr_text_semantic",
+          inputVerified: true,
+          verificationRegionSource: "runtime_focus_candidate"
+        })
+      })
+    );
+  });
+
+  it("resolves input_text_to_element from a runtime structural locator without a recorded region", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "+86 请输入手机号/邮箱",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "+86 请输入手机号/邮箱", confidence: 0.98, x: 80, y: 395, width: 335, height: 30 }
+          ]
+        },
+        {
+          text: "+86 18743085313",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "18743085313", confidence: 0.98, x: 180, y: 395, width: 180, height: 30 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "18743085313",
+        clearFirst: true,
+        focusDelayMs: 1,
+        inputVerificationDelayMs: 1,
+        locator: "runtime-locator:phone_or_email_input",
+        locatorKind: "structural_locator",
+        targetText: "请输入手机号/邮箱",
+        valueParamKey: "phone",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        structuralLocator: {
+          strategy: "ocr_or_edittext",
+          role: "phone_or_email_input",
+          preferredPlaceholderText: "请输入手机号/邮箱",
+          fallbackPolicy: "no_region_center_fallback"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 248, y: 410 },
+      { type: "clear_text" },
+      { type: "input_text", text: "18743085313" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          resolvedBy: "runtime_structural_locator",
+          focusResolvedBy: "ocr_text_semantic",
+          inputVerified: true,
+          verificationRegionSource: "runtime_focus_candidate"
+        })
+      })
+    );
+  });
+
+  it("resolves input_text_to_element from UI EditText structure when OCR has no field text", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "登录",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: [
+          { text: "登录", confidence: 0.98, x: 120, y: 120, width: 120, height: 56 }
+        ]
+      }),
+      dumpUiHierarchy: async () => inputHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "secret",
+        clearFirst: true,
+        valueParamKey: "password",
+        region: { x: 10, y: 32, width: 80, height: 8 },
+        semanticArea: "content",
+        coordinateSpace: "screen"
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 500, y: 720 },
+      { type: "clear_text" },
+      { type: "input_text", text: "secret" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          type: "element_input",
+          action: "input_text",
+          resolvedBy: "image_region",
+          focusResolvedBy: "ui_edit_text_structural",
+          textLength: 6
+        })
+      })
+    );
+  });
+
+  it("does not input text into a marked image region when the input focus cannot be relocated", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
       ocr: new LayoutOcrService(layout("新建课堂")),
@@ -424,21 +932,19 @@ describe("SemanticStepResolver", () => {
       })
     });
 
-    expect(actions).toEqual([
-      { type: "tap", x: 400, y: 480 },
-      { type: "clear_text" },
-      { type: "input_text", text: "自动化课堂" }
-    ]);
+    expect(actions).toEqual([]);
     expect(outcome).toEqual(
       expect.objectContaining({
         supported: true,
         resolved: false,
-        message: 'Input text "自动化课堂" was not verified by OCR after typing.',
+        message: "Input region could not be relocated by OCR, visual template, or structural evidence.",
         metadata: expect.objectContaining({
           type: "element_input",
           action: "fail",
-          reason: "input_text_not_verified",
-          actual: "新建课堂"
+          reason: "runtime_relocation_required",
+          fallback: "region_center_disabled",
+          focusResolvedBy: "region_center_disabled",
+          recordedCenter: { x: 400, y: 480 }
         })
       })
     );
@@ -447,17 +953,29 @@ describe("SemanticStepResolver", () => {
   it("fails input_text_to_element when OCR verifies the text outside the target image region", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
-      ocr: new LayoutOcrService({
-        text: "登录\n123qwe",
-        engine: "fake-layout",
-        lang: "test",
-        width: 1000,
-        height: 2000,
-        boxes: [
-          { text: "登录", confidence: 0.98, x: 460, y: 940, width: 80, height: 50 },
-          { text: "123qwe", confidence: 0.98, x: 120, y: 1120, width: 180, height: 56 }
-        ]
-      }),
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "请输入密码",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "请输入密码", confidence: 0.98, x: 120, y: 1240, width: 160, height: 40 }
+          ]
+        },
+        {
+          text: "登录\n123qwe",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "登录", confidence: 0.98, x: 460, y: 940, width: 80, height: 50 },
+            { text: "123qwe", confidence: 0.98, x: 120, y: 1120, width: 180, height: 56 }
+          ]
+        }
+      ]),
       performAction: async (_serial, action) => {
         actions.push(action);
         return {
@@ -477,6 +995,7 @@ describe("SemanticStepResolver", () => {
         clearFirst: true,
         focusDelayMs: 1,
         inputVerificationDelayMs: 1,
+        targetText: "请输入密码",
         region: { x: 6, y: 62, width: 88, height: 4 },
         semanticArea: "content",
         coordinateSpace: "screen"
@@ -484,7 +1003,7 @@ describe("SemanticStepResolver", () => {
     });
 
     expect(actions).toEqual([
-      { type: "tap", x: 500, y: 1280 },
+      { type: "tap", x: 200, y: 1260 },
       { type: "clear_text" },
       { type: "input_text", text: "123qwe" }
     ]);
@@ -498,6 +1017,231 @@ describe("SemanticStepResolver", () => {
           action: "fail",
           reason: "input_text_not_verified",
           actual: "登录 123qwe"
+        })
+      })
+    );
+  });
+
+  it("focuses a marked input region at OCR semantic text before typing", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "请输入密码",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "请输入密码", confidence: 0.98, x: 120, y: 700, width: 160, height: 40 }
+          ]
+        },
+        {
+          text: "123qwe",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "123qwe", confidence: 0.98, x: 120, y: 700, width: 140, height: 40 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "123qwe",
+        clearFirst: true,
+        focusDelayMs: 1,
+        inputVerificationDelayMs: 1,
+        targetText: "请输入密码",
+        region: { x: 6, y: 31, width: 88, height: 6 },
+        semanticArea: "content",
+        coordinateSpace: "screen"
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 200, y: 720 },
+      { type: "clear_text" },
+      { type: "input_text", text: "123qwe" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          resolvedBy: "image_region",
+          focusResolvedBy: "ocr_text_semantic",
+          focusLocator: expect.objectContaining({
+            text: "请输入密码"
+          })
+        })
+      })
+    );
+  });
+
+  it("accepts sensitive input when the target region is masked and the clear text is absent elsewhere", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "请输入密码",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "请输入密码", confidence: 0.98, x: 120, y: 700, width: 160, height: 40 }
+          ]
+        },
+        {
+          text: "••••••",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "••••••", confidence: 0.98, x: 120, y: 700, width: 140, height: 40 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "123qwe",
+        clearFirst: true,
+        focusDelayMs: 1,
+        inputVerificationDelayMs: 1,
+        region: { x: 6, y: 31, width: 88, height: 6 },
+        semanticArea: "content",
+        coordinateSpace: "screen",
+        valueParamKey: "password"
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 200, y: 720 },
+      { type: "clear_text" },
+      { type: "input_text", text: "123qwe" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          inputVerified: true,
+          sensitiveInput: true,
+          verificationStrategy: "masked_target_region"
+        })
+      })
+    );
+  });
+
+  it("retries sensitive input through Android keyevents when secure keyboard keeps the placeholder", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "请输入密码",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "请输入密码", confidence: 0.98, x: 120, y: 700, width: 160, height: 40 }
+          ]
+        },
+        {
+          text: "请输入密码 华为安全键盘",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "请输入密码", confidence: 0.98, x: 120, y: 700, width: 160, height: 40 },
+            { text: "华为安全键盘", confidence: 0.9, x: 80, y: 1180, width: 220, height: 40 }
+          ]
+        },
+        {
+          text: "••••••",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "••••••", confidence: 0.98, x: 120, y: 700, width: 140, height: 40 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "123qwe",
+        clearFirst: true,
+        focusDelayMs: 1,
+        inputVerificationDelayMs: 1,
+        secureKeyboardKeyEventIntervalMs: 0,
+        region: { x: 6, y: 31, width: 88, height: 6 },
+        semanticArea: "content",
+        coordinateSpace: "screen",
+        valueParamKey: "password"
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 200, y: 720 },
+      { type: "clear_text" },
+      { type: "input_text", text: "123qwe" },
+      { type: "input_keyevents", text: "123qwe", intervalMs: 0 }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        action: { type: "input_keyevents", text: "123qwe", intervalMs: 0 },
+        metadata: expect.objectContaining({
+          inputVerified: true,
+          sensitiveInput: true,
+          inputFallback: "secure_keyboard_keyevent_retry",
+          initialVerificationStrategy: "target_region_still_placeholder",
+          verificationStrategy: "masked_target_region"
         })
       })
     );
@@ -589,7 +1333,7 @@ describe("SemanticStepResolver", () => {
     );
   });
 
-  it("executes manually marked image regions by tapping the region center", async () => {
+  it("does not execute a plain marked image region without runtime relocation evidence", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
       ocr: new LayoutOcrService(layout("首页")),
@@ -614,16 +1358,18 @@ describe("SemanticStepResolver", () => {
       })
     });
 
-    expect(actions).toEqual([{ type: "tap", x: 243, y: 270 }]);
+    expect(actions).toEqual([]);
     expect(outcome).toEqual(
       expect.objectContaining({
         supported: true,
-        resolved: true,
+        resolved: false,
+        message: "Image region could not be relocated by OCR, visual template, or visual candidates.",
         metadata: expect.objectContaining({
           type: "image_region",
-          action: "tap",
+          action: "fail",
+          reason: "runtime_relocation_required",
           region: { x: 12.5, y: 8.25, width: 20, height: 6 },
-          center: { x: 243, y: 270 }
+          fallback: "region_center_disabled"
         })
       })
     );
@@ -682,6 +1428,526 @@ describe("SemanticStepResolver", () => {
           relocatedBy: "ocr_text",
           semanticArea: "bottom",
           actual: "发布"
+        })
+      })
+    );
+  });
+
+  it("relocates leading checkboxes by nearby OCR anchor text before visual templates", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const screenshots = [checkboxScreenshot(false), checkboxScreenshot(true)];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "已阅读并同意 用户协议",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1080,
+        height: 2400,
+        boxes: [
+          {
+            text: "已阅读并同意",
+            confidence: 0.94,
+            x: 120,
+            y: 980,
+            width: 180,
+            height: 50
+          }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: screenshots.shift() ?? checkboxScreenshot(true)
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 3.2, y: 41, width: 8, height: 4.5 },
+        locator: "image-region:3.2,41,8,4.5",
+        targetMode: "image_region",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "near_text",
+          role: "checkbox",
+          anchorText: "已阅读并同意",
+          clickTarget: "leading_checkbox",
+          fallbackPolicy: "no_region_center_fallback"
+        },
+        visualLocator: {
+          minTemplateSimilarity: 0.9,
+          template: {
+            version: 1,
+            source: "recorded_crop",
+            width: 3,
+            height: 3,
+            pixels: [
+              0, 255, 0,
+              255, 255, 255,
+              0, 255, 0
+            ],
+            hash: "old-template",
+            region: { x: 3.2, y: 41, width: 8, height: 4.5 }
+          }
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 88, y: 1005 }]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          action: "tap",
+          relocatedBy: "near_text_checkbox",
+          structuralLocator: expect.objectContaining({
+            anchorText: "已阅读并同意"
+          }),
+          verification: expect.objectContaining({
+            strategy: "checkbox_visual_state",
+            afterState: expect.objectContaining({
+              checked: true
+            })
+          })
+        })
+      })
+    );
+  });
+
+  it("skips leading checkbox taps when the checkbox is already checked", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "已阅读并同意 用户协议",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1080,
+        height: 2400,
+        boxes: [
+          {
+            text: "已阅读并同意",
+            confidence: 0.94,
+            x: 120,
+            y: 980,
+            width: 180,
+            height: 50
+          }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: checkboxScreenshot(true)
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 3.2, y: 41, width: 8, height: 4.5 },
+        locator: "image-region:3.2,41,8,4.5",
+        targetMode: "image_region",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "near_text",
+          role: "checkbox",
+          anchorText: "已阅读并同意",
+          clickTarget: "leading_checkbox"
+        }
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          action: "skip",
+          reason: "checkbox_already_checked",
+          relocatedBy: "near_text_checkbox",
+          verification: expect.objectContaining({
+            strategy: "checkbox_visual_state",
+            state: "checked"
+          })
+        })
+      })
+    );
+  });
+
+  it("relocates a runtime structural checkbox without a recorded region", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const screenshots = [checkboxScreenshot(false), checkboxScreenshot(true)];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "已阅读并同意 用户协议",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1080,
+        height: 2400,
+        boxes: [
+          {
+            text: "已阅读并同意",
+            confidence: 0.94,
+            x: 120,
+            y: 980,
+            width: 180,
+            height: 50
+          }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: screenshots.shift() ?? checkboxScreenshot(true)
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:agreement_checkbox",
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        structuralLocator: {
+          strategy: "near_text",
+          role: "checkbox",
+          anchorText: "已阅读并同意",
+          clickTarget: "leading_checkbox"
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 88, y: 1005 }]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          action: "tap",
+          relocatedBy: "near_text_checkbox"
+        })
+      })
+    );
+  });
+
+  it("relocates a runtime structural button by OCR text without a recorded region", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "登录",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1080,
+        height: 2400,
+        boxes: [
+          { text: "登录", confidence: 0.98, x: 460, y: 1120, width: 160, height: 70 }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:primary_login_button",
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        targetText: "登录",
+        structuralLocator: {
+          strategy: "ocr_text",
+          role: "primary_button",
+          text: "登录",
+          fallbackPolicy: "no_region_center_fallback"
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 540, y: 1155 }]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          action: "tap",
+          relocatedBy: "runtime_ocr_text",
+          targetText: "登录"
+        })
+      })
+    );
+  });
+
+  it("fails leading checkbox taps when the checkbox region does not visually change", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "已阅读并同意 用户协议",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1080,
+        height: 2400,
+        boxes: [
+          {
+            text: "已阅读并同意",
+            confidence: 0.94,
+            x: 120,
+            y: 980,
+            width: 180,
+            height: 50
+          }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: checkboxScreenshot(false)
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 3.2, y: 41, width: 8, height: 4.5 },
+        locator: "image-region:3.2,41,8,4.5",
+        targetMode: "image_region",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "near_text",
+          role: "checkbox",
+          anchorText: "已阅读并同意",
+          clickTarget: "leading_checkbox"
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 88, y: 1005 }]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: false,
+        metadata: expect.objectContaining({
+          action: "fail",
+          reason: "checkbox_not_checked_after_tap"
+        })
+      })
+    );
+  });
+
+  it("relocates manually marked image regions by visual candidates before using the recorded center", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("主页")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 10, y: 20, width: 20, height: 10 },
+        locator: "image-region:10,20,20,10",
+        targetMode: "image_region",
+        semanticArea: "top",
+        visualLocator: {
+          minScore: 0.72,
+          targetRole: "button",
+          candidates: [
+            { source: "vision", label: "头像", role: "image", score: 0.96, semanticArea: "top", region: { x: 10, y: 8, width: 8, height: 5 } },
+            { source: "omniparser", label: "更多", role: "button", score: 0.91, semanticArea: "top", region: { x: 70, y: 10, width: 8, height: 5 } }
+          ]
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 740, y: 250 }]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          action: "tap",
+          relocatedBy: "visual_candidate",
+          semanticArea: "top",
+          visualCandidate: expect.objectContaining({
+            label: "更多",
+            score: 0.91
+          })
+        })
+      })
+    );
+  });
+
+  it("relocates manually marked image regions by recorded crop template local search", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const pixels = Array.from({ length: 100 }, () => 20);
+    const templatePixels = [
+      0, 255, 0,
+      255, 255, 255,
+      0, 255, 0
+    ];
+    for (let row = 0; row < 3; row += 1) {
+      for (let column = 0; column < 3; column += 1) {
+        pixels[(2 + row) * 10 + 3 + column] = templatePixels[row * 3 + column]!;
+      }
+    }
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("主页")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: pgm(10, 10, pixels)
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 10, height: 10 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 20, y: 20, width: 30, height: 30 },
+        locator: "image-region:20,20,30,30",
+        targetMode: "image_region",
+        semanticArea: "content",
+        visualLocator: {
+          minTemplateSimilarity: 0.9,
+          template: {
+            version: 1,
+            source: "recorded_crop",
+            width: 3,
+            height: 3,
+            pixels: templatePixels,
+            hash: "cross",
+            region: { x: 20, y: 20, width: 30, height: 30 }
+          }
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 5, y: 4 }]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        artifacts: [expect.objectContaining({ id: "artifact-1" })],
+        metadata: expect.objectContaining({
+          action: "tap",
+          relocatedBy: "template_search",
+          visualTemplate: expect.objectContaining({
+            hash: "cross",
+            similarity: expect.any(Number),
+            region: { x: 30, y: 20, width: 30, height: 30 }
+          }),
+          visualRelocation: expect.objectContaining({
+            reason: "template_selected",
+            templateHash: "cross"
+          })
+        })
+      })
+    );
+  });
+
+  it("fails instead of using region-center fallback when visual candidates are below the confidence threshold", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("主页")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 10, y: 20, width: 20, height: 10 },
+        locator: "image-region:10,20,20,10",
+        targetMode: "image_region",
+        semanticArea: "content",
+        visualLocator: {
+          minScore: 0.72,
+          candidates: [
+            { source: "vision", label: "弱候选", role: "button", score: 0.41, semanticArea: "content", region: { x: 70, y: 10, width: 8, height: 5 } }
+          ]
+        }
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        resolved: false,
+        metadata: expect.objectContaining({
+          action: "fail",
+          reason: "runtime_relocation_required",
+          fallback: "region_center_disabled",
+          visualRelocation: expect.objectContaining({
+            reason: "candidate_below_threshold"
+          })
         })
       })
     );
@@ -1254,7 +2520,7 @@ describe("SemanticStepResolver", () => {
     );
   });
 
-  it("taps manually marked image regions directly when only an element label is present", async () => {
+  it("does not tap manually marked image regions when only an element label is present", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
       ocr: new LayoutOcrService({
@@ -1297,14 +2563,18 @@ describe("SemanticStepResolver", () => {
       })
     });
 
-    expect(actions).toEqual([{ type: "tap", x: 540, y: 2387 }]);
+    expect(actions).toEqual([]);
     if (!outcome) {
       throw new Error("expected semantic locator to return an outcome");
     }
+    expect(outcome.resolved).toBe(false);
+    expect(outcome.message).toBe("Image region could not be relocated by OCR, visual template, or visual candidates.");
     expect(outcome.metadata).toEqual(
       expect.objectContaining({
-        action: "tap",
-        center: { x: 540, y: 2387 }
+        action: "fail",
+        reason: "runtime_relocation_required",
+        fallback: "region_center_disabled",
+        recordedCenter: { x: 540, y: 2387 }
       })
     );
   });
@@ -1650,6 +2920,17 @@ function hierarchy(resourceId: string): string {
 </hierarchy>`;
 }
 
+function inputHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1000,2000]">
+    <node index="0" text="登录" resource-id="com.demo:id/login_title" class="android.widget.TextView" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[120,120][240,176]" />
+    <node index="1" text="" resource-id="com.demo:id/phone_input" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[100,500][900,620]" />
+    <node index="2" text="" resource-id="com.demo:id/password_input" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[100,660][900,780]" />
+  </node>
+</hierarchy>`;
+}
+
 function layout(...texts: string[]): OcrLayoutResult {
   const boxes = texts.map((text, index) => ({
     text,
@@ -1669,11 +2950,110 @@ function layout(...texts: string[]): OcrLayoutResult {
   };
 }
 
+function topBarLayout(): OcrLayoutResult {
+  return {
+    text: "主页\n免费版",
+    engine: "fake-layout",
+    lang: "test",
+    width: 1200,
+    height: 2000,
+    boxes: [
+      { text: "主页", confidence: 0.99, x: 129, y: 129, width: 86, height: 48 },
+      { text: "免费版", confidence: 0.92, x: 232, y: 133, width: 84, height: 38 }
+    ]
+  };
+}
+
 function screenshot(id: string): ScreenshotCapture {
   return {
     artifact: artifact(id),
     png: Buffer.from("screen")
   };
+}
+
+function pgm(width: number, height: number, pixels: number[]): Buffer {
+  if (pixels.length !== width * height) {
+    throw new Error("Invalid PGM pixel count");
+  }
+  return Buffer.concat([
+    Buffer.from(`P5\n${width} ${height}\n255\n`, "ascii"),
+    Buffer.from(pixels)
+  ]);
+}
+
+function checkboxScreenshot(checked: boolean): Buffer {
+  const width = 1080;
+  const height = 2400;
+  const pixels = Array.from({ length: width * height }, () => 255);
+  const centerX = 88;
+  const centerY = 1005;
+  for (let y = centerY - 18; y <= centerY + 18; y += 1) {
+    for (let x = centerX - 18; x <= centerX + 18; x += 1) {
+      const distance = Math.hypot(x - centerX, y - centerY);
+      if (distance >= 14 && distance <= 18) {
+        pixels[y * width + x] = 170;
+      }
+      if (checked && distance <= 11) {
+        pixels[y * width + x] = 60;
+      }
+    }
+  }
+  return pgm(width, height, pixels);
+}
+
+function topBarIconScreenshot(
+  width: number,
+  height: number,
+  icons: Array<{ role: "add" | "search"; centerX: number; centerY: number }>
+): Buffer {
+  const pixels = Array.from({ length: width * height }, () => 255);
+  for (const icon of icons) {
+    if (icon.role === "add") {
+      drawCircle(pixels, width, height, icon.centerX, icon.centerY, 22, 5, 20);
+      drawLine(pixels, width, height, icon.centerX - 13, icon.centerY, icon.centerX + 13, icon.centerY, 5, 20);
+      drawLine(pixels, width, height, icon.centerX, icon.centerY - 13, icon.centerX, icon.centerY + 13, 5, 20);
+    } else {
+      drawCircle(pixels, width, height, icon.centerX - 3, icon.centerY - 3, 18, 5, 20);
+      drawLine(pixels, width, height, icon.centerX + 9, icon.centerY + 9, icon.centerX + 24, icon.centerY + 24, 5, 20);
+    }
+  }
+  return pgm(width, height, pixels);
+}
+
+function drawCircle(pixels: number[], width: number, height: number, centerX: number, centerY: number, radius: number, thickness: number, color: number): void {
+  const minX = Math.max(0, Math.floor(centerX - radius - thickness));
+  const maxX = Math.min(width - 1, Math.ceil(centerX + radius + thickness));
+  const minY = Math.max(0, Math.floor(centerY - radius - thickness));
+  const maxY = Math.min(height - 1, Math.ceil(centerY + radius + thickness));
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const distance = Math.hypot(x - centerX, y - centerY);
+      if (Math.abs(distance - radius) <= thickness / 2) {
+        pixels[y * width + x] = color;
+      }
+    }
+  }
+}
+
+function drawLine(pixels: number[], width: number, height: number, x1: number, y1: number, x2: number, y2: number, thickness: number, color: number): void {
+  const steps = Math.max(1, Math.ceil(Math.hypot(x2 - x1, y2 - y1)));
+  const radius = Math.max(1, Math.floor(thickness / 2));
+  for (let step = 0; step <= steps; step += 1) {
+    const x = Math.round(x1 + ((x2 - x1) * step) / steps);
+    const y = Math.round(y1 + ((y2 - y1) * step) / steps);
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        if (Math.hypot(dx, dy) > radius) {
+          continue;
+        }
+        const px = x + dx;
+        const py = y + dy;
+        if (px >= 0 && px < width && py >= 0 && py < height) {
+          pixels[py * width + px] = color;
+        }
+      }
+    }
+  }
 }
 
 function artifact(id: string): ArtifactRef {

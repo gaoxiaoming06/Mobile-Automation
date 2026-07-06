@@ -41,7 +41,7 @@ describe("identifyOrCreateCurrentPageDraft", () => {
     });
 
     expect(result.status).toBe("draft_created");
-    if (result.status === "matched") {
+    if (result.status !== "draft_created") {
       throw new Error("expected draft creation");
     }
     expect(result.node).toEqual(
@@ -116,7 +116,7 @@ describe("identifyOrCreateCurrentPageDraft", () => {
     });
 
     expect(result.status).toBe("draft_candidate");
-    if (result.status === "matched") {
+    if (result.status !== "draft_candidate") {
       throw new Error("expected asset-only detection to ignore recording node");
     }
     expect(result.node?.key).not.toBe(recordingNode.key);
@@ -287,6 +287,50 @@ describe("identifyOrCreateCurrentPageDraft", () => {
     expect(result.status).toBe("matched");
     expect(result.match.node?.id).toBe(home.id);
     expect(result.visualPageName).toBe("主页");
+  });
+
+  it("blocks asset-only page recording when a debug overlay covers missing critical page evidence", async () => {
+    const home = node({
+      id: "node-home",
+      key: "classin.home",
+      name: "主页",
+      tags: ["page-asset", "asset-recording"],
+      status: "active",
+      matchers: [
+        { id: "matcher-home-title", type: "ocr_text", value: "主页", weight: 3, critical: true, region: { x: 10, y: 5, width: 25, height: 8 }, platformScope: "mobile-both" },
+        { id: "matcher-package", type: "package", value: "cn.eeo.classin", weight: 1, critical: true, platformScope: "android" }
+      ],
+      metadata: { assetRecordingConfirmed: true, pageName: "主页" }
+    });
+
+    const result = await identifyOrCreateCurrentPageDraft({
+      graphVersion: graph([home]),
+      observation: observation({
+        resourceId: "cn.eeo.classin:id/home",
+        text: "主页",
+        packageName: "cn.eeo.classin",
+        activityName: ".MainActivity",
+        resolution: { width: 1080, height: 2340 },
+        ocrTexts: [
+          { text: "MEM: 369.6 MB", source: "ocr", region: { x: 320, y: 150, width: 360, height: 52 } },
+          { text: "FPS: 60.0", source: "ocr", region: { x: 760, y: 150, width: 170, height: 52 } },
+          { text: "页", source: "ocr", region: { x: 188, y: 190, width: 130, height: 82 } },
+          { text: "主页", source: "ocr", region: { x: 56, y: 2230, width: 70, height: 40 } }
+        ]
+      }),
+      storage: new MemoryCurrentPageStorage([home]),
+      assetOnly: true
+    });
+
+    expect(result.status).toBe("blocked");
+    if (result.status !== "blocked") {
+      throw new Error("expected screenshot pollution to block page recording");
+    }
+    expect(result.blocker.code).toBe("SCREENSHOT_POLLUTION");
+    expect(result.blocker.affectedMatchers).toEqual([
+      expect.objectContaining({ matcherId: "matcher-home-title", nodeName: "主页", expected: "主页" })
+    ]);
+    expect(result.blocker.pollutionTexts.map((item) => item.text)).toEqual(expect.arrayContaining(["MEM: 369.6 MB"]));
   });
 
   it("creates confirmed page assets from explicit confirmed evidence only", () => {

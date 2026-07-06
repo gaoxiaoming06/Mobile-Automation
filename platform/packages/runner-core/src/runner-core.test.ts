@@ -423,6 +423,36 @@ describe("graph runner", () => {
     expect(result.steps[0]?.nodeMatches.after?.node?.id).toBe("home");
   });
 
+  it("passes the already detected node match to state expectations", async () => {
+    const executionPlan = planTo("home");
+    const driver = new MockGraphDriver(["root", "home"]);
+
+    const result = await new GraphRunner({
+      executionPlan,
+      driver,
+      idFactory: fixedIdFactory(),
+      now: fixedNow()
+    }).run();
+
+    expect(result.status).toBe("passed");
+    expect(driver.evaluatedExpectations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "expectation",
+          nodeMatch: expect.objectContaining({
+            node: expect.objectContaining({ id: "home" })
+          })
+        }),
+        expect.objectContaining({
+          phase: "system_guard",
+          nodeMatch: expect.objectContaining({
+            node: expect.objectContaining({ id: "home" })
+          })
+        })
+      ])
+    );
+  });
+
   it("records final recovery requirement when transition retries still miss the target node", async () => {
     const basePlan = planTo("home");
     const executionPlan = {
@@ -713,6 +743,7 @@ function fixedNow(): () => string {
 
 class MockGraphDriver {
   readonly actions: ActionStep[] = [];
+  readonly evaluatedExpectations: unknown[] = [];
   private observeIndex = 0;
 
   constructor(
@@ -770,7 +801,8 @@ class MockGraphDriver {
     this.observeIndex += 1;
   }
 
-  async evaluateExpectation(input: { expectation: StepExpectation; phase: string }): Promise<StepExpectationResult> {
+  async evaluateExpectation(input: { expectation: StepExpectation; phase: string; nodeMatch?: NodeMatchResult }): Promise<StepExpectationResult> {
+    this.evaluatedExpectations.push(input);
     const failed = this.options.failedExpectationIds?.has(input.expectation.id) ?? false;
     return {
       id: `expectation-result-${input.expectation.id}`,

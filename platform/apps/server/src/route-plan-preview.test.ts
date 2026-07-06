@@ -66,6 +66,43 @@ describe("route plan preview start detection", () => {
     expect(detection.startNodeId).toBeUndefined();
   });
 
+  it("can use a visually matched current device node even when the package differs from the graph target app", async () => {
+    const home = node("node-home", "home", "首页", [matcher("resource_id", "flutter:id/home_title", 3)]);
+    const graphVersion: BusinessGraphVersion = {
+      id: "version-1",
+      graphId: "graph-1",
+      version: 1,
+      sourceSummary: [],
+      status: "active",
+      nodes: [home],
+      edges: [],
+      createdAt: "2026-06-14T00:00:00.000Z"
+    };
+
+    const detection = await resolveRoutePlanStart({
+      graphVersion,
+      targetApp: { androidPackageName: "cn.eeo.classin" },
+      platform: "android",
+      startAppScope: "current_device",
+      observation: {
+        ...observation("首页", "flutter:id/home_title"),
+        packageName: "cn.eeo.classin.flutter"
+      }
+    });
+
+    expect(detection).toEqual(
+      expect.objectContaining({
+        source: "device_observation",
+        startNodeId: "node-home",
+        inTargetApp: true,
+        nodeMatch: expect.objectContaining({
+          status: "matched",
+          node: expect.objectContaining({ key: "home" })
+        })
+      })
+    );
+  });
+
   it("prefers a confirmed page asset over a legacy recording node for the device start", async () => {
     const legacyRecordingNode = node("node-recording-home", "recording.home", "录制节点：主页", [
       matcher("package", "com.demo"),

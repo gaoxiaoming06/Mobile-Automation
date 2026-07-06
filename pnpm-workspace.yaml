@@ -1,3 +1,5 @@
 packages:
   - "platform/apps/*"
   - "platform/packages/*"
+allowBuilds:
+  esbuild: true

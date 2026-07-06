@@ -313,6 +313,56 @@ describe("AssetRecordingPanel", () => {
     expect(markup).not.toContain("AI 说明");
   });
 
+  it("renders saved page element quality status in the actions tab", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "device-1",
+        busy: false,
+        initialDetailTab: "actions",
+        currentPage: {
+          status: "matched",
+          pageName: "登录",
+          nodeId: "node-login",
+          graphVersionId: "version-1",
+          elements: [
+            {
+              id: "password-input",
+              label: "密码输入框",
+              locator: "image-region:6,31,88,6",
+              action: "input",
+              actionKind: "input",
+              source: "manual",
+              quality: {
+                status: "needs_review",
+                score: 0.68,
+                warnings: [
+                  {
+                    code: "ambiguous_target_text",
+                    severity: "warning",
+                    message: "同一区域内存在多个相似文字候选"
+                  }
+                ],
+                candidates: [],
+                evidence: {
+                  uniqueCandidate: false,
+                  candidateCount: 2
+                }
+              }
+            }
+          ]
+        },
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: vi.fn()
+      })
+    );
+
+    expect(markup).toContain("定位质量");
+    expect(markup).toContain("建议复核");
+    expect(markup).toContain("68%");
+    expect(markup).toContain("同一区域内存在多个相似文字候选");
+  });
+
   it("shows an identifying state while the next page is being recognized", () => {
     const markup = renderToStaticMarkup(
       React.createElement(AssetRecordingPanel, {
@@ -1158,11 +1208,91 @@ describe("AssetRecordingPanel", () => {
       semanticArea: "top",
       coordinateSpace: "screen",
       elementLabel: "搜索按钮",
+      locatorKind: "visual_locator",
       outcomeType: "navigate",
       targetNodeId: "node-search",
       targetLabel: "搜索页",
       outcomeLabel: "进入搜索页"
     });
+  });
+
+  it("builds structural locator page abilities with dynamic masks", () => {
+    const draft = manualOperationDraftFromForm(
+      {
+        locatorKind: "structural_locator",
+        dynamicMaskPreset: "avatar_text",
+        actionKind: "tap",
+        availability: "visible",
+        semanticArea: "content",
+        elementLabel: "个人信息",
+        outcomeType: "navigate",
+        targetNodeId: "node-profile",
+        targetLabel: "个人信息"
+      },
+      {
+        sourceNodeId: "node-settings",
+        region: { x: 6, y: 15, width: 88.77, height: 8.78, semanticArea: "content" }
+      }
+    );
+
+    expect(draft).toEqual(
+      expect.objectContaining({
+        sourceNodeId: "node-settings",
+        locator: "image-region:6,15,88.77,8.78",
+        locatorKind: "structural_locator",
+        elementLabel: "个人信息",
+        structuralLocator: expect.objectContaining({
+          kind: "marked_row",
+          role: "list_item",
+          label: "个人信息"
+        }),
+        dynamicMasks: [
+          expect.objectContaining({ kind: "avatar", reason: "personalized_visual" }),
+          expect.objectContaining({ kind: "text", reason: "personalized_text" })
+        ]
+      })
+    );
+  });
+
+  it("builds collection item page abilities with dynamic region and item template metadata", () => {
+    const draft = manualOperationDraftFromForm(
+      {
+        abilityType: "grid_candidate",
+        locatorKind: "collection_item_locator",
+        actionKind: "tap",
+        availability: "visible",
+        semanticArea: "content",
+        elementLabel: "打开班级详情",
+        outcomeType: "navigate",
+        targetNodeId: "node-class-detail",
+        targetLabel: "班级详情",
+        dynamicRegionLabel: "班级列表",
+        itemTemplateLabel: "班级卡片",
+        parameterName: "className"
+      },
+      {
+        sourceNodeId: "node-home",
+        region: { x: 3, y: 32, width: 91, height: 56, semanticArea: "content" }
+      }
+    );
+
+    expect(draft).toEqual(
+      expect.objectContaining({
+        abilityType: "grid_candidate",
+        locatorKind: "collection_item_locator",
+        transitionKind: "parameterized",
+        parameterMapping: { className: "dynamicRegion.item.titleText" },
+        dynamicRegion: expect.objectContaining({
+          id: "dynamic_region_node_home_班级列表",
+          label: "班级列表",
+          itemTemplateId: "item_template_node_home_班级列表"
+        }),
+        itemTemplate: expect.objectContaining({
+          id: "item_template_node_home_班级列表",
+          label: "班级卡片"
+        })
+      })
+    );
   });
 
   it("maps full-screen element bounds into the cropped app preview coordinate space", () => {
@@ -1242,6 +1372,43 @@ describe("AssetRecordingPanel", () => {
     );
 
     expect(markup).toContain("未采集到控件位置");
+  });
+
+  it("shows runtime location instead of missing coordinates for runtime structural elements", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "device-1",
+        busy: false,
+        initialDetailTab: "actions",
+        currentPage: {
+          status: "matched",
+          pageName: "登录",
+          screenshotUrl: "/api/devices/device-1/screenshot?force=true&t=8",
+          elements: [
+            {
+              label: "登录按钮",
+              locator: "runtime-locator:primary_login_button",
+              locatorKind: "structural_locator",
+              coordinateSpace: "runtime",
+              targetText: "登录",
+              action: "tap",
+              actionKind: "tap",
+              availability: "visible",
+              source: "manual",
+              structuralLocator: { role: "primary_button" }
+            }
+          ],
+          savedAssets: []
+        },
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: vi.fn()
+      })
+    );
+
+    expect(markup).toContain("运行时定位");
+    expect(markup).toContain("登录 · primary_button");
+    expect(markup).not.toContain("未采集到控件位置");
   });
 
   it("uses a change description instead of target page selection for local outcomes", () => {

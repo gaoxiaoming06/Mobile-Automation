@@ -16,6 +16,7 @@ import { createId, nowIso, type ArtifactRef } from "@mobile-automation/shared";
 import {
   enrichObservationImageRegions as enrichPageMatcherObservationImageRegions,
   matchCurrentPage,
+  type PageMatcherPollutionDiagnostic,
   type PageMatcherBaselineReader,
   type PageMatcherDiagnostics
 } from "./page-matcher.js";
@@ -66,6 +67,15 @@ export type CurrentPageAssetResult =
       node: BusinessNode;
       artifact?: ArtifactRef;
       visualPageName?: string;
+    }
+  | {
+      status: "blocked";
+      match: NodeMatchResult;
+      observation: Observation;
+      matcherDiagnostics?: PageMatcherDiagnostics;
+      blocker: PageMatcherPollutionDiagnostic;
+      message: string;
+      visualPageName?: string;
     };
 
 export async function identifyOrCreateCurrentPageDraft(input: {
@@ -93,6 +103,17 @@ export async function identifyOrCreateCurrentPageDraft(input: {
       observation,
       matcherDiagnostics: pageMatch?.diagnostics,
       visualPageName: inferVisualPageName(observation, match.node?.name)
+    };
+  }
+  if (input.assetOnly && pageMatch?.diagnostics.pollution) {
+    return {
+      status: "blocked",
+      match,
+      observation,
+      matcherDiagnostics: pageMatch.diagnostics,
+      blocker: pageMatch.diagnostics.pollution,
+      message: pageMatch.diagnostics.pollution.message,
+      visualPageName: inferVisualPageName(observation, pageMatch.diagnostics.topCandidate?.name)
     };
   }
 

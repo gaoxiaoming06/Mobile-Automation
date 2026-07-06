@@ -92,6 +92,358 @@ describe("persistManualPageTransitionAsset", () => {
     ]);
   });
 
+  it("persists structural locator evidence and dynamic masks for non-text profile entries", () => {
+    const storage = new MemoryPageTransitionStorage();
+    const source = pageNode({ id: "node-settings", key: "classin.settings", name: "设置" });
+    storage.nodes.push(source);
+
+    const result = persistManualPageElementAsset({
+      graphVersionId: "version-1",
+      storage,
+      sourceNodeId: source.id,
+      actionKind: "tap",
+      locator: "image-region:6,15,88.77,8.78",
+      elementLabel: "个人信息",
+      availability: "visible",
+      platformScope: "android",
+      outcomeType: "navigate",
+      locatorKind: "structural_locator",
+      structuralLocator: {
+        kind: "top_profile_entry",
+        role: "list_item",
+        indexHint: { semanticArea: "content", order: 0 },
+        stableAnchors: [
+          { kind: "right_chevron", region: { x: 86, y: 17, width: 5, height: 4 } }
+        ],
+        excludedDynamicEvidence: ["avatar", "display_name"]
+      },
+      dynamicMasks: [
+        { kind: "avatar", label: "头像", region: { x: 7, y: 15.5, width: 11, height: 7.5 } },
+        { kind: "text", label: "昵称", region: { x: 21, y: 16, width: 25, height: 7 } }
+      ]
+    });
+
+    expect(result.status).toBe("saved");
+    expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toEqual([
+      expect.objectContaining({
+        label: "个人信息",
+        locatorKind: "structural_locator",
+        structuralLocator: expect.objectContaining({
+          kind: "top_profile_entry",
+          role: "list_item",
+          excludedDynamicEvidence: ["avatar", "display_name"]
+        }),
+        dynamicMasks: [
+          { kind: "avatar", label: "头像", region: { x: 7, y: 15.5, width: 11, height: 7.5 } },
+          { kind: "text", label: "昵称", region: { x: 21, y: 16, width: 25, height: 7 } }
+        ]
+      })
+    ]);
+  });
+
+  it("persists dynamic regions, item templates, and parameterized transition metadata for lists", () => {
+    const storage = new MemoryPageTransitionStorage();
+    const source = pageNode({ id: "node-home", key: "classin.home", name: "主页" });
+    const target = pageNode({ id: "node-class-detail", key: "classin.class.detail", name: "班级详情" });
+    storage.nodes.push(source, target);
+
+    const result = persistManualPageElementAsset({
+      graphVersionId: "version-1",
+      storage,
+      sourceNodeId: source.id,
+      targetNodeId: target.id,
+      abilityType: "grid_candidate",
+      actionKind: "tap",
+      locator: "image-region:3,32,91,56",
+      elementLabel: "打开班级详情",
+      availability: "visible",
+      platformScope: "android",
+      outcomeType: "navigate",
+      targetLabel: "班级详情",
+      locatorKind: "collection_item_locator",
+      transitionKind: "parameterized",
+      parameterMapping: {
+        className: "dynamicRegion.item.titleText"
+      },
+      dynamicRegion: {
+        id: "dynamic_region_class_list",
+        label: "班级列表",
+        kind: "grid",
+        region: { x: 3, y: 32, width: 91, height: 56 },
+        itemTemplateId: "item_template_class_card",
+        dynamicFieldRules: [
+          { name: "className", source: "ocr_text", role: "title" },
+          { name: "lastMessage", source: "ocr_text", role: "secondary" }
+        ]
+      },
+      itemTemplate: {
+        id: "item_template_class_card",
+        label: "班级卡片",
+        region: { x: 3, y: 32, width: 43, height: 24.5 },
+        actionArea: { x: 3, y: 32, width: 43, height: 24.5 },
+        dynamicFields: [
+          { name: "className", role: "title" },
+          { name: "lastMessage", role: "secondary" }
+        ],
+        stableStructure: {
+          columns: 2,
+          clickSafePoint: { xPercent: 50, yPercent: 28 }
+        }
+      },
+      scrollProfile: {
+        containerKind: "grid_list",
+        direction: "vertical",
+        columns: 2,
+        targetKind: "nth_item",
+        afterFoundAction: "tap_item",
+        candidateItemHeightPercent: 24.5,
+        clickSafePoint: { xPercent: 50, yPercent: 28 },
+        failureStrategy: "try_next_candidate"
+      }
+    });
+
+    expect(result.status).toBe("saved");
+    const sourceMetadata = storage.nodes.find((node) => node.id === source.id)?.metadata;
+    expect(sourceMetadata?.assetRecordingDynamicRegions).toEqual([
+      expect.objectContaining({
+        id: "dynamic_region_class_list",
+        label: "班级列表",
+        kind: "grid",
+        itemTemplateId: "item_template_class_card"
+      })
+    ]);
+    expect(sourceMetadata?.assetRecordingItemTemplates).toEqual([
+      expect.objectContaining({
+        id: "item_template_class_card",
+        label: "班级卡片",
+        dynamicFields: [
+          { name: "className", role: "title" },
+          { name: "lastMessage", role: "secondary" }
+        ]
+      })
+    ]);
+    expect(sourceMetadata?.assetRecordingManualElements).toEqual([
+      expect.objectContaining({
+        label: "打开班级详情",
+        locatorKind: "collection_item_locator",
+        dynamicRegionId: "dynamic_region_class_list",
+        itemTemplateId: "item_template_class_card"
+      })
+    ]);
+    expect(storage.edges[0]?.actionPolicies[0]?.action.params).toEqual(
+      expect.objectContaining({
+        transitionKind: "parameterized",
+        dynamicRegionId: "dynamic_region_class_list",
+        itemTemplateId: "item_template_class_card",
+        parameterMapping: {
+          className: "dynamicRegion.item.titleText"
+        }
+      })
+    );
+  });
+
+  it("persists a manual input element with a separate tap point inside the visual region", () => {
+    const storage = new MemoryPageTransitionStorage();
+    const source = pageNode({ id: "node-login", key: "classin.login", name: "登录" });
+    storage.nodes.push(source);
+
+    const result = persistManualPageElementAsset({
+      graphVersionId: "version-1",
+      storage,
+      sourceNodeId: source.id,
+      actionKind: "input",
+      locator: "image-region:6,31,88,6",
+      elementLabel: "密码输入框",
+      availability: "visible",
+      platformScope: "android",
+      outcomeType: "no_visible_change",
+      tapPointPercent: { x: 20, y: 70 }
+    });
+
+    expect(result.status).toBe("saved");
+    expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toEqual([
+      expect.objectContaining({
+        label: "密码输入框",
+        locator: "image-region:6,31,88,6",
+        actionKind: "input",
+        region: { x: 6, y: 31, width: 88, height: 6 },
+        tapPointPercent: { x: 20, y: 70 }
+      })
+    ]);
+  });
+
+  it("persists page element quality evidence for recording-time review and repair", () => {
+    const storage = new MemoryPageTransitionStorage();
+    const source = pageNode({ id: "node-login", key: "classin.login", name: "登录" });
+    storage.nodes.push(source);
+
+    const result = persistManualPageElementAsset({
+      graphVersionId: "version-1",
+      storage,
+      sourceNodeId: source.id,
+      actionKind: "input",
+      locator: "image-region:6,31,88,6",
+      elementLabel: "密码输入框",
+      targetText: "请输入密码",
+      availability: "visible",
+      platformScope: "android",
+      outcomeType: "no_visible_change",
+      quality: {
+        status: "pass",
+        score: 0.88,
+        warnings: [],
+        candidates: [
+          {
+            source: "ocr_text",
+            text: "请输入密码",
+            label: "请输入密码",
+            score: 0.96,
+            semanticArea: "content",
+            insideMarkedRegion: true
+          }
+        ],
+        evidence: {
+          targetText: "请输入密码",
+          semanticArea: "content",
+          uniqueCandidate: true,
+          candidateCount: 1
+        }
+      },
+      visualLocator: {
+        version: 1,
+        strategy: "recorded_crop_template",
+        template: {
+          hash: "crop-hash",
+          width: 2,
+          height: 2,
+          pixels: [0, 255, 255, 0],
+          region: { x: 6, y: 31, width: 88, height: 6 }
+        }
+      }
+    });
+
+    expect(result.status).toBe("saved");
+    expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toEqual([
+      expect.objectContaining({
+        label: "密码输入框",
+        quality: expect.objectContaining({
+          status: "pass",
+          score: 0.88,
+          evidence: expect.objectContaining({
+            uniqueCandidate: true
+          })
+        }),
+        visualLocator: expect.objectContaining({
+          strategy: "recorded_crop_template",
+          template: expect.objectContaining({
+            hash: "crop-hash"
+          })
+        })
+      })
+    ]);
+  });
+
+  it("replaces an overlapping manual page element with the same label and action when the edited request omits elementId", () => {
+    const storage = new MemoryPageTransitionStorage();
+    const source = {
+      ...pageNode({
+        id: "node-settings",
+        key: "classin.settings",
+        name: "设置"
+      }),
+      metadata: {
+        assetRecordingManualElements: [
+          {
+            id: "manual_element_qr_old",
+            label: "我的二维码",
+            locator: "image-region:6,43,88,8",
+            action: "tap",
+            actionKind: "tap",
+            availability: "visible",
+            region: { x: 6, y: 43, width: 88, height: 8 },
+            platformScope: "android",
+            outcomeType: "navigate"
+          }
+        ]
+      }
+    };
+    storage.nodes.push(source);
+
+    const result = persistManualPageElementAsset({
+      graphVersionId: "version-1",
+      storage,
+      sourceNodeId: source.id,
+      actionKind: "tap",
+      locator: "image-region:3.96,47.36,91.57,6.16",
+      elementLabel: "我的二维码",
+      availability: "visible",
+      platformScope: "android",
+      outcomeType: "no_visible_change"
+    });
+
+    expect(result.status).toBe("saved");
+    expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toEqual([
+      expect.objectContaining({
+        id: "manual_element_tap.image.region.3.96.47.36.91.57.6.16.undefined",
+        label: "我的二维码",
+        locator: "image-region:3.96,47.36,91.57,6.16",
+        region: { x: 3.96, y: 47.36, width: 91.57, height: 6.16 }
+      })
+    ]);
+  });
+
+  it("keeps same-label manual page elements when their regions do not overlap", () => {
+    const storage = new MemoryPageTransitionStorage();
+    const source = {
+      ...pageNode({
+        id: "node-list",
+        key: "classin.list",
+        name: "列表页"
+      }),
+      metadata: {
+        assetRecordingManualElements: [
+          {
+            id: "manual_element_first",
+            label: "详情",
+            locator: "image-region:6,20,88,6",
+            action: "tap",
+            actionKind: "tap",
+            availability: "visible",
+            region: { x: 6, y: 20, width: 88, height: 6 },
+            platformScope: "android",
+            outcomeType: "navigate"
+          }
+        ]
+      }
+    };
+    storage.nodes.push(source);
+
+    const result = persistManualPageElementAsset({
+      graphVersionId: "version-1",
+      storage,
+      sourceNodeId: source.id,
+      actionKind: "tap",
+      locator: "image-region:6,60,88,6",
+      elementLabel: "详情",
+      availability: "visible",
+      platformScope: "android",
+      outcomeType: "navigate"
+    });
+
+    expect(result.status).toBe("saved");
+    expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toEqual([
+      expect.objectContaining({
+        id: "manual_element_first",
+        label: "详情",
+        locator: "image-region:6,20,88,6"
+      }),
+      expect.objectContaining({
+        label: "详情",
+        locator: "image-region:6,60,88,6"
+      })
+    ]);
+  });
+
   it("creates a plannable transition when a manual page element has a navigate target", () => {
     const storage = new MemoryPageTransitionStorage();
     const source = pageNode({ id: "node-home", key: "classin.home", name: "主页" });
@@ -732,10 +1084,10 @@ describe("persistManualPageTransitionAsset", () => {
       expect.objectContaining({
         locator: "image-region:12.5,8.25,20,6",
         semanticArea: "content",
-        coordinateSpace: "app_viewport",
-        targetText: "搜索按钮"
+        coordinateSpace: "app_viewport"
       })
     );
+    expect(storage.edges[0]?.actionPolicies[0]?.action.params).not.toHaveProperty("targetText");
     expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toEqual([
       expect.objectContaining({
         locator: "image-region:12.5,8.25,20,6",

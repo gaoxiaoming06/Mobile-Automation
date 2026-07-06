@@ -10,6 +10,8 @@ export type RoutePlanStartDetection = {
   observation?: Observation;
 };
 
+export type StartAppScope = "target_app" | "current_device";
+
 export async function resolveRoutePlanStart(input: {
   graphVersion: BusinessGraphVersion;
   targetApp?: GraphTargetApp;
@@ -17,6 +19,7 @@ export async function resolveRoutePlanStart(input: {
   requestedStartNodeId?: string;
   observation?: Observation;
   baselineReader?: PageMatcherBaselineReader;
+  startAppScope?: StartAppScope;
 }): Promise<RoutePlanStartDetection> {
   if (input.observation) {
     const pageMatch = await matchCurrentPage({
@@ -28,7 +31,7 @@ export async function resolveRoutePlanStart(input: {
       pageMatch.match.status === "matched"
         ? pageMatch.match
         : detectNode(pageMatch.observation, input.graphVersion, input.platform);
-    const inTargetApp = isObservationInTargetApp(input.observation, input.targetApp, input.platform);
+    const inTargetApp = isObservationInRouteScope(input.observation, input.targetApp, input.platform, input.startAppScope);
     return {
       source: "device_observation",
       startNodeId: nodeMatch.status === "matched" && inTargetApp ? nodeMatch.node?.id : undefined,
@@ -99,7 +102,10 @@ export function routePreviewBlockingIssue(detection: RoutePlanStartDetection): R
   };
 }
 
-function isObservationInTargetApp(observation: Observation, targetApp: GraphTargetApp | undefined, platform: Platform): boolean {
+function isObservationInRouteScope(observation: Observation, targetApp: GraphTargetApp | undefined, platform: Platform, startAppScope: StartAppScope | undefined): boolean {
+  if (startAppScope === "current_device") {
+    return true;
+  }
   if (platform === "android" && targetApp?.androidPackageName) {
     return observation.packageName === targetApp.androidPackageName;
   }

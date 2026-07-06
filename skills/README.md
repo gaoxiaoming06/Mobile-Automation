@@ -28,7 +28,10 @@ These files are source-of-truth prompts for future AI development sessions. Keep
 
 ## Current Product Direction
 
-- Current mainline: `StructuredFlow` / Smart Recorded Flow.
-- New product work defaults to the structured flow path: case library, recording, semantic actions, dynamic waits, step expectations, runtime interceptors, evidence, reports, package smoke, and Flow REST / CLI / MCP.
-- BusinessGraph upper-layer work is frozen as experimental: source scanning to global graph, candidate graph governance, target-node route planning, graph-runs, and auto-promotion should not be expanded unless the user explicitly reopens that direction.
+- Current mainline: `PageStateFlow`.
+- New product work defaults to page assets and semantic execution: `PageModel`, `PageElement`, `PageTransition`, `PageTask`, page matching, semantic locators, route planning, repair evidence, reports, package smoke, and REST / CLI / MCP integration.
+- PageElement execution must relocate at runtime through OCR, visual template/candidates, or structural locator evidence. Do not default to `region_center`; keep recorded regions and centers as evidence for reports and repair UI.
+- Dynamic list work should model `dynamicRegion`, `itemTemplate`, `parameterMapping`, `locatorKind`, and `dynamicMasks` first. Do not expand every real list item into a fixed PageElement.
+- `StructuredFlow` / Smart Recorded Flow remains a compatible linear execution artifact for replaying concrete steps, but it is no longer the product-level source of truth.
+- `BusinessGraph` remains the lower-level graph storage and route-planning model behind PageStateFlow. Do not revive source-code global graph expansion, auto-promotion, or old graph-first UX unless the user explicitly reopens that direction.
 - Keep reusable lower-level primitives: `TestRuleStep`, `StateMatcher` / `FlowStateAnchor`, semantic locators, `RuntimeOverlay`, dynamic wait, `RuntimeInterceptor`, screenshots, video, logs, metrics, and report evidence.

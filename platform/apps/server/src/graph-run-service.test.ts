@@ -70,12 +70,174 @@ describe("grid candidate recovery action", () => {
 });
 
 describe("GraphRunService", () => {
-  it("executes a target-node route on a real driver adapter and writes legacy run evidence", async () => {
+  it("uses the runner-provided node match when evaluating state_is expectations", async () => {
     context = await createContext();
     const { storage } = context;
     const driver = new GraphMockDriver(context.tempRoot);
     const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new FakeOcrService("其它页面"));
+    const graph = storage.createBusinessGraph({
+      appId: "demo-app",
+      targetApp: { androidPackageName: "com.demo" },
+      platformScope: "android",
+      name: "Demo 图谱",
+      status: "draft"
+    });
+    const version = storage.createBusinessGraphVersion({
+      graphId: graph.id,
+      sourceSummary: ["test"],
+      status: "draft"
+    });
+    const expectedNode = storage.createBusinessNode(node(version.id, "target", "目标页", [matcher("text", "目标页", 2)], []));
+    const staleObservation = {
+      id: "observation-stale",
+      platform: "android",
+      capturedAt: "2026-06-11T00:00:00.000Z",
+      packageName: "com.demo",
+      activityName: "com.demo.OtherActivity",
+      componentName: "com.demo/com.demo.OtherActivity",
+      resolution: { width: 1080, height: 2400 },
+      uiElements: [],
+      ocrTexts: [{ text: "其它页面", source: "ocr", region: { x: 10, y: 10, width: 100, height: 40 } }],
+      raw: {
+        screenshotBase64: Buffer.from("not-png").toString("base64")
+      }
+    };
+    const providedNodeMatch = {
+      status: "matched",
+      observationId: staleObservation.id,
+      capturedAt: staleObservation.capturedAt,
+      node: expectedNode,
+      score: 1,
+      candidates: [],
+      threshold: 0.6
+    };
+
+    const result = await (service as any).evaluateStateIsExpectation(
+      {
+        expectation: textExpectation("expect-target-state", "目标页", {
+          nodeId: expectedNode.id,
+          nodeKey: expectedNode.key,
+          nodeName: expectedNode.name
+        }),
+        phase: "expectation",
+        step: {
+          id: "execution-step",
+          order: 1,
+          edgeId: "edge",
+          edgeKey: "edge",
+          name: "edge",
+          intent: "edge",
+          fromNode: expectedNode,
+          toNode: expectedNode,
+          action: tapOnElementStep(),
+          preconditions: [],
+          expectations: [],
+          systemGuards: [],
+          fallbackActionPolicies: [],
+          issues: [],
+          executionMode: "action"
+        },
+        observation: staleObservation,
+        nodeMatch: providedNodeMatch
+      },
+      { ...version, nodes: [expectedNode], edges: [] }
+    );
+
+    expect(result.status).toBe("passed");
+    expect(result.actual).toContain("Matched 目标页");
+  });
+
+  it("matches the preferred business node before loading unrelated visual baselines", async () => {
+    context = await createContext();
+    const { storage, tempRoot } = context;
+    const driver = new GraphMockDriver(tempRoot);
+    const { GraphRunService } = await import("./graph-run-service.js");
     const service = new GraphRunService(storage, driver, new FakeOcrService("目标页"));
+    const baseline = pgm(2, 2, [0, 0, 0, 0]);
+    const relativePath = path.join("baselines", "unrelated.pgm");
+    const absolutePath = path.join(tempRoot, "artifacts", relativePath);
+    await mkdir(path.dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, baseline);
+    storage.addArtifact({
+      id: "artifact-unrelated",
+      type: "screenshot",
+      name: "unrelated.pgm",
+      path: relativePath,
+      url: `/artifacts/${relativePath}`,
+      mimeType: "image/x-portable-graymap",
+      sizeBytes: baseline.byteLength,
+      createdAt: "2026-06-11T00:00:00.000Z"
+    });
+    const targetMatchers = [matcher("package", "com.demo", 2), matcher("text", "目标页", 2), matcher("ocr_text", "目标页", 2)].map((item) => ({
+      ...item,
+      critical: true
+    }));
+    const target = {
+      ...node("version-1", "target", "目标页", targetMatchers, [], ["page-asset", "asset-recording"]),
+      id: "node-target"
+    } as BusinessNode;
+    target.metadata = { assetRecordingConfirmed: true };
+    const unrelated = {
+      ...node(
+        "version-1",
+        "unrelated",
+        "无关页",
+        [
+          {
+            ...matcher("image_region", "screenshot-region:unrelated:%E6%97%A0%E5%85%B3", 9),
+            critical: true,
+            threshold: 0.9,
+            region: { x: 0, y: 0, width: 100, height: 100 },
+            source: { sourceType: "manual_edit", artifactId: "artifact-unrelated" }
+          }
+        ],
+        [],
+        ["page-asset", "asset-recording"]
+      ),
+      id: "node-unrelated"
+    } as BusinessNode;
+    unrelated.metadata = { assetRecordingConfirmed: true };
+    const getArtifactSpy = vi.spyOn(storage, "getArtifact");
+
+    const match = await (service as any).matchBusinessNode(
+      {
+        id: "observation-target",
+        platform: "android",
+        capturedAt: "2026-06-11T00:00:00.000Z",
+        packageName: "com.demo",
+        activityName: "com.demo.TargetActivity",
+        componentName: "com.demo/com.demo.TargetActivity",
+        resolution: { width: 2, height: 2 },
+        uiElements: [{ text: "目标页", visible: true, enabled: true }],
+        ocrTexts: [{ text: "目标页", source: "ocr" }],
+        raw: { screenshotBase64: baseline.toString("base64") }
+      },
+      {
+        id: "version-1",
+        graphId: "graph-1",
+        version: 1,
+        sourceSummary: [],
+        status: "active",
+        nodes: [target, unrelated],
+        edges: [],
+        createdAt: "2026-06-11T00:00:00.000Z"
+      },
+      "android",
+      target.id
+    );
+
+    expect(match.status).toBe("matched");
+    expect(match.node?.id).toBe(target.id);
+    expect(getArtifactSpy).not.toHaveBeenCalled();
+  });
+
+  it("executes a target-node route on a real driver adapter and writes legacy run evidence", async () => {
+    context = await createContext();
+    const { storage } = context;
+    const driver = new VisualGraphMockDriver(context.tempRoot);
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new DynamicFakeOcrService(() => (driver.actions.some((action) => action.type === "tap") ? "目标页" : "首页")));
     const { graph, targetNode } = seedGraph(storage);
 
     const started = await service.start({
@@ -89,7 +251,18 @@ describe("GraphRunService", () => {
     await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
 
     const run = storage.getRun(started.run.id);
-    expect(run.status).toBe("passed");
+    expect(
+      run.status,
+      JSON.stringify({
+        actions: driver.actions,
+        stepResults: run.stepResults.map((step: { status: string; errorCode?: string; errorMessage?: string }) => ({
+          status: step.status,
+          errorCode: step.errorCode,
+          errorMessage: step.errorMessage
+        })),
+        events: run.events
+      })
+    ).toBe("passed");
     expect(driver.actions).toEqual([{ type: "tap", x: 240, y: 400 }]);
     expect(run.stepResults).toHaveLength(1);
     expect(run.stepResults[0]).toEqual(
@@ -118,7 +291,7 @@ describe("GraphRunService", () => {
     const { storage } = context;
     const driver = new GraphMockDriver(context.tempRoot);
     const { GraphRunService } = await import("./graph-run-service.js");
-    const service = new GraphRunService(storage, driver, new FakeOcrService("首页"));
+    const service = new GraphRunService(storage, driver, new DynamicFakeOcrService(() => "首页"));
     const { graph, targetNode, pageAssetNode } = seedPageAssetStartGraph(storage);
 
     const started = await service.start({
@@ -154,9 +327,20 @@ describe("GraphRunService", () => {
     await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
 
     const run = storage.getRun(started.run.id);
-    expect(run.status).toBe("passed");
+    expect(
+      run.status,
+      JSON.stringify({
+        actions: driver.actions,
+        stepResults: run.stepResults.map((step: { status: string; errorCode?: string; errorMessage?: string }) => ({
+          status: step.status,
+          errorCode: step.errorCode,
+          errorMessage: step.errorMessage
+        })),
+        events: run.events
+      })
+    ).toBe("passed");
     expect(driver.dumpUiHierarchyCalls).toBe(0);
-    expect(driver.actions).toEqual([{ type: "tap", x: 324, y: 720 }]);
+    expect(driver.actions).toEqual([{ type: "tap", x: 240, y: 360 }]);
     expect(run.config.recordVideo).toBe(false);
     expect(run.config.keepVideoOnSuccess).toBe(false);
     expect(run.stepResults[0]?.metadata.graph.observationProfile).toBe("fast_visual");
@@ -196,8 +380,19 @@ describe("GraphRunService", () => {
     await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
 
     const run = storage.getRun(started.run.id);
-    expect(run.status).toBe("passed");
-    expect(driver.actions).toEqual([{ type: "tap", x: 324, y: 720 }]);
+    expect(
+      run.status,
+      JSON.stringify({
+        actions: driver.actions,
+        stepResults: run.stepResults.map((step: { status: string; errorCode?: string; errorMessage?: string }) => ({
+          status: step.status,
+          errorCode: step.errorCode,
+          errorMessage: step.errorMessage
+        })),
+        events: run.events
+      })
+    ).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 240, y: 360 }]);
     expect(run.stepResults[0]?.expectationResults).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -241,18 +436,27 @@ describe("GraphRunService", () => {
     await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
 
     const run = storage.getRun(started.run.id);
-    if (run.status !== "passed") {
-      console.log(JSON.stringify({ status: run.status, actions: driver.actions, stepResults: run.stepResults.map((r: any) => ({ title: r.title, status: r.status, errorCode: r.errorCode, errorMessage: r.errorMessage, metadata: r.metadata })) }, null, 2));
-    }
     expect(run.status).toBe("passed");
     expect(driver.actions).toEqual([
-      { type: "tap", x: 324, y: 720 },
+      { type: "tap", x: 240, y: 360 },
       { type: "tap", x: 432, y: 576 },
       { type: "clear_text" },
       { type: "input_text", text: "自动化课堂" },
       { type: "tap", x: 891, y: 2256 }
     ]);
     expect(run.steps.map((step: ActionStep) => step.title)).toEqual(["快速视觉进入新建课堂", "创建课堂：课堂标题", "创建课堂：发布"]);
+    expect(run.steps[1]?.params).toEqual(
+      expect.objectContaining({
+        quality: expect.objectContaining({
+          status: "pass",
+          score: 0.88
+        }),
+        visualLocator: expect.objectContaining({
+          minScore: 0.72,
+          targetRole: "input"
+        })
+      })
+    );
     expect(run.stepResults.map((stepResult: { status: string }) => stepResult.status)).toEqual(["passed", "passed", "passed"]);
     expect(run.stepResults[1]?.metadata.graph.runtimeOverlay).toEqual(
       expect.objectContaining({
@@ -294,18 +498,27 @@ describe("GraphRunService", () => {
     await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
 
     const run = storage.getRun(started.run.id);
-    if (run.status !== "passed") {
-      console.log(JSON.stringify({ status: run.status, actions: driver.actions, stepResults: run.stepResults.map((r: any) => ({ title: r.title, status: r.status, errorCode: r.errorCode, errorMessage: r.errorMessage, metadata: r.metadata })) }, null, 2));
-    }
-    expect(run.status).toBe("passed");
+    expect(
+      run.status,
+      JSON.stringify({
+        actions: driver.actions,
+        stepResults: run.stepResults.map((step: { status: string; type: string; errorCode?: string; metadata?: any }) => ({
+          status: step.status,
+          type: step.type,
+          errorCode: step.errorCode,
+          graph: step.metadata?.graph
+        })),
+        events: run.events
+      }, null, 2)
+    ).toBe("passed");
+    expect(driver.actions).not.toContainEqual({ type: "tap", x: 97, y: 1620 });
     expect(driver.actions).toEqual([
       { type: "tap", x: 540, y: 1392 },
       { type: "clear_text" },
       { type: "input_text", text: "18743085313" },
-      { type: "tap", x: 540, y: 1536 },
+      { type: "tap", x: 540, y: 1522 },
       { type: "clear_text" },
       { type: "input_text", text: "secret" },
-      { type: "tap", x: 97, y: 1620 },
       { type: "tap", x: 540, y: 1224 }
     ]);
     expect(run.steps.map((step: ActionStep) => step.title)).toEqual([
@@ -314,6 +527,13 @@ describe("GraphRunService", () => {
       "账号密码登录：协议勾选",
       "账号密码登录：登录按钮"
     ]);
+    expect(run.steps.map((step: ActionStep) => step.params.locator)).toEqual([
+      "runtime-locator:phone_or_email_input",
+      "runtime-locator:password_input",
+      "runtime-locator:agreement_checkbox",
+      "runtime-locator:primary_login_button"
+    ]);
+    expect(run.steps.every((step: ActionStep) => step.params.coordinateSpace === "runtime")).toBe(true);
     expect(run.stepResults.at(-1)?.metadata.graph).toEqual(
       expect.objectContaining({
         edgeKey: expect.stringContaining("login.task.to.home"),
@@ -321,6 +541,85 @@ describe("GraphRunService", () => {
         toNodeName: "主页"
       })
     );
+  }, 15000);
+
+  it("expands runtime structural page task elements into runtime semantic steps", async () => {
+    context = await createContext();
+    const { storage } = context;
+    const driver = new LoginTaskGraphMockDriver(context.tempRoot);
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new LoginFormOcrService(() => driver.loginSnapshot()));
+    const { graph, targetNode } = seedLoginTaskNavigationGraph(storage);
+
+    const started = await service.start({
+      deviceSerial: driver.device.serial,
+      graphId: graph.id,
+      targetNodeId: targetNode.id,
+      startStrategy: "keep_current",
+      executionProfile: "fast_visual",
+      overlay: {
+        runtimeParams: {
+          phone: "18743085313",
+          password: "secret"
+        }
+      }
+    });
+
+    await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
+
+    const run = storage.getRun(started.run.id);
+    expect(
+      run.status,
+      JSON.stringify({
+        actions: driver.actions,
+        stepResults: run.stepResults.map((step: { status: string; type: string; errorCode?: string; metadata?: any }) => ({
+          status: step.status,
+          type: step.type,
+          errorCode: step.errorCode,
+          graph: step.metadata?.graph
+        })),
+        events: run.events
+      }, null, 2)
+    ).toBe("passed");
+    expect(run.steps.map((step: ActionStep) => ({ type: step.type, title: step.title, params: step.params }))).toEqual([
+      expect.objectContaining({
+        type: "input_text_to_element",
+        title: "账号密码登录：手机号输入框",
+        params: expect.objectContaining({
+          locator: "runtime-locator:phone_or_email_input",
+          locatorKind: "structural_locator",
+          structuralLocator: expect.objectContaining({ role: "phone_or_email_input" })
+        })
+      }),
+      expect.objectContaining({
+        type: "input_text_to_element",
+        title: "账号密码登录：密码输入框",
+        params: expect.objectContaining({
+          locator: "runtime-locator:password_input",
+          locatorKind: "structural_locator",
+          structuralLocator: expect.objectContaining({ role: "password_input" })
+        })
+      }),
+      expect.objectContaining({
+        type: "tap_on_image",
+        title: "账号密码登录：协议勾选",
+        params: expect.objectContaining({
+          locator: "runtime-locator:agreement_checkbox",
+          locatorKind: "structural_locator",
+          structuralLocator: expect.objectContaining({ role: "checkbox" })
+        })
+      }),
+      expect.objectContaining({
+        type: "tap_on_image",
+        title: "账号密码登录：登录按钮",
+        params: expect.objectContaining({
+          locator: "runtime-locator:primary_login_button",
+          locatorKind: "structural_locator",
+          targetText: "登录",
+          structuralLocator: expect.objectContaining({ role: "primary_button" })
+        })
+      })
+    ]);
   }, 15000);
 
   it("fails an appended target page task when its navigation target is not reached", async () => {
@@ -401,7 +700,7 @@ describe("GraphRunService", () => {
     const run = storage.getRun(started.run.id);
     expect(run.status).toBe("passed");
     expect(driver.actions).toEqual([
-      { type: "tap", x: 324, y: 720 },
+      { type: "tap", x: 240, y: 360 },
       { type: "tap", x: 810, y: 744 },
       { type: "tap", x: 240, y: 360 },
       { type: "tap", x: 240, y: 240 },
@@ -460,7 +759,7 @@ describe("GraphRunService", () => {
     const run = storage.getRun(started.run.id);
     expect(run.status).toBe("passed");
     expect(driver.actions).toEqual([
-      { type: "tap", x: 324, y: 720 },
+      { type: "tap", x: 240, y: 360 },
       { type: "tap", x: 918, y: 1092 }
     ]);
     expect(run.steps.map((step: ActionStep) => step.title)).toEqual([
@@ -510,6 +809,123 @@ describe("GraphRunService", () => {
         toNodeName: "目标页"
       })
     );
+  });
+
+  it("prefers an explicit start app package when restarting before graph execution", async () => {
+    context = await createContext();
+    const { storage } = context;
+    const driver = new GraphMockDriver(context.tempRoot);
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new FakeOcrService("首页"));
+    const { graph, targetNode } = seedGraph(storage);
+    const activeVersion = storage.getActiveBusinessGraphVersion(graph.id);
+    const homeNode = activeVersion.nodes.find((item: BusinessNode) => item.key === "home");
+    expect(homeNode).toBeTruthy();
+
+    const started = await service.start({
+      deviceSerial: driver.device.serial,
+      graphId: graph.id,
+      targetNodeId: targetNode.id,
+      startNodeId: homeNode!.id,
+      platform: "android",
+      startStrategy: "restart_app",
+      startAppPackageName: "com.override",
+      executionProfile: "fast_visual"
+    });
+
+    await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
+
+    const run = storage.getRun(started.run.id);
+    expect(run.config.startAppPackageName).toBe("com.override");
+    expect(driver.actions.slice(0, 2)).toEqual([
+      { type: "close_app", packageName: "com.override" },
+      { type: "launch_app", packageName: "com.override" }
+    ]);
+  }, 15000);
+
+  it("detects the real page after restart instead of trusting a synthetic root start node", async () => {
+    context = await createContext();
+    const { storage } = context;
+    const driver = new VisualGraphMockDriver(context.tempRoot);
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new FakeOcrService("首页"));
+    const { graph } = seedVisualRestartGraph(storage);
+    const activeVersion = storage.getActiveBusinessGraphVersion(graph.id);
+    const rootNode = activeVersion.nodes.find((item: BusinessNode) => item.key === "root");
+    const homeNode = activeVersion.nodes.find((item: BusinessNode) => item.key === "home");
+    expect(rootNode).toBeTruthy();
+    expect(homeNode).toBeTruthy();
+
+    const started = await service.start({
+      deviceSerial: driver.device.serial,
+      graphId: graph.id,
+      targetNodeId: homeNode!.id,
+      startNodeId: rootNode!.id,
+      platform: "android",
+      startStrategy: "restart_app",
+      startAppPackageName: "com.demo",
+      executionProfile: "fast_visual"
+    });
+
+    await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
+
+    const run = storage.getRun(started.run.id);
+    expect(
+      run.status,
+      JSON.stringify({
+        actions: driver.actions,
+        stepResults: run.stepResults.map((step: { status: string; type: string; errorCode?: string; metadata?: any }) => ({
+          status: step.status,
+          type: step.type,
+          errorCode: step.errorCode,
+          graph: step.metadata?.graph
+        })),
+        events: run.events
+      }, null, 2)
+    ).toBe("passed");
+    expect(driver.actions.slice(0, 2)).toEqual([
+      { type: "close_app", packageName: "com.demo" },
+      { type: "launch_app", packageName: "com.demo" }
+    ]);
+    expect(driver.actions).toHaveLength(2);
+    expect(run.stepResults).toHaveLength(1);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        status: "passed",
+        type: "wait",
+        metadata: expect.objectContaining({
+          graph: expect.objectContaining({
+            edgeKey: "target.validation",
+            fromNodeName: "首页",
+            toNodeName: "首页"
+          })
+        })
+      })
+    );
+  });
+
+  it("can start from the current foreground package when the page visually matches the graph", async () => {
+    context = await createContext();
+    const { storage } = context;
+    const driver = new CurrentDevicePackageGraphMockDriver(context.tempRoot);
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new DynamicFakeOcrService(() => driver.currentText));
+    const { graph, targetNode } = seedGraph(storage);
+
+    const started = await service.start({
+      deviceSerial: driver.device.serial,
+      graphId: graph.id,
+      targetNodeId: targetNode.id,
+      startStrategy: "keep_current",
+      startAppScope: "current_device"
+    });
+
+    await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
+
+    const run = storage.getRun(started.run.id);
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 240, y: 400 }]);
+    expect(driver.actions.some((action) => action.type === "launch_app")).toBe(false);
   });
 
   it("backs out of a recognized but unreachable transient page before planning to the target", async () => {
@@ -1227,10 +1643,9 @@ describe("GraphRunService", () => {
     expect(run.status).toBe("passed");
     expect(driver.actions).toEqual([
       { type: "tap", x: 270, y: 384 },
-      { type: "tap", x: 918, y: 1980 },
       { type: "back" },
       { type: "tap", x: 810, y: 384 },
-      { type: "tap", x: 918, y: 1980 }
+      { type: "tap", x: 240, y: 360 }
     ]);
     expect(run.stepResults.map((step: { status: string }) => step.status)).toEqual(["passed", "failed", "passed", "passed"]);
     expect(run.stepResults[2]?.metadata.graph).toEqual(
@@ -1291,7 +1706,7 @@ describe("GraphRunService", () => {
     );
     expect(driver.actions).toEqual([
       { type: "tap", x: 810, y: 300 },
-      { type: "tap", x: 918, y: 1980 }
+      { type: "tap", x: 240, y: 360 }
     ]);
     expect(run.stepResults[0]?.metadata.semantic).toEqual(
       expect.objectContaining({
@@ -1507,10 +1922,10 @@ async function createContext(): Promise<{ storage: any; tempRoot: string }> {
   return { storage, tempRoot };
 }
 
-function seedGraph(storage: any): { graph: { id: string }; targetNode: BusinessNode } {
+function seedGraph(storage: any, options: { targetApp?: { androidPackageName: string } } = { targetApp: { androidPackageName: "com.demo" } }): { graph: { id: string }; targetNode: BusinessNode } {
   const graph = storage.createBusinessGraph({
     appId: "demo-app",
-    targetApp: { androidPackageName: "com.demo" },
+    targetApp: options.targetApp,
     platformScope: "android",
     name: "Demo 图谱",
     status: "draft"
@@ -1569,6 +1984,70 @@ function seedGraph(storage: any): { graph: { id: string }; targetNode: BusinessN
   });
   storage.setActiveBusinessGraphVersion(graph.id, version.id);
   return { graph, targetNode: target };
+}
+
+function seedVisualRestartGraph(storage: any): { graph: { id: string }; homeNode: BusinessNode; targetNode: BusinessNode } {
+  const graph = storage.createBusinessGraph({
+    appId: "demo-app",
+    targetApp: { androidPackageName: "com.demo" },
+    platformScope: "android",
+    name: "Demo 视觉重启图谱",
+    status: "draft"
+  });
+  const version = storage.createBusinessGraphVersion({
+    graphId: graph.id,
+    sourceSummary: ["test-visual-restart"],
+    status: "draft"
+  });
+  const root = storage.createBusinessNode(node(version.id, "root", "Root", [matcher("package", "not.demo", 1)], []));
+  const home = storage.createBusinessNode(
+    node(
+      version.id,
+      "home",
+      "首页",
+      [matcher("package", "com.demo", 2), regionMatcher("ocr_text", "首页", 3)],
+      [textExpectation("home-visible", "首页")]
+    )
+  );
+  const target = storage.createBusinessNode(
+    node(
+      version.id,
+      "target",
+      "目标页",
+      [matcher("package", "com.demo", 2), regionMatcher("ocr_text", "目标页", 3)],
+      [textExpectation("target-visible", "目标页")]
+    )
+  );
+  storage.createOperationEdge({
+    graphVersionId: version.id,
+    fromNodeId: root.id,
+    toNodeId: home.id,
+    key: "root.to.home",
+    name: "启动",
+    intent: "启动到首页",
+    status: "active",
+    source: "manual_edit",
+    actionPolicies: [actionPolicy(launchStep())],
+    expectations: [textExpectation("expect-home", "首页")],
+    platformScope: "android",
+    reliabilityScore: 0.9
+  });
+  storage.createOperationEdge({
+    graphVersionId: version.id,
+    fromNodeId: home.id,
+    toNodeId: target.id,
+    key: "home.to.target",
+    name: "进入目标页",
+    intent: "点击目标按钮",
+    status: "active",
+    source: "manual_edit",
+    actionPolicies: [actionPolicy(tapOnElementStep())],
+    expectations: [textExpectation("expect-target", "目标页")],
+    platformScope: "android",
+    reliabilityScore: 0.9
+  });
+  storage.setActiveBusinessGraphVersion(graph.id, version.id);
+  return { graph, homeNode: home, targetNode: target };
 }
 
 function seedPageAssetStartGraph(storage: any): { graph: { id: string }; pageAssetNode: BusinessNode; targetNode: BusinessNode } {
@@ -1651,7 +2130,7 @@ function seedFastVisualGraph(storage: any, options: { edgePreconditions?: StepEx
       version.id,
       "home",
       "首页",
-      [matcher("package", "com.demo", 2), regionMatcher("ocr_text", "首页", 3)],
+      [matcher("package", "com.demo", 2), matcher("activity", "com.demo.HomeActivity", 3), matcher("ocr_text", "首页", 3)],
       [stateExpectation("home-state", "home")]
     )
   );
@@ -1660,7 +2139,7 @@ function seedFastVisualGraph(storage: any, options: { edgePreconditions?: StepEx
       version.id,
       "target",
       "目标页",
-      [matcher("package", "com.demo", 2), regionMatcher("ocr_text", "目标页", 3)],
+      [matcher("package", "com.demo", 2), matcher("activity", "com.demo.TargetActivity", 3), matcher("ocr_text", "目标页", 3)],
       [stateExpectation("target-state", "target")]
     )
   );
@@ -1681,7 +2160,9 @@ function seedFastVisualGraph(storage: any, options: { edgePreconditions?: StepEx
         type: "tap_on_image",
         enabled: true,
         params: {
-          region: { x: 20, y: 20, width: 20, height: 20 }
+          region: { x: 20, y: 20, width: 20, height: 20 },
+          targetText: "进入目标",
+          semanticArea: "content"
         },
         createdAt: "2026-06-20T00:00:00.000Z"
       })
@@ -1712,7 +2193,7 @@ function seedPageTaskGraph(storage: any): { graph: { id: string }; targetNode: B
       version.id,
       "home",
       "首页",
-      [matcher("package", "com.demo", 2), regionMatcher("ocr_text", "首页", 3)],
+      [matcher("package", "com.demo", 2), matcher("activity", "com.demo.HomeActivity", 3), matcher("ocr_text", "首页", 3)],
       [stateExpectation("home-state", "home")]
     )
   );
@@ -1721,7 +2202,7 @@ function seedPageTaskGraph(storage: any): { graph: { id: string }; targetNode: B
       version.id,
       "lesson-create",
       "新建课堂",
-      [matcher("package", "com.demo", 2), regionMatcher("ocr_text", "新建课堂", 3)],
+      [matcher("package", "com.demo", 2), matcher("activity", "com.demo.CreateLessonActivity", 3), matcher("ocr_text", "新建课堂", 3)],
       [stateExpectation("lesson-create-state", "lesson-create")],
       ["page-asset"]
     ),
@@ -1731,15 +2212,36 @@ function seedPageTaskGraph(storage: any): { graph: { id: string }; targetNode: B
         {
           id: "manual-title",
           label: "课堂标题",
+          targetText: "课堂标题",
           locator: "image-region:10,20,60,8",
           actionKind: "input",
           semanticArea: "content",
           coordinateSpace: "screen",
-          region: { x: 10, y: 20, width: 60, height: 8 }
+          region: { x: 10, y: 20, width: 60, height: 8 },
+          quality: {
+            status: "pass",
+            score: 0.88,
+            warnings: [],
+            candidates: [],
+            evidence: {
+              targetText: "课堂标题",
+              semanticArea: "content",
+              uniqueCandidate: true,
+              candidateCount: 1
+            }
+          },
+          visualLocator: {
+            minScore: 0.72,
+            targetRole: "input",
+            candidates: [
+              { source: "vision", label: "课堂标题", role: "input", score: 0.9, semanticArea: "content", region: { x: 10, y: 20, width: 60, height: 8 } }
+            ]
+          }
         },
         {
           id: "manual-publish",
           label: "发布",
+          targetText: "发布",
           locator: "image-region:75,90,15,8",
           actionKind: "tap",
           semanticArea: "bottom",
@@ -1813,7 +2315,9 @@ function seedPageTaskGraph(storage: any): { graph: { id: string }; targetNode: B
         type: "tap_on_image",
         enabled: true,
         params: {
-          region: { x: 20, y: 20, width: 20, height: 20 }
+          region: { x: 20, y: 20, width: 20, height: 20 },
+          targetText: "新建课堂",
+          semanticArea: "content"
         },
         createdAt: "2026-06-20T00:00:00.000Z"
       })
@@ -1844,51 +2348,13 @@ function seedLoginTaskNavigationGraph(storage: any): { graph: { id: string }; ta
       version.id,
       "login",
       "登录",
-      [matcher("package", "com.demo", 2), regionMatcher("ocr_text", "登录", 3)],
+      [matcher("package", "com.demo", 2), matcher("activity", "com.demo.LoginActivity", 3), matcher("ocr_text", "登录", 3)],
       [stateExpectation("login-state", "login")],
       ["page-asset"]
     ),
     metadata: {
       assetRecordingConfirmed: true,
-      assetRecordingManualElements: [
-        {
-          id: "manual-phone",
-          label: "手机号输入框",
-          locator: "image-region:6,56,88,4",
-          actionKind: "input",
-          semanticArea: "content",
-          coordinateSpace: "screen",
-          region: { x: 6, y: 56, width: 88, height: 4 }
-        },
-        {
-          id: "manual-password",
-          label: "密码输入框",
-          locator: "image-region:6,62,88,4",
-          actionKind: "input",
-          semanticArea: "content",
-          coordinateSpace: "screen",
-          region: { x: 6, y: 62, width: 88, height: 4 }
-        },
-        {
-          id: "manual-agreement",
-          label: "协议勾选",
-          locator: "image-region:6,66,6,3",
-          actionKind: "tap",
-          semanticArea: "content",
-          coordinateSpace: "screen",
-          region: { x: 6, y: 66, width: 6, height: 3 }
-        },
-        {
-          id: "manual-login-submit",
-          label: "登录按钮",
-          targetText: "登录",
-          locator: "image-region:6,47,88,8",
-          actionKind: "tap",
-          semanticArea: "content",
-          coordinateSpace: "screen",
-          region: { x: 6, y: 47, width: 88, height: 8 }
-        }
-      ],
+      assetRecordingManualElements: runtimeStructuralLoginElements(),
       assetRecordingPageTasks: [
         {
           id: "task-account-password-login",
@@ -1909,7 +2375,7 @@ function seedLoginTaskNavigationGraph(storage: any): { graph: { id: string }; ta
       version.id,
       "home",
       "主页",
-      [matcher("package", "com.demo", 2), regionMatcher("ocr_text", "主页", 3)],
+      [matcher("package", "com.demo", 2), matcher("activity", "com.demo.HomeActivity", 3), matcher("ocr_text", "主页", 3)],
       [stateExpectation("home-state", "home")],
       ["page-asset"]
     )
@@ -1943,6 +2409,74 @@ function seedLoginTaskNavigationGraph(storage: any): { graph: { id: string }; ta
   });
   storage.setActiveBusinessGraphVersion(graph.id, version.id);
   return { graph, targetNode: home, loginNode: login };
+}
+
+function runtimeStructuralLoginElements(): Array<Record<string, unknown>> {
+  return [
+    {
+      id: "manual-phone",
+      label: "手机号输入框",
+      targetText: "请输入手机号",
+      locator: "runtime-locator:phone_or_email_input",
+      locatorKind: "structural_locator",
+      actionKind: "input",
+      semanticArea: "content",
+      coordinateSpace: "runtime",
+      structuralLocator: {
+        strategy: "ocr_or_edittext",
+        role: "phone_or_email_input",
+        preferredPlaceholderText: "请输入手机号",
+        fallbackPolicy: "no_region_center_fallback"
+      }
+    },
+    {
+      id: "manual-password",
+      label: "密码输入框",
+      targetText: "请输入密码",
+      locator: "runtime-locator:password_input",
+      locatorKind: "structural_locator",
+      actionKind: "input",
+      semanticArea: "content",
+      coordinateSpace: "runtime",
+      structuralLocator: {
+        strategy: "ocr_or_edittext",
+        role: "password_input",
+        preferredPlaceholderText: "请输入密码",
+        fallbackPolicy: "no_region_center_fallback"
+      }
+    },
+    {
+      id: "manual-agreement",
+      label: "协议勾选",
+      targetText: "已阅读并同意",
+      locator: "runtime-locator:agreement_checkbox",
+      locatorKind: "structural_locator",
+      actionKind: "tap",
+      semanticArea: "content",
+      coordinateSpace: "runtime",
+      structuralLocator: {
+        strategy: "near_text",
+        role: "checkbox",
+        anchorText: "已阅读并同意",
+        clickTarget: "leading_checkbox"
+      }
+    },
+    {
+      id: "manual-login-submit",
+      label: "登录按钮",
+      targetText: "登录",
+      locator: "runtime-locator:primary_login_button",
+      locatorKind: "structural_locator",
+      actionKind: "tap",
+      semanticArea: "content",
+      coordinateSpace: "runtime",
+      structuralLocator: {
+        strategy: "ocr_text",
+        role: "primary_button",
+        text: "登录"
+      }
+    }
+  ];
 }
 
 function seedUnreachableGraph(storage: any): { graph: { id: string }; targetNode: BusinessNode } {
@@ -2144,7 +2678,7 @@ function seedClassGridRetryGraph(storage: any): { graph: { id: string }; targetN
       version.id,
       "home",
       "主页",
-      [matcher("package", "com.demo", 2), matcher("ocr_text", "主页", 2), matcher("ocr_text", "班级列表", 2)],
+      [matcher("package", "com.demo", 2), matcher("activity", "com.demo.HomeActivity", 3), matcher("ocr_text", "主页", 2), matcher("ocr_text", "班级列表", 2)],
       [textExpectation("home-visible", "主页")]
     )
   );
@@ -2153,7 +2687,7 @@ function seedClassGridRetryGraph(storage: any): { graph: { id: string }; targetN
       version.id,
       "class-detail",
       "班级详情",
-      [matcher("package", "com.demo", 2), matcher("ocr_text", "班级详情", 3), matcher("ocr_text", "无创建入口", 1), matcher("ocr_text", "创建课堂", 1)],
+      [matcher("package", "com.demo", 2), matcher("activity", "com.demo.ClassDetailActivity", 3), matcher("ocr_text", "班级详情", 3), matcher("ocr_text", "无创建入口", 1), matcher("ocr_text", "创建课堂", 1)],
       [textExpectation("class-detail-visible", "班级详情")]
     )
   );
@@ -2229,7 +2763,9 @@ function seedClassGridRetryGraph(storage: any): { graph: { id: string }; targetN
         title: "点击：创建课堂",
         params: {
           elementLabel: "创建课堂",
-          region: { x: 80, y: 80, width: 10, height: 5 }
+          region: { x: 80, y: 80, width: 10, height: 5 },
+          targetText: "创建课堂",
+          semanticArea: "content"
         },
         createdAt: "2026-06-22T00:00:00.000Z"
       })
@@ -2296,6 +2832,13 @@ function seedCompoundMenuGraph(storage: any): { graph: { id: string }; targetNod
         params: {
           elementLabel: "右上角更多",
           region: { x: 89, y: 5, width: 8, height: 6 },
+          visualLocator: {
+            minScore: 0.72,
+            targetRole: "button",
+            candidates: [
+              { source: "vision", label: "右上角更多", role: "button", score: 0.9, semanticArea: "top", region: { x: 90, y: 5, width: 6, height: 6 } }
+            ]
+          },
           outcomeType: "compound_navigation",
           compoundSteps: [
             {
@@ -2400,8 +2943,19 @@ function matcher(type: StateMatcher["type"], value: string, weight: number): Sta
 function regionMatcher(type: StateMatcher["type"], value: string, weight: number): StateMatcher {
   return {
     ...matcher(type, value, weight),
-    region: { x: 8, y: 5, width: 40, height: 12 }
+    region: { x: 10, y: 7, width: 25, height: 6 },
+    semanticArea: "top"
   };
+}
+
+function pgm(width: number, height: number, pixels: number[]): Buffer {
+  if (pixels.length !== width * height) {
+    throw new Error("Invalid PGM pixel count");
+  }
+  return Buffer.concat([
+    Buffer.from(`P5\n${width} ${height}\n255\n`, "ascii"),
+    Buffer.from(pixels)
+  ]);
 }
 
 function textExpectation(id: string, expected: string, extraParams: Record<string, unknown> = {}): StepExpectation {
@@ -2519,8 +3073,15 @@ class GraphMockDriver extends MockDriver {
   }
 }
 
+class VisualGraphMockDriver extends GraphMockDriver {
+  override async screenshot(serial: string): Promise<Buffer> {
+    await this.getDeviceInfo(serial);
+    return pgm(1080, 2400, Array.from({ length: 1080 * 2400 }, () => 255));
+  }
+}
+
 class CountingGraphMockDriver extends GraphMockDriver {
-  currentText = "首页";
+  currentText = "首页\n进入目标";
   dumpUiHierarchyCalls = 0;
 
   override async dumpUiHierarchy(): Promise<string> {
@@ -2538,7 +3099,7 @@ class CountingGraphMockDriver extends GraphMockDriver {
 }
 
 class PageTaskGraphMockDriver extends GraphMockDriver {
-  currentText = "首页";
+  currentText = "首页\n新建课堂";
   pickerOpen = false;
   private enteredText = "";
 
@@ -2548,7 +3109,7 @@ class PageTaskGraphMockDriver extends GraphMockDriver {
 
   override async performAction(serial: string, action: DeviceActionRequest): ReturnType<MockDriver["performAction"]> {
     const result = await MockDriver.prototype.performAction.call(this, serial, action);
-    if (action.type === "tap" && this.currentText === "首页") {
+    if (action.type === "tap" && this.currentText.includes("首页")) {
       this.currentText = "新建课堂";
       this.foreground = {
         packageName: "com.demo",
@@ -2586,6 +3147,11 @@ class PageTaskGraphMockDriver extends GraphMockDriver {
 
 class LoginTaskGraphMockDriver extends GraphMockDriver {
   currentText = "登录";
+  protected foreground = {
+    packageName: "com.demo",
+    activityName: "com.demo.LoginActivity",
+    componentName: "com.demo/com.demo.LoginActivity"
+  };
   private enteredPhone = "";
   private enteredPassword = "";
   private focusedField: "phone" | "password" | undefined;
@@ -2650,6 +3216,11 @@ class LoginTaskGraphMockDriver extends GraphMockDriver {
 
 class LoginSubmitStaysOnPageMockDriver extends GraphMockDriver {
   currentText = "登录";
+  protected foreground = {
+    packageName: "com.demo",
+    activityName: "com.demo.LoginActivity",
+    componentName: "com.demo/com.demo.LoginActivity"
+  };
   private enteredPhone = "";
   private enteredPassword = "";
   private focusedField: "phone" | "password" | undefined;
@@ -2734,6 +3305,36 @@ class OutsideAppGraphMockDriver extends GraphMockDriver {
     const result = await super.performAction(serial, action);
     if (action.type === "tap") {
       this.currentText = "目标页";
+    }
+    return result;
+  }
+}
+
+class CurrentDevicePackageGraphMockDriver extends GraphMockDriver {
+  currentText = "首页";
+
+  constructor(tempDir: string) {
+    super(tempDir);
+    this.foreground = {
+      packageName: "com.demo.flutter",
+      activityName: "com.demo.flutter.MainActivity",
+      componentName: "com.demo.flutter/.MainActivity"
+    };
+  }
+
+  override async dumpUiHierarchy(): Promise<string> {
+    return hierarchy(this.currentText);
+  }
+
+  override async performAction(serial: string, action: DeviceActionRequest): ReturnType<MockDriver["performAction"]> {
+    const result = await super.performAction(serial, action);
+    if (action.type === "tap") {
+      this.currentText = "目标页";
+      this.foreground = {
+        packageName: "com.demo.flutter",
+        activityName: "com.demo.flutter.TargetActivity",
+        componentName: "com.demo.flutter/.TargetActivity"
+      };
     }
     return result;
   }
@@ -3288,13 +3889,19 @@ class LoginFormOcrService implements OcrService {
       };
     }
     const boxes: OcrLayoutResult["boxes"] = [
-      { text: "登录", confidence: 0.98, x: 120, y: 120, width: 120, height: 64 }
+      { text: "登录", confidence: 0.98, x: 120, y: 120, width: 120, height: 64 },
+      { text: "登录", confidence: 0.98, x: 108, y: 1152, width: 864, height: 144 },
+      { text: "已阅读并同意", confidence: 0.98, x: 120, y: 1590, width: 180, height: 60 }
     ];
     if (snapshot.phone) {
-      boxes.push({ text: snapshot.phone, confidence: 0.98, x: 120, y: 1344, width: 360, height: 64 });
+      boxes.push({ text: snapshot.phone, confidence: 0.98, x: 108, y: 1320, width: 864, height: 144 });
+    } else {
+      boxes.push({ text: "请输入手机号", confidence: 0.98, x: 108, y: 1320, width: 864, height: 144 });
     }
     if (snapshot.password) {
-      boxes.push({ text: snapshot.password, confidence: 0.98, x: 120, y: 1488, width: 240, height: 64 });
+      boxes.push({ text: snapshot.password, confidence: 0.98, x: 108, y: 1460, width: 864, height: 124 });
+    } else {
+      boxes.push({ text: "请输入密码", confidence: 0.98, x: 108, y: 1460, width: 864, height: 124 });
     }
     return {
       text: snapshot.text,
@@ -3324,12 +3931,15 @@ class LessonFormOcrService implements OcrService {
         width: 1080,
         height: 2400,
         boxes: [
-          { text: "首页", confidence: 0.98, x: 120, y: 120, width: 120, height: 64 }
+          { text: "首页", confidence: 0.98, x: 120, y: 120, width: 120, height: 64 },
+          { text: "新建课堂", confidence: 0.98, x: 120, y: 320, width: 240, height: 80 }
         ]
       };
     }
     const boxes: OcrLayoutResult["boxes"] = [
-      { text: "新建课堂", confidence: 0.98, x: 120, y: 120, width: 220, height: 64 }
+      { text: "新建课堂", confidence: 0.98, x: 120, y: 120, width: 220, height: 64 },
+      { text: "课堂标题", confidence: 0.98, x: 180, y: 520, width: 504, height: 112 },
+      { text: "发布", confidence: 0.98, x: 810, y: 2220, width: 162, height: 72 }
     ];
     const enteredText = text
       .split("\n")
@@ -3417,10 +4027,13 @@ function hierarchy(text: string): string {
   const actionNode = normalized.includes("目标页")
     ? ""
     : '\n    <node index="1" text="进入目标" resource-id="com.demo:id/target" class="android.widget.Button" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[120,360][360,440]" />';
+  const loginFormNodes = normalized.includes("登录")
+    ? '\n    <node index="2" text="" resource-id="com.demo:id/phone_input" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[108,1320][972,1464]" />\n    <node index="3" text="" resource-id="com.demo:id/password_input" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[108,1460][972,1584]" />'
+    : "";
   return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
   <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2400]">
-    <node index="0" text="${text}" resource-id="${titleResourceId}" class="android.widget.TextView" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[120,200][360,280]" />${actionNode}
+    <node index="0" text="${text}" resource-id="${titleResourceId}" class="android.widget.TextView" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[120,200][360,280]" />${actionNode}${loginFormNodes}
   </node>
 </hierarchy>`;
 }

@@ -4,7 +4,7 @@ doc_type: design
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-06-25
+updated_at: 2026-07-05
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -1885,18 +1885,36 @@ type ExplorationConfig = {
 
 探索要求：
 
-- 探索候选优先级为：已保存 PageElement / PageAbility、带区域的 OCR 文本、视觉候选区域、随机安全区域。
+- 探索候选优先级为：临时页 / 阻断页处理规则、已保存 PageElement / PageAbility、带区域的 OCR 文本、视觉候选区域、随机安全区域。
 - 保守策略只执行已保存页面能力和低风险 OCR 候选；平衡策略允许视觉候选；激进策略才允许随机安全区域。
 - 每一步都必须重新采集 Observation，记录当前 PageModel、匹配分数、动作来源、候选过滤原因和异常状态。
 - 发现新页面、新元素或新边时只写入 draft / candidate，不能自动进入 active 页面资产。
-- 危险文案、危险区域和危险页面必须默认过滤，尤其是删除、退出登录、注销、支付、发布、提交、确认删除。
+- 危险文案、危险区域和危险页面必须默认过滤，尤其是删除、退出登录、注销、支付、发布、提交、确认删除；Dashboard 在默认危险词之外按 packageName 本地保存补充危险词，切换回同一包时合并默认词并回显。
 - 每次探索必须记录 seed 和动作序列。
 - 探索路径应能转换成普通 Flow，用于失败复现。
 - 报告中展示探索阶段和固定流程阶段的边界。
 - 黑名单区域用于避开退出登录、支付、删除数据等危险操作。
-- 当跳到桌面、系统页或其他 App 时，按 `appExitPolicy` 恢复或停止，并在报告中标记。
+- 当跳到桌面、系统页或其他 App 时，按 `appExitPolicy` 恢复或停止，并在报告中标记；默认 `back_to_app`，即优先返回目标 App。
 - 当连续多步识别为未知页、黑屏、无画面变化或 App 无响应时，按停止条件结束并保存证据。
+- App 内回退通过轻量页面签名栈实现：进入新页面时压入父页面签名；达到 `maxDepth`、当前页无候选或需要离开叶子页时生成 `backtrack` 候选执行返回；返回后从栈中弹出父页面，并在父页面标记已覆盖入口为 `path_explored`。
+- 动作后等待应采用动态稳定策略：先做短延迟，再轮询 Observation；若识别到 `加载中`、`正在加载`、`loading` 或 ProgressBar 等加载态，应继续等待，直到页面脱离加载态并出现稳定的有意义页面签名或达到上限。
+- 当候选动作执行后回到同一有意义页面签名时，探索器应在该页面签名下标记该候选为 `repeated_no_change` 并跳过，签名需过滤状态栏、时间日期、纯数字和运行时长等动态噪声。
 - 第一版可以复用 PageStateFlow 自动探索的 Observation、OCR、截图、PageMatcher 和报告证据管线，但必须作为独立“稳定性探索”入口和独立 Run 类型展示。
+
+第一版实现设计：
+
+- 后端新增 `StabilityExplorer` 服务，复用 `AutomationDeviceDriver`、`ObservationService`、`RunArtifactService` 和 Storage，不混入资产录制自动探索接口。
+- API：`POST /api/stability-explorations` 创建稳定性探索 run；现有 `GET /api/runs/:id`、`POST /api/runs/:id/stop` 负责查询和停止。
+- RunConfig 使用 `runKind=stability_exploration` 和 `stabilityExploration` 配置快照记录 packageName、startMode、seed、策略、最大时长、最大动作数、允许动作、App 外策略、回退策略、最大深度和危险词。
+- 起始方式支持 `launch_app`、`current_state`、`restart_app`，默认 `restart_app`。`current_state` 不下发启动命令，先采集 Observation 并校验前台包等于目标包；不满足时写入 `start_state_failed` 并停止，避免用户希望从当前页探索时被静默重启。
+- 每轮探索先执行 RuntimeInterceptor 临时页处理规则；命中已保存稳定页面资产时，优先把该页面已录入 PageAbility 转成探索候选，普通 OCR / 视觉 / 随机候选只作为兜底。
+- 默认回退策略为 `shallow`、默认最大深度为 4；Dashboard 可切换 `none`、`shallow`、`depth_first`，其中第一版 `shallow` 和 `depth_first` 都按最大深度回溯，后续再扩展候选穷尽顺序差异。
+- 每次动作后通过动态 post-action wait 等待页面稳定，避免 H5 / WebView 尚在加载时就把加载文案当作下一轮可点击候选。
+- 每个探索动作写入普通 `StepResult`，并在 `metadata.stabilityExploration` 中记录 actionIndex、候选来源、候选标签、当前包、过滤候选和 OCR 文本摘要。
+- 同一页面内因无实质变化被跳过的候选应进入 `skippedCandidates`，`skipReason=repeated_no_change`，便于从报告回溯为什么没有继续点击同一目标。
+- 已进入并回退的父页面入口应进入 `skippedCandidates`，`skipReason=path_explored`，便于从报告回溯覆盖路径。
+- 报告层新增“稳定性探索摘要”，展示目标包、seed、策略、动作进度、App 外策略、过滤候选和最近动作。
+- Dashboard 新增独立导航项“稳定性探索”，展示设备选择、目标包、策略配置、执行提示、停止按钮和报告入口。
 
 ### DES-034：步骤级预期验证与状态感知回放设计
 
@@ -3303,7 +3321,7 @@ type AiReadableAssetInfo = {
 
 - `PageModel.key` 是跨平台逻辑页面 key。`home` 只应该有一份 PageModel；Android 和 iOS 的识别信息分别存放在 `PlatformPageProfile`。
 - `PageElement.key` 是跨平台逻辑元素 key。`create_lesson_button` 只应该有一份 PageElement；人工圈选的视觉区域、OCR 文案和滚动容器配置优先作为通用定位依据。Android 的 resource-id、content-desc 和 iOS 的 accessibility id / label 只能放在平台 profile / debug evidence 中，不作为跨平台主定位。
-- `PageTask` 归属于单个 PageModel，用来描述页面内部的表单任务、选择器任务和提交任务。它只引用该页面已有 PageElement 或 wait 条件，不生成跨页边，也不创建新的 PageModel。
+- `PageTask` 归属于单个 PageModel，用来描述页面内部的表单任务、选择器任务和提交任务。它只引用该页面已有 PageElement 或 wait 条件，不生成跨页边，也不创建新的 PageModel。PageTask 引用的输入框、checkbox、主按钮如果属于固定表单语义控件，应使用运行时结构定位；历史圈选区域只可作为 `searchHintRegion`。
 - `commonMatchers` 和 `mobile-both` profile 存放跨端通用证据，例如 OCR 标题、页面主要截图区域、页面语义描述和稳定图像区域。
 - 平台录入 iOS 页面时，应先按逻辑 key、页面名称、通用 OCR、截图区域相似度和人工确认提示搜索已有 PageModel；命中后更新 iOS profile，不默认创建新逻辑页面。
 - 平台必须允许用户合并误创建的跨端重复页面，并把 transitions、elements、history 和 reports 迁移到保留的逻辑 key 下。
@@ -3318,6 +3336,7 @@ type AiReadableAssetInfo = {
 - `confirmedOcrTexts` 也必须经过平台噪声过滤。形如 `resource-id:*`、`package:*`、`class:*`、`android.*`、`XCUIElementType*` 的字符串即使被误填到 OCR 字段，也必须被拒绝，不能包装成正式 OCR matcher。
 - 截图重点区域是当前最推荐的页面身份基准：用户只圈固定、跨账号稳定的标题栏、固定入口、底部固定区或业务骨架区域；动态账号名、组织名、课程名、班级名、出勤数字、角标、广告和临时黑条应通过 `ignoreRegions` 或不圈选来规避。
 - PageElement / PageTransition 的主动作优先使用人工圈选的 `image-region`、`tap_on_image`、`tap_on_text`、`input_text`、`scroll_candidate`、`grid_candidate` 和复合 micro-step。`tap_on_element` / `android_uiautomator` / WDA selector 只能作为历史兼容或平台专属 fallback，不作为新核心流程默认策略。
+- 登录、注册、搜索、表单填写等固定语义控件不得把录入时的矩形区域作为执行真相。手机号 / 邮箱输入框、密码输入框、协议勾选、主登录按钮、搜索输入框、表单主按钮等应优先保存为 `runtime-locator:*` + `locatorKind=structural_locator` + `coordinateSpace=runtime`，并补充 `structuralLocator` 描述角色、邻近 OCR、placeholder、敏感输入校验和 `fallbackPolicy=no_region_center_fallback`。历史圈选区域只能迁移到 `searchHintRegion` 或 debug evidence，用于提示运行时搜索范围和人工排障，不得写入 `region`，也不得作为最终点击、输入或验证区域。
 - `launch_app` / `close_app` 使用 package / bundle 属于 App 启动上下文，不属于页面身份；允许保留。
 - 资产库普通列表和详情页默认只展示正式页面身份、页面能力、连接边和 AI 可读信息；raw visible texts、resource ids、accessibility ids、UI tree / WDA source 只能折叠到“原始采集与调试信息”。
 
@@ -3342,8 +3361,8 @@ AI 可理解资产模型：
 - PageTask 用于页面内的一组能力编排，例如 `创建课堂`、`发布公开课`、`编辑课堂信息`、`账号密码登录`。默认情况下它不是页面之间的连接边，PathPlanner 不直接使用 PageTask 搜索路线。
 - 当 PageTask 本身完成跨页面导航时，应建立一条 PageTransition 引用源页面的 `taskId`：例如 `登录 --账号密码登录--> 主页`。该连接边只记录 `taskMode=source_page_navigation`、`taskId` 和目标 PageModel；执行计划展开时再读取源 PageModel 的 PageTask steps。这样登录页仍按“页面能力 -> 页面任务 -> 连接边”三层维护，连接边不复制手机号输入框、密码输入框、协议勾选和登录按钮的底层 locator。
 - PageTaskStep 一期执行方式：
-  - `text_input`：引用输入型 PageElement，运行时先定位人工圈选区域 / 同语义区域文本；如果本次 `runtimeParams[valueParamKey]` 或步骤固定 `text` 有值，则清空并输入该值，否则跳过该步骤，保留页面默认值。Android fallback 会优先用 ADB Keyboard 的 `ADB_CLEAR_TEXT` / `ADB_INPUT_TEXT` 通道，执行后必须再次截图并用 OCR 验证目标文本已经出现在页面中，否则该步骤失败。
-  - `tap` / `submit`：引用按钮型 PageElement，运行时转成 `tap_on_image`、`tap_on_text` 或平台 fallback。
+  - `text_input`：引用输入型 PageElement。运行时先按 PageElement 的 locator 重新定位：`runtime-locator:*` 走结构定位 / OCR placeholder / 输入框形态；`image-region` 走 OCR、模板或视觉候选重定位；没有运行时重定位证据时失败，不按历史区域中心输入。如果本次 `runtimeParams[valueParamKey]` 或步骤固定 `text` 有值，则清空并输入该值，否则跳过该步骤，保留页面默认值。Android fallback 会优先用 ADB Keyboard 的 `ADB_CLEAR_TEXT` / `ADB_INPUT_TEXT` 通道，执行后必须再次截图并用 OCR 或敏感输入策略验证目标文本确实落在运行时定位到的输入控件中，否则该步骤失败。
+  - `tap` / `submit`：引用按钮型 PageElement。运行时转成 `tap_on_image`、`tap_on_text` 或 `runtime-locator:*` 结构点击；历史 `region` / `searchHintRegion` 只能限定搜索，不得作为最终点击坐标。
   - `wait`：不要求 elementId，按 `text` 或 `runtimeParams[valueParamKey]` 执行 `wait_until_state`；如果没有等待文本则跳过。
   - `picker_select`：引用选择器入口 PageElement；只有本次提供 `runtimeParams[valueParamKey]` 或步骤固定 `text` 时才执行。执行时先点击入口打开选择器，再通过 OCR 在选择器区域查找目标值，支持空格归一和 `45` + `分钟` 分裂框合并，命中后点击目标值并点击 `confirmText`（默认 `确定`）。未提供参数时保留页面默认选择。
   - `toggle_set`：引用开关 PageElement；只有本次提供 `desiredState` / `desiredStateParamKey` 或步骤固定 `text` 时才执行布尔状态设置。未提供参数时保留页面默认开关；若当前状态未知且目标是关闭，默认安全跳过，避免把关闭态误点成开启态。
@@ -3391,7 +3410,7 @@ collect Observation
 - OCR 可以作为弱信号或区域强信号；两个以上弱信号可兜底，但必须过滤常见按钮文案、状态标签、时间数字、平台 id 和技术标签。
 - image_region 只允许用户圈选的稳定区域参与强匹配，整屏截图相似度只能作为辅助证据。
 - 用户圈选标题栏、主按钮或固定模块后，系统必须保存该区域的相对位置；从区域内提取出的 OCR 文本只能在同一相对区域内命中，不能因为同样文字出现在底部列表、弹窗、广告或动态内容里就判定为同一页面。UI tree / WDA 文本只作为候选和调试，不生成正式页面身份。
-- 页面资产的唯一坐标标准是“屏幕截图相对坐标 + 语义区域 + 坐标空间”。`region` 继续保存用户当时圈选的原始相对矩形，`coordinateSpace` 标记其来源（当前默认 `screen`），`semanticArea` 只保留四个大区：`top`（顶部标题栏 / 固定顶部区）、`content`（中间内容 / 可滚动主体区）、`bottom`（底部固定导航 / 固定底部区）、`unknown`。后续匹配和执行不能只把 `x/y/width/height` 当成绝对真理，必须结合语义区域、文本、视觉结构和邻域漂移搜索。
+- 页面资产的唯一坐标标准是“屏幕截图相对坐标 + 语义区域 + 坐标空间”。`region` 继续保存用户当时圈选的原始相对矩形，`coordinateSpace` 标记其来源（当前默认 `screen`），`semanticArea` 只保留四个大区：`top`（顶部标题栏 / 固定顶部区）、`content`（中间内容 / 可滚动主体区）、`bottom`（底部固定导航 / 固定底部区）、`unknown`。后续匹配和执行不能只把 `x/y/width/height` 当成绝对真理，必须结合语义区域、文本、视觉结构、结构定位和邻域漂移搜索。`region_center` 只允许作为录入证据、调试信息和失败修复建议，不再作为默认执行兜底。
 - 新录入数据不再接受旧的细分语义区值，例如 `top_bar`、`top_action_area`、`bottom_action_bar`、`bottom_navigation`、`list_container`。当前资产量较少，历史异常数据按“删除后重新录入”处理，不做兼容映射和自动迁移，避免旧分类继续污染页面匹配和执行模型。
 - 带区域的 `ocr_text` matcher 必须优先按原始区域命中；如果 OCR 引擎升级、状态栏 inset 或截图采集导致框位小幅漂移，可以在同一 `semanticArea` 内做受控漂移匹配。跨语义区域出现的同文案不得命中，例如底部 Tab 的“消息”不能证明当前是消息页，内容区的“新建公开课”也不能证明标题栏页面身份成立。历史 `text` matcher 只用于兼容，新增资产不得再用 UI tree 文本作为正式身份。
 - image_region 允许配置 `ignoreRegions` 屏蔽重点区域内部的不稳定子区域，例如状态栏、动态课程条、账号名、班级名、未读数、时间或广告 banner。视觉评分应在屏蔽后再计算，避免页面主体稳定但动态内容变化导致误判；没有 baseline artifact 的截图区域只能作为 metadata 和人工编辑证据，不得自动成为 critical matcher。
@@ -3452,6 +3471,7 @@ target = PageModel | PageElement action | StructuredFlow
 - `compound_navigation` 执行时应把主动作和 `compoundSteps` 展开为同一个 PageTransition 内的 micro-step 序列：先执行用户圈选的 PageElement 动作，再按顺序执行等待文字 / 点击文字 / 点击区域等中间步骤，最后再动态等待目标 PageModel。任一 micro-step 失败时，该 PageTransition 失败，报告必须显示失败发生在哪个 micro-step。
 - `grid_candidate` 用于动态列表 / 两列网格这类“候选入口”。如果点击某个候选项进入下游页面后，后续路径失败，例如班级详情没有创建课堂入口，执行器应按策略返回候选源页面并把 `candidateIndex` 加一，重试同屏下一个候选；每次重试都必须记录 `grid_candidate_downstream_failed`、回退动作和候选序号。跨屏滚动翻页候选可作为后续增强。
 - `grid_candidate` 同时支持参数化指定候选。PageElement / PageTransition 可以把 `scrollProfile.targetKind` 设为 `item_text`，把 `scrollProfile.targetQuery` 设为 `{{className}}` 这类运行期模板；目标执行表单的“目标项 / 班级名”支持直接输入 `班级四十二号`，也支持 `className=班级四十二号` 这类键值格式，外部 API 继续通过 `RuntimeOverlay.runtimeParams` 传入参数。ExecutionPlan 只在本次运行中把模板替换为真实值，不修改 active graph 资产；如果历史资产仍是 `targetKind=nth_item`，但本次运行传入了 `className`，执行计划会临时升级为 `targetKind=item_text + targetQuery=className`。执行时先在人工圈选的列表 / 网格区域内 OCR 查找目标文本，根据文本中心推导所在网格 cell，再点击该 cell 的安全点；找不到时按 `scrollProfile.direction` / `scrollStepPercent` 滑动容器并重试。只要存在参数化 `targetQuery`，最终未命中就返回 `target_not_found`，不得 fallback 到第一个候选或普通 `candidateIndex` 点击。非参数化 `grid_candidate` 才适用“任选候选 / 下游失败后尝试下一个”的策略。
+- PageStateFlow 新增一层轻量结构抽象：`locatorKind` 区分 `text_locator`、`visual_locator`、`structural_locator` 和 `collection_item_locator`；PageElement 可记录 `dynamicMasks` 排除头像、昵称、数字、业务标题等动态内容；列表 / 网格类页面可以保存 `dynamicRegion`、`itemTemplate` 和 `parameterMapping`，把“班级列表中的某个班级卡片”表达为参数型能力，而不是把每个真实班级都录成一个固定 PageElement。当前阶段先落模型、录入、持久化、回显和执行参数透传，不一次性实现完整的班级列表参数化探索规划器。
 - 当路径缺失时，返回 route gap：缺失 source page、target page、transition 或 matcher，而不是伪造固定路径。
 - PathPlan 可以保存为 StructuredFlowSnapshot，用于回归和历史报告解释；后续页面资产变化不得改变历史报告。
 - 执行过程仍通过 TestRuleCore：PageTransition 会转换为 `beforeState -> action -> afterExpectations -> systemGuards -> evidence`。
@@ -3490,7 +3510,7 @@ select device
 资产录制一期只要求人工确认沉淀页面和页面内可操作元素，不在同一个页签内同时确认“去哪里”。
 
 - “页面能力”页签一期实际定位为当前页面可操作元素管理：
-  - 当前页先录入 PageElement：用户选择 `tap` / `scroll` / `long_press` / `input`，在当前页面截图上圈选区域，填写元素名称、出现条件和必要的滚动容器信息后保存。
+  - 当前页先录入 PageElement：用户选择 `tap` / `scroll` / `long_press` / `input`，在当前页面截图上圈选区域，填写元素名称、出现条件、locator 类型、必要的动态 mask / 结构定位证据和滚动容器信息后保存。
   - 手工标注区域必须保存为相对坐标 `image-region:x,y,width,height` locator，并写回源 PageModel 的 `assetRecordingManualElements`；重新识别该页面时，已保存元素优先显示为“已录入可操作元素”。
   - 已录入元素列表优先展示，用户可以编辑或删除；每个条目应展示自动裁剪到操作区域附近的截图缩略图，避免把整张手机截图压缩到不可读。编辑时表单直接展开在当前条目内，不跳到列表底部；列表底部提供“+ 添加可操作元素”入口。没有已录入元素时列表显示 `0 个元素` 和空态，不自动展开表单；用户点击添加后才出现一个编辑态条目，保存成功后回到已录入列表。
   - PageElement 可以保存“结果草稿”，但该草稿不等于正式 PageTransition。结果草稿至少包括：`navigate`（一次动作直接跳转页面）、`compound_navigation`（先打开菜单 / 弹层 / 中间状态，再继续操作后跳转页面）、`show_inline_state`（出现页面内菜单、弹窗、选择器等状态）、`local_state_change`（选择 / 确认后局部内容变化或状态消失）、`no_visible_change`（无明显视觉变化）。`navigate` / `compound_navigation` 可先保存目标页面草稿（targetNodeId / targetLabel）和结果说明，便于后续连接边流程复用；但保存 PageElement 时仍不创建正式 PageTransition。例如“点右上角加号 -> 弹出菜单 -> 点添加好友 -> 跳转添加好友页”应先把右上角加号记录为 `compound_navigation` 草稿；“点时长 -> 弹出时长选择框 -> 选择并确认后弹窗消失”应记录为 `show_inline_state` 或 `local_state_change`，不单独建页面。
@@ -3503,8 +3523,8 @@ select device
   - `navigate` 结果只允许从已保存 PageModel 中选择目标页面；源页面和目标页面都已确认保存时，连接边流程创建 `manual_edit / active` PageTransition，active navigate transition 才可进入 PathPlan / `planRoute`。
   - `compound_navigation` 结果也必须绑定已保存目标页面，并保存 `compoundSteps`。一期面板支持“等待某个文字出现 -> 点击该文字”的复合步骤表单，服务端会把它转换为 `wait_until_state` + 语义点击 micro-step；这种复合边可以进入 PathPlan / graph-run。
   - `show_inline_state`、`local_state_change`、`no_visible_change` 需要保存页面内状态描述、等待条件和证据；在 inline/local outcome schema 完整前，不进入默认路径规划。
-- `tap_on_image` 一期执行策略为：如果 action params 或 PageElement 带有人工确认的 `region`，执行器先读取 `targetText` / `text` 和 `semanticArea`，在当前截图 OCR 结果里寻找同一语义区域内的目标文字并点击 OCR 框中心；找不到目标文字或没有 OCR 布局时，再按人工区域中心点兜底点击。这样同一按钮在不同 OCR 引擎、状态栏高度或设备 inset 下发生小幅位移时，执行仍优先点运行时真实文字位置。没有人工 region 或可解释目标时不得盲猜图像目标。
-- 对于 `availability=after_scroll` 且 `semanticArea=content` 的 `tap_on_image`，执行器不得直接按旧坐标点击。它必须先在当前 OCR 布局中查找 `targetText`；若不可见，应按页面内容区的显露策略进行受控滑动，例如先回到内容区顶部 / 上方入口，再重新截图和 OCR 定位目标文字，命中后点击运行时 OCR 框中心。只有超过最大显露尝试后，才允许退回人工区域中心点或报告目标不可见。
+- `tap_on_image` 一期执行策略为：如果 action params 或 PageElement 带有人工确认的 `region`，执行器必须先读取 `targetText` / `text`、`semanticArea`、`visualLocator`、`locatorKind` 和结构证据，在当前截图 OCR、crop hash/template、视觉候选或结构候选中重定位目标，命中后点击运行时目标中心或安全点。找不到目标文字、模板或结构候选时不得再按人工区域中心点兜底点击，必须失败并在报告 / 修复 UI 中暴露 `runtime_relocation_required`、记录区域、记录中心点和定位证据缺失原因。这样换设备、状态栏高度变化或布局小改版时不会发生“看似执行了但点错区域”的假阳性。
+- 对于 `availability=after_scroll` 且 `semanticArea=content` 的 `tap_on_image`，执行器不得直接按旧坐标点击。它必须先在当前 OCR 布局中查找 `targetText`；若不可见，应按页面内容区的显露策略进行受控滑动，例如先回到内容区顶部 / 上方入口，再重新截图和 OCR 定位目标文字，命中后点击运行时 OCR 框中心。超过最大显露尝试或视觉 / 结构重定位失败后，应报告目标不可见或需要修复 locator，不得退回人工区域中心点。
 - 滑动区域不能按固定点击点表达，应保存为 `ScrollContainerProfile`：容器类型（单列列表 / 两列网格列表 / 横向 TabBar / 横向卡片或轮播 / 普通滚动区域）、滚动方向（vertical / horizontal）、布局列数、目标匹配方式（item 文案 / OCR 文案 / 语义名称 / 第 N 个 item / 图像区域）、目标 query 和找到后动作（点击列表项 / 点击 item 内控件 / 只验证出现）。例如首页班级卡片区是 `grid_list + vertical + columns=2 + targetKind=item_text + afterFoundAction=tap_item`，顶部“全部班级 / 我是教师 / 我是学生 / 待处理”是 `tab_bar + horizontal + targetKind=item_text + afterFoundAction=tap_item`。
 - 动态业务数据不得保存成页面身份，也不应保存成多个重复 PageElement。对于“进入指定班级”“搜索指定课程”“输入指定手机号”等场景，资产里保存模板化 query / value，例如 `targetQuery={{className}}` 或输入值 `{{phone}}`；运行时由 `RuntimeOverlay.runtimeParams` 注入真实参数。报告只记录使用过的参数 key 和执行结果，避免把账号、班级、课程标题等业务数据误沉淀为长期资产。
 - 如果可滚动目标是图标、图片按钮或其它没有稳定 OCR 文案的视觉元素，应录成 `scroll_candidate` + `targetKind=image_region`。用户圈选目标样本后，系统保存 `targetQuery=image-region:x,y,width,height` 和所在 `content` 容器；执行时循环“截图 -> 在内容区按图像区域 / 轻量视觉签名查找 -> 找到后执行 `afterFoundAction` -> 找不到则按配置滑动”，直到命中、触底或达到最大尝试次数。
@@ -3737,6 +3757,187 @@ Dashboard 设计：
 - Dashboard 不展示完整 token，不允许通过 MCP 参数传入 token。
 - TAPD API 不可用、鉴权失败、字段校验失败或附件上传失败时，不改变 Run 结果；只记录 `integration_failed` 事件和候选状态。
 - 报告导出应包含 TAPD bugId / link / submission state，但不得包含 TAPD 密钥。
+
+### DES-044：资产驱动巡检设计
+
+关联需求：REQ-044、REQ-042、REQ-009、REQ-011、REQ-012、REQ-013、REQ-014、REQ-032
+
+目标：新增一个基于 PageStateFlow 正式资产的巡检执行器。它不负责盲目发现全 App，也不负责替代目标任务，而是周期性验证“已录入的页面、区域、元素、连接边和页内任务是否仍然稳定可用”，并把失败项沉淀为可修复的资产健康问题。
+
+入口与执行边界：
+
+- Dashboard 新增“资产驱动巡检”入口，和“目标执行”“资产录制”“自动探索 / 稳定性探索”分开。
+- 巡检入口支持三种起点：当前设备当前页面、指定 PageModel、启动目标 App 后自动识别根页面。
+- 巡检开始必须先做 Observation 和 PageModel 匹配；只有稳定命中 active PageModel 后才执行巡检动作。
+- 未命中、低置信、多候选或 App 外状态默认进入诊断结果，不继续盲目点击。
+- 巡检只能执行 active PageElement / PageTransition / PageTask 或明确允许的低风险健康动作；自动 OCR / UI dump 候选只进入建议列表。
+
+核心模型：
+
+```ts
+type AssetPatrolPlan = {
+  id: string;
+  appId: string;
+  graphVersionId: string;
+  startMode: "current_state" | "target_page" | "launch_app";
+  pageScope: "current_page" | "reachable_pages" | "tagged_pages" | "all_active_pages";
+  maxDurationMs: number;
+  maxPages: number;
+  maxTransitions: number;
+  allowRiskyActions: boolean;
+  allowBusinessSubmit: boolean;
+  pageChecks: AssetPatrolPageCheck[];
+  transitionChecks: AssetPatrolTransitionCheck[];
+  taskChecks: AssetPatrolTaskCheck[];
+};
+```
+
+```ts
+type AssetPatrolPageCheck = {
+  pageModelId: string;
+  checks: Array<
+    | "page_match"
+    | "screenshot_region_match"
+    | "ocr_region_match"
+    | "content_scroll"
+    | "element_relocation"
+    | "performance_sample"
+  >;
+};
+```
+
+执行策略：
+
+- Page health：重新匹配当前 PageModel，记录分数、关键 matcher 命中、截图重点区域相似度、OCR 区域漂移和动态 mask 效果。
+- Region patrol：只在标注为 content / list / dynamic region 的区域内做上下滑动，滑动后重新识别当前页面，验证标题栏 / 底部导航 / 页面身份不被误判。
+- Element patrol：对 PageElement 只做重定位或低风险点击验证；若定位证据不足、只剩 `region_center`，直接标记 `runtime_relocation_required`。
+- Transition patrol：按 PageTransition 风险等级、最近失败率、业务优先级和预算排序执行；危险动作默认 skipped。
+- PageTask patrol：默认 dry-run，只验证步骤引用、参数解析、元素可定位和提交前路径；真实提交必须由 `allowBusinessSubmit=true` 或测试计划显式授权。
+- Recovery：连接边执行后尽量恢复到源页面或巡检起点；恢复失败时停止当前分支并记录 `recovery_failed`，不得继续未知状态探索。
+
+候选与修复：
+
+- 巡检过程中发现的新页面、新元素、新边、新页面变体和定位修复建议统一写入 candidate queue 或报告候选区。
+- 候选不得自动进入 active PageMatcher / PageElement / PageTransition / PageTask。
+- 失败项必须引用具体资产 ID，例如 `pageModelId`、`pageElementId`、`pageTransitionId`、`pageTaskId`，并提供跳转资产录制 / 修复 UI 的上下文。
+
+报告：
+
+- Report model 新增 `assetPatrolSummary`，包含页面覆盖率、元素定位成功率、连接边成功率、PageTask 可执行性、跳过原因、失败分类、耗时分布、性能指标和异常事件。
+- 每条巡检步骤记录 action source：`page_health`、`region_scroll`、`element_relocation`、`transition_validation`、`task_dry_run`。
+- HTML 报告按页面维度聚合展示资产健康状态，支持定位到失败截图、matcher 分数、locator 证据和修复入口。
+
+### DES-045：探索异常 AI 诊断与受控资产修复设计
+
+关联需求：REQ-045、REQ-044、REQ-043、REQ-042、REQ-039、REQ-032、REQ-012、REQ-013、REQ-014
+
+目标：在探索和巡检执行失败时，引入一个可审计、可回放、可限权的 AI 诊断层。AI 负责解释失败、生成结构化结论，并在策略允许时提出或自动应用受控资产修复；Runner 负责证据固化、策略裁决、验证修复和继续执行。AI 不直接点击设备，也不能裸写数据库或绕过资产质量门禁；所有 active 资产变更都必须通过 `AssetPatchService` 形成可审计、可回滚的新版本。
+
+核心流程：
+
+```mermaid
+flowchart TD
+  A["Runner 发现异常"] --> B["EvidencePackBuilder 固化证据并脱敏"]
+  B --> C["RuleClassifier 先做确定性分流"]
+  C --> D["AiDiagnosisService 调用模型"]
+  D --> E["DiagnosisPolicyEngine 裁决"]
+  E --> F["业务/运行异常: 缺陷候选 + 报告 + 重启/继续策略"]
+  E --> G["资产问题: AssetPatchCandidate / verified patch"]
+  G --> H["AssetPatchValidator 重新匹配/重定位/轻量验证"]
+  H --> I["验证通过: 自动应用或人工确认后继续执行"]
+  H --> J["验证失败或低置信: 人工复核"]
+```
+
+模型接入：
+
+- 新增 `AiModelClient` 抽象，默认实现 `openai_compatible` provider，配置项包括 `baseUrl`、`apiKey`、`model`、`timeoutMs`、`extraHeaders`、`temperature` 和 `maxTokens`。
+- 参考 ai-test / munk-ai 的 provider 设计：全局 provider + 可选角色 override；本平台第一阶段只需要 `diagnosis` 角色，后续可扩展 `asset_repair`、`defect_summary`、`report_review`。
+- 模型响应必须通过 JSON schema 校验；解析失败、超时、限流或低置信时回退到规则诊断，不影响原始失败证据和报告生成。
+- Prompt 中只传脱敏证据摘要、必要截图引用和资产摘要；大体量截图、日志和 HTML 报告通过 artifact ref 提供，不直接塞满上下文。
+
+诊断模型：
+
+```ts
+type AiDiagnosisClassification =
+  | "app_defect"
+  | "asset_stale"
+  | "test_plan_gap"
+  | "environment"
+  | "transient"
+  | "unsafe_to_decide";
+
+type AiDiagnosisResult = {
+  id: string;
+  runId: string;
+  stepId?: string;
+  provider: "openai_compatible" | "gemini" | "mock";
+  model: string;
+  classification: AiDiagnosisClassification;
+  confidence: number;
+  severity: "info" | "warning" | "error" | "critical";
+  reason: string;
+  evidenceRefs: string[];
+  recommendedAction:
+    | "report_defect"
+    | "restart_and_continue"
+    | "propose_asset_patch"
+    | "retry_once"
+    | "stop_for_review";
+  defectSummary?: AiDefectSummary;
+  assetPatchProposal?: AssetPatchProposal;
+};
+```
+
+证据包：
+
+```ts
+type AiDiagnosisEvidencePack = {
+  runId: string;
+  stepId?: string;
+  runKind: "target_run" | "structured_flow" | "asset_patrol" | "stability_exploration";
+  device: { serial: string; platform: "android" | "ios"; model?: string };
+  app: { packageName: string; versionName?: string; versionCode?: string };
+  actionHistory: Array<{ index: number; action: string; pageName?: string; result: string }>;
+  currentObservation: ObservationSummary;
+  previousObservation?: ObservationSummary;
+  pageMatchDiagnostics?: PageMatchDiagnostic[];
+  locatorDiagnostics?: LocatorDiagnostic[];
+  transitionContext?: PageTransitionContext;
+  taskContext?: PageTaskContext;
+  runtimeEvents: Array<{ type: string; severity: string; summary: string; artifactIds: string[] }>;
+  artifactRefs: Array<{ id: string; kind: "screenshot" | "log" | "video" | "html" | "json"; path: string }>;
+  assetSummary: PageStateAssetSummary;
+  redactionSummary: string[];
+};
+```
+
+资产修复候选：
+
+- `AssetPatchCandidate` 必须带 `diagnosisId`、`evidencePackId`、`targetAssetId`、`patchType`、`patchJson`、`status`、`validationResult`、`riskLevel`、`autoApplyPolicy` 和 `createdBy="ai"`.
+- 允许的 patch 类型包括：`add_ocr_alias`、`replace_screenshot_region`、`add_dynamic_mask`、`update_element_locator`、`add_transition_candidate`、`mark_asset_stale`、`add_page_variant_candidate`。
+- 禁止的 patch 类型包括：写入 package/activity/resource-id/accessibility-id 作为正式 matcher、把历史 `region_center` 提升为可执行定位、自动删除 active 资产、自动执行高风险业务动作。
+- Patch 默认 `draft`；通过本地验证后进入 `validated`。当 `autoApplyPolicy.enabled=true`、AI 置信度达到阈值、patch 类型在低风险白名单内、证据引用完整、验证通过且单次 Run 自动修复预算未耗尽时，`AssetPatchService` 可以把 patch 应用为新的 active 资产版本，状态记为 `auto_applied`；否则只能由人工在修复 UI 中确认后应用。
+
+MCP / REST 工具：
+
+- `get_run_context(runId, stepId?)`：读取运行上下文和最近动作。
+- `get_failure_evidence(runId, stepId?)`：读取脱敏证据包和 artifact refs。
+- `list_page_assets(filter)` / `get_page_asset(assetId)`：查询 PageStateFlow 资产摘要。
+- `propose_page_asset_patch(payload)`：提交 AI 资产修复 patch，默认 draft。
+- `validate_page_asset_patch(patchId, deviceSerial?)`：用当前设备或离线证据验证 patch。
+- `apply_page_asset_patch(patchId, mode)`：在人工确认或 `auto_apply_verified_patch` 策略通过时应用 patch，生成新的 active 资产版本。
+- `rollback_page_asset_patch(patchId)`：回滚该 patch 生成的 active 资产版本，并保留回滚记录。
+- `create_defect_candidate(payload)`：从 AI 诊断创建缺陷候选。
+- `continue_exploration(runId, strategy)`：在策略允许时重启 App、回到起点或继续下一分支。
+
+策略边界：
+
+- RuleClassifier 优先识别 crash / ANR / app exit / black screen / fatal log，这类高置信运行异常不进入自动资产修复。
+- 页面未匹配、边缺失、元素重定位失败等资产类问题可以调用 AI，并允许在高置信、低风险、可验证、策略开启时自动应用修复；自动修复预算必须受限，例如单次 Run 最多应用 N 个低风险 patch，连续失败后停止。
+- 自动应用前必须确认同一失败窗口内没有 crash / ANR / App 退出 / fatal log / 黑屏等运行异常，避免把真实 App 问题误修成资产问题。
+- 自动应用只能影响目标资产的局部版本，例如 OCR alias、截图重点区域、dynamic mask、PageElement locator、PageTransition candidate 或页面变体 candidate；删除 active 资产、启用 `region_center` 执行、扩大页面 matcher 到平台依赖字段等仍必须人工复核。
+- 所有 AI 诊断、prompt 摘要、模型响应、patch、验证结果都必须进入 Run artifact 和 HTML 报告，方便复盘。
+- AI 诊断失败不能覆盖原始 Runner 失败；它只追加解释和建议，不改写执行事实。
 
 ## 关键数据模型
 

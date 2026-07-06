@@ -219,6 +219,15 @@ export class AndroidActionExecutor {
       await this.inputText(serial, action.text);
       return adbInputResult();
     }
+    if (action.type === "input_keyevents") {
+      await this.inputTextWithKeyEvents(serial, action.text, action.intervalMs);
+      return {
+        ...adbInputResult(),
+        details: {
+          inputMethod: "keyevent"
+        }
+      };
+    }
     if (action.type === "clear_text") {
       if (await this.clearTextWithAdbKeyboard(serial)) {
         return adbInputResult();
@@ -328,6 +337,19 @@ export class AndroidActionExecutor {
     const escaped = escapeShellSingleQuoted(text);
     await this.shell(serial, ["sh", "-c", `cmd clipboard set text 'mobile-automation' '${escaped}'`], { timeoutMs: 5000 });
     await this.shell(serial, ["input", "keyevent", "KEYCODE_PASTE"], { timeoutMs: 5000 });
+  }
+
+  private async inputTextWithKeyEvents(serial: string, text: string, intervalMs = 35): Promise<void> {
+    for (const char of text) {
+      const keyCode = keyCodeForTextChar(char);
+      if (!keyCode) {
+        throw new Error(`Character cannot be typed through Android keyevents: ${JSON.stringify(char)}`);
+      }
+      await this.shell(serial, ["input", "keyevent", keyCode], { timeoutMs: 5000 });
+      if (intervalMs > 0) {
+        await this.sleep(intervalMs);
+      }
+    }
   }
 
   private async hasAdbKeyboard(serial: string): Promise<boolean> {
@@ -455,6 +477,31 @@ function adbInputResult(): DeviceActionResult {
   return {
     driverChannel: "adb_input"
   };
+}
+
+function keyCodeForTextChar(char: string): string | undefined {
+  if (/^[0-9]$/.test(char)) {
+    return `KEYCODE_${char}`;
+  }
+  if (/^[a-zA-Z]$/.test(char)) {
+    return `KEYCODE_${char.toUpperCase()}`;
+  }
+  if (char === " ") {
+    return "KEYCODE_SPACE";
+  }
+  if (char === ".") {
+    return "KEYCODE_PERIOD";
+  }
+  if (char === ",") {
+    return "KEYCODE_COMMA";
+  }
+  if (char === "-") {
+    return "KEYCODE_MINUS";
+  }
+  if (char === "\n") {
+    return "KEYCODE_ENTER";
+  }
+  return undefined;
 }
 
 function semanticFallbackResult(action: SemanticDeviceActionRequest["type"], backend: AndroidActionBackend | undefined): DeviceActionResult {

@@ -1,6 +1,7 @@
 import {
   PlayCircle,
   RefreshCw,
+  Square,
   Smartphone
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -20,6 +21,8 @@ import {
   AssetRecordingPanel,
   type AssetRecordingAutoExploreReport,
   type AssetRecordingCurrentPage,
+  type AssetRecordingDynamicMask,
+  type AssetRecordingLocatorKind,
   type AssetRecordingOperationTransitionDraft,
   type AssetRecordingPageElementDraft,
   type AssetRecordingPageTask,
@@ -29,7 +32,7 @@ import {
 import { CaseLibraryPanel, type FlowExpectationOverride } from "./components/CaseLibraryPanel";
 import { PreviewPanel } from "./components/PreviewPanel";
 import { GraphCandidatesPanel } from "./components/GraphCandidatesPanel";
-import { PageAssetsPanel } from "./components/PageAssetsPanel";
+import { PageAssetsPanel, parseRuntimeParams } from "./components/PageAssetsPanel";
 import { RuntimeInterceptorPanel, type RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
 import { StepsPanel } from "./components/StepsPanel";
 import { ToolStatusBar } from "./components/StepsPanelParts";
@@ -61,6 +64,77 @@ type ResizeStart = {
 
 type AutomationTab = "steps" | "runs";
 type NavItemId = AppNavItemId;
+type StabilityExplorerStrategy = "conservative" | "balanced" | "aggressive";
+type StabilityExplorerStartMode = "launch_app" | "current_state" | "restart_app";
+type StabilityExplorerAppExitPolicy = "back_to_app" | "restart_app" | "stop";
+type StabilityExplorerBacktrackStrategy = "none" | "shallow" | "depth_first";
+type AssetPatrolStartMode = "current_state" | "launch_app" | "restart_app";
+type AssetPatrolPageScope = "current_page" | "reachable_pages" | "tagged_pages" | "all_active_pages";
+type AssetPatrolPlanStep = {
+  id: string;
+  order: number;
+  kind: string;
+  label: string;
+  status: "ready" | "skipped" | "needs_repair";
+  skipReason?: string;
+  pageModelName?: string;
+  pageElementId?: string;
+  pageTransitionId?: string;
+  evidence?: Record<string, unknown>;
+};
+type AssetPatrolPlan = {
+  status: "ready" | "diagnostic";
+  startPage?: { id: string; name: string; score: number };
+  issues: Array<{ code: string; severity: "warning" | "error"; message: string }>;
+  steps: AssetPatrolPlanStep[];
+  summary: {
+    pageChecks: number;
+    elementChecks: number;
+    transitionChecks: number;
+    taskChecks: number;
+    skipped: number;
+    needsRepair: number;
+  };
+};
+type AssetRuntimeParamDefinition = {
+  key: string;
+  usages?: Array<{
+    pageModelName?: string;
+    taskName?: string;
+    stepLabel?: string;
+    fieldType?: string;
+    binding?: string;
+  }>;
+};
+type StabilityAllowedActions = {
+  tap: boolean;
+  swipe: boolean;
+  back: boolean;
+  wait: boolean;
+};
+type TextStorage = Pick<Storage, "getItem" | "setItem">;
+
+export const DEFAULT_STABILITY_EXPLORER_START_MODE: StabilityExplorerStartMode = "restart_app";
+export const DEFAULT_STABILITY_EXPLORER_APP_EXIT_POLICY: StabilityExplorerAppExitPolicy = "back_to_app";
+export const DEFAULT_STABILITY_EXPLORER_MAX_DEPTH = 4;
+export const DEFAULT_STABILITY_DANGEROUS_TEXT_PATTERNS = ["删除", "退出登录", "注销", "支付", "发布", "提交", "确认删除"];
+export const DEFAULT_STABILITY_DANGEROUS_TEXT = DEFAULT_STABILITY_DANGEROUS_TEXT_PATTERNS.join("\n");
+export const DEFAULT_ASSET_PATROL_PACKAGE_NAME = "cn.eeo.classin";
+export const DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES: Record<string, string> = {
+  phone: "18743085313",
+  mobile: "18743085313",
+  password: "eeo123",
+  pwd: "eeo123",
+  className: "班级四十二号",
+  lessonName: "班级四十二号",
+  duration: "30",
+  recordClassroom: "true",
+  recordLive: "false"
+};
+export const ASSET_PATROL_PRIMARY_ACTION_LABEL = "执行资产体检";
+export const ASSET_DRIVEN_TEST_ACTION_LABEL = "开始资产测试";
+export const ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE = "当前为诊断模式：只检查页面匹配、元素重定位、边和任务编排质量，不会触发页面点击或输入。";
+const STABILITY_DANGEROUS_TEXT_BY_PACKAGE_STORAGE_KEY = "mobile-automation.stabilityDangerousTextByPackage.v1";
 type RecordingWorkspaceStyle = CSSProperties & {
   "--recording-preview-width"?: string;
   "--asset-recording-preview-width"?: string;
@@ -164,10 +238,18 @@ type CurrentPageMatcherEvidenceApi = {
   matched?: boolean;
 };
 
+type CurrentPagePollutionApi = {
+  code?: string;
+  message?: string;
+  pollutionTexts?: Array<{ text?: string }>;
+  affectedMatchers?: Array<{ nodeName?: string; matcherId?: string; type?: string; expected?: string }>;
+};
+
 type CurrentPageMatcherDiagnosticsApi = {
   status?: string;
   matchedEvidence?: CurrentPageMatcherEvidenceApi[];
   missingEvidence?: CurrentPageMatcherEvidenceApi[];
+  pollution?: CurrentPagePollutionApi;
   topCandidate?: {
     nodeId?: string;
     key?: string;
@@ -178,9 +260,11 @@ type CurrentPageMatcherDiagnosticsApi = {
 
 type CurrentPageAssetApiResponse = {
   result?: {
-    status: "matched" | "draft_created" | "draft_reused" | "draft_candidate";
+    status: "matched" | "draft_created" | "draft_reused" | "draft_candidate" | "blocked";
     visualPageName?: string;
     matcherDiagnostics?: CurrentPageMatcherDiagnosticsApi;
+    blocker?: CurrentPagePollutionApi;
+    message?: string;
     match: {
       status: string;
       score: number;
@@ -337,8 +421,16 @@ export function assetOperationTransitionRequestBody(
     outcomeType: draft.outcomeType,
     targetLabel: draft.targetLabel,
     platformScope: context.platformScope,
+    ...(draft.tapPointPercent ? { tapPointPercent: draft.tapPointPercent } : {}),
     ...(draft.compoundSteps?.length ? { compoundSteps: draft.compoundSteps } : {}),
-    ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {})
+    ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {}),
+    ...(draft.locatorKind ? { locatorKind: draft.locatorKind } : {}),
+    ...(draft.dynamicMasks?.length ? { dynamicMasks: draft.dynamicMasks } : {}),
+    ...(draft.structuralLocator ? { structuralLocator: draft.structuralLocator } : {}),
+    ...(draft.dynamicRegion ? { dynamicRegion: draft.dynamicRegion } : {}),
+    ...(draft.itemTemplate ? { itemTemplate: draft.itemTemplate } : {}),
+    ...(draft.transitionKind ? { transitionKind: draft.transitionKind } : {}),
+    ...(draft.parameterMapping ? { parameterMapping: draft.parameterMapping } : {})
   };
 }
 
@@ -362,8 +454,18 @@ export function assetPageElementRequestBody(
     outcomeLabel: draft.outcomeLabel,
     targetNodeId: draft.targetNodeId,
     targetLabel: draft.targetLabel,
+    ...(draft.tapPointPercent ? { tapPointPercent: draft.tapPointPercent } : {}),
     ...(draft.compoundSteps?.length ? { compoundSteps: draft.compoundSteps } : {}),
-    ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {})
+    ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {}),
+    ...(draft.quality ? { quality: draft.quality } : {}),
+    ...(draft.visualLocator ? { visualLocator: draft.visualLocator } : {}),
+    ...(draft.locatorKind ? { locatorKind: draft.locatorKind } : {}),
+    ...(draft.dynamicMasks?.length ? { dynamicMasks: draft.dynamicMasks } : {}),
+    ...(draft.structuralLocator ? { structuralLocator: draft.structuralLocator } : {}),
+    ...(draft.dynamicRegion ? { dynamicRegion: draft.dynamicRegion } : {}),
+    ...(draft.itemTemplate ? { itemTemplate: draft.itemTemplate } : {}),
+    ...(draft.transitionKind ? { transitionKind: draft.transitionKind } : {}),
+    ...(draft.parameterMapping ? { parameterMapping: draft.parameterMapping } : {})
   };
 }
 
@@ -394,10 +496,423 @@ export function assetPageTaskTransitionRequestBody(
 }
 
 export function validateAssetPageElementDraftForSave(draft: AssetRecordingPageElementDraft): string | undefined {
+  if ((draft.outcomeType === "navigate" || draft.outcomeType === "compound_navigation") && !draft.targetNodeId) {
+    return "跳转页面类型必须选择已保存的目标页面；如果只是普通点击，请把结果类型改为本页状态变化或无可见变化";
+  }
+  const region = imageRegionMetadata(draft.locator);
+  if (region && isRegionTooSmallForPageElement(region)) {
+    return "圈选区域过小，请重新圈选完整的可识别元素区域";
+  }
   if (draft.outcomeType === "navigate" && !draft.targetNodeId?.trim()) {
     return "跳转页面类型必须选择已保存的目标页面，否则不会进入路径规划";
   }
   return undefined;
+}
+
+export function stabilityExplorerRequestBody(input: {
+  selectedSerial: string;
+  packageName: string;
+  maxDurationMinutes: number;
+  maxActions: number;
+  strategy: StabilityExplorerStrategy;
+  startMode: StabilityExplorerStartMode;
+  seed: string;
+  allowedActions: StabilityAllowedActions;
+  appExitPolicy: StabilityExplorerAppExitPolicy;
+  backtrackStrategy: StabilityExplorerBacktrackStrategy;
+  maxDepth: number;
+  dangerousTextPatternsText: string;
+}) {
+  return {
+    deviceSerial: input.selectedSerial,
+    packageName: input.packageName.trim(),
+    maxDurationMs: Math.max(1, Math.floor(input.maxDurationMinutes || 1)) * 60_000,
+    maxActions: Math.max(1, Math.floor(input.maxActions || 1)),
+    strategy: input.strategy,
+    startMode: input.startMode,
+    seed: input.seed.trim() || undefined,
+    allowedActions: (["tap", "swipe", "back", "wait"] as const).filter((action) => input.allowedActions[action]),
+    appExitPolicy: input.appExitPolicy,
+    backtrackStrategy: input.backtrackStrategy,
+    maxDepth: Math.max(1, Math.floor(input.maxDepth || 1)),
+    dangerousTextPatterns: dangerousTextPatternsFromText(input.dangerousTextPatternsText),
+    stopOnCrash: true,
+    stopOnAnr: true,
+    stopOnBlackScreen: true,
+    stopOnUnknownPageStuck: true
+  };
+}
+
+export function assetPatrolPageScopeOptions(): Array<{ value: AssetPatrolPageScope; label: string; disabled: boolean }> {
+  return [
+    { value: "current_page", label: "当前页", disabled: false },
+    { value: "reachable_pages", label: "可达页面（后续接入）", disabled: true },
+    { value: "tagged_pages", label: "标记页面（后续接入）", disabled: true },
+    { value: "all_active_pages", label: "全部已激活页面（后续接入）", disabled: true }
+  ];
+}
+
+export function assetPatrolRequestBody(input: {
+  selectedSerial: string;
+  packageName: string;
+  startMode: AssetPatrolStartMode;
+  pageScope: AssetPatrolPageScope;
+  maxDurationMinutes: number;
+  maxTransitions: number;
+  allowRiskyActions: boolean;
+  allowBusinessSubmit: boolean;
+  dangerousTextPatternsText: string;
+  runtimeParamsText?: string;
+}) {
+  const runtimeParams = parseRuntimeParams(input.runtimeParamsText);
+  return {
+    deviceSerial: input.selectedSerial,
+    packageName: input.packageName.trim(),
+    startMode: input.startMode,
+    pageScope: supportedAssetPatrolPageScope(input.pageScope),
+    maxDurationMs: Math.max(1, Math.floor(input.maxDurationMinutes || 1)) * 60_000,
+    maxTransitions: Math.max(0, Math.floor(input.maxTransitions || 0)),
+    allowRiskyActions: input.allowRiskyActions,
+    allowBusinessSubmit: input.allowBusinessSubmit,
+    dangerousTextPatterns: dangerousTextPatternsFromText(input.dangerousTextPatternsText),
+    ...(runtimeParams ? { runtimeParams } : {})
+  };
+}
+
+export function assetPatrolRuntimeParamsTemplate(parameters: Array<Pick<AssetRuntimeParamDefinition, "key">>): string {
+  return parameters
+    .map((parameter) => parameter.key.trim())
+    .filter(Boolean)
+    .map((key) => `${key}=${defaultAssetPatrolRuntimeParamValue(key)}`)
+    .join("\n");
+}
+
+export function mergeAssetPatrolRuntimeParamsText(currentText: string, parameters: Array<Pick<AssetRuntimeParamDefinition, "key">>): string {
+  const existingKeys = runtimeParamKeysFromText(currentText);
+  const currentLines = currentText
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => defaultedRuntimeParamLine(line));
+  const missingLines = parameters
+    .map((parameter) => parameter.key.trim())
+    .filter((key) => key && !existingKeys.has(key))
+    .map((key) => `${key}=${defaultAssetPatrolRuntimeParamValue(key)}`);
+  return [...currentLines, ...missingLines].join("\n");
+}
+
+function defaultedRuntimeParamLine(line: string): string {
+  const separator = line.indexOf("=");
+  if (separator < 0) {
+    return line;
+  }
+  const key = line.slice(0, separator).trim();
+  const value = line.slice(separator + 1).trim();
+  if (!key || value) {
+    return line;
+  }
+  return `${key}=${defaultAssetPatrolRuntimeParamValue(key)}`;
+}
+
+function defaultAssetPatrolRuntimeParamValue(key: string): string {
+  const normalized = key.trim();
+  if (DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES[normalized] !== undefined) {
+    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES[normalized];
+  }
+  const lower = normalized.toLowerCase();
+  if (lower.includes("phone") || lower.includes("mobile")) {
+    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.phone;
+  }
+  if (lower.includes("password") || lower.includes("passwd") || lower.includes("pwd")) {
+    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.password;
+  }
+  if (lower.includes("classname") || lower.includes("class_name")) {
+    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.className;
+  }
+  if (lower.includes("lessonname") || lower.includes("lesson_name") || lower.includes("title")) {
+    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.lessonName;
+  }
+  if (lower.includes("duration")) {
+    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.duration;
+  }
+  if (lower.includes("recordclassroom")) {
+    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.recordClassroom;
+  }
+  if (lower.includes("recordlive")) {
+    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.recordLive;
+  }
+  return "";
+}
+
+export function assetPatrolRuntimeParamValuesFromText(value: string): Record<string, string> {
+  return Object.fromEntries(
+    value
+      .split(/[\n,，;]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const separator = item.indexOf("=");
+        if (separator < 0) {
+          return undefined;
+        }
+        const key = item.slice(0, separator).trim();
+        return key ? [key, item.slice(separator + 1).trim()] as const : undefined;
+      })
+      .filter((item): item is readonly [string, string] => Boolean(item))
+  );
+}
+
+export function setAssetPatrolRuntimeParamValue(currentText: string, key: string, value: string): string {
+  const normalizedKey = key.trim();
+  if (!normalizedKey) {
+    return currentText;
+  }
+  const lines = currentText
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  let replaced = false;
+  const nextLines = lines.map((line) => {
+    const separator = line.indexOf("=");
+    const lineKey = separator >= 0 ? line.slice(0, separator).trim() : "";
+    if (lineKey !== normalizedKey) {
+      return line;
+    }
+    replaced = true;
+    return `${normalizedKey}=${value}`;
+  });
+  if (!replaced) {
+    nextLines.push(`${normalizedKey}=${value}`);
+  }
+  return nextLines.join("\n");
+}
+
+export function assetPatrolRuntimeParamDefinitionsForDisplay(
+  parameters: AssetRuntimeParamDefinition[],
+  currentPageName?: string
+): AssetRuntimeParamDefinition[] {
+  const normalizedCurrentPageName = currentPageName?.trim();
+  return [...parameters].sort((left, right) => {
+    const leftCurrentPage = runtimeParamUsedByPage(left, normalizedCurrentPageName);
+    const rightCurrentPage = runtimeParamUsedByPage(right, normalizedCurrentPageName);
+    if (leftCurrentPage !== rightCurrentPage) {
+      return Number(rightCurrentPage) - Number(leftCurrentPage);
+    }
+    return runtimeParamPriority(left.key) - runtimeParamPriority(right.key);
+  });
+}
+
+export function assetPatrolRuntimeParamUsageSummary(parameter: AssetRuntimeParamDefinition): string {
+  const usage = parameter.usages?.[0];
+  return [usage?.pageModelName, usage?.taskName, usage?.stepLabel].filter(Boolean).join(" / ") || parameter.key;
+}
+
+export function assetPatrolRuntimeParamPlaceholder(parameter: AssetRuntimeParamDefinition): string {
+  const key = parameter.key.toLowerCase();
+  const usageText = assetPatrolRuntimeParamUsageSummary(parameter).toLowerCase();
+  if (key.includes("password") || usageText.includes("密码")) {
+    return "请输入密码";
+  }
+  if (key.includes("phone") || key.includes("mobile") || usageText.includes("手机号")) {
+    return "手机号/邮箱";
+  }
+  if (key.includes("duration") || usageText.includes("时长")) {
+    return "例如：30";
+  }
+  if (key.includes("record") || parameter.usages?.some((usage) => usage.binding === "desired_state")) {
+    return "true / false";
+  }
+  if (key.includes("name") || key.includes("title") || usageText.includes("标题")) {
+    return "填写测试数据";
+  }
+  return "填写运行值";
+}
+
+function runtimeParamUsedByPage(parameter: AssetRuntimeParamDefinition, pageName: string | undefined): boolean {
+  if (!pageName) {
+    return false;
+  }
+  return parameter.usages?.some((usage) => usage.pageModelName === pageName) ?? false;
+}
+
+function runtimeParamPriority(key: string): number {
+  const normalized = key.toLowerCase();
+  if (normalized.includes("phone") || normalized.includes("mobile")) {
+    return 10;
+  }
+  if (normalized.includes("password")) {
+    return 20;
+  }
+  if (normalized.includes("classname")) {
+    return 30;
+  }
+  return 100;
+}
+
+function runtimeParamKeysFromText(value: string): Set<string> {
+  return new Set(
+    value
+      .split(/[\n,，;]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const separator = item.indexOf("=");
+        return separator >= 0 ? item.slice(0, separator).trim() : "";
+      })
+      .filter(Boolean)
+  );
+}
+
+function supportedAssetPatrolPageScope(value: AssetPatrolPageScope): AssetPatrolPageScope {
+  return value === "current_page" ? value : "current_page";
+}
+
+export function loadStabilityDangerousTextForPackage(packageName: string, storage: TextStorage | undefined = browserTextStorage()): string {
+  const normalizedPackageName = packageName.trim();
+  if (!normalizedPackageName || !storage) {
+    return DEFAULT_STABILITY_DANGEROUS_TEXT;
+  }
+  const savedText = readDangerousTextByPackage(storage)[normalizedPackageName];
+  return savedText ? mergeDangerousText(DEFAULT_STABILITY_DANGEROUS_TEXT, savedText) : DEFAULT_STABILITY_DANGEROUS_TEXT;
+}
+
+export function saveStabilityDangerousTextForPackage(packageName: string, text: string, storage: TextStorage | undefined = browserTextStorage()): void {
+  const normalizedPackageName = packageName.trim();
+  if (!normalizedPackageName || !storage) {
+    return;
+  }
+  const byPackage = readDangerousTextByPackage(storage);
+  byPackage[normalizedPackageName] = mergeDangerousText(text);
+  storage.setItem(STABILITY_DANGEROUS_TEXT_BY_PACKAGE_STORAGE_KEY, JSON.stringify(byPackage));
+}
+
+function browserTextStorage(): TextStorage | undefined {
+  try {
+    return typeof window === "undefined" ? undefined : window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function readDangerousTextByPackage(storage: TextStorage): Record<string, string> {
+  try {
+    const raw = storage.getItem(STABILITY_DANGEROUS_TEXT_BY_PACKAGE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, string> : {};
+  } catch {
+    return {};
+  }
+}
+
+function dangerousTextPatternsFromText(text: string): string[] {
+  return text
+    .split(/\n|,|，/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function mergeDangerousText(...texts: string[]): string {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const text of texts) {
+    for (const pattern of dangerousTextPatternsFromText(text)) {
+      const key = pattern.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(pattern);
+      }
+    }
+  }
+  return merged.join("\n");
+}
+
+export function stabilityRunProgressSummary(run: TestRun | null | undefined) {
+  if (!run?.config.stabilityExploration) {
+    return undefined;
+  }
+  const latestStep = run.stepResults.at(-1);
+  const metadata = latestStep?.metadata?.stabilityExploration;
+  const stabilityMetadata = isStabilityStepMetadata(metadata) ? metadata : undefined;
+  return {
+    packageName: run.config.stabilityExploration.packageName,
+    seed: run.config.stabilityExploration.seed,
+    progressText: `${run.stepResults.length} / ${run.config.stabilityExploration.maxActions}`,
+    latestAction: stabilityMetadata?.candidateLabel ?? "-",
+    latestSource: stabilityMetadata?.candidateSource ?? "-",
+    currentPackage: stabilityMetadata?.currentPackage ?? run.config.stabilityExploration.packageName,
+    skippedCandidates: stabilityMetadata?.skippedCandidates?.length ?? 0
+  };
+}
+
+export function assetPatrolRunProgressSummary(run: TestRun | null | undefined) {
+  if (!run?.config.assetPatrol) {
+    return undefined;
+  }
+  const latestStep = run.stepResults.at(-1);
+  const metadata = latestStep?.metadata?.assetPatrol;
+  const patrolMetadata = isAssetPatrolStepMetadata(metadata) ? metadata : undefined;
+  const failed = run.stepResults.filter((step) => step.status === "failed").length;
+  const skipped = run.stepResults.filter((step) => step.status === "skipped").length;
+  const needsRepair = run.stepResults.filter((step) => {
+    const item = step.metadata?.assetPatrol;
+    return isAssetPatrolStepMetadata(item) && (item.status === "needs_repair" || item.skipReason === "runtime_relocation_required");
+  }).length;
+  return {
+    packageName: run.config.assetPatrol.packageName,
+    progressText: `${run.stepResults.length} 项`,
+    latestCheck: patrolMetadata?.label ?? "-",
+    latestKind: patrolMetadata?.kind ?? "-",
+    pageName: patrolMetadata?.pageModelName ?? patrolMetadata?.startPage?.name ?? "-",
+    failed,
+    skipped,
+    needsRepair
+  };
+}
+
+export function assetPatrolPanelDisplayMode(input: { plan?: AssetPatrolPlan; currentRun?: TestRun }): "run" | "plan" | "empty" {
+  if (input.currentRun && isActiveRunStatus(input.currentRun)) {
+    return "run";
+  }
+  if (input.plan) {
+    return "plan";
+  }
+  if (input.currentRun) {
+    return "run";
+  }
+  return "empty";
+}
+
+export function assetPatrolPlanRequiresBusinessSubmit(plan: AssetPatrolPlan | undefined): boolean {
+  if (!plan || plan.status !== "ready") {
+    return false;
+  }
+  return plan.steps.some((step) => step.kind === "task_dry_run" || step.skipReason === "business_submit_disabled");
+}
+
+export function assetPatrolPreviewMessage(plan: AssetPatrolPlan): string {
+  return plan.status === "ready" ? `已生成资产体检计划：${plan.steps.length} 项` : plan.issues[0]?.message ?? "资产体检需要先修复资产";
+}
+
+export function shouldAutoSyncAssetPatrolRuntimeParams(input: {
+  activeNavItem: AppNavItemId;
+  packageName: string;
+  lastSyncedPackageName?: string;
+}): boolean {
+  const packageName = input.packageName.trim();
+  return input.activeNavItem === "assetPatrol" && Boolean(packageName) && packageName !== (input.lastSyncedPackageName ?? "").trim();
+}
+
+export function assetPatrolStartMessage(run: Pick<TestRun, "id">): string {
+  return `已启动资产体检：${run.id}`;
+}
+
+export function assetDrivenTestStartMessage(run: Pick<TestRun, "id">, queue?: { total?: number; remaining?: number }): string {
+  const total = typeof queue?.total === "number" ? queue.total : undefined;
+  const remaining = typeof queue?.remaining === "number" ? queue.remaining : undefined;
+  if (total && total > 1) {
+    return `已启动资产测试：${run.id}，本页面资产边 ${total} 条，剩余 ${Math.max(0, remaining ?? total - 1)} 条后台巡检`;
+  }
+  return `已启动资产测试：${run.id}`;
 }
 
 export function App() {
@@ -419,6 +934,33 @@ export function App() {
   const [assetRecordingPage, setAssetRecordingPage] = useState<AssetRecordingCurrentPage>({ status: "idle" });
   const [assetAutoExploreReport, setAssetAutoExploreReport] = useState<AssetRecordingAutoExploreReport>();
   const [assetRecordingIdentifying, setAssetRecordingIdentifying] = useState(false);
+  const [stabilityPackageName, setStabilityPackageName] = useState("");
+  const [stabilityMaxDurationMinutes, setStabilityMaxDurationMinutes] = useState(3);
+  const [stabilityMaxActions, setStabilityMaxActions] = useState(100);
+  const [stabilityStrategy, setStabilityStrategy] = useState<StabilityExplorerStrategy>("conservative");
+  const [stabilityStartMode, setStabilityStartMode] = useState<StabilityExplorerStartMode>(DEFAULT_STABILITY_EXPLORER_START_MODE);
+  const [stabilitySeed, setStabilitySeed] = useState("");
+  const [stabilityAppExitPolicy, setStabilityAppExitPolicy] = useState<StabilityExplorerAppExitPolicy>(DEFAULT_STABILITY_EXPLORER_APP_EXIT_POLICY);
+  const [stabilityBacktrackStrategy, setStabilityBacktrackStrategy] = useState<StabilityExplorerBacktrackStrategy>("shallow");
+  const [stabilityMaxDepth, setStabilityMaxDepth] = useState(DEFAULT_STABILITY_EXPLORER_MAX_DEPTH);
+  const [stabilityDangerousText, setStabilityDangerousText] = useState(DEFAULT_STABILITY_DANGEROUS_TEXT);
+  const [stabilityAllowedActions, setStabilityAllowedActions] = useState<StabilityAllowedActions>({
+    tap: true,
+    swipe: true,
+    back: true,
+    wait: true
+  });
+  const [assetPatrolPackageName, setAssetPatrolPackageName] = useState(DEFAULT_ASSET_PATROL_PACKAGE_NAME);
+  const [assetPatrolStartMode, setAssetPatrolStartMode] = useState<AssetPatrolStartMode>("current_state");
+  const [assetPatrolPageScope, setAssetPatrolPageScope] = useState<AssetPatrolPageScope>("current_page");
+  const [assetPatrolMaxDurationMinutes, setAssetPatrolMaxDurationMinutes] = useState(2);
+  const [assetPatrolMaxTransitions, setAssetPatrolMaxTransitions] = useState(8);
+  const [assetPatrolAllowRiskyActions, setAssetPatrolAllowRiskyActions] = useState(false);
+  const [assetPatrolAllowBusinessSubmit, setAssetPatrolAllowBusinessSubmit] = useState(false);
+  const [assetPatrolDangerousText, setAssetPatrolDangerousText] = useState(DEFAULT_STABILITY_DANGEROUS_TEXT);
+  const [assetPatrolRuntimeParamsText, setAssetPatrolRuntimeParamsText] = useState("");
+  const [assetPatrolRuntimeParamDefinitions, setAssetPatrolRuntimeParamDefinitions] = useState<AssetRuntimeParamDefinition[]>([]);
+  const [assetPatrolPlan, setAssetPatrolPlan] = useState<AssetPatrolPlan>();
   const activePreviewWorkspaceKey = previewWorkspaceKey(activeNavItem);
 
   const workspaceRef = useRef<HTMLElement | null>(null);
@@ -430,6 +972,7 @@ export function App() {
   const elementSnapshotInFlightRef = useRef(false);
   const textSnapshotInFlightRef = useRef(false);
   const assetRecordingIdentificationInFlightRef = useRef(0);
+  const assetPatrolRuntimeParamSyncPackageRef = useRef("");
 
   const {
     devices,
@@ -513,6 +1056,7 @@ export function App() {
     setStartStrategy,
     setStartAppPackageName,
     setStartSetupScope,
+    refreshRuns,
     loadMoreRuns,
     startRun,
     startFlowRun,
@@ -558,6 +1102,20 @@ export function App() {
     refreshStructuredFlows().catch(() => undefined);
     refreshRuntimeInterceptorRules().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!shouldAutoSyncAssetPatrolRuntimeParams({
+      activeNavItem,
+      packageName: assetPatrolPackageName,
+      lastSyncedPackageName: assetPatrolRuntimeParamSyncPackageRef.current
+    })) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void syncAssetPatrolRuntimeParams({ silent: true });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeNavItem, assetPatrolPackageName]);
 
   useEffect(() => {
     if (activeNavItem !== "assetRecording" || !selectedSerial || !selectedDevice) {
@@ -1242,6 +1800,14 @@ export function App() {
     setActiveNavItem("pageAssets");
   }
 
+  function openAssetPatrol() {
+    setActiveNavItem("assetPatrol");
+  }
+
+  function openStability() {
+    setActiveNavItem("stability");
+  }
+
   function openRuns() {
     setActiveNavItem("runs");
     setAutomationTab("runs");
@@ -1560,25 +2126,54 @@ export function App() {
     }
   }
 
-  async function saveAssetPageElement(draft: AssetRecordingPageElementDraft) {
+  async function saveAssetPageElement(draft: AssetRecordingPageElementDraft): Promise<boolean> {
     const graphVersionId = assetRecordingPage.graphVersionId;
     const sourceNodeId = draft.sourceNodeId ?? assetRecordingPage.nodeId;
     if (!graphVersionId || !sourceNodeId) {
       setMessage("当前页面还没有保存为页面资产，请先保存页面后再录入可操作元素");
-      return;
+      return false;
     }
     const validationMessage = validateAssetPageElementDraftForSave(draft);
     if (validationMessage) {
       setMessage(validationMessage);
-      return;
+      return false;
     }
     try {
       setBusy(true);
+      const validationBody = assetPageElementRequestBody(draft, {
+        sourceNodeId,
+        platformScope: selectedDevice?.platform ?? "android"
+      });
+      const validationResponse = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/page-elements/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...validationBody,
+          ...(selectedSerial ? { deviceSerial: selectedSerial } : {}),
+          includeOcr: true
+        })
+      });
+      const validationJson = (await validationResponse.json().catch(() => ({}))) as {
+        quality?: AssetRecordingPageElementDraft["quality"];
+        visualLocator?: Record<string, unknown>;
+        error?: string;
+      };
+      if (!validationResponse.ok || !validationJson.quality) {
+        throw new Error(validationJson.error ?? "可操作元素质量校验失败");
+      }
+      if (validationJson.quality.status === "fail") {
+        throw new Error(validationJson.quality.warnings.find((warning) => warning.severity === "error")?.message ?? "可操作元素质量不满足保存要求");
+      }
+      const qualityCheckedDraft: AssetRecordingPageElementDraft = {
+        ...draft,
+        quality: validationJson.quality,
+        ...(validationJson.visualLocator ? { visualLocator: validationJson.visualLocator } : {})
+      };
       const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/page-elements`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          assetPageElementRequestBody(draft, {
+          assetPageElementRequestBody(qualityCheckedDraft, {
             sourceNodeId,
             platformScope: selectedDevice?.platform ?? "android"
           })
@@ -1596,13 +2191,15 @@ export function App() {
         ...page,
         savedAssets: mapPageAssets(json.assets),
         elements: mergeOperationElements(
-          [manualElementFromOperationDraft(draft, selectedDevice?.platform ?? "android", json.result?.element)],
+          [manualElementFromOperationDraft(qualityCheckedDraft, selectedDevice?.platform ?? "android", json.result?.element)],
           page.elements ?? []
         )
       }));
-      setMessage(`已保存可操作元素：${draft.elementLabel}`);
+      setMessage(validationJson.quality.status === "needs_review" ? `已保存可操作元素：${draft.elementLabel}（建议复核定位质量）` : `已保存可操作元素：${draft.elementLabel}`);
+      return true;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -1808,6 +2405,278 @@ export function App() {
     }
   }
 
+  function updateStabilityPackageName(packageName: string) {
+    setStabilityPackageName(packageName);
+    setStabilityDangerousText(loadStabilityDangerousTextForPackage(packageName));
+  }
+
+  function updateStabilityDangerousText(text: string) {
+    setStabilityDangerousText(text);
+    saveStabilityDangerousTextForPackage(stabilityPackageName, text);
+  }
+
+  function updateAssetPatrolPackageName(packageName: string) {
+    setAssetPatrolPackageName(packageName);
+    setAssetPatrolDangerousText(loadStabilityDangerousTextForPackage(packageName));
+    setAssetPatrolPlan(undefined);
+    setAssetPatrolRuntimeParamDefinitions([]);
+    assetPatrolRuntimeParamSyncPackageRef.current = "";
+  }
+
+  function assetPatrolRequestPayload() {
+    return assetPatrolRequestBody({
+      selectedSerial,
+      packageName: assetPatrolPackageName,
+      startMode: assetPatrolStartMode,
+      pageScope: assetPatrolPageScope,
+      maxDurationMinutes: assetPatrolMaxDurationMinutes,
+      maxTransitions: assetPatrolMaxTransitions,
+      allowRiskyActions: assetPatrolAllowRiskyActions,
+      allowBusinessSubmit: assetPatrolAllowBusinessSubmit,
+      dangerousTextPatternsText: assetPatrolDangerousText,
+      runtimeParamsText: assetPatrolRuntimeParamsText
+    });
+  }
+
+  async function previewAssetPatrol() {
+    if (!selectedSerial) {
+      setMessage("请先选择设备");
+      return;
+    }
+    if (!assetPatrolPackageName.trim()) {
+      setMessage("请先填写目标包名");
+      return;
+    }
+    try {
+      setBusy(true);
+      saveStabilityDangerousTextForPackage(assetPatrolPackageName, assetPatrolDangerousText);
+      const response = await fetch("/api/asset-patrols/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(assetPatrolRequestPayload())
+      });
+      const json = (await response.json().catch(() => ({}))) as { plan?: AssetPatrolPlan; error?: string };
+      if (!response.ok || !json.plan) {
+        throw new Error(json.error ?? "生成资产巡检预览失败");
+      }
+      setAssetPatrolPlan(json.plan);
+      setMessage(assetPatrolPreviewMessage(json.plan));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startAssetPatrol() {
+    if (!selectedSerial) {
+      setMessage("请先选择设备");
+      return;
+    }
+    if (!assetPatrolPackageName.trim()) {
+      setMessage("请先填写目标包名");
+      return;
+    }
+    if (selectedDeviceBusy) {
+      setMessage(`当前设备正在执行：${activeRunForSelectedDevice?.id ?? ""}`);
+      return;
+    }
+    try {
+      setBusy(true);
+      saveStabilityDangerousTextForPackage(assetPatrolPackageName, assetPatrolDangerousText);
+      const response = await fetch("/api/asset-patrols", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(assetPatrolRequestPayload())
+      });
+      const json = (await response.json().catch(() => ({}))) as { run?: TestRun; error?: string; activeRunId?: string };
+      if (!response.ok || !json.run) {
+        throw new Error(json.error ?? (json.activeRunId ? `设备正在执行：${json.activeRunId}` : "启动资产体检失败"));
+      }
+      setAssetPatrolPlan(undefined);
+      setCurrentRunId(json.run.id);
+      await refreshRuns();
+      setMessage(assetPatrolStartMessage(json.run));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncAssetPatrolRuntimeParams(options: { silent?: boolean } = {}) {
+    const packageName = assetPatrolPackageName.trim();
+    if (!packageName) {
+      if (!options.silent) {
+        setMessage("请先填写目标包名");
+      }
+      return;
+    }
+    try {
+      if (!options.silent) {
+        setBusy(true);
+      }
+      const url = `/api/asset-patrols/runtime-params?packageName=${encodeURIComponent(packageName)}`;
+      const response = await fetch(url);
+      const json = (await response.json().catch(() => ({}))) as { parameters?: AssetRuntimeParamDefinition[]; templateText?: string; error?: string };
+      if (!response.ok) {
+        throw new Error(json.error ?? "提取运行参数失败");
+      }
+      const parameters = json.parameters ?? [];
+      setAssetPatrolRuntimeParamDefinitions(parameters);
+      setAssetPatrolRuntimeParamsText((current) => mergeAssetPatrolRuntimeParamsText(current, parameters));
+      assetPatrolRuntimeParamSyncPackageRef.current = packageName;
+      if (!options.silent) {
+        setMessage(parameters.length ? `已提取运行参数：${parameters.map((item) => item.key).join("、")}` : "当前资产没有动态运行参数");
+      }
+    } catch (error) {
+      if (!options.silent) {
+        setMessage(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (!options.silent) {
+        setBusy(false);
+      }
+    }
+  }
+
+  async function startAssetDrivenTest() {
+    if (!selectedSerial) {
+      setMessage("请先选择设备");
+      return;
+    }
+    if (!assetPatrolPackageName.trim()) {
+      setMessage("请先填写目标包名");
+      return;
+    }
+    if (selectedDeviceBusy) {
+      setMessage(`当前设备正在执行：${activeRunForSelectedDevice?.id ?? ""}`);
+      return;
+    }
+    if (!assetPatrolAllowBusinessSubmit && assetPatrolPlanRequiresBusinessSubmit(assetPatrolPlan)) {
+      setMessage("当前资产测试会执行页面任务，请先勾选“允许业务提交”后再开始资产测试。");
+      return;
+    }
+    try {
+      setBusy(true);
+      saveStabilityDangerousTextForPackage(assetPatrolPackageName, assetPatrolDangerousText);
+      const response = await fetch("/api/asset-patrols/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(assetPatrolRequestPayload())
+      });
+      const json = (await response.json().catch(() => ({}))) as {
+        run?: TestRun;
+        plan?: AssetPatrolPlan;
+        error?: string;
+        activeRunId?: string;
+        assetDrivenQueue?: { total?: number; remaining?: number };
+      };
+      if (!response.ok || !json.run) {
+        if (json.plan) {
+          setAssetPatrolPlan(json.plan);
+        }
+        throw new Error(json.error ?? (json.activeRunId ? `设备正在执行：${json.activeRunId}` : "启动资产测试失败"));
+      }
+      setAssetPatrolPlan(json.plan);
+      setCurrentRunId(json.run.id);
+      setActiveNavItem("runs");
+      setAutomationTab("runs");
+      await refreshRuns();
+      setMessage(assetDrivenTestStartMessage(json.run, json.assetDrivenQueue));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stopAssetPatrol(runId: string) {
+    try {
+      setBusy(true);
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
+      const json = (await response.json().catch(() => ({}))) as { run?: TestRun; error?: string };
+      if (!response.ok) {
+        throw new Error(json.error ?? "停止资产驱动巡检失败");
+      }
+      setCurrentRunId(runId);
+      await refreshRuns();
+      setMessage(`已停止资产驱动巡检：${runId}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startStabilityExploration() {
+    if (!selectedSerial) {
+      setMessage("请先选择设备");
+      return;
+    }
+    if (!stabilityPackageName.trim()) {
+      setMessage("请先填写目标包名");
+      return;
+    }
+    if (selectedDeviceBusy) {
+      setMessage(`当前设备正在执行：${activeRunForSelectedDevice?.id ?? ""}`);
+      return;
+    }
+    try {
+      setBusy(true);
+      saveStabilityDangerousTextForPackage(stabilityPackageName, stabilityDangerousText);
+      const response = await fetch("/api/stability-explorations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          stabilityExplorerRequestBody({
+            selectedSerial,
+            packageName: stabilityPackageName,
+            maxDurationMinutes: stabilityMaxDurationMinutes,
+            maxActions: stabilityMaxActions,
+            strategy: stabilityStrategy,
+            startMode: stabilityStartMode,
+            seed: stabilitySeed,
+            allowedActions: stabilityAllowedActions,
+            appExitPolicy: stabilityAppExitPolicy,
+            backtrackStrategy: stabilityBacktrackStrategy,
+            maxDepth: stabilityMaxDepth,
+            dangerousTextPatternsText: stabilityDangerousText
+          })
+        )
+      });
+      const json = (await response.json().catch(() => ({}))) as { run?: TestRun; error?: string; activeRunId?: string };
+      if (!response.ok || !json.run) {
+        throw new Error(json.error ?? (json.activeRunId ? `设备正在执行：${json.activeRunId}` : "启动稳定性探索失败"));
+      }
+      setCurrentRunId(json.run.id);
+      await refreshRuns();
+      setMessage(`已启动稳定性探索：${json.run.id}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stopStabilityExploration(runId: string) {
+    try {
+      setBusy(true);
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
+      const json = (await response.json().catch(() => ({}))) as { run?: TestRun; error?: string };
+      if (!response.ok) {
+        throw new Error(json.error ?? "停止稳定性探索失败");
+      }
+      setCurrentRunId(runId);
+      await refreshRuns();
+      setMessage(`已停止稳定性探索：${runId}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deleteAssetOperationTransition(transition: NonNullable<AssetRecordingCurrentPage["transitions"]>[number]) {
     const graphVersionId = assetRecordingPage.graphVersionId;
     if (!graphVersionId) {
@@ -1843,6 +2712,18 @@ export function App() {
   }
 
   const workspaceStyle: RecordingWorkspaceStyle = workspaceStyleForNav(activeNavItem, recordingPreviewWidth, assetRecordingPreviewWidth);
+  const stabilityPackageOptions = knownStabilityPackages(cases, structuredFlows, runs);
+  const assetPatrolPackageOptions = stabilityPackageOptions;
+  const currentStabilityRun =
+    (currentRun?.config.runKind === "stability_exploration" ? currentRun : undefined) ??
+    runs.find((run) => run.config.runKind === "stability_exploration" && run.deviceSerial === selectedSerial && isActiveRunStatus(run)) ??
+    runs.find((run) => run.config.runKind === "stability_exploration" && run.deviceSerial === selectedSerial);
+  const stabilitySummary = stabilityRunProgressSummary(currentStabilityRun);
+  const currentAssetPatrolRun =
+    (currentRun?.config.runKind === "asset_patrol" ? currentRun : undefined) ??
+    runs.find((run) => run.config.runKind === "asset_patrol" && run.deviceSerial === selectedSerial && isActiveRunStatus(run)) ??
+    runs.find((run) => run.config.runKind === "asset_patrol" && run.deviceSerial === selectedSerial);
+  const assetPatrolSummary = assetPatrolRunProgressSummary(currentAssetPatrolRun);
 
   const stepsPanel = (
     <StepsPanel
@@ -1914,6 +2795,8 @@ export function App() {
           openCaseLibrary={openCaseLibrary}
           openAssetRecording={openAssetRecording}
           openPageAssets={openPageAssets}
+          openAssetPatrol={openAssetPatrol}
+          openStability={openStability}
           openRuns={openRuns}
           openGraphs={() => setActiveNavItem("graphs")}
         />
@@ -2073,6 +2956,104 @@ export function App() {
           />
         )}
 
+        {activeNavItem === "assetPatrol" && (
+          <AssetPatrolPanel
+            devices={devices}
+            selectedSerial={selectedSerial}
+            selectedDevice={selectedDevice}
+            selectedDeviceBusy={selectedDeviceBusy}
+            packageName={assetPatrolPackageName}
+            packageOptions={assetPatrolPackageOptions}
+            startMode={assetPatrolStartMode}
+            pageScope={assetPatrolPageScope}
+            maxDurationMinutes={assetPatrolMaxDurationMinutes}
+            maxTransitions={assetPatrolMaxTransitions}
+            allowRiskyActions={assetPatrolAllowRiskyActions}
+            allowBusinessSubmit={assetPatrolAllowBusinessSubmit}
+            dangerousTextPatternsText={assetPatrolDangerousText}
+            runtimeParamsText={assetPatrolRuntimeParamsText}
+            runtimeParamDefinitions={assetPatrolRuntimeParamDefinitions}
+            plan={assetPatrolPlan}
+            currentRun={currentAssetPatrolRun}
+            summary={assetPatrolSummary}
+            busy={busy}
+            onSelectDevice={(serial) => {
+              const device = devices.find((item) => item.serial === serial);
+              if (device) {
+                selectDeviceAndCloseStream(device);
+              }
+            }}
+            onPackageNameChange={updateAssetPatrolPackageName}
+            onStartModeChange={setAssetPatrolStartMode}
+            onPageScopeChange={setAssetPatrolPageScope}
+            onMaxDurationMinutesChange={setAssetPatrolMaxDurationMinutes}
+            onMaxTransitionsChange={setAssetPatrolMaxTransitions}
+            onAllowRiskyActionsChange={setAssetPatrolAllowRiskyActions}
+            onAllowBusinessSubmitChange={setAssetPatrolAllowBusinessSubmit}
+            onDangerousTextPatternsChange={(value) => {
+              setAssetPatrolDangerousText(value);
+              saveStabilityDangerousTextForPackage(assetPatrolPackageName, value);
+            }}
+            onRuntimeParamsChange={setAssetPatrolRuntimeParamsText}
+            onSyncRuntimeParams={() => void syncAssetPatrolRuntimeParams()}
+            onPreview={() => void previewAssetPatrol()}
+            onStart={() => void startAssetPatrol()}
+            onExecute={() => void startAssetDrivenTest()}
+            onStop={(runId) => void stopAssetPatrol(runId)}
+            onOpenRun={(runId) => {
+              setCurrentRunId(runId);
+              openRuns();
+            }}
+          />
+        )}
+
+        {activeNavItem === "stability" && (
+          <StabilityExplorerPanel
+            devices={devices}
+            selectedSerial={selectedSerial}
+            selectedDevice={selectedDevice}
+            selectedDeviceBusy={selectedDeviceBusy}
+            packageName={stabilityPackageName}
+            packageOptions={stabilityPackageOptions}
+            maxDurationMinutes={stabilityMaxDurationMinutes}
+            maxActions={stabilityMaxActions}
+            strategy={stabilityStrategy}
+            startMode={stabilityStartMode}
+            seed={stabilitySeed}
+            allowedActions={stabilityAllowedActions}
+            appExitPolicy={stabilityAppExitPolicy}
+            backtrackStrategy={stabilityBacktrackStrategy}
+            maxDepth={stabilityMaxDepth}
+            dangerousTextPatternsText={stabilityDangerousText}
+            currentRun={currentStabilityRun}
+            summary={stabilitySummary}
+            busy={busy}
+            onSelectDevice={(serial) => {
+              const device = devices.find((item) => item.serial === serial);
+              if (device) {
+                selectDeviceAndCloseStream(device);
+              }
+            }}
+            onPackageNameChange={updateStabilityPackageName}
+            onMaxDurationMinutesChange={setStabilityMaxDurationMinutes}
+            onMaxActionsChange={setStabilityMaxActions}
+            onStrategyChange={setStabilityStrategy}
+            onStartModeChange={setStabilityStartMode}
+            onSeedChange={setStabilitySeed}
+            onAllowedActionsChange={setStabilityAllowedActions}
+            onAppExitPolicyChange={setStabilityAppExitPolicy}
+            onBacktrackStrategyChange={setStabilityBacktrackStrategy}
+            onMaxDepthChange={setStabilityMaxDepth}
+            onDangerousTextPatternsChange={updateStabilityDangerousText}
+            onStart={startStabilityExploration}
+            onStop={(runId) => void stopStabilityExploration(runId)}
+            onOpenRun={(runId) => {
+              setCurrentRunId(runId);
+              openRuns();
+            }}
+          />
+        )}
+
         {activeNavItem === "runs" && <section className="module-page execution-module">{stepsPanel}</section>}
 
         {activeNavItem === "graphs" && (
@@ -2089,6 +3070,578 @@ export function App() {
         )}
       </section>
     </main>
+  );
+}
+
+type AssetPatrolPanelProps = {
+  devices: DeviceInfo[];
+  selectedSerial: string;
+  selectedDevice?: DeviceInfo;
+  selectedDeviceBusy: boolean;
+  packageName: string;
+  packageOptions: string[];
+  startMode: AssetPatrolStartMode;
+  pageScope: AssetPatrolPageScope;
+  maxDurationMinutes: number;
+  maxTransitions: number;
+  allowRiskyActions: boolean;
+  allowBusinessSubmit: boolean;
+  dangerousTextPatternsText: string;
+  runtimeParamsText: string;
+  runtimeParamDefinitions: AssetRuntimeParamDefinition[];
+  plan?: AssetPatrolPlan;
+  currentRun?: TestRun;
+  summary?: ReturnType<typeof assetPatrolRunProgressSummary>;
+  busy: boolean;
+  onSelectDevice: (serial: string) => void;
+  onPackageNameChange: (value: string) => void;
+  onStartModeChange: (value: AssetPatrolStartMode) => void;
+  onPageScopeChange: (value: AssetPatrolPageScope) => void;
+  onMaxDurationMinutesChange: (value: number) => void;
+  onMaxTransitionsChange: (value: number) => void;
+  onAllowRiskyActionsChange: (value: boolean) => void;
+  onAllowBusinessSubmitChange: (value: boolean) => void;
+  onDangerousTextPatternsChange: (value: string) => void;
+  onRuntimeParamsChange: (value: string) => void;
+  onSyncRuntimeParams: () => void;
+  onPreview: () => void;
+  onStart: () => void;
+  onExecute: () => void;
+  onStop: (runId: string) => void;
+  onOpenRun: (runId: string) => void;
+};
+
+function AssetPatrolPanel({
+  devices,
+  selectedSerial,
+  selectedDevice,
+  selectedDeviceBusy,
+  packageName,
+  packageOptions,
+  startMode,
+  pageScope,
+  maxDurationMinutes,
+  maxTransitions,
+  allowRiskyActions,
+  allowBusinessSubmit,
+  dangerousTextPatternsText,
+  runtimeParamsText,
+  runtimeParamDefinitions,
+  plan,
+  currentRun,
+  summary,
+  busy,
+  onSelectDevice,
+  onPackageNameChange,
+  onStartModeChange,
+  onPageScopeChange,
+  onMaxDurationMinutesChange,
+  onMaxTransitionsChange,
+  onAllowRiskyActionsChange,
+  onAllowBusinessSubmitChange,
+  onDangerousTextPatternsChange,
+  onRuntimeParamsChange,
+  onSyncRuntimeParams,
+  onPreview,
+  onStart,
+  onExecute,
+  onStop,
+  onOpenRun
+}: AssetPatrolPanelProps) {
+  const running = Boolean(currentRun && isActiveRunStatus(currentRun));
+  const canUseDevice = Boolean(selectedSerial && packageName.trim() && !selectedDeviceBusy && !busy);
+  const displayMode = assetPatrolPanelDisplayMode({ plan, currentRun });
+  const runtimeParamValues = assetPatrolRuntimeParamValuesFromText(runtimeParamsText);
+  const displayRuntimeParamDefinitions = assetPatrolRuntimeParamDefinitionsForDisplay(runtimeParamDefinitions, plan?.startPage?.name ?? summary?.pageName);
+  const assetDrivenTestNeedsBusinessSubmit = !allowBusinessSubmit && assetPatrolPlanRequiresBusinessSubmit(plan);
+
+  return (
+    <section className="module-page stability-module">
+      <div className="panel module-head-panel">
+        <div>
+          <span className="module-eyebrow">资产驱动巡检</span>
+          <h2>按 PageStateFlow 资产体检当前页面</h2>
+        </div>
+        <div className="module-stat-grid">
+          <div>
+            <strong>{plan ? `${plan.steps.length}` : "0"}</strong>
+            <span>计划检查</span>
+          </div>
+          <div>
+            <strong>{plan?.summary.needsRepair ?? summary?.needsRepair ?? 0}</strong>
+            <span>建议修复</span>
+          </div>
+          <div>
+            <strong>{currentRun?.status ?? "idle"}</strong>
+            <span>运行状态</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="stability-layout">
+        <div className="panel stability-config-panel">
+          <div className="panel-head">
+            <h2>体检配置</h2>
+          </div>
+          <div className="stability-form-grid">
+            <label>
+              设备
+              <select value={selectedSerial} onChange={(event) => onSelectDevice(event.target.value)}>
+                <option value="">选择设备</option>
+                {devices.map((device) => (
+                  <option key={device.serial} value={device.serial}>
+                    {device.name || device.serial}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              目标包
+              <input list="asset-patrol-package-options" value={packageName} onChange={(event) => onPackageNameChange(event.target.value)} placeholder="cn.eeo.classin" />
+              <datalist id="asset-patrol-package-options">
+                {packageOptions.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
+            </label>
+            <label>
+              起始方式
+              <select value={startMode} onChange={(event) => onStartModeChange(event.target.value as AssetPatrolStartMode)}>
+                <option value="current_state">当前页开始</option>
+                <option value="launch_app">启动 App</option>
+                <option value="restart_app">重启 App</option>
+              </select>
+            </label>
+            <label>
+              巡检范围
+              <select value={pageScope} onChange={(event) => onPageScopeChange(event.target.value as AssetPatrolPageScope)}>
+                {assetPatrolPageScopeOptions().map((option) => (
+                  <option key={option.value} value={option.value} disabled={option.disabled}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              最大时长
+              <input min={1} max={30} type="number" value={maxDurationMinutes} onChange={(event) => onMaxDurationMinutesChange(clampNumberInput(event.target.value, 1, 30, 2))} />
+            </label>
+            <label>
+              最大边数
+              <input min={0} max={200} type="number" value={maxTransitions} onChange={(event) => onMaxTransitionsChange(clampNumberInput(event.target.value, 0, 200, 8))} />
+            </label>
+          </div>
+
+          <div className="stability-checkbox-grid">
+            <label>
+              <input type="checkbox" checked={allowRiskyActions} onChange={(event) => onAllowRiskyActionsChange(event.target.checked)} />
+              允许危险动作
+            </label>
+            <label>
+              <input type="checkbox" checked={allowBusinessSubmit} onChange={(event) => onAllowBusinessSubmitChange(event.target.checked)} />
+              允许业务提交
+            </label>
+          </div>
+
+          <label className="stability-danger-list">
+            危险词
+            <textarea value={dangerousTextPatternsText} onChange={(event) => onDangerousTextPatternsChange(event.target.value)} rows={5} />
+          </label>
+
+          <div className="stability-danger-list">
+            <div className="runtime-param-header">
+              <span>运行参数</span>
+              <button className="inline-action-button" type="button" disabled={busy || !packageName.trim()} onClick={onSyncRuntimeParams}>
+                刷新参数项
+              </button>
+            </div>
+            {displayRuntimeParamDefinitions.length ? (
+              <>
+                <div className="runtime-param-editor">
+                  {displayRuntimeParamDefinitions.map((parameter) => (
+                    <label key={parameter.key} className="runtime-param-field">
+                      <span>
+                        <strong>{parameter.key}</strong>
+                        <small>{assetPatrolRuntimeParamUsageSummary(parameter)}</small>
+                      </span>
+                      <input
+                        value={runtimeParamValues[parameter.key] ?? ""}
+                        onChange={(event) => onRuntimeParamsChange(setAssetPatrolRuntimeParamValue(runtimeParamsText, parameter.key, event.target.value))}
+                        placeholder={assetPatrolRuntimeParamPlaceholder(parameter)}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <details className="runtime-param-raw">
+                  <summary>高级 key=value</summary>
+                  <textarea value={runtimeParamsText} onChange={(event) => onRuntimeParamsChange(event.target.value)} rows={4} />
+                </details>
+              </>
+            ) : (
+              <>
+                <textarea
+                  value={runtimeParamsText}
+                  onChange={(event) => onRuntimeParamsChange(event.target.value)}
+                  rows={4}
+                  placeholder={"phone=18743085313\npassword=secret"}
+                />
+                <span className="runtime-param-hint">暂无参数项</span>
+              </>
+            )}
+          </div>
+
+          <div className="action-row">
+            <button className="icon-button" type="button" disabled={!canUseDevice} onClick={onPreview}>
+              <RefreshCw size={16} />
+              预览计划
+            </button>
+            <button className="icon-button primary" type="button" disabled={!canUseDevice} onClick={onExecute}>
+              <PlayCircle size={16} />
+              {ASSET_DRIVEN_TEST_ACTION_LABEL}
+            </button>
+            <button className="icon-button" type="button" disabled={!canUseDevice} onClick={onStart}>
+              <RefreshCw size={16} />
+              {ASSET_PATROL_PRIMARY_ACTION_LABEL}
+            </button>
+            {running && currentRun ? (
+              <button className="icon-button danger" type="button" disabled={busy} onClick={() => onStop(currentRun.id)}>
+                <Square size={16} />
+                停止
+              </button>
+            ) : null}
+          </div>
+          {assetDrivenTestNeedsBusinessSubmit ? (
+            <div className="runtime-param-hint">当前计划包含页面任务；真实执行前需要勾选“允许业务提交”。</div>
+          ) : null}
+        </div>
+
+        <div className="panel stability-status-panel">
+          <div className="panel-head">
+            <h2>{displayMode === "run" ? "体检结果" : "体检计划"}</h2>
+            {displayMode === "run" && currentRun ? (
+              <span className={`run-status-mini ${currentRun.status}`}>{currentRun.status}</span>
+            ) : plan ? (
+              <span className={`run-status-mini ${plan.status === "ready" ? "passed" : "failed"}`}>{plan.status}</span>
+            ) : null}
+          </div>
+          {displayMode === "plan" && plan ? (
+            <>
+              <div className="stability-facts">
+                <div><span>当前页</span><strong>{plan.startPage?.name ?? "-"}</strong></div>
+                <div><span>页面检查</span><strong>{plan.summary.pageChecks}</strong></div>
+                <div><span>元素检查</span><strong>{plan.summary.elementChecks}</strong></div>
+                <div><span>边检查</span><strong>{plan.summary.transitionChecks}</strong></div>
+                <div><span>跳过</span><strong>{plan.summary.skipped}</strong></div>
+                <div><span>建议修复</span><strong>{plan.summary.needsRepair}</strong></div>
+              </div>
+              {plan.issues.length ? (
+                <div className="stability-timeline">
+                  {plan.issues.map((issue) => (
+                    <div key={`${issue.code}-${issue.message}`} className={`stability-step ${issue.severity === "error" ? "failed" : "skipped"}`}>
+                      <strong>{issue.code}</strong>
+                      <span>{issue.message}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <div className="stability-timeline">
+                {plan.steps.slice(0, 10).map((step) => (
+                  <div key={step.id} className={`stability-step ${step.status === "ready" ? "passed" : step.status === "skipped" ? "skipped" : "failed"}`}>
+                    <strong>{step.order}. {step.label}</strong>
+                    <span>{step.kind} · {step.status}{step.skipReason ? ` · ${step.skipReason}` : ""}</span>
+                  </div>
+                ))}
+                {!plan.steps.length ? <div className="empty">当前计划没有可执行检查项</div> : null}
+              </div>
+            </>
+          ) : displayMode === "run" && summary && currentRun ? (
+            <>
+              <div className="stability-run-card">
+                <strong>{currentRun.caseName}</strong>
+                <span>{currentRun.id}</span>
+              </div>
+              <div className="stability-diagnostic-note">{ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE}</div>
+              <div className="stability-facts">
+                <div><span>设备</span><strong>{selectedDevice?.name || selectedSerial || currentRun.deviceSerial}</strong></div>
+                <div><span>包名</span><strong>{summary.packageName}</strong></div>
+                <div><span>页面</span><strong>{summary.pageName}</strong></div>
+                <div><span>最近检查</span><strong>{summary.latestCheck}</strong></div>
+                <div><span>失败</span><strong>{summary.failed}</strong></div>
+                <div><span>建议修复</span><strong>{summary.needsRepair}</strong></div>
+              </div>
+              <div className="action-row">
+                <button className="icon-button" type="button" onClick={() => onOpenRun(currentRun.id)}>
+                  查看执行
+                </button>
+                {currentRun.reportHtmlPath ? (
+                  <a className="report-link" href={`/api/reports/${currentRun.id}/html`} target="_blank" rel="noreferrer">
+                    打开报告
+                  </a>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <div className="empty">选择设备和目标包后预览资产巡检计划</div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+type StabilityExplorerPanelProps = {
+  devices: DeviceInfo[];
+  selectedSerial: string;
+  selectedDevice?: DeviceInfo;
+  selectedDeviceBusy: boolean;
+  packageName: string;
+  packageOptions: string[];
+  maxDurationMinutes: number;
+  maxActions: number;
+  strategy: StabilityExplorerStrategy;
+  startMode: StabilityExplorerStartMode;
+  seed: string;
+  allowedActions: StabilityAllowedActions;
+  appExitPolicy: StabilityExplorerAppExitPolicy;
+  backtrackStrategy: StabilityExplorerBacktrackStrategy;
+  maxDepth: number;
+  dangerousTextPatternsText: string;
+  currentRun?: TestRun;
+  summary?: ReturnType<typeof stabilityRunProgressSummary>;
+  busy: boolean;
+  onSelectDevice: (serial: string) => void;
+  onPackageNameChange: (value: string) => void;
+  onMaxDurationMinutesChange: (value: number) => void;
+  onMaxActionsChange: (value: number) => void;
+  onStrategyChange: (value: StabilityExplorerStrategy) => void;
+  onStartModeChange: (value: StabilityExplorerStartMode) => void;
+  onSeedChange: (value: string) => void;
+  onAllowedActionsChange: (value: StabilityAllowedActions) => void;
+  onAppExitPolicyChange: (value: StabilityExplorerAppExitPolicy) => void;
+  onBacktrackStrategyChange: (value: StabilityExplorerBacktrackStrategy) => void;
+  onMaxDepthChange: (value: number) => void;
+  onDangerousTextPatternsChange: (value: string) => void;
+  onStart: () => void;
+  onStop: (runId: string) => void;
+  onOpenRun: (runId: string) => void;
+};
+
+function StabilityExplorerPanel({
+  devices,
+  selectedSerial,
+  selectedDevice,
+  selectedDeviceBusy,
+  packageName,
+  packageOptions,
+  maxDurationMinutes,
+  maxActions,
+  strategy,
+  startMode,
+  seed,
+  allowedActions,
+  appExitPolicy,
+  backtrackStrategy,
+  maxDepth,
+  dangerousTextPatternsText,
+  currentRun,
+  summary,
+  busy,
+  onSelectDevice,
+  onPackageNameChange,
+  onMaxDurationMinutesChange,
+  onMaxActionsChange,
+  onStrategyChange,
+  onStartModeChange,
+  onSeedChange,
+  onAllowedActionsChange,
+  onAppExitPolicyChange,
+  onBacktrackStrategyChange,
+  onMaxDepthChange,
+  onDangerousTextPatternsChange,
+  onStart,
+  onStop,
+  onOpenRun
+}: StabilityExplorerPanelProps) {
+  const running = Boolean(currentRun && isActiveRunStatus(currentRun));
+  const canStart = Boolean(selectedSerial && packageName.trim() && !selectedDeviceBusy && !busy);
+
+  return (
+    <section className="module-page stability-module">
+      <div className="panel module-head-panel">
+        <div>
+          <span className="module-eyebrow">稳定性探索</span>
+          <h2>指定包稳定性巡检</h2>
+        </div>
+        <div className="module-stat-grid">
+          <div>
+            <strong>{summary?.progressText ?? "0 / 0"}</strong>
+            <span>探索进度</span>
+          </div>
+          <div>
+            <strong>{currentRun?.status ?? "idle"}</strong>
+            <span>运行状态</span>
+          </div>
+          <div>
+            <strong>{summary?.skippedCandidates ?? 0}</strong>
+            <span>过滤候选</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="stability-layout">
+        <div className="panel stability-config-panel">
+          <div className="panel-head">
+            <h2>执行配置</h2>
+          </div>
+          <div className="stability-form-grid">
+            <label>
+              设备
+              <select value={selectedSerial} onChange={(event) => onSelectDevice(event.target.value)}>
+                <option value="">选择设备</option>
+                {devices.map((device) => (
+                  <option key={device.serial} value={device.serial}>
+                    {device.name || device.serial}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              目标包
+              <input list="stability-package-options" value={packageName} onChange={(event) => onPackageNameChange(event.target.value)} placeholder="com.example.app" />
+              <datalist id="stability-package-options">
+                {packageOptions.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
+            </label>
+            <label>
+              最大时长
+              <input min={1} max={30} type="number" value={maxDurationMinutes} onChange={(event) => onMaxDurationMinutesChange(clampNumberInput(event.target.value, 1, 30, 3))} />
+            </label>
+            <label>
+              最大动作
+              <input min={1} max={1000} type="number" value={maxActions} onChange={(event) => onMaxActionsChange(clampNumberInput(event.target.value, 1, 1000, 100))} />
+            </label>
+            <label>
+              策略
+              <select value={strategy} onChange={(event) => onStrategyChange(event.target.value as StabilityExplorerStrategy)}>
+                <option value="conservative">保守</option>
+                <option value="balanced">平衡</option>
+                <option value="aggressive">激进</option>
+              </select>
+            </label>
+            <label>
+              起始方式
+              <select value={startMode} onChange={(event) => onStartModeChange(event.target.value as StabilityExplorerStartMode)}>
+                <option value="restart_app">重启 App</option>
+                <option value="launch_app">启动 App</option>
+                <option value="current_state">当前页开始</option>
+              </select>
+            </label>
+            <label>
+              Seed
+              <input value={seed} onChange={(event) => onSeedChange(event.target.value)} placeholder="自动生成" />
+            </label>
+            <label>
+              App 外处理
+              <select value={appExitPolicy} onChange={(event) => onAppExitPolicyChange(event.target.value as StabilityExplorerAppExitPolicy)}>
+                <option value="back_to_app">返回 App</option>
+                <option value="restart_app">重启 App</option>
+                <option value="stop">停止探索</option>
+              </select>
+            </label>
+            <label>
+              回退策略
+              <select value={backtrackStrategy} onChange={(event) => onBacktrackStrategyChange(event.target.value as StabilityExplorerBacktrackStrategy)}>
+                <option value="shallow">浅层回退</option>
+                <option value="depth_first">深度优先</option>
+                <option value="none">不主动返回</option>
+              </select>
+            </label>
+            <label>
+              最大深度
+              <input min={1} max={10} type="number" value={maxDepth} onChange={(event) => onMaxDepthChange(clampNumberInput(event.target.value, 1, 10, DEFAULT_STABILITY_EXPLORER_MAX_DEPTH))} />
+            </label>
+          </div>
+
+          <div className="stability-checkbox-grid">
+            {(["tap", "swipe", "back", "wait"] as const).map((action) => (
+              <label key={action}>
+                <input
+                  type="checkbox"
+                  checked={allowedActions[action]}
+                  onChange={(event) => onAllowedActionsChange({ ...allowedActions, [action]: event.target.checked })}
+                />
+                {stabilityActionLabel(action)}
+              </label>
+            ))}
+          </div>
+
+          <label className="stability-danger-list">
+            危险词
+            <textarea value={dangerousTextPatternsText} onChange={(event) => onDangerousTextPatternsChange(event.target.value)} rows={5} />
+          </label>
+
+          <div className="action-row">
+            <button className="icon-button primary" type="button" disabled={!canStart} onClick={onStart}>
+              <PlayCircle size={16} />
+              开始探索
+            </button>
+            {running && currentRun ? (
+              <button className="icon-button danger" type="button" disabled={busy} onClick={() => onStop(currentRun.id)}>
+                <Square size={16} />
+                停止
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="panel stability-status-panel">
+          <div className="panel-head">
+            <h2>执行提示</h2>
+            {currentRun ? <span className={`run-status-mini ${currentRun.status}`}>{currentRun.status}</span> : null}
+          </div>
+          {currentRun && summary ? (
+            <>
+              <div className="stability-run-card">
+                <strong>{currentRun.caseName}</strong>
+                <span>{currentRun.id}</span>
+              </div>
+              <div className="stability-facts">
+                <div><span>设备</span><strong>{selectedDevice?.name || selectedSerial || currentRun.deviceSerial}</strong></div>
+                <div><span>包名</span><strong>{summary.packageName}</strong></div>
+                <div><span>Seed</span><strong>{summary.seed}</strong></div>
+                <div><span>当前包</span><strong>{summary.currentPackage}</strong></div>
+                <div><span>最近动作</span><strong>{summary.latestAction}</strong></div>
+                <div><span>动作来源</span><strong>{summary.latestSource}</strong></div>
+              </div>
+              <div className="stability-timeline">
+                {currentRun.stepResults.slice(-6).reverse().map((step) => (
+                  <div key={step.id} className={`stability-step ${step.status}`}>
+                    <strong>{step.stepOrder}. {stabilityStepLabel(step)}</strong>
+                    <span>{step.type} · {step.status} · {step.durationMs ?? "-"} ms</span>
+                    {step.errorMessage ? <small>{step.errorMessage}</small> : null}
+                  </div>
+                ))}
+                {!currentRun.stepResults.length ? <div className="empty">启动中，等待第一步探索结果</div> : null}
+              </div>
+              <div className="action-row">
+                <button className="icon-button" type="button" onClick={() => onOpenRun(currentRun.id)}>
+                  查看执行
+                </button>
+                {currentRun.reportHtmlPath ? (
+                  <a className="report-link" href={`/api/reports/${currentRun.id}/html`} target="_blank" rel="noreferrer">
+                    打开报告
+                  </a>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <div className="empty">选择设备和目标包后启动探索</div>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -2302,6 +3855,82 @@ async function fetchWritableGraphVersionId(platform: DeviceInfo["platform"]): Pr
   return selectRecordingGraphVersionId(json.graphs, platform);
 }
 
+function knownStabilityPackages(cases: TestCase[], flows: StructuredFlow[], runs: TestRun[]): string[] {
+  const packages = new Set<string>();
+  for (const testCase of cases) {
+    if (testCase.targetApp?.androidPackageName) {
+      packages.add(testCase.targetApp.androidPackageName);
+    }
+  }
+  for (const flow of flows) {
+    if (flow.targetApp.androidPackageName) {
+      packages.add(flow.targetApp.androidPackageName);
+    }
+  }
+  for (const run of runs) {
+    if (run.config.startAppPackageName) {
+      packages.add(run.config.startAppPackageName);
+    }
+    if (run.config.stabilityExploration?.packageName) {
+      packages.add(run.config.stabilityExploration.packageName);
+    }
+    if (run.config.assetPatrol?.packageName) {
+      packages.add(run.config.assetPatrol.packageName);
+    }
+  }
+  return Array.from(packages).sort();
+}
+
+function clampNumberInput(value: string, min: number, max: number, fallback: number): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function stabilityActionLabel(action: keyof StabilityAllowedActions): string {
+  if (action === "tap") {
+    return "点击";
+  }
+  if (action === "swipe") {
+    return "滑动";
+  }
+  if (action === "back") {
+    return "返回";
+  }
+  return "等待";
+}
+
+function stabilityStepLabel(step: TestRun["stepResults"][number]): string {
+  const metadata = step.metadata?.stabilityExploration;
+  if (isStabilityStepMetadata(metadata)) {
+    return metadata.candidateLabel ?? metadata.resultType ?? step.type;
+  }
+  return step.type;
+}
+
+function isStabilityStepMetadata(value: unknown): value is {
+  candidateLabel?: string;
+  candidateSource?: string;
+  currentPackage?: string;
+  resultType?: string;
+  skippedCandidates?: Array<{ label?: string; skipReason?: string }>;
+} {
+  return typeof value === "object" && value !== null;
+}
+
+function isAssetPatrolStepMetadata(value: unknown): value is {
+  kind?: string;
+  label?: string;
+  status?: string;
+  skipReason?: string;
+  pageModelName?: string;
+  startPage?: { name?: string };
+} {
+  return typeof value === "object" && value !== null;
+}
+
 async function readCurrentPageAssetResponse(response: Response): Promise<CurrentPageAssetApiResponse> {
   const text = await response.text();
   if (!text.trim()) {
@@ -2325,6 +3954,30 @@ export function mapCurrentPageAssetResponse(response: CurrentPageAssetApiRespons
     return {
       status: "error",
       message: response.error ?? "当前页面识别失败"
+    };
+  }
+  if (result.status === "blocked") {
+    const message = result.message ?? result.blocker?.message ?? result.matcherDiagnostics?.pollution?.message ?? "当前页面识别被阻断，请查看诊断信息";
+    return {
+      status: "error",
+      message,
+      graphVersionId,
+      assetKind: "page",
+      observation: result.observation,
+      match: result.match,
+      pageName: sanitizeAssetDisplayName(result.visualPageName) ?? "未知页面",
+      visualPageName: sanitizeAssetDisplayName(result.visualPageName),
+      matchScore: result.match.score,
+      packageName: result.observation?.packageName ?? result.observation?.bundleId,
+      activityName: result.observation?.activityName ?? result.observation?.componentName,
+      screenshotUrl: observationScreenshotUrl(result.observation),
+      matchedMatchers: summarizeEvidenceDiagnostics(result.matcherDiagnostics?.matchedEvidence),
+      missedMatchers: summarizeEvidenceDiagnostics(result.matcherDiagnostics?.missingEvidence),
+      uiTexts: summarizeObservationTexts(result.observation, "ui"),
+      ocrTexts: summarizeObservationTexts(result.observation, "ocr"),
+      elements: summarizeObservationElements(result.observation),
+      aiDescription: message,
+      savedAssets: mapPageAssets(response.assets)
     };
   }
   const observation = result.observation;
@@ -2583,7 +4236,7 @@ function manualOperationElementsMetadata(metadata: Record<string, unknown> | und
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
+  const elements = value
     .map((item): PageElement | undefined => {
       if (!item || typeof item !== "object") {
         return undefined;
@@ -2608,10 +4261,20 @@ function manualOperationElementsMetadata(metadata: Record<string, unknown> | und
       const targetLabel = stringMetadata(element, "targetLabel");
       const targetText = stringMetadata(element, "targetText");
       const compoundSteps = compoundStepsMetadata(element.compoundSteps);
+      const quality = pageElementQualityMetadata(element.quality);
+      const visualLocator = visualLocatorMetadata(element.visualLocator);
+      const locatorKind = locatorKindMetadata(element.locatorKind);
+      const dynamicMasks = dynamicMasksMetadata(element.dynamicMasks);
+      const structuralLocator = recordMetadata(element.structuralLocator);
+      const dynamicRegionId = stringMetadata(element, "dynamicRegionId");
+      const itemTemplateId = stringMetadata(element, "itemTemplateId");
+      const transitionKind = transitionKindMetadata(element.transitionKind);
+      const parameterMapping = stringRecordMetadata(element.parameterMapping);
       return {
         ...(id ? { id } : {}),
         label,
         locator,
+        ...(locatorKind ? { locatorKind } : {}),
         ...(semanticArea ? { semanticArea } : {}),
         ...(coordinateSpace ? { coordinateSpace } : {}),
         action: stringMetadata(element, "action") ?? actionKind,
@@ -2626,11 +4289,20 @@ function manualOperationElementsMetadata(metadata: Record<string, unknown> | und
         ...(targetNodeId ? { targetNodeId } : {}),
         ...(targetLabel ? { targetLabel } : {}),
         ...(targetText ? { targetText } : {}),
+        ...(quality ? { quality } : {}),
+        ...(visualLocator ? { visualLocator } : {}),
+        ...(dynamicMasks?.length ? { dynamicMasks } : {}),
+        ...(structuralLocator ? { structuralLocator } : {}),
+        ...(dynamicRegionId ? { dynamicRegionId } : {}),
+        ...(itemTemplateId ? { itemTemplateId } : {}),
+        ...(transitionKind ? { transitionKind } : {}),
+        ...(parameterMapping ? { parameterMapping } : {}),
         ...(compoundSteps.length ? { compoundSteps } : {}),
         ...(scrollProfile ? { scrollProfile } : {})
       };
     })
     .filter((item): item is PageElement => Boolean(item));
+  return dedupeManualOperationElements(elements);
 }
 
 function mergeOperationElements(
@@ -2639,10 +4311,89 @@ function mergeOperationElements(
 ): NonNullable<AssetRecordingCurrentPage["elements"]> {
   const manualKeys = new Set(manualElements.map((element) => `${element.actionKind ?? element.action}:${element.locator}`));
   const manualIds = new Set(manualElements.map((element) => element.id).filter(Boolean));
-  return [
+  return dedupeManualOperationElements([
     ...manualElements,
     ...candidateElements.filter((element) => !manualKeys.has(`${element.actionKind ?? element.action}:${element.locator}`) && (!element.id || !manualIds.has(element.id)))
-  ];
+  ]);
+}
+
+function dedupeManualOperationElements(
+  elements: NonNullable<AssetRecordingCurrentPage["elements"]>
+): NonNullable<AssetRecordingCurrentPage["elements"]> {
+  const result: NonNullable<AssetRecordingCurrentPage["elements"]> = [];
+  for (const element of elements) {
+    const duplicateIndex = result.findIndex((existing) => manualOperationElementsRepresentSameTarget(existing, element));
+    if (duplicateIndex < 0) {
+      result.push(element);
+      continue;
+    }
+    const existing = result[duplicateIndex]!;
+    if (manualOperationElementPriority(element) >= manualOperationElementPriority(existing)) {
+      result[duplicateIndex] = element;
+    }
+  }
+  return result;
+}
+
+function manualOperationElementsRepresentSameTarget(
+  left: NonNullable<AssetRecordingCurrentPage["elements"]>[number],
+  right: NonNullable<AssetRecordingCurrentPage["elements"]>[number]
+): boolean {
+  if (left.source !== "manual" || right.source !== "manual") {
+    return false;
+  }
+  if (!left.label || !right.label || left.label !== right.label) {
+    return false;
+  }
+  if ((left.actionKind ?? left.action) !== (right.actionKind ?? right.action)) {
+    return false;
+  }
+  const leftCompound = left.compoundSteps?.length ? JSON.stringify(left.compoundSteps) : "";
+  const rightCompound = right.compoundSteps?.length ? JSON.stringify(right.compoundSteps) : "";
+  if (leftCompound !== rightCompound) {
+    return false;
+  }
+  if (left.locator === right.locator) {
+    return true;
+  }
+  return Boolean(left.region && right.region && rectsRepresentSameMarkedTarget(left.region, right.region));
+}
+
+function rectsRepresentSameMarkedTarget(
+  left: { x: number; y: number; width: number; height: number },
+  right: { x: number; y: number; width: number; height: number }
+): boolean {
+  const overlapWidth = Math.max(0, Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
+  const overlapHeight = Math.max(0, Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y));
+  const overlapArea = overlapWidth * overlapHeight;
+  const minArea = Math.max(1, Math.min(left.width * left.height, right.width * right.height));
+  return overlapArea / minArea >= 0.45 || rectCenterInside(left, right) || rectCenterInside(right, left);
+}
+
+function rectCenterInside(
+  rect: { x: number; y: number; width: number; height: number },
+  container: { x: number; y: number; width: number; height: number }
+): boolean {
+  const centerX = rect.x + rect.width / 2;
+  const centerY = rect.y + rect.height / 2;
+  return centerX >= container.x && centerX <= container.x + container.width && centerY >= container.y && centerY <= container.y + container.height;
+}
+
+function manualOperationElementPriority(element: NonNullable<AssetRecordingCurrentPage["elements"]>[number]): number {
+  let score = 0;
+  if (element.visualLocator) {
+    score += 8;
+  }
+  if (element.quality) {
+    score += 4;
+  }
+  if (element.tapPointPercent) {
+    score += 2;
+  }
+  if (element.region) {
+    score += 1;
+  }
+  return score;
 }
 
 function mergePageTasks(
@@ -2666,10 +4417,20 @@ function manualElementFromOperationDraft(
   const targetText = stringMetadata(persistedElement, "targetText") ?? draft.targetText;
   const semanticArea = visualSemanticAreaMetadata(persistedElement?.semanticArea) ?? draft.semanticArea;
   const coordinateSpace = coordinateSpaceMetadata(persistedElement?.coordinateSpace) ?? draft.coordinateSpace;
+  const quality = pageElementQualityMetadata(persistedElement?.quality) ?? draft.quality;
+  const visualLocator = visualLocatorMetadata(persistedElement?.visualLocator) ?? draft.visualLocator;
+  const locatorKind = locatorKindMetadata(persistedElement?.locatorKind) ?? draft.locatorKind;
+  const dynamicMasks = dynamicMasksMetadata(persistedElement?.dynamicMasks) ?? draft.dynamicMasks;
+  const structuralLocator = recordMetadata(persistedElement?.structuralLocator) ?? draft.structuralLocator;
+  const dynamicRegionId = stringMetadata(persistedElement, "dynamicRegionId") ?? stringMetadata(recordMetadata(draft.dynamicRegion), "id");
+  const itemTemplateId = stringMetadata(persistedElement, "itemTemplateId") ?? stringMetadata(recordMetadata(draft.itemTemplate), "id");
+  const transitionKind = transitionKindMetadata(persistedElement?.transitionKind) ?? draft.transitionKind;
+  const parameterMapping = stringRecordMetadata(persistedElement?.parameterMapping) ?? draft.parameterMapping;
   return {
     ...(id ?? draft.elementId ? { id: id ?? draft.elementId } : {}),
     label: draft.elementLabel,
     locator: draft.locator,
+    ...(locatorKind ? { locatorKind } : {}),
     ...(semanticArea ? { semanticArea } : {}),
     ...(coordinateSpace ? { coordinateSpace } : {}),
     action: draft.actionKind,
@@ -2683,6 +4444,14 @@ function manualElementFromOperationDraft(
     ...(targetNodeId ? { targetNodeId } : {}),
     ...(targetLabel ? { targetLabel } : {}),
     ...(targetText ? { targetText } : {}),
+    ...(quality ? { quality } : {}),
+    ...(visualLocator ? { visualLocator } : {}),
+    ...(dynamicMasks?.length ? { dynamicMasks } : {}),
+    ...(structuralLocator ? { structuralLocator } : {}),
+    ...(dynamicRegionId ? { dynamicRegionId } : {}),
+    ...(itemTemplateId ? { itemTemplateId } : {}),
+    ...(transitionKind ? { transitionKind } : {}),
+    ...(parameterMapping ? { parameterMapping } : {}),
     ...(draft.compoundSteps?.length ? { compoundSteps: draft.compoundSteps } : {}),
     ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {})
   };
@@ -2710,6 +4479,96 @@ function imageRegionMetadata(locator: string): { x: number; y: number; width: nu
     return undefined;
   }
   return { x, y, width, height };
+}
+
+function isRegionTooSmallForPageElement(region: { width: number; height: number }): boolean {
+  return region.width < 2 || region.height < 1.5 || region.width * region.height < 8;
+}
+
+function pageElementQualityMetadata(value: unknown): NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["quality"]> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  const status = input.status === "pass" || input.status === "needs_review" || input.status === "fail" ? input.status : undefined;
+  const score = numberMetadata(input.score);
+  if (!status || score === undefined) {
+    return undefined;
+  }
+  return {
+    status,
+    score,
+    warnings: Array.isArray(input.warnings) ? input.warnings.filter((item): item is any => Boolean(item) && typeof item === "object") : [],
+    candidates: Array.isArray(input.candidates) ? input.candidates.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [],
+    evidence: input.evidence && typeof input.evidence === "object" && !Array.isArray(input.evidence) ? input.evidence as Record<string, unknown> : {}
+  };
+}
+
+function recordMetadata(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function visualLocatorMetadata(value: unknown): Record<string, unknown> | undefined {
+  return recordMetadata(value);
+}
+
+function locatorKindMetadata(value: unknown): AssetRecordingLocatorKind | undefined {
+  return value === "text_locator" ||
+    value === "visual_locator" ||
+    value === "structural_locator" ||
+    value === "collection_item_locator"
+    ? value
+    : undefined;
+}
+
+function transitionKindMetadata(value: unknown): "static" | "parameterized" | undefined {
+  return value === "static" || value === "parameterized" ? value : undefined;
+}
+
+function dynamicMasksMetadata(value: unknown): AssetRecordingDynamicMask[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const masks = value
+    .map((item): AssetRecordingDynamicMask | undefined => {
+      const input = recordMetadata(item);
+      const kind = dynamicMaskKindMetadata(input?.kind);
+      const region = rectMetadata(input?.region);
+      if (!kind || !region) {
+        return undefined;
+      }
+      const label = stringMetadata(input, "label");
+      const reason = stringMetadata(input, "reason");
+      return {
+        kind,
+        region,
+        ...(label ? { label } : {}),
+        ...(reason ? { reason } : {})
+      };
+    })
+    .filter((item): item is AssetRecordingDynamicMask => Boolean(item));
+  return masks.length ? masks : undefined;
+}
+
+function dynamicMaskKindMetadata(value: unknown): AssetRecordingDynamicMask["kind"] | undefined {
+  return value === "avatar" ||
+    value === "text" ||
+    value === "image" ||
+    value === "number" ||
+    value === "custom"
+    ? value
+    : undefined;
+}
+
+function stringRecordMetadata(value: unknown): Record<string, string> | undefined {
+  const input = recordMetadata(value);
+  if (!input) {
+    return undefined;
+  }
+  const entries = Object.entries(input)
+    .map(([key, item]) => [key.trim(), typeof item === "string" ? item.trim() : ""] as const)
+    .filter(([key, item]) => key.length > 0 && item.length > 0);
+  return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 function rectMetadata(value: unknown): { x: number; y: number; width: number; height: number } | undefined {
@@ -2748,8 +4607,8 @@ function visualSemanticAreaMetadata(value: unknown): NonNullable<NonNullable<Ass
     : undefined;
 }
 
-function coordinateSpaceMetadata(value: unknown): "screen" | "app_viewport" | "region" | undefined {
-  return value === "screen" || value === "app_viewport" || value === "region" ? value : undefined;
+function coordinateSpaceMetadata(value: unknown): "screen" | "app_viewport" | "region" | "runtime" | undefined {
+  return value === "screen" || value === "app_viewport" || value === "region" || value === "runtime" ? value : undefined;
 }
 
 function scrollProfileMetadata(value: unknown): NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["scrollProfile"]> | undefined {
@@ -3095,6 +4954,9 @@ export function pageAssetMessage(response: CurrentPageAssetApiResponse, mappedPa
   }
   if (result.status === "draft_candidate") {
     return `已识别待保存页面：${mappedPage?.pageName ?? sanitizeAssetDisplayName(result.node?.name) ?? "未知页面"}`;
+  }
+  if (result.status === "blocked") {
+    return result.message ?? result.blocker?.message ?? result.matcherDiagnostics?.pollution?.message ?? "当前页面识别被阻断";
   }
   return "当前页面识别完成";
 }

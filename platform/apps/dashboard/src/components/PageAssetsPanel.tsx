@@ -326,6 +326,7 @@ export function PageAssetsPanel({
           targetNodeId: selectedTargetAsset.id,
           deviceSerial: selectedSerial,
           executionProfile: "fast_visual",
+          startAppScope: "current_device",
           persist: false
         })
       });
@@ -866,6 +867,7 @@ export function buildTargetPageGraphRunRequest(input: {
   startStrategy: "keep_current";
   startNodeId?: string;
   executionProfile: "fast_visual";
+  startAppScope: "current_device";
   overlay?: RuntimeOverlay;
 } {
   return {
@@ -875,6 +877,7 @@ export function buildTargetPageGraphRunRequest(input: {
     startStrategy: "keep_current",
     startNodeId: input.startNodeId,
     executionProfile: "fast_visual",
+    startAppScope: "current_device",
     overlay: input.overlay
   };
 }
