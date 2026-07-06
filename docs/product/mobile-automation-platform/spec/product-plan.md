@@ -4,7 +4,7 @@ doc_type: product-plan
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-06
-updated_at: 2026-07-02
+updated_at: 2026-07-06
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -135,6 +135,7 @@ collect Observation
 - 页面操作资产：每个 PageModel 维护本页可执行的 PageElement / PageAbility 入口，而不是把菜单、临时黑条、底部面板和动态卡片都拆成独立页面。资产录制阶段先按能力类型录入区域和参数：`fixed_tap` 表示固定位置点击，`scroll_candidate` 表示在内容区滚动查找某个 OCR / 图像目标，`grid_candidate` 表示动态列表 / 两列网格中的候选入口，`conditional_tap` 表示只在条件满足时出现的点击能力；连接边阶段再选择已保存 PageElement、执行动作并确认目标页面 / 页面内状态，沉淀为 PageTransition。对于“主页两列班级列表 -> 班级详情 -> 有 add 按钮才可创建课堂”这类场景，主页只录入“打开班级详情”的 `grid_candidate` 能力：圈选列表容器，保存列数、候选 item 高度、点击安全点、滑动步长和失败策略，并在跳转页面类型下绑定“班级详情”目标页面；班级详情再录入“创建课堂”的 `conditional_tap` 能力。如果业务目标要求进入指定数据项，例如“进入 {{className}} 这个班级再创建课堂”，`grid_candidate.scrollProfile.targetQuery` 可以保存 `{{className}}` 模板，目标页面测试通过运行参数 `className=班级四十一号` 注入；运行时只在人工圈选的列表 / 网格区域内 OCR 查找该文本，找不到时按容器滑动继续查找，最终仍找不到则失败并报告，不得退化为随便点击第一个候选。对于会随滚动出现的图标 / 图片按钮，录入 `scroll_candidate + targetKind=image_region`，执行时在内容区循环截图查找该图像目标。已绑定目标页面的 `navigate` PageAbility 会在路径规划和执行时临时转成 active route edge；未绑定目标页面的跳转能力会在保存或 route-plan 中提示，不参与规划。`grid_candidate` 运行时按视觉区域和安全点点击候选，不依赖 UIAutomator dump。同屏候选一期开通：非指定候选的下游失败重规划时会按 recovery attempt 尝试下一个候选；跨屏滚动翻页继续作为后续增强，而不是把每个班级卡片或每种账号数据保存成页面。
 - 自动探索：平台只针对已识别为已保存 PageModel 的当前页运行，V1 做当前页一跳探索，V2 做受深度和动作数限制的多层探索。候选来源优先使用已录入 PageElement / PageAbility，其次使用带区域的 OCR 文本候选；删除、退出登录、支付、发布、提交、确认等危险文案默认标记为 skipped。自动探索只生成候选、执行报告、新页面候选和异常证据，不直接写入正式 PageMatcher、PageElement 或 PageTransition；用户确认后仍通过“页面能力”和“连接边”流程入库。探索采集默认使用快速视觉模式（截图 + OCR + 已有视觉基线匹配），不依赖 UIAutomator / WDA 作为主路径。
 - 资产驱动巡检：作为独立于“目标执行”和“自动探索 / 稳定性探索”的产品入口，按已保存 PageModel 识别当前页面，再读取该页 PageElement、PageTransition、PageTask 和人工标注区域生成巡检计划。巡检先做页面健康检查、内容区滚动检查、元素重定位检查，再按风险策略验证连接边和轻量 PageTask；未录入为正式资产的 OCR / UI 候选只进入建议，不直接执行。巡检报告输出页面覆盖率、元素定位成功率、连接边稳定性、路径缺口、性能耗时、异常事件和修复入口。
+- AI 异常诊断：正常执行仍由 PageStateFlow / 资产巡检规则驱动，AI 不参与常规路径规划和设备控制；当执行出现 crash / ANR、页面匹配失败、元素重定位失败、状态迁移失败或资产巡检异常时，系统生成脱敏证据包并调用大模型做归因。AI 输出必须是结构化 JSON，分类为 App 问题、资产问题、自动化系统问题、环境问题或未知；如果判断为资产问题，可以生成受控的 `AssetPatchCandidate` 草稿。后续自动应用只允许在高置信、低风险、可验证且不依赖设备坐标的修复上开启，并必须保留诊断附件、修复 diff 和验证结果。
 - 稳定性探索：作为独立于目标执行和资产录制的测试入口，用于启动 App 后持续探索安全点击 / 滑动位置，发现 crash、ANR、黑屏、卡死、App 退出、未知页面和不可恢复状态。它类似视觉版 Monkey / Fastbot，但必须受最大时长、最大步数、危险词、黑名单区域、App 外恢复和 seed 复现约束；探索出来的新页面 / 新边 / 新能力只进入 draft 候选，不直接污染正式页面资产库。
 - 源码 / UI dump 辅助：源码、UIAutomator dump、WDA source、OCR 和截图分析只作为候选生成来源，不直接发布正式资产；其中 UIAutomator / WDA / resource-id / accessibility-id 相关信息必须留在 raw/debug evidence 或平台 profile，不能进入 active PageMatcher 白名单。
 - AI / CI 动态验证：AI 可请求执行到某个 PageModel 或运行某条 StructuredFlow，并临时覆盖目标预期。

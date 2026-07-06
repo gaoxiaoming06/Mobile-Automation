@@ -30,6 +30,64 @@ describe("renderReportHtml", () => {
     expect(renderReportHtml(run)).toContain("passed");
   });
 
+  it("renders AI diagnosis events with evidence links", () => {
+    const run: TestRun = {
+      id: "run-ai",
+      caseName: "业务图谱执行",
+      deviceSerial: "device-1",
+      status: "failed",
+      config: {
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 0,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false
+      },
+      steps: [],
+      stepResults: [],
+      metrics: [],
+      events: [
+        {
+          id: "event-ai",
+          runId: "run-ai",
+          deviceSerial: "device-1",
+          type: "ai_diagnosis",
+          severity: "warning",
+          occurredAt: "2026-06-04T00:00:01.000Z",
+          summary: "AI 诊断：asset_issue · 搜索图标资产失效。",
+          detail: JSON.stringify({
+            confidence: 0.92,
+            recommendedAction: "create_asset_patch",
+            safeToAutoApply: false
+          }),
+          artifactIds: ["artifact-ai"]
+        }
+      ],
+      artifacts: [
+        {
+          id: "artifact-ai",
+          runId: "run-ai",
+          type: "log",
+          name: "ai-diagnosis-1.json",
+          path: "runs/run-ai/logs/ai-diagnosis-1.json",
+          url: "/artifacts/runs/run-ai/logs/ai-diagnosis-1.json",
+          mimeType: "application/json",
+          createdAt: "2026-06-04T00:00:01.000Z"
+        }
+      ],
+      startedAt: "2026-06-04T00:00:00.000Z"
+    };
+
+    const html = renderReportHtml(run);
+
+    expect(html).toContain("AI 诊断");
+    expect(html).toContain("搜索图标资产失效");
+    expect(html).toContain("create_asset_patch");
+    expect(html).toContain("/artifacts/runs/run-ai/logs/ai-diagnosis-1.json");
+  });
+
   it("renders stability exploration config and runtime summary", () => {
     const run: TestRun = {
       id: "run-stability",

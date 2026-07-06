@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildExecutionPlan, planRoute, type ActionPolicy, type StateMatcher } from "@mobile-automation/graph-core";
 import type { ActionStep, ArtifactRef, RunConfig, StepExpectation, StepExpectationResult, StepResult, StructuredFlow } from "@mobile-automation/shared";
+import type { AiDiagnosisStoredSettings } from "./ai-diagnosis.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 
 type StorageContext = {
@@ -57,6 +58,8 @@ type StorageContext = {
     listRuntimeInterceptorRules(filter?: { enabledOnly?: boolean; platform?: "android" | "ios"; appPackageName?: string; flowId?: string }): RuntimeInterceptorRule[];
     updateRuntimeInterceptorRule(id: string, patch: Partial<Omit<RuntimeInterceptorRule, "id" | "createdAt" | "updatedAt">>): RuntimeInterceptorRule | undefined;
     deleteRuntimeInterceptorRule(id: string): boolean;
+    getAiDiagnosisSettings(): AiDiagnosisStoredSettings | undefined;
+    updateAiDiagnosisSettings(input: Partial<AiDiagnosisStoredSettings> & { clearApiKey?: boolean }): AiDiagnosisStoredSettings;
     createRun(input: { caseId?: string; caseName: string; deviceSerial: string; configJson: string; caseSnapshotJson: string; steps: ActionStep[] }): { id: string };
     updateRunStatus(runId: string, status: string, endedAt?: string): void;
     updateRunReport(runId: string, relativePath: string): void;
@@ -81,7 +84,7 @@ type StorageContext = {
       runId: string;
       stepResultId?: string;
       deviceSerial: string;
-      type: "crash" | "anr" | "command_failed" | "device_lost" | "preview_lost" | "runner_error" | "video_unavailable" | "start_state_failed";
+      type: "crash" | "anr" | "command_failed" | "device_lost" | "preview_lost" | "runner_error" | "video_unavailable" | "start_state_failed" | "ai_diagnosis";
       severity: "info" | "warning" | "error";
       occurredAt: string;
       summary: string;
@@ -946,6 +949,46 @@ describe("Storage", () => {
         metadata: expect.objectContaining({ candidateId: "node-home" })
       })
     );
+  });
+
+  it("persists AI diagnosis settings without losing the saved api key when editing public fields", async () => {
+    const { storage } = await createStorageContext();
+
+    const saved = storage.updateAiDiagnosisSettings({
+      enabled: true,
+      baseURL: "https://ai.example/v1",
+      apiKey: "secret-key",
+      model: "gpt-test",
+      timeoutMs: 12000
+    });
+
+    expect(saved).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        baseURL: "https://ai.example/v1",
+        apiKey: "secret-key",
+        model: "gpt-test",
+        timeoutMs: 12000
+      })
+    );
+
+    const edited = storage.updateAiDiagnosisSettings({
+      enabled: true,
+      baseURL: "https://ai2.example/v1",
+      model: "gpt-next",
+      timeoutMs: 15000
+    });
+
+    expect(edited).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        baseURL: "https://ai2.example/v1",
+        apiKey: "secret-key",
+        model: "gpt-next",
+        timeoutMs: 15000
+      })
+    );
+    expect(storage.getAiDiagnosisSettings()).toEqual(edited);
   });
 });
 

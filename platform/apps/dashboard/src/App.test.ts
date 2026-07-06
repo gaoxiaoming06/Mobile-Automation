@@ -7,6 +7,7 @@ import {
   ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE,
   ASSET_PATROL_PRIMARY_ACTION_LABEL,
   ASSET_DRIVEN_TEST_ACTION_LABEL,
+  AiDiagnosisSettingsPanel,
   DEFAULT_ASSET_PATROL_PACKAGE_NAME,
   DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES,
   DEFAULT_STABILITY_EXPLORER_APP_EXIT_POLICY,
@@ -70,6 +71,68 @@ describe("App shell", () => {
     expect(markup).toContain("页面资产库");
     expect(markup).toContain("资产驱动巡检");
     expect(markup).toContain("稳定性探索");
+    expect(markup).toContain("系统设置");
+  });
+
+  it("renders AI diagnosis settings without exposing the saved api key", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AiDiagnosisSettingsPanel, {
+        settings: {
+          enabled: true,
+          baseURL: "https://ai.example/v1",
+          model: "gpt-test",
+          timeoutMs: 12000,
+          apiKeyConfigured: true,
+          source: "stored"
+        },
+        draft: {
+          enabled: true,
+          baseURL: "https://ai.example/v1",
+          apiKey: "",
+          model: "gpt-test",
+          timeoutMs: 12000
+        },
+        busy: false,
+        onDraftChange: () => undefined,
+        onSave: () => undefined
+      })
+    );
+
+    expect(markup).toContain("AI 诊断");
+    expect(markup).toContain("已配置");
+    expect(markup).not.toContain("secret-key");
+  });
+
+  it("renders AI diagnosis settings as a compact single form", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AiDiagnosisSettingsPanel, {
+        settings: {
+          enabled: false,
+          baseURL: "",
+          model: "",
+          timeoutMs: 30000,
+          apiKeyConfigured: false,
+          source: "none"
+        },
+        draft: {
+          enabled: false,
+          baseURL: "",
+          apiKey: "",
+          model: "",
+          timeoutMs: 30000
+        },
+        busy: false,
+        onDraftChange: () => undefined,
+        onSave: () => undefined
+      })
+    );
+
+    expect(markup).toContain("AI 诊断");
+    expect(markup).toContain("接口地址");
+    expect(markup).toContain("保存");
+    expect(markup).not.toContain("AI 诊断配置");
+    expect(markup).not.toContain("刷新");
+    expect(markup).not.toContain("清除已保存密钥");
   });
 
   it("keeps the stability exploration config panel independently scrollable", () => {

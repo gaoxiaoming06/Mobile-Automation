@@ -386,7 +386,8 @@ export type DeviceEvent = {
     | "black_screen"
     | "unknown_page_stuck"
     | "stability_exploration"
-    | "asset_patrol";
+    | "asset_patrol"
+    | "ai_diagnosis";
   severity: "info" | "warning" | "error";
   occurredAt: string;
   summary: string;

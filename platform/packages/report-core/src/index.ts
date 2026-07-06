@@ -151,6 +151,7 @@ export function renderReportHtml(run: TestRun): string {
     ${renderGraphReport(run)}
     ${renderStabilityReport(run)}
     ${renderAssetPatrolReport(run)}
+    ${renderAiDiagnosisReport(run)}
 
     <h2>性能摘要</h2>
     <section class="summary">
@@ -434,6 +435,31 @@ function renderAssetPatrolReport(run: TestRun): string {
     </section>`;
 }
 
+function renderAiDiagnosisReport(run: TestRun): string {
+  const events = run.events.filter((event) => event.type === "ai_diagnosis");
+  if (!events.length) {
+    return "";
+  }
+  return `<h2>AI 诊断</h2>
+    <section class="graph-panel">
+      <div class="graph-diagnostics">
+        ${events
+          .map((event) => {
+            const detail = readJsonObject(event.detail);
+            const artifacts = event.artifactIds
+              .map((id) => run.artifacts.find((artifact) => artifact.id === id))
+              .filter((artifact): artifact is ArtifactRef => Boolean(artifact));
+            return `<div class="${event.severity === "warning" ? "warning" : ""}">
+              <strong>${escapeHtml(event.summary)}</strong>
+              <span>置信度=${escapeHtml(formatUnknown(detail?.confidence, "-"))} · 建议=${escapeHtml(formatUnknown(detail?.recommendedAction, "-"))} · 自动应用=${escapeHtml(formatUnknown(detail?.safeToAutoApply, false))}</span>
+              ${artifacts.length ? renderEvidenceLinks(artifacts) : ""}
+            </div>`;
+          })
+          .join("")}
+      </div>
+    </section>`;
+}
+
 function renderGraphReport(run: TestRun): string {
   const graphSteps = collectGraphSteps(run);
   if (!graphSteps.length) {
@@ -697,6 +723,18 @@ function renderSemanticLocatorEvidence(value: unknown): string {
 
 function readSemanticObject(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function readJsonObject(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function textValue(value: unknown): string {
@@ -1028,6 +1066,10 @@ function formatUnknownValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function formatUnknown(value: unknown, fallback: unknown): string {
+  return formatUnknownValue(value ?? fallback);
 }
 
 function formatMaybe(value: number | undefined, suffix: string): string {

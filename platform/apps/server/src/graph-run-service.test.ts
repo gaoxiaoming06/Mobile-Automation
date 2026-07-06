@@ -1368,6 +1368,132 @@ describe("GraphRunService", () => {
     expect(storedTargetNode.defaultExpectations.map((expectation: StepExpectation) => expectation.id)).toEqual(["target-visible"]);
   });
 
+  it("writes AI diagnosis evidence for failed graph runs when a diagnosis client is configured", async () => {
+    context = await createContext();
+    const { storage } = context;
+    const driver = new GraphMockDriver(context.tempRoot);
+    const aiDiagnosisClient = {
+      diagnose: vi.fn(async () => ({
+        classification: "asset_issue" as const,
+        confidence: 0.88,
+        summary: "目标页新增文案导致旧预期失败。",
+        reasoning: ["动作已执行", "目标节点视觉可见但覆盖预期未满足"],
+        recommendedAction: "create_asset_patch" as const,
+        safeToAutoApply: false,
+        assetPatch: {
+          kind: "page_matcher" as const,
+          operation: "update" as const,
+          targetId: "node-target",
+          summary: "补充新版目标页文案 matcher",
+          changes: { matcher: "新版目标页" },
+          status: "draft" as const
+        }
+      }))
+    };
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new FakeOcrService("首页\n目标页"), { aiDiagnosisClient });
+    const { graph, targetNode } = seedGraph(storage);
+
+    const started = await service.start({
+      deviceSerial: driver.device.serial,
+      graphId: graph.id,
+      targetNodeId: targetNode.id,
+      startStrategy: "keep_current",
+      overlay: {
+        id: "overlay-ai-diagnosis",
+        note: "temporary AI expectation",
+        nodeExpectationOverrides: [
+          {
+            nodeId: targetNode.id,
+            expectations: [textExpectation("overlay-missing-copy", "不存在的目标页文案", { timeoutMs: 20, intervalMs: 1 })]
+          }
+        ]
+      }
+    });
+
+    await waitForRun(storage, started.run.id, { waitForReport: true });
+
+    const run = storage.getRun(started.run.id);
+    expect(run.status).toBe("failed");
+    expect(aiDiagnosisClient.diagnose).toHaveBeenCalledTimes(1);
+    const aiEvent = run.events.find((event: { type: string }) => event.type === "ai_diagnosis");
+    expect(aiEvent).toEqual(
+      expect.objectContaining({
+        severity: "warning",
+        summary: "AI 诊断：asset_issue · 目标页新增文案导致旧预期失败。"
+      })
+    );
+    const artifact = run.artifacts.find((item: { id: string }) => item.id === aiEvent.artifactIds[0]);
+    expect(artifact?.name).toMatch(/^ai-diagnosis-/);
+    const payload = JSON.parse(await readFile(path.join(context.tempRoot, "artifacts", artifact.path), "utf8"));
+    expect(payload).toEqual(
+      expect.objectContaining({
+        diagnosis: expect.objectContaining({
+          classification: "asset_issue",
+          assetPatch: expect.objectContaining({ status: "draft" })
+        }),
+        evidence: expect.objectContaining({
+          runId: started.run.id,
+          deviceSerial: driver.device.serial
+        })
+      })
+    );
+  });
+
+  it("uses saved AI diagnosis settings for failed graph runs without restarting the service", async () => {
+    context = await createContext();
+    const { storage } = context;
+    storage.updateAiDiagnosisSettings({
+      enabled: true,
+      baseURL: "https://settings.example/v1",
+      apiKey: "settings-key",
+      model: "settings-model",
+      timeoutMs: 7000
+    });
+    const driver = new GraphMockDriver(context.tempRoot);
+    const aiDiagnosisClient = {
+      diagnose: vi.fn(async () => ({
+        classification: "automation_issue" as const,
+        confidence: 0.77,
+        summary: "测试配置来源",
+        reasoning: ["使用设置页保存的模型配置"],
+        recommendedAction: "report_only" as const,
+        safeToAutoApply: false
+      }))
+    };
+    const createAiDiagnosisClient = vi.fn(() => aiDiagnosisClient);
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new FakeOcrService("首页\n目标页"), { createAiDiagnosisClient });
+    const { graph, targetNode } = seedGraph(storage);
+
+    const started = await service.start({
+      deviceSerial: driver.device.serial,
+      graphId: graph.id,
+      targetNodeId: targetNode.id,
+      startStrategy: "keep_current",
+      overlay: {
+        id: "overlay-ai-settings",
+        nodeExpectationOverrides: [
+          {
+            nodeId: targetNode.id,
+            expectations: [textExpectation("overlay-missing-copy", "不存在的目标页文案", { timeoutMs: 20, intervalMs: 1 })]
+          }
+        ]
+      }
+    });
+
+    await waitForRun(storage, started.run.id, { waitForReport: true });
+
+    expect(createAiDiagnosisClient).toHaveBeenCalledWith({
+      enabled: true,
+      baseURL: "https://settings.example/v1",
+      apiKey: "settings-key",
+      model: "settings-model",
+      timeoutMs: 7000
+    });
+    expect(aiDiagnosisClient.diagnose).toHaveBeenCalledTimes(1);
+  });
+
   it("evaluates runtime overlay expectations when the device is already at the target node", async () => {
     context = await createContext();
     const { storage } = context;

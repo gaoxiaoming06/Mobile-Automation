@@ -100,6 +100,12 @@ import {
   type AssetPatrolStartMode
 } from "./asset-patrol.js";
 import {
+  previewAiDiagnosisSettingsUpdate,
+  publicAiDiagnosisSettings,
+  resolveAiDiagnosisConfig,
+  type AiDiagnosisSettingsUpdateInput
+} from "./ai-diagnosis.js";
+import {
   StabilityExplorer,
   StabilityExplorerDeviceBusyError,
   type StabilityExplorerAllowedAction,
@@ -172,6 +178,27 @@ app.get("/api/health", (_req, res) => {
     service: "mobile-automation-server",
     artifactRoot
   });
+});
+
+app.get("/api/settings/ai-diagnosis", (_req, res) => {
+  res.json({ settings: publicAiDiagnosisSettings(process.env, storage.getAiDiagnosisSettings()) });
+});
+
+app.put("/api/settings/ai-diagnosis", (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const update = aiDiagnosisSettingsUpdateFromBody(body);
+    const candidate = previewAiDiagnosisSettingsUpdate(storage.getAiDiagnosisSettings(), update);
+    const resolved = resolveAiDiagnosisConfig(process.env, candidate);
+    if (candidate.enabled && !resolved.enabled) {
+      res.status(400).json({ error: "AI 诊断配置不完整，请填写接口地址和模型名；HTTP 接口还需要 API Key" });
+      return;
+    }
+    const saved = storage.updateAiDiagnosisSettings(update);
+    res.json({ settings: publicAiDiagnosisSettings(process.env, saved) });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
 });
 
 app.get("/api/system/tools", async (_req, res) => {
@@ -4385,6 +4412,26 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringBodyValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function positiveNumberBodyValue(value: unknown): number | undefined {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : undefined;
+}
+
+function aiDiagnosisSettingsUpdateFromBody(body: Record<string, unknown>): AiDiagnosisSettingsUpdateInput {
+  return {
+    enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+    baseURL: stringBodyValue(body.baseURL),
+    apiKey: stringBodyValue(body.apiKey),
+    model: stringBodyValue(body.model),
+    timeoutMs: positiveNumberBodyValue(body.timeoutMs),
+    clearApiKey: body.clearApiKey === true
+  };
 }
 
 function firstString(values: unknown[]): string | undefined {

@@ -28,6 +28,7 @@ import {
   type TestRun
 } from "@mobile-automation/shared";
 import { artifactRoot, dataRoot } from "./artifacts.js";
+import { previewAiDiagnosisSettingsUpdate, type AiDiagnosisSettingsUpdateInput, type AiDiagnosisStoredSettings } from "./ai-diagnosis.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 
 const dbPath = path.join(dataRoot, "mobile-automation.sqlite");
@@ -95,6 +96,8 @@ type RuntimeInterceptorRuleFilter = {
   flowId?: string;
   stepId?: string;
 };
+
+const AI_DIAGNOSIS_SETTINGS_KEY = "ai_diagnosis";
 
 export type ImportedSourceScanGraph = {
   graph: BusinessGraph;
@@ -500,6 +503,32 @@ export class Storage {
   deleteRuntimeInterceptorRule(id: string): boolean {
     const result = this.db.prepare("DELETE FROM runtime_interceptor_rules WHERE id = ?").run(id);
     return result.changes > 0;
+  }
+
+  getAiDiagnosisSettings(): AiDiagnosisStoredSettings | undefined {
+    const row = this.db.prepare("SELECT value_json, updated_at FROM app_settings WHERE setting_key = ?").get(AI_DIAGNOSIS_SETTINGS_KEY) as Row | undefined;
+    if (!row) {
+      return undefined;
+    }
+    const parsed = parseJsonObject(String(row.value_json));
+    return normalizeAiDiagnosisSettings({ ...parsed, updatedAt: String(row.updated_at) });
+  }
+
+  updateAiDiagnosisSettings(input: AiDiagnosisSettingsUpdateInput): AiDiagnosisStoredSettings {
+    const existing = this.getAiDiagnosisSettings();
+    const now = nowIso();
+    const next = normalizeAiDiagnosisSettings({
+      ...previewAiDiagnosisSettingsUpdate(existing, input),
+      updatedAt: now
+    });
+    this.db
+      .prepare(
+        `INSERT INTO app_settings (setting_key, value_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(setting_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
+      )
+      .run(AI_DIAGNOSIS_SETTINGS_KEY, JSON.stringify(stripUndefined({ ...next, updatedAt: undefined })), now);
+    return next;
   }
 
   createBusinessGraph(input: CreateBusinessGraphInput): BusinessGraph {
@@ -1555,6 +1584,12 @@ export class Storage {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS app_settings (
+        setting_key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_steps_case_order ON steps(case_id, step_order);
       CREATE INDEX IF NOT EXISTS idx_structured_flows_app ON structured_flows(app_id, platform, updated_at);
       CREATE INDEX IF NOT EXISTS idx_structured_flow_steps_flow_order ON structured_flow_steps(flow_id, step_order);
@@ -1815,6 +1850,39 @@ function runtimeInterceptorRuleMatchesFilter(rule: RuntimeInterceptorRule, filte
     return false;
   }
   return true;
+}
+
+function normalizeAiDiagnosisSettings(input: Record<string, unknown>): AiDiagnosisStoredSettings {
+  return stripUndefined({
+    enabled: Boolean(input.enabled),
+    baseURL: nonEmptyString(input.baseURL),
+    apiKey: nonEmptyString(input.apiKey),
+    model: nonEmptyString(input.model),
+    timeoutMs: positiveInteger(input.timeoutMs),
+    updatedAt: nonEmptyString(input.updatedAt)
+  });
+}
+
+function parseJsonObject(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : undefined;
+}
+
+function stripUndefined<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
 }
 
 function reliabilityHintOrUndefined(value: unknown): ActionPolicy["reliabilityHint"] | undefined {

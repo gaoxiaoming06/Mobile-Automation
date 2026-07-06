@@ -1,6 +1,7 @@
 import {
   PlayCircle,
   RefreshCw,
+  Save,
   Square,
   Smartphone
 } from "lucide-react";
@@ -50,6 +51,7 @@ import {
   type SemanticSnapshots,
   type TextSnapshot
 } from "./semantic-snapshot";
+import { apiFetchJson } from "./api";
 
 type PointerStart = {
   x: number;
@@ -113,6 +115,23 @@ type StabilityAllowedActions = {
   wait: boolean;
 };
 type TextStorage = Pick<Storage, "getItem" | "setItem">;
+type AiDiagnosisSettingsSource = "stored" | "environment" | "none";
+export type PublicAiDiagnosisSettings = {
+  enabled: boolean;
+  baseURL: string;
+  model: string;
+  timeoutMs: number;
+  apiKeyConfigured: boolean;
+  source: AiDiagnosisSettingsSource;
+};
+export type AiDiagnosisSettingsDraft = {
+  enabled: boolean;
+  baseURL: string;
+  apiKey: string;
+  model: string;
+  timeoutMs: number;
+  clearApiKey?: boolean;
+};
 
 export const DEFAULT_STABILITY_EXPLORER_START_MODE: StabilityExplorerStartMode = "restart_app";
 export const DEFAULT_STABILITY_EXPLORER_APP_EXIT_POLICY: StabilityExplorerAppExitPolicy = "back_to_app";
@@ -134,6 +153,14 @@ export const DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES: Record<string, string> =
 export const ASSET_PATROL_PRIMARY_ACTION_LABEL = "执行资产体检";
 export const ASSET_DRIVEN_TEST_ACTION_LABEL = "开始资产测试";
 export const ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE = "当前为诊断模式：只检查页面匹配、元素重定位、边和任务编排质量，不会触发页面点击或输入。";
+export const DEFAULT_AI_DIAGNOSIS_SETTINGS: PublicAiDiagnosisSettings = {
+  enabled: false,
+  baseURL: "",
+  model: "",
+  timeoutMs: 30_000,
+  apiKeyConfigured: false,
+  source: "none"
+};
 const STABILITY_DANGEROUS_TEXT_BY_PACKAGE_STORAGE_KEY = "mobile-automation.stabilityDangerousTextByPackage.v1";
 type RecordingWorkspaceStyle = CSSProperties & {
   "--recording-preview-width"?: string;
@@ -915,6 +942,27 @@ export function assetDrivenTestStartMessage(run: Pick<TestRun, "id">, queue?: { 
   return `已启动资产测试：${run.id}`;
 }
 
+export function aiDiagnosisDraftFromSettings(settings: PublicAiDiagnosisSettings): AiDiagnosisSettingsDraft {
+  return {
+    enabled: settings.enabled,
+    baseURL: settings.baseURL,
+    apiKey: "",
+    model: settings.model,
+    timeoutMs: settings.timeoutMs || DEFAULT_AI_DIAGNOSIS_SETTINGS.timeoutMs
+  };
+}
+
+export function aiDiagnosisSettingsRequestBody(draft: AiDiagnosisSettingsDraft): Record<string, unknown> {
+  return {
+    enabled: draft.enabled,
+    baseURL: draft.baseURL.trim(),
+    model: draft.model.trim(),
+    timeoutMs: draft.timeoutMs,
+    apiKey: draft.apiKey.trim() || undefined,
+    clearApiKey: draft.clearApiKey === true
+  };
+}
+
 export function App() {
   const [inputText, setInputText] = useState("");
   const [message, setMessage] = useState("准备连接设备");
@@ -961,6 +1009,8 @@ export function App() {
   const [assetPatrolRuntimeParamsText, setAssetPatrolRuntimeParamsText] = useState("");
   const [assetPatrolRuntimeParamDefinitions, setAssetPatrolRuntimeParamDefinitions] = useState<AssetRuntimeParamDefinition[]>([]);
   const [assetPatrolPlan, setAssetPatrolPlan] = useState<AssetPatrolPlan>();
+  const [aiDiagnosisSettings, setAiDiagnosisSettings] = useState<PublicAiDiagnosisSettings>(DEFAULT_AI_DIAGNOSIS_SETTINGS);
+  const [aiDiagnosisDraft, setAiDiagnosisDraft] = useState<AiDiagnosisSettingsDraft>(aiDiagnosisDraftFromSettings(DEFAULT_AI_DIAGNOSIS_SETTINGS));
   const activePreviewWorkspaceKey = previewWorkspaceKey(activeNavItem);
 
   const workspaceRef = useRef<HTMLElement | null>(null);
@@ -973,6 +1023,7 @@ export function App() {
   const textSnapshotInFlightRef = useRef(false);
   const assetRecordingIdentificationInFlightRef = useRef(0);
   const assetPatrolRuntimeParamSyncPackageRef = useRef("");
+  const aiDiagnosisSettingsLoadedRef = useRef(false);
 
   const {
     devices,
@@ -1098,6 +1149,36 @@ export function App() {
     setRuntimeInterceptorRules(json.rules);
   }
 
+  async function loadAiDiagnosisSettings() {
+    try {
+      const json = await apiFetchJson<{ settings: PublicAiDiagnosisSettings }>("/api/settings/ai-diagnosis");
+      setAiDiagnosisSettings(json.settings);
+      setAiDiagnosisDraft(aiDiagnosisDraftFromSettings(json.settings));
+      setMessage("已加载 AI 诊断配置");
+    } catch (error) {
+      aiDiagnosisSettingsLoadedRef.current = false;
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function saveAiDiagnosisSettings() {
+    try {
+      setBusy(true);
+      const json = await apiFetchJson<{ settings: PublicAiDiagnosisSettings }>("/api/settings/ai-diagnosis", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(aiDiagnosisSettingsRequestBody(aiDiagnosisDraft))
+      });
+      setAiDiagnosisSettings(json.settings);
+      setAiDiagnosisDraft(aiDiagnosisDraftFromSettings(json.settings));
+      setMessage("已保存 AI 诊断配置");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     refreshStructuredFlows().catch(() => undefined);
     refreshRuntimeInterceptorRules().catch(() => undefined);
@@ -1116,6 +1197,14 @@ export function App() {
     }, 250);
     return () => window.clearTimeout(timer);
   }, [activeNavItem, assetPatrolPackageName]);
+
+  useEffect(() => {
+    if (activeNavItem !== "settings" || aiDiagnosisSettingsLoadedRef.current) {
+      return;
+    }
+    aiDiagnosisSettingsLoadedRef.current = true;
+    void loadAiDiagnosisSettings();
+  }, [activeNavItem]);
 
   useEffect(() => {
     if (activeNavItem !== "assetRecording" || !selectedSerial || !selectedDevice) {
@@ -1806,6 +1895,10 @@ export function App() {
 
   function openStability() {
     setActiveNavItem("stability");
+  }
+
+  function openSettings() {
+    setActiveNavItem("settings");
   }
 
   function openRuns() {
@@ -2799,6 +2892,7 @@ export function App() {
           openStability={openStability}
           openRuns={openRuns}
           openGraphs={() => setActiveNavItem("graphs")}
+          openSettings={openSettings}
         />
 
         {activeNavItem === "devices" && (
@@ -3056,6 +3150,16 @@ export function App() {
 
         {activeNavItem === "runs" && <section className="module-page execution-module">{stepsPanel}</section>}
 
+        {activeNavItem === "settings" && (
+          <SettingsView
+            aiSettings={aiDiagnosisSettings}
+            aiDraft={aiDiagnosisDraft}
+            busy={busy}
+            onAiDraftChange={(patch) => setAiDiagnosisDraft((draft) => ({ ...draft, ...patch }))}
+            onSaveAiSettings={() => void saveAiDiagnosisSettings()}
+          />
+        )}
+
         {activeNavItem === "graphs" && (
           <GraphCandidatesPanel
             setMessage={setMessage}
@@ -3071,6 +3175,117 @@ export function App() {
       </section>
     </main>
   );
+}
+
+type SettingsViewProps = {
+  aiSettings: PublicAiDiagnosisSettings;
+  aiDraft: AiDiagnosisSettingsDraft;
+  busy: boolean;
+  onAiDraftChange: (patch: Partial<AiDiagnosisSettingsDraft>) => void;
+  onSaveAiSettings: () => void;
+};
+
+function SettingsView({
+  aiSettings,
+  aiDraft,
+  busy,
+  onAiDraftChange,
+  onSaveAiSettings
+}: SettingsViewProps) {
+  return (
+    <section className="module-page settings-module">
+      <AiDiagnosisSettingsPanel
+        settings={aiSettings}
+        draft={aiDraft}
+        busy={busy}
+        onDraftChange={onAiDraftChange}
+        onSave={onSaveAiSettings}
+      />
+    </section>
+  );
+}
+
+type AiDiagnosisSettingsPanelProps = {
+  settings: PublicAiDiagnosisSettings;
+  draft: AiDiagnosisSettingsDraft;
+  busy: boolean;
+  onDraftChange: (patch: Partial<AiDiagnosisSettingsDraft>) => void;
+  onSave: () => void;
+};
+
+export function AiDiagnosisSettingsPanel({
+  settings,
+  draft,
+  busy,
+  onDraftChange,
+  onSave
+}: AiDiagnosisSettingsPanelProps) {
+  const keyStatus = settings.baseURL.trim().toLowerCase().startsWith("codex://app-server")
+    ? "Codex 本地入口，无需密钥"
+    : settings.apiKeyConfigured
+      ? "已保存密钥，留空保持不变"
+      : "未保存密钥";
+  return (
+    <div className="panel settings-content-panel">
+      <div className="panel-head">
+        <div>
+          <h2>AI 诊断</h2>
+          <span className="settings-status-line">
+            {settings.enabled ? "已启用" : "未启用"} · {keyStatus} · {settingsSourceLabel(settings.source)}
+          </span>
+        </div>
+        <div className="toolbar-actions">
+          <button className="icon-button primary" type="button" disabled={busy} onClick={onSave}>
+            <Save size={16} />
+            保存
+          </button>
+        </div>
+      </div>
+      <div className="settings-form-grid">
+        <label className="settings-toggle-row">
+          <input type="checkbox" checked={draft.enabled} onChange={(event) => onDraftChange({ enabled: event.target.checked })} />
+          启用失败后 AI 诊断
+        </label>
+        <label>
+          接口地址
+          <input value={draft.baseURL} onChange={(event) => onDraftChange({ baseURL: event.target.value })} placeholder="codex://app-server 或 https://api.example.com/v1" />
+        </label>
+        <label>
+          模型名
+          <input value={draft.model} onChange={(event) => onDraftChange({ model: event.target.value })} placeholder="gpt-5.4" />
+        </label>
+        <label>
+          API Key
+          <input
+            type="password"
+            value={draft.apiKey}
+            onChange={(event) => onDraftChange({ apiKey: event.target.value })}
+            placeholder={settings.apiKeyConfigured ? "已配置，留空保持不变" : "HTTP 接口需要填写；Codex 可留空"}
+          />
+        </label>
+        <label>
+          超时 ms
+          <input
+            min={1000}
+            max={120000}
+            type="number"
+            value={draft.timeoutMs}
+            onChange={(event) => onDraftChange({ timeoutMs: clampNumberInput(event.target.value, 1000, 120000, DEFAULT_AI_DIAGNOSIS_SETTINGS.timeoutMs) })}
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function settingsSourceLabel(source: AiDiagnosisSettingsSource): string {
+  if (source === "stored") {
+    return "设置页";
+  }
+  if (source === "environment") {
+    return "环境变量";
+  }
+  return "未配置";
 }
 
 type AssetPatrolPanelProps = {

@@ -58,6 +58,14 @@ import { SemanticStepResolver } from "./semantic-locator.js";
 import { resolveReachableStartNode, type StartAppScope } from "./start-node-recovery.js";
 import { StepExpectationEvaluator, annotateNonBlockingExpectationResults, shouldFailStepForExpectation, stateExpectedDescription } from "./step-expectations.js";
 import type { Storage } from "./storage.js";
+import {
+  buildAiDiagnosisEvidencePack,
+  createAiDiagnosisClient,
+  resolveAiDiagnosisConfig,
+  type AiDiagnosisConfig,
+  type AiDiagnosisClient,
+  type AiDiagnosisResult
+} from "./ai-diagnosis.js";
 
 type GraphExecutionPlan = ReturnType<typeof buildExecutionPlan>;
 
@@ -103,6 +111,7 @@ export type GraphRunStorage = Pick<
   | "createOperationEdge"
   | "findOperationEdgeByKey"
   | "listRuntimeInterceptorRules"
+  | "getAiDiagnosisSettings"
 >;
 
 export type StartGraphRunInput = {
@@ -131,6 +140,11 @@ export type StartedGraphRun = {
   targetResolution?: ReturnType<typeof resolveTargetNode>;
 };
 
+export type GraphRunServiceOptions = {
+  aiDiagnosisClient?: AiDiagnosisClient;
+  createAiDiagnosisClient?: (config: Extract<AiDiagnosisConfig, { enabled: true }>) => AiDiagnosisClient;
+};
+
 type ActiveGraphRun = {
   promise: Promise<void>;
   controller: RunExecutionController;
@@ -143,12 +157,17 @@ export class GraphRunService {
   private readonly expectationEvaluator: StepExpectationEvaluator;
   private readonly semanticStepResolver: SemanticStepResolver;
   private readonly observationService: ObservationService;
+  private readonly aiDiagnosisClient?: AiDiagnosisClient;
+  private readonly createAiDiagnosisClient: (config: Extract<AiDiagnosisConfig, { enabled: true }>) => AiDiagnosisClient;
 
   constructor(
     private readonly storage: GraphRunStorage,
     private readonly driver: AutomationDeviceDriver,
-    private readonly ocr: OcrService
+    private readonly ocr: OcrService,
+    options: GraphRunServiceOptions = {}
   ) {
+    this.aiDiagnosisClient = options.aiDiagnosisClient;
+    this.createAiDiagnosisClient = options.createAiDiagnosisClient ?? createAiDiagnosisClient;
     this.artifactService = new RunArtifactService(this.storage, this.driver);
     this.expectationEvaluator = new StepExpectationEvaluator({
       ocr: this.ocr,
@@ -476,6 +495,9 @@ export class GraphRunService {
       await eventWatcher?.stop().catch(() => undefined);
       await Promise.allSettled(pendingEventWrites);
       await this.artifactService.finalizeVideo(runId, videoRecording, failed || stopped || config.keepVideoOnSuccess);
+      if (failed && !stopped) {
+        await this.writeAiDiagnosis(runId, config, activeStepResultId).catch((error) => this.writeAiDiagnosisFailure(runId, config.deviceSerial, error, activeStepResultId));
+      }
       this.storage.updateRunStatus(runId, stopped ? "stopped" : failed ? "failed" : "passed");
       await this.artifactService.generateReport(runId);
     }
@@ -1992,6 +2014,108 @@ export class GraphRunService {
     });
   }
 
+  private async writeAiDiagnosis(runId: string, config: RunConfig, activeStepResultId?: string): Promise<void> {
+    const aiDiagnosisClient = this.resolveAiDiagnosisClient();
+    if (!aiDiagnosisClient) {
+      return;
+    }
+    const run = this.storage.getRun(runId);
+    if (!run) {
+      return;
+    }
+    const failedStep = latestFailedStep(run.stepResults) ?? run.stepResults.at(-1);
+    const evidence = buildAiDiagnosisEvidencePack({
+      runId,
+      runKind: config.runKind,
+      deviceSerial: config.deviceSerial,
+      packageName: config.assetPatrol?.packageName ?? config.startAppPackageName,
+      currentPage: graphString(failedStep, "fromNodeName"),
+      targetPage: graphString(failedStep, "toNodeName"),
+      failedStep: failedStep
+        ? {
+            id: failedStep.id,
+            title: graphString(failedStep, "edgeKey") ?? graphString(failedStep, "edgeId") ?? failedStep.stepId,
+            status: failedStep.status,
+            errorMessage: failedStep.errorMessage
+          }
+        : undefined,
+      error: failedStep?.errorMessage ?? latestErrorEvent(run.events)?.detail ?? "Run failed without a step error message.",
+      runtimeParams: config.assetPatrol?.runtimeParams,
+      recentSteps: run.stepResults.slice(-8).map((step) => ({
+        id: step.id,
+        stepId: step.stepId,
+        order: step.stepOrder,
+        type: step.type,
+        status: step.status,
+        errorCode: step.errorCode,
+        errorMessage: step.errorMessage,
+        graph: readRecord(step.metadata?.graph)
+      })),
+      recentEvents: run.events.slice(-8).map((event) => ({
+        type: event.type,
+        severity: event.severity,
+        summary: event.summary,
+        detail: event.detail,
+        artifactIds: event.artifactIds
+      })),
+      artifacts: run.artifacts.slice(-12).map((artifact) => ({
+        id: artifact.id,
+        type: artifact.type,
+        name: artifact.name,
+        path: artifact.path,
+        url: artifact.url
+      }))
+    });
+    const diagnosis = await aiDiagnosisClient.diagnose(evidence);
+    const artifact = await this.artifactService.writeLog(
+      runId,
+      `ai-diagnosis-${Date.now()}.json`,
+      JSON.stringify({ evidence, diagnosis }, null, 2),
+      activeStepResultId ?? failedStep?.id
+    );
+    this.addDeviceEvent({
+      id: createId("event"),
+      runId,
+      stepResultId: activeStepResultId ?? failedStep?.id,
+      deviceSerial: config.deviceSerial,
+      type: "ai_diagnosis",
+      severity: aiDiagnosisSeverity(diagnosis),
+      occurredAt: nowIso(),
+      summary: `AI 诊断：${diagnosis.classification} · ${diagnosis.summary}`,
+      detail: JSON.stringify({
+        confidence: diagnosis.confidence,
+        recommendedAction: diagnosis.recommendedAction,
+        safeToAutoApply: diagnosis.safeToAutoApply,
+        assetPatch: diagnosis.assetPatch
+      }),
+      artifactIds: [artifact.id]
+    });
+  }
+
+  private resolveAiDiagnosisClient(): AiDiagnosisClient | undefined {
+    if (this.aiDiagnosisClient) {
+      return this.aiDiagnosisClient;
+    }
+    const aiDiagnosisConfig = resolveAiDiagnosisConfig(process.env, this.storage.getAiDiagnosisSettings());
+    return aiDiagnosisConfig.enabled ? this.createAiDiagnosisClient(aiDiagnosisConfig) : undefined;
+  }
+
+  private async writeAiDiagnosisFailure(runId: string, serial: string, error: unknown, activeStepResultId?: string): Promise<void> {
+    const artifact = await this.artifactService.writeLog(runId, `ai-diagnosis-failed-${Date.now()}.txt`, errorToString(error), activeStepResultId).catch(() => undefined);
+    this.addDeviceEvent({
+      id: createId("event"),
+      runId,
+      stepResultId: activeStepResultId,
+      deviceSerial: serial,
+      type: "ai_diagnosis",
+      severity: "warning",
+      occurredAt: nowIso(),
+      summary: "AI 诊断失败",
+      detail: errorToString(error),
+      artifactIds: [artifact?.id].filter((id): id is string => Boolean(id))
+    });
+  }
+
   private addDeviceEvent(event: DeviceEvent): void {
     this.storage.addDeviceEvent(event);
   }
@@ -3301,6 +3425,43 @@ function gridCandidateHasTargetQuery(params: Record<string, unknown>): boolean {
   }
   const targetQuery = (scrollProfile as Record<string, unknown>).targetQuery;
   return typeof targetQuery === "string" && targetQuery.trim().length > 0;
+}
+
+function latestFailedStep(steps: StepResult[]): StepResult | undefined {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index];
+    if (step && (step.status === "failed" || step.status === "timeout")) {
+      return step;
+    }
+  }
+  return undefined;
+}
+
+function latestErrorEvent(events: DeviceEvent[]): DeviceEvent | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.severity === "error") {
+      return event;
+    }
+  }
+  return undefined;
+}
+
+function graphString(step: StepResult | undefined, key: string): string | undefined {
+  const graph = readRecord(step?.metadata?.graph);
+  const value = graph?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function aiDiagnosisSeverity(diagnosis: AiDiagnosisResult): DeviceEvent["severity"] {
+  if (diagnosis.classification === "app_issue" || diagnosis.classification === "environment_issue") {
+    return "error";
+  }
+  return "warning";
 }
 
 function errorToString(error: unknown): string {

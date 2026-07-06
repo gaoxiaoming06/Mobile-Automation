@@ -28,6 +28,7 @@ type AppNavProps = {
   openStability: () => void;
   openRuns: () => void;
   openGraphs: () => void;
+  openSettings: () => void;
 };
 
 export function AppNav({
@@ -42,7 +43,8 @@ export function AppNav({
   openAssetPatrol,
   openStability,
   openRuns,
-  openGraphs
+  openGraphs,
+  openSettings
 }: AppNavProps) {
   return (
     <aside className="app-nav" aria-label="主导航">
@@ -100,9 +102,9 @@ export function AppNav({
           <FileText size={18} />
           <span>报告</span>
         </button>
-        <button className="nav-item planned" disabled title="设置按产品规划接入" type="button">
+        <button className={navButtonClass(activeNavItem, "settings")} onClick={openSettings} title="系统设置" type="button">
           <Settings size={18} />
-          <span>设置</span>
+          <span>系统设置</span>
         </button>
       </nav>
     </aside>

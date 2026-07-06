@@ -20,7 +20,8 @@ describe("AppNav", () => {
         openAssetPatrol: noop,
         openStability: noop,
         openRuns: noop,
-        openGraphs: noop
+        openGraphs: noop,
+        openSettings: noop
       })
     );
 
@@ -33,7 +34,9 @@ describe("AppNav", () => {
     expect(markup).toContain("稳定性探索");
     expect(markup).toContain("执行结果");
     expect(markup).toContain("实验能力");
+    expect(markup).toContain("系统设置");
     expect(markup).toContain("业务图谱上层能力已冻结");
+    expect(markup).not.toContain("设置按产品规划接入");
     expect(markup).not.toContain(">节点测试<");
   });
 });
