@@ -355,7 +355,7 @@ export type AssetRecordingPanelProps = {
   onResizePointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
 };
 
-type AssetDetailTab = "match" | "actions" | "transitions" | "tasks" | "explorer";
+type AssetDetailTab = "workbench" | "match" | "actions" | "transitions" | "tasks" | "explorer";
 type AssetEvidenceKind = "matcher" | "页面文字" | "OCR 文字";
 type AssetEvidenceItem = {
   kind: AssetEvidenceKind;
@@ -386,6 +386,11 @@ type OperationOutcomeFields = {
   resultPlaceholder: string;
 };
 type ManualActionKind = "tap" | "scroll" | "long_press" | "input";
+type ManualElementSeed = {
+  label?: string;
+  targetText?: string;
+  locatorKind?: AssetRecordingLocatorKind;
+};
 type PercentPoint = { x: number; y: number };
 type RegionResizeHandle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 type EditableRegionOperation =
@@ -413,7 +418,7 @@ export function AssetRecordingPanel({
   selectedDeviceName,
   busy,
   identifying = false,
-  initialDetailTab = "match",
+  initialDetailTab = "workbench",
   currentPage,
   previewSlot,
   onPageDraftChange,
@@ -451,6 +456,7 @@ export function AssetRecordingPanel({
   const [manualActionKind, setManualActionKind] = useState<ManualActionKind>("tap");
   const [manualOutcomeType, setManualOutcomeType] = useState<AssetRecordingElementOutcomeType>("navigate");
   const [manualTargetQuery, setManualTargetQuery] = useState("");
+  const [manualElementSeed, setManualElementSeed] = useState<ManualElementSeed>();
   const [manualActionEdit, setManualActionEdit] = useState<EditableRegionOperation>();
   const [manualActionRegion, setManualActionRegion] = useState<AssetRecordingScreenshotRegion>();
   const [manualActionNaturalSize, setManualActionNaturalSize] = useState<{ width: number; height: number }>();
@@ -653,6 +659,7 @@ export function AssetRecordingPanel({
 
   function startAddPageElement() {
     setEditingPageElement(undefined);
+    setManualElementSeed(undefined);
     setManualAbilityType("fixed_tap");
     setManualActionKind("tap");
     setManualOutcomeType("navigate");
@@ -661,8 +668,31 @@ export function AssetRecordingPanel({
     setIsAddingPageElement(true);
   }
 
+  function startPageElementFromEvidence(item: AssetEvidenceItem) {
+    const label = evidenceDisplayValue(item);
+    const region = evidenceRegionToScreenshotRegion(parseRegionBoundEvidence(item.value).region, label);
+    if (!region) {
+      return;
+    }
+    setEditingPageElement(undefined);
+    setManualElementSeed({
+      label,
+      targetText: label,
+      locatorKind: item.kind === "OCR 文字" ? "text_locator" : "visual_locator"
+    });
+    setManualAbilityType("fixed_tap");
+    setManualActionKind("tap");
+    setManualOutcomeType("navigate");
+    setManualTargetQuery("");
+    setManualActionRegion(region);
+    setManualActionEdit(undefined);
+    setIsAddingPageElement(true);
+    setActiveDetailTab("actions");
+  }
+
   function startEditPageElement(element: AssetRecordingPageElement) {
     setEditingPageElement(element);
+    setManualElementSeed(undefined);
     setManualAbilityType(element.abilityType ?? abilityTypeFromElement(element));
     const actionKind = normalizeActionKind(element);
     setManualActionKind(actionKind === "unknown" ? "tap" : actionKind);
@@ -684,6 +714,7 @@ export function AssetRecordingPanel({
 
   function cancelManualPageElementEdit() {
     setEditingPageElement(undefined);
+    setManualElementSeed(undefined);
     setManualActionRegion(undefined);
     setManualActionEdit(undefined);
     setManualOutcomeType("navigate");
@@ -707,6 +738,7 @@ export function AssetRecordingPanel({
       return;
     }
     setEditingPageElement(undefined);
+    setManualElementSeed(undefined);
     setManualActionRegion(undefined);
     setManualActionEdit(undefined);
     setIsAddingPageElement(false);
@@ -806,7 +838,7 @@ export function AssetRecordingPanel({
               {editingPageElement?.id ? <input type="hidden" name="elementId" value={editingPageElement.id} /> : null}
               <label>
                 定位方式
-                <select name="locatorKind" defaultValue={editingPageElement?.locatorKind ?? (manualAbilityType === "grid_candidate" ? "collection_item_locator" : "visual_locator")}>
+                <select name="locatorKind" defaultValue={editingPageElement?.locatorKind ?? manualElementSeed?.locatorKind ?? (manualAbilityType === "grid_candidate" ? "collection_item_locator" : "visual_locator")}>
                   <option value="visual_locator">视觉重定位</option>
                   <option value="text_locator">文字重定位</option>
                   <option value="structural_locator">结构型入口</option>
@@ -852,11 +884,11 @@ export function AssetRecordingPanel({
               </label>
               <label>
                 动作名称
-                <input name="elementLabel" placeholder="例如：搜索按钮 / 列表区域" defaultValue={editingPageElement?.label ?? manualActionLabel(manualActionKind)} />
+                <input name="elementLabel" placeholder="例如：搜索按钮 / 列表区域" defaultValue={editingPageElement?.label ?? manualElementSeed?.label ?? manualActionLabel(manualActionKind)} />
               </label>
               <label>
                 执行识别文字
-                <input name="targetText" placeholder="可选，例如：学习方案" defaultValue={editingPageElement?.targetText ?? ""} />
+                <input name="targetText" placeholder="可选，例如：学习方案" defaultValue={editingPageElement?.targetText ?? manualElementSeed?.targetText ?? ""} />
               </label>
               <label>
                 动态区域处理
@@ -1011,6 +1043,9 @@ export function AssetRecordingPanel({
           {page.status !== "idle" ? (
             <>
               <div className="asset-detail-tabs" role="tablist" aria-label="页面资产详情">
+                <button className={detailTabClass(activeDetailTab, "workbench")} type="button" role="tab" aria-selected={activeDetailTab === "workbench"} onClick={() => setActiveDetailTab("workbench")}>
+                  v2 候选录入
+                </button>
                 <button className={detailTabClass(activeDetailTab, "match")} type="button" role="tab" aria-selected={activeDetailTab === "match"} onClick={() => setActiveDetailTab("match")}>
                   页面匹配
                 </button>
@@ -1029,6 +1064,21 @@ export function AssetRecordingPanel({
               </div>
 
               <div className="asset-detail-scroll asset-editor-scroll">
+                {activeDetailTab === "workbench" ? (
+                  <V2AssetWorkbench
+                    page={page}
+                    savedManualElements={savedManualElements}
+                    transitions={transitions}
+                    tasks={tasks}
+                    candidateEvidence={candidateEvidence}
+                    confirmedEvidenceCount={confirmedEvidence.length}
+                    candidateEvidenceCount={candidateEvidence.length}
+                    onConfirmEvidence={confirmEvidence}
+                    onStartElementFromEvidence={startPageElementFromEvidence}
+                    onOpenTab={setActiveDetailTab}
+                  />
+                ) : null}
+
                 {activeDetailTab === "match" ? (
                   <div className="asset-detail-section asset-identity-card">
                     <div className="panel-head">
@@ -1434,6 +1484,208 @@ function pointerToPercent(event: PointerEvent<HTMLDivElement>, imageLayer: HTMLE
   return clientPointToImagePercent(event, rect);
 }
 
+function V2AssetWorkbench({
+  page,
+  savedManualElements,
+  transitions,
+  tasks,
+  candidateEvidence,
+  confirmedEvidenceCount,
+  candidateEvidenceCount,
+  onConfirmEvidence,
+  onStartElementFromEvidence,
+  onOpenTab
+}: {
+  page: AssetRecordingCurrentPage;
+  savedManualElements: AssetRecordingPageElement[];
+  transitions: AssetRecordingPageTransition[];
+  tasks: AssetRecordingPageTask[];
+  candidateEvidence: AssetEvidenceItem[];
+  confirmedEvidenceCount: number;
+  candidateEvidenceCount: number;
+  onConfirmEvidence: (item: AssetEvidenceItem) => void;
+  onStartElementFromEvidence: (item: AssetEvidenceItem) => void;
+  onOpenTab: (tab: AssetDetailTab) => void;
+}) {
+  const activeTasks = tasks.filter((task) => task.status !== "deprecated");
+  const readyTransitions = transitions.filter((transition) => transition.status !== "deprecated");
+  const pageName = page.pageName || page.visualPageName || "当前页面";
+  const qualitySummary = summarizeV2ElementQuality(savedManualElements);
+  const visibleCandidates = compactEvidenceCandidates(candidateEvidence).slice(0, 8);
+
+  return (
+    <div className="asset-detail-section asset-v2-workbench">
+      <section className="asset-v2-hero">
+        <div>
+          <strong>v2 候选录入</strong>
+          <p>先选候选，再确认语义。这里不是旧的先手动画框流程，只有带 OCR/视觉/结构证据的候选才能进入正式资产。</p>
+        </div>
+        <span>{pageName}</span>
+      </section>
+
+      <section className="asset-v2-flow" aria-label="v2 资产录入流程">
+        {[
+          ["选候选", "从 OCR 带区域文字、视觉 crop、结构上下文或已有元素开始。"],
+          ["定语义", "确认它是页面身份、按钮、输入框、列表项模板、连接边还是页面任务。"],
+          ["验定位", "保存前检查唯一性、动态内容、重复候选和运行时重定位证据。"],
+          ["进巡检", "通过后进入资产驱动巡检；失败证据会回到这里修复。"]
+        ].map(([title, description], index) => (
+          <div className="asset-v2-flow-step" key={title}>
+            <code>{index + 1}</code>
+            <strong>{title}</strong>
+            <span>{description}</span>
+          </div>
+        ))}
+      </section>
+
+      <section className="asset-v2-rule-strip">
+        <strong>执行规则</strong>
+        <span>region_center 不直接执行</span>
+        <span>OCR / 视觉 / 结构重定位成功才允许点击</span>
+        <span>头像、昵称、数量、时间等动态内容必须 mask 或参数化</span>
+      </section>
+
+      <section className="asset-v2-card asset-v2-candidate-pool">
+        <div className="asset-v2-card-head">
+          <strong>候选池</strong>
+          <span>{visibleCandidates.length ? `${visibleCandidates.length} 个可处理候选` : "等待候选"}</span>
+        </div>
+        {visibleCandidates.length ? (
+          <div className="asset-v2-evidence-grid">
+            {visibleCandidates.map((item) => {
+              const displayText = evidenceDisplayValue(item);
+              const hasRegion = Boolean(parseRegionBoundEvidence(item.value).region);
+              return (
+                <div className="asset-v2-evidence-card" key={evidenceKey(item)}>
+                  <div>
+                    <strong>{displayText}</strong>
+                    <span>{item.kind} · {hasRegion ? "带截图区域" : "无区域证据"}</span>
+                  </div>
+                  <div className="asset-v2-evidence-actions">
+                    <button type="button" onClick={() => onConfirmEvidence(item)}>直接录为页面身份</button>
+                    <button type="button" disabled={!hasRegion} onClick={() => onStartElementFromEvidence(item)}>
+                      {hasRegion ? "录为可操作元素" : "缺少区域，先刷新候选"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="empty">当前没有候选。先确保设备预览正常、OCR 服务可用，再刷新当前页面。</div>
+        )}
+      </section>
+
+      <div className="asset-v2-grid">
+        <section className="asset-v2-card">
+          <div className="asset-v2-card-head">
+            <strong>当前页录入状态</strong>
+            <span>{page.status === "matched" ? "已匹配" : statusLabel(page.status)}</span>
+          </div>
+          <div className="asset-v2-metrics">
+            <div>
+              <b>{confirmedEvidenceCount}</b>
+              <span>已确认身份依据</span>
+            </div>
+            <div>
+              <b>{candidateEvidenceCount}</b>
+              <span>候选身份信号</span>
+            </div>
+            <div>
+              <b>{savedManualElements.length}</b>
+              <span>{savedManualElements.length} 个可操作元素</span>
+            </div>
+            <div>
+              <b>{readyTransitions.length}</b>
+              <span>{readyTransitions.length} 条连接边</span>
+            </div>
+            <div>
+              <b>{activeTasks.length}</b>
+              <span>{activeTasks.length} 个页面任务</span>
+            </div>
+            <div>
+              <b>{qualitySummary.reviewCount}</b>
+              <span>建议复核</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="asset-v2-card">
+          <div className="asset-v2-card-head">
+            <strong>资产分层</strong>
+            <span>v2 schema</span>
+          </div>
+          <div className="asset-v2-layer-list">
+            <div>
+              <strong>页面身份</strong>
+              <span>用稳定 OCR/视觉锚点识别当前页面，过滤调试浮层和系统栏污染。</span>
+            </div>
+            <div>
+              <strong>PageElement</strong>
+              <span>保存语义、动作方式、定位证据和质量结果，不把固定坐标当主定位。</span>
+            </div>
+            <div>
+              <strong>PageTransition</strong>
+              <span>描述元素执行后的目标页面或局部状态，用于路径规划和资产巡检。</span>
+            </div>
+            <div>
+              <strong>DynamicRegion / ListTemplate</strong>
+              <span>把列表、卡片、Tab、滚动区域参数化，执行时按目标参数找 item。</span>
+            </div>
+            <div>
+              <strong>PageTask</strong>
+              <span>把输入、勾选、提交、等待结果编排成页面内可复用任务。</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section className="asset-v2-card">
+        <div className="asset-v2-card-head">
+          <strong>已录入资产</strong>
+          <span>从已有录入读取</span>
+        </div>
+        <div className="asset-v2-candidate-list">
+          {savedManualElements.slice(0, 4).map((element) => (
+            <div className="asset-v2-candidate-row" key={element.id ?? element.locator}>
+              <div>
+                <strong>{element.label}</strong>
+                <span>{locatorKindLabel(element.locatorKind)} · {operationKindLabel(normalizeActionKind(element))} · {semanticAreaLabel(element.semanticArea ?? semanticAreaForLocator(element.locator) ?? "unknown")}</span>
+                <small>{runtimeLocatorSummaryForWorkbench(element)}</small>
+              </div>
+              <code>{element.quality ? pageElementQualityStatusLabel(element.quality.status) : "待校验"}</code>
+            </div>
+          ))}
+          {readyTransitions.slice(0, 3).map((transition) => (
+            <div className="asset-v2-candidate-row" key={transition.id}>
+              <div>
+                <strong>{transition.name}</strong>
+                <span>PageTransition · {operationKindLabel(transition.actionKind ?? "unknown")}</span>
+                <small>{transition.targetName ? `目标：${transition.targetName}` : "目标待确认"}</small>
+              </div>
+              <code>{transitionStatusLabel(transition.status)}</code>
+            </div>
+          ))}
+          {!savedManualElements.length && !readyTransitions.length ? <div className="empty">当前页还没有可展示的 v2 候选资产。</div> : null}
+        </div>
+      </section>
+
+      <section className="asset-v2-card">
+        <div className="asset-v2-card-head">
+          <strong>推荐下一步</strong>
+          <span>按缺口处理</span>
+        </div>
+        <div className="asset-v2-next-actions">
+          <button type="button" onClick={() => onOpenTab("actions")}>打开详情编辑</button>
+          <button type="button" onClick={() => onOpenTab("transitions")}>从已录入元素补连接边</button>
+          <button type="button" onClick={() => onOpenTab("tasks")}>把元素编入页面任务</button>
+          <button type="button" onClick={() => onOpenTab("match")}>查看页面身份证据</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AutoExploreReportView({ report }: { report?: AssetRecordingAutoExploreReport }) {
   if (!report) {
     return <div className="empty">还没有自动探索报告。</div>;
@@ -1653,6 +1905,38 @@ function runtimeLocatorSummary(element: AssetRecordingPageElement): string {
     return `${element.targetText} · ${role}`;
   }
   return element.targetText ?? role ?? "运行时按 OCR / 结构证据重定位";
+}
+
+function runtimeLocatorSummaryForWorkbench(element: AssetRecordingPageElement): string {
+  if (isRuntimeLocatedElement(element)) {
+    return runtimeLocatorSummary(element);
+  }
+  if (element.locatorKind === "text_locator" && element.targetText) {
+    return `运行时按文字 "${element.targetText}" 重定位`;
+  }
+  if (element.locatorKind === "collection_item_locator" || element.abilityType === "grid_candidate") {
+    return element.scrollProfile?.targetQuery ? `按列表模板查找 ${element.scrollProfile.targetQuery}` : "按动态列表模板查找目标 item";
+  }
+  return "按 OCR / 视觉 crop / 上下文证据重定位";
+}
+
+function locatorKindLabel(kind?: AssetRecordingLocatorKind): string {
+  if (kind === "text_locator") {
+    return "文字重定位";
+  }
+  if (kind === "structural_locator") {
+    return "结构上下文";
+  }
+  if (kind === "collection_item_locator") {
+    return "列表模板";
+  }
+  return "视觉重定位";
+}
+
+function summarizeV2ElementQuality(elements: AssetRecordingPageElement[]): { reviewCount: number } {
+  return {
+    reviewCount: elements.filter((element) => element.quality?.status === "needs_review" || element.quality?.status === "fail").length
+  };
 }
 
 export function operationPreviewFrame(
@@ -2132,6 +2416,45 @@ function evidence(kind: AssetEvidenceKind, value: string): AssetEvidenceItem {
 
 function evidenceKey(item: AssetEvidenceItem): string {
   return `${item.kind}:${item.value}`;
+}
+
+function compactEvidenceCandidates(items: AssetEvidenceItem[]): AssetEvidenceItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const display = evidenceDisplayValue(item);
+    if (!display) {
+      return false;
+    }
+    const key = `${item.kind}:${display}:${parseRegionBoundEvidence(item.value).region ?? "no-region"}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function evidenceRegionToScreenshotRegion(regionText: string | undefined, label: string): AssetRecordingScreenshotRegion | undefined {
+  if (!regionText) {
+    return undefined;
+  }
+  const [x, y, width, height] = regionText.split(",").map((part) => Number(part.trim()));
+  if (![x, y, width, height].every(Number.isFinite)) {
+    return undefined;
+  }
+  const region = {
+    id: "manual-action-region",
+    label,
+    x: roundPercent(clamp(x)),
+    y: roundPercent(clamp(y)),
+    width: roundPercent(clamp(width, 0, 100 - clamp(x))),
+    height: roundPercent(clamp(height, 0, 100 - clamp(y))),
+    coordinateSpace: "screen" as const
+  };
+  return {
+    ...region,
+    semanticArea: semanticAreaForRegion(region)
+  };
 }
 
 function evidenceField(item: AssetEvidenceItem): "confirmedMatchers" | "confirmedUiTexts" | "confirmedOcrTexts" {

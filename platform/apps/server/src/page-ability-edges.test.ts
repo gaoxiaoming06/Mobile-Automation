@@ -3,6 +3,269 @@ import { planRoute, type BusinessGraphVersion, type BusinessNode, type StateMatc
 import { pageAbilityRouteGapIssues, withPageAbilityEdges } from "./page-ability-edges.js";
 
 describe("page ability route edges", () => {
+  it("builds route edges from separated page elements and page transitions", () => {
+    const home = pageNode("node-home", "classin.home", "主页", {
+      assetRecordingPageElements: [
+        {
+          id: "home-class-grid",
+          label: "班级列表",
+          elementKind: "collection",
+          locator: "runtime-locator:home_class_grid",
+          locatorKind: "collection_item_locator",
+          semanticArea: "content",
+          coordinateSpace: "runtime",
+          platformScope: "mobile-both",
+          actions: ["tap_item"],
+          structuralLocator: {
+            strategy: "collection_grid",
+            role: "class_grid",
+            searchHintRegion: { x: 3.06, y: 30.44, width: 93.99, height: 59.13 }
+          },
+          collection: {
+            kind: "vertical_grid",
+            columns: 2,
+            itemIdentity: { type: "ocr_title" },
+            candidateItemHeightPercent: 24.5,
+            clickSafePoint: { xPercent: 50, yPercent: 28 },
+            scrollStepPercent: 65,
+            failureStrategy: "try_next_candidate"
+          }
+        }
+      ],
+      assetRecordingPageTransitions: [
+        {
+          id: "home-open-class-detail",
+          elementId: "home-class-grid",
+          action: "tap_item",
+          outcomeType: "navigate",
+          targetNodeId: "node-class-detail",
+          targetLabel: "班级详情",
+          params: {
+            itemText: "{{className}}"
+          }
+        }
+      ]
+    });
+    const classDetail = pageNode("node-class-detail", "classin.class.detail", "班级详情");
+
+    const nextGraphVersion = withPageAbilityEdges(graph([home, classDetail]), "android");
+    const routePlan = planRoute({
+      graphVersion: nextGraphVersion,
+      appId: "classin",
+      targetApp: { androidPackageName: "cn.eeo.classin" },
+      platform: "android",
+      startNodeId: home.id,
+      targetNodeId: classDetail.id
+    });
+
+    expect(routePlan.unresolvedIssues).toEqual([]);
+    expect(routePlan.edges.map((item) => item.edge.name)).toEqual(["主页 -> 班级详情"]);
+    expect(routePlan.edges[0]?.edge.actionPolicies[0]?.action).toEqual(
+      expect.objectContaining({
+        type: "tap_on_image",
+        params: expect.objectContaining({
+          elementId: "home-class-grid",
+          elementKind: "collection",
+          abilityType: "grid_candidate",
+          locator: "runtime-locator:home_class_grid",
+          structuralLocator: expect.objectContaining({
+            strategy: "collection_grid",
+            searchHintRegion: { x: 3.06, y: 30.44, width: 93.99, height: 59.13 }
+          }),
+          scrollProfile: expect.objectContaining({
+            containerKind: "grid_list",
+            direction: "vertical",
+            columns: 2,
+            targetKind: "item_text",
+            targetQuery: "{{className}}",
+            afterFoundAction: "tap_item",
+            failureStrategy: "try_next_candidate"
+          })
+        })
+      })
+    );
+    expect(home.metadata?.assetRecordingPageElements).toEqual([
+      expect.not.objectContaining({
+        targetNodeId: expect.any(String),
+        outcomeType: expect.any(String)
+      })
+    ]);
+  });
+
+  it("ignores legacy mixed page ability elements when separated v2 assets exist", () => {
+    const home = pageNode("node-home", "classin.home", "主页", {
+      assetRecordingPageElements: [
+        {
+          id: "home-search-button",
+          label: "搜索按钮",
+          elementKind: "icon_button",
+          locator: "top-bar-icon:search",
+          locatorKind: "top_bar_icon_locator",
+          semanticArea: "top",
+          coordinateSpace: "runtime",
+          role: "search",
+          slot: "trailing",
+          orderFromRight: 2,
+          actions: ["tap"]
+        }
+      ],
+      assetRecordingPageTransitions: [
+        {
+          id: "home-search",
+          elementId: "home-search-button",
+          action: "tap",
+          outcomeType: "navigate",
+          targetNodeId: "node-search",
+          targetLabel: "搜索"
+        }
+      ],
+      assetRecordingManualElements: [
+        {
+          id: "legacy-add",
+          label: "旧添加好友",
+          locator: "top-bar-icon:add",
+          actionKind: "tap",
+          outcomeType: "navigate",
+          targetNodeId: "node-add-friend",
+          targetLabel: "添加好友"
+        }
+      ]
+    });
+    const search = pageNode("node-search", "classin.search", "搜索");
+    const addFriend = pageNode("node-add-friend", "classin.add-friend", "添加好友");
+
+    const nextGraphVersion = withPageAbilityEdges(graph([home, search, addFriend]), "android");
+
+    expect(nextGraphVersion.edges.map((edge) => edge.name)).toEqual(["主页 -> 搜索"]);
+    expect(nextGraphVersion.edges[0]?.actionPolicies[0]?.action.params).toEqual(
+      expect.objectContaining({
+        elementId: "home-search-button",
+        locator: "top-bar-icon:search",
+        targetLabel: "搜索"
+      })
+    );
+  });
+
+  it("reports separated asset rule issues for missing transition bindings and mixed element fields", () => {
+    const home = pageNode("node-home", "classin.home", "主页", {
+      assetRecordingPageElements: [
+        {
+          id: "home-add-button",
+          label: "加号",
+          elementKind: "icon_button",
+          locator: "top-bar-icon:add",
+          actions: ["tap"],
+          targetNodeId: "node-should-not-live-here",
+          outcomeType: "navigate"
+        }
+      ],
+      assetRecordingPageTransitions: [
+        {
+          id: "missing-element",
+          elementId: "missing-button",
+          action: "tap",
+          outcomeType: "navigate",
+          targetNodeId: "node-add-friend"
+        },
+        {
+          id: "missing-target",
+          elementId: "home-add-button",
+          action: "tap",
+          outcomeType: "navigate"
+        }
+      ]
+    });
+    const graphVersion = graph([home]);
+
+    expect(pageAbilityRouteGapIssues(graphVersion, "android", { startNodeId: home.id })).toEqual([
+      expect.objectContaining({
+        code: "PAGE_ELEMENT_MIXED_TRANSITION_FIELD",
+        severity: "error",
+        nodeId: home.id,
+        message: expect.stringContaining("home-add-button")
+      }),
+      expect.objectContaining({
+        code: "PAGE_TRANSITION_ELEMENT_MISSING",
+        severity: "error",
+        nodeId: home.id,
+        message: expect.stringContaining("missing-button")
+      }),
+      expect.objectContaining({
+        code: "PAGE_TRANSITION_TARGET_MISSING",
+        severity: "error",
+        nodeId: home.id,
+        message: expect.stringContaining("missing-target")
+      })
+    ]);
+  });
+
+  it("reports separated asset rule issues when transitions carry element locator fields", () => {
+    const home = pageNode("node-home", "classin.home", "主页", {
+      assetRecordingPageElements: [
+        {
+          id: "home-search-button",
+          label: "搜索按钮",
+          elementKind: "icon_button",
+          locator: "top-bar-icon:search",
+          actions: ["tap"]
+        }
+      ],
+      assetRecordingPageTransitions: [
+        {
+          id: "home-search",
+          elementId: "home-search-button",
+          action: "tap",
+          outcomeType: "navigate",
+          targetNodeId: "node-search",
+          locator: "top-bar-icon:search",
+          semanticArea: "top",
+          visualLocator: {
+            role: "search"
+          }
+        }
+      ]
+    });
+    const search = pageNode("node-search", "classin.search", "搜索");
+    const graphVersion = graph([home, search]);
+
+    expect(pageAbilityRouteGapIssues(graphVersion, "android", { startNodeId: home.id })).toEqual([
+      expect.objectContaining({
+        code: "PAGE_TRANSITION_MIXED_ELEMENT_FIELD",
+        severity: "error",
+        nodeId: home.id,
+        message: expect.stringContaining("locator, semanticArea, visualLocator")
+      })
+    ]);
+  });
+
+  it("does not build route edges from separated assets that violate page asset boundaries", () => {
+    const home = pageNode("node-home", "classin.home", "主页", {
+      assetRecordingPageElements: [
+        {
+          id: "home-search-button",
+          label: "搜索按钮",
+          elementKind: "icon_button",
+          locator: "top-bar-icon:search",
+          actions: ["tap"],
+          outcomeType: "navigate"
+        }
+      ],
+      assetRecordingPageTransitions: [
+        {
+          id: "home-search",
+          elementId: "home-search-button",
+          action: "tap",
+          outcomeType: "navigate",
+          targetNodeId: "node-search",
+          locator: "top-bar-icon:search"
+        }
+      ]
+    });
+    const search = pageNode("node-search", "classin.search", "搜索");
+
+    expect(withPageAbilityEdges(graph([home, search]), "android").edges).toEqual([]);
+  });
+
   it("turns saved grid candidate and conditional page abilities into plannable edges", () => {
     const home = pageNode("node-home", "classin.home", "主页", {
       assetRecordingManualElements: [

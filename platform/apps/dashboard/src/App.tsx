@@ -108,6 +108,38 @@ type AssetRuntimeParamDefinition = {
     binding?: string;
   }>;
 };
+type AssetDrivenExecutionItem = {
+  id: string;
+  order: number;
+  label: string;
+  fromPage: string;
+  toPage: string;
+  status: "pending" | "running" | "passed" | "failed" | "skipped" | "stopped";
+  runId?: string;
+  latestStep?: string;
+  errorMessage?: string;
+  reportHtmlPath?: string;
+};
+type AssetDrivenExecutionSession = {
+  id: string;
+  deviceSerial: string;
+  packageName: string;
+  graphVersionId?: string;
+  startNodeId: string;
+  startNodeName: string;
+  status: "running" | "passed" | "failed" | "stopped";
+  totalEdges: number;
+  completedEdges: number;
+  runningEdges: number;
+  pendingEdges: number;
+  failedEdges: number;
+  needsRepair: number;
+  runningItem?: AssetDrivenExecutionItem;
+  items: AssetDrivenExecutionItem[];
+  startedAt: string;
+  updatedAt: string;
+  endedAt?: string;
+};
 type StabilityAllowedActions = {
   tap: boolean;
   swipe: boolean;
@@ -150,7 +182,6 @@ export const DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES: Record<string, string> =
   recordClassroom: "true",
   recordLive: "false"
 };
-export const ASSET_PATROL_PRIMARY_ACTION_LABEL = "执行资产体检";
 export const ASSET_DRIVEN_TEST_ACTION_LABEL = "开始资产测试";
 export const ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE = "当前为诊断模式：只检查页面匹配、元素重定位、边和任务编排质量，不会触发页面点击或输入。";
 export const DEFAULT_AI_DIAGNOSIS_SETTINGS: PublicAiDiagnosisSettings = {
@@ -896,7 +927,53 @@ export function assetPatrolRunProgressSummary(run: TestRun | null | undefined) {
   };
 }
 
-export function assetPatrolPanelDisplayMode(input: { plan?: AssetPatrolPlan; currentRun?: TestRun }): "run" | "plan" | "empty" {
+export function assetDrivenRunProgressSummary(run: TestRun | null | undefined, packageName: string) {
+  if (!run) {
+    return undefined;
+  }
+  const assetPatrolSummary = assetPatrolRunProgressSummary(run);
+  if (assetPatrolSummary) {
+    return assetPatrolSummary;
+  }
+  const latestStep = run.stepResults.at(-1);
+  const failed = run.stepResults.filter((step) => step.status === "failed").length;
+  const skipped = run.stepResults.filter((step) => step.status === "skipped").length;
+  return {
+    packageName: packageName.trim() || "-",
+    progressText: `${run.stepResults.length} 步`,
+    latestCheck: latestStep ? `${latestStep.stepOrder}. ${latestStep.type}` : "等待执行结果",
+    latestKind: run.config.runKind ?? "run",
+    pageName: run.caseName,
+    failed,
+    skipped,
+    needsRepair: failed
+  };
+}
+
+export function assetDrivenExecutionProgressSummary(execution: AssetDrivenExecutionSession | null | undefined) {
+  if (!execution) {
+    return undefined;
+  }
+  const latestItem =
+    execution.runningItem ??
+    execution.items.find((item) => item.status === "failed" || item.status === "stopped") ??
+    execution.items.filter((item) => item.status === "passed").at(-1) ??
+    execution.items[0];
+  return {
+    packageName: execution.packageName,
+    progressText: `${execution.completedEdges}/${execution.totalEdges}`,
+    latestCheck: latestItem?.label ?? "等待执行",
+    pageName: execution.startNodeName,
+    failed: execution.failedEdges,
+    skipped: execution.items.filter((item) => item.status === "skipped").length,
+    needsRepair: execution.needsRepair
+  };
+}
+
+export function assetPatrolPanelDisplayMode(input: { plan?: AssetPatrolPlan; currentRun?: TestRun; assetDrivenExecution?: AssetDrivenExecutionSession }): "run" | "plan" | "empty" {
+  if (input.assetDrivenExecution) {
+    return "run";
+  }
   if (input.currentRun && isActiveRunStatus(input.currentRun)) {
     return "run";
   }
@@ -916,10 +993,6 @@ export function assetPatrolPlanRequiresBusinessSubmit(plan: AssetPatrolPlan | un
   return plan.steps.some((step) => step.kind === "task_dry_run" || step.skipReason === "business_submit_disabled");
 }
 
-export function assetPatrolPreviewMessage(plan: AssetPatrolPlan): string {
-  return plan.status === "ready" ? `已生成资产体检计划：${plan.steps.length} 项` : plan.issues[0]?.message ?? "资产体检需要先修复资产";
-}
-
 export function shouldAutoSyncAssetPatrolRuntimeParams(input: {
   activeNavItem: AppNavItemId;
   packageName: string;
@@ -929,8 +1002,23 @@ export function shouldAutoSyncAssetPatrolRuntimeParams(input: {
   return input.activeNavItem === "assetPatrol" && Boolean(packageName) && packageName !== (input.lastSyncedPackageName ?? "").trim();
 }
 
-export function assetPatrolStartMessage(run: Pick<TestRun, "id">): string {
-  return `已启动资产体检：${run.id}`;
+export function shouldRestoreAssetDrivenExecution(input: {
+  activeNavItem: AppNavItemId;
+  selectedSerial: string;
+  packageName: string;
+  assetDrivenExecutionId?: string;
+}): boolean {
+  return input.activeNavItem === "assetPatrol" && Boolean(input.selectedSerial) && Boolean(input.packageName.trim()) && !input.assetDrivenExecutionId;
+}
+
+export function canStartAssetDrivenTest(input: {
+  selectedSerial: string;
+  packageName: string;
+  selectedDeviceBusy: boolean;
+  busy: boolean;
+  running: boolean;
+}): boolean {
+  return Boolean(input.selectedSerial && input.packageName.trim() && !input.selectedDeviceBusy && !input.busy && !input.running);
 }
 
 export function assetDrivenTestStartMessage(run: Pick<TestRun, "id">, queue?: { total?: number; remaining?: number }): string {
@@ -1009,6 +1097,9 @@ export function App() {
   const [assetPatrolRuntimeParamsText, setAssetPatrolRuntimeParamsText] = useState("");
   const [assetPatrolRuntimeParamDefinitions, setAssetPatrolRuntimeParamDefinitions] = useState<AssetRuntimeParamDefinition[]>([]);
   const [assetPatrolPlan, setAssetPatrolPlan] = useState<AssetPatrolPlan>();
+  const [assetDrivenPanelRunId, setAssetDrivenPanelRunId] = useState("");
+  const [assetDrivenExecutionId, setAssetDrivenExecutionId] = useState("");
+  const [assetDrivenExecution, setAssetDrivenExecution] = useState<AssetDrivenExecutionSession>();
   const [aiDiagnosisSettings, setAiDiagnosisSettings] = useState<PublicAiDiagnosisSettings>(DEFAULT_AI_DIAGNOSIS_SETTINGS);
   const [aiDiagnosisDraft, setAiDiagnosisDraft] = useState<AiDiagnosisSettingsDraft>(aiDiagnosisDraftFromSettings(DEFAULT_AI_DIAGNOSIS_SETTINGS));
   const activePreviewWorkspaceKey = previewWorkspaceKey(activeNavItem);
@@ -1117,6 +1208,36 @@ export function App() {
     stepCurrentRun
   } = useRunExecution({ selectedSerial, caseName, steps, setMessage });
 
+  useEffect(() => {
+    if (!assetDrivenExecutionId) {
+      setAssetDrivenExecution(undefined);
+      return;
+    }
+    let cancelled = false;
+    const refreshExecution = async () => {
+      const response = await fetch(`/api/asset-patrols/executions/${encodeURIComponent(assetDrivenExecutionId)}`);
+      if (cancelled) {
+        return;
+      }
+      if (!response.ok) {
+        return;
+      }
+      const json = (await response.json().catch(() => ({}))) as { execution?: AssetDrivenExecutionSession };
+      if (!cancelled && json.execution) {
+        setAssetDrivenExecution(json.execution);
+      }
+    };
+    void refreshExecution();
+    const intervalMs = assetDrivenExecution?.status === "running" ? 1000 : 5000;
+    const timer = window.setInterval(() => {
+      void refreshExecution();
+    }, intervalMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [assetDrivenExecutionId, assetDrivenExecution?.status]);
+
   function updateAssetRecordingIdentification(event: "begin" | "end") {
     const nextState = assetRecordingIdentificationStateAfter(assetRecordingIdentificationInFlightRef.current, event);
     assetRecordingIdentificationInFlightRef.current = nextState.inFlightCount;
@@ -1197,6 +1318,25 @@ export function App() {
     }, 250);
     return () => window.clearTimeout(timer);
   }, [activeNavItem, assetPatrolPackageName]);
+
+  useEffect(() => {
+    if (!shouldRestoreAssetDrivenExecution({
+      activeNavItem,
+      selectedSerial,
+      packageName: assetPatrolPackageName,
+      assetDrivenExecutionId
+    })) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void syncLatestAssetDrivenExecution({ silent: true, isCancelled: () => cancelled });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeNavItem, selectedSerial, assetPatrolPackageName, assetDrivenExecutionId]);
 
   useEffect(() => {
     if (activeNavItem !== "settings" || aiDiagnosisSettingsLoadedRef.current) {
@@ -2512,6 +2652,8 @@ export function App() {
     setAssetPatrolPackageName(packageName);
     setAssetPatrolDangerousText(loadStabilityDangerousTextForPackage(packageName));
     setAssetPatrolPlan(undefined);
+    setAssetDrivenExecutionId("");
+    setAssetDrivenExecution(undefined);
     setAssetPatrolRuntimeParamDefinitions([]);
     assetPatrolRuntimeParamSyncPackageRef.current = "";
   }
@@ -2529,72 +2671,6 @@ export function App() {
       dangerousTextPatternsText: assetPatrolDangerousText,
       runtimeParamsText: assetPatrolRuntimeParamsText
     });
-  }
-
-  async function previewAssetPatrol() {
-    if (!selectedSerial) {
-      setMessage("请先选择设备");
-      return;
-    }
-    if (!assetPatrolPackageName.trim()) {
-      setMessage("请先填写目标包名");
-      return;
-    }
-    try {
-      setBusy(true);
-      saveStabilityDangerousTextForPackage(assetPatrolPackageName, assetPatrolDangerousText);
-      const response = await fetch("/api/asset-patrols/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(assetPatrolRequestPayload())
-      });
-      const json = (await response.json().catch(() => ({}))) as { plan?: AssetPatrolPlan; error?: string };
-      if (!response.ok || !json.plan) {
-        throw new Error(json.error ?? "生成资产巡检预览失败");
-      }
-      setAssetPatrolPlan(json.plan);
-      setMessage(assetPatrolPreviewMessage(json.plan));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function startAssetPatrol() {
-    if (!selectedSerial) {
-      setMessage("请先选择设备");
-      return;
-    }
-    if (!assetPatrolPackageName.trim()) {
-      setMessage("请先填写目标包名");
-      return;
-    }
-    if (selectedDeviceBusy) {
-      setMessage(`当前设备正在执行：${activeRunForSelectedDevice?.id ?? ""}`);
-      return;
-    }
-    try {
-      setBusy(true);
-      saveStabilityDangerousTextForPackage(assetPatrolPackageName, assetPatrolDangerousText);
-      const response = await fetch("/api/asset-patrols", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(assetPatrolRequestPayload())
-      });
-      const json = (await response.json().catch(() => ({}))) as { run?: TestRun; error?: string; activeRunId?: string };
-      if (!response.ok || !json.run) {
-        throw new Error(json.error ?? (json.activeRunId ? `设备正在执行：${json.activeRunId}` : "启动资产体检失败"));
-      }
-      setAssetPatrolPlan(undefined);
-      setCurrentRunId(json.run.id);
-      await refreshRuns();
-      setMessage(assetPatrolStartMessage(json.run));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function syncAssetPatrolRuntimeParams(options: { silent?: boolean } = {}) {
@@ -2633,6 +2709,43 @@ export function App() {
     }
   }
 
+  async function syncLatestAssetDrivenExecution(options: { silent?: boolean; isCancelled?: () => boolean } = {}) {
+    const packageName = assetPatrolPackageName.trim();
+    if (!selectedSerial || !packageName) {
+      return;
+    }
+    try {
+      const query = new URLSearchParams({
+        deviceSerial: selectedSerial,
+        packageName
+      });
+      const response = await fetch(`/api/asset-patrols/executions?${query.toString()}`);
+      if (options.isCancelled?.()) {
+        return;
+      }
+      const json = (await response.json().catch(() => ({}))) as { execution?: AssetDrivenExecutionSession; error?: string };
+      if (!response.ok) {
+        throw new Error(json.error ?? "同步资产测试状态失败");
+      }
+      if (options.isCancelled?.() || !json.execution) {
+        return;
+      }
+      setAssetDrivenExecutionId(json.execution.id);
+      setAssetDrivenExecution(json.execution);
+      if (json.execution.runningItem?.runId) {
+        setAssetDrivenPanelRunId(json.execution.runningItem.runId);
+        setCurrentRunId(json.execution.runningItem.runId);
+      }
+      if (!options.silent) {
+        setMessage(`已同步资产测试批次：${json.execution.id}`);
+      }
+    } catch (error) {
+      if (!options.silent) {
+        setMessage(error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+
   async function startAssetDrivenTest() {
     if (!selectedSerial) {
       setMessage("请先选择设备");
@@ -2644,6 +2757,10 @@ export function App() {
     }
     if (selectedDeviceBusy) {
       setMessage(`当前设备正在执行：${activeRunForSelectedDevice?.id ?? ""}`);
+      return;
+    }
+    if (assetDrivenExecution?.status === "running") {
+      setMessage(`本轮资产测试正在执行：${assetDrivenExecution.id}`);
       return;
     }
     if (!assetPatrolAllowBusinessSubmit && assetPatrolPlanRequiresBusinessSubmit(assetPatrolPlan)) {
@@ -2663,7 +2780,8 @@ export function App() {
         plan?: AssetPatrolPlan;
         error?: string;
         activeRunId?: string;
-        assetDrivenQueue?: { total?: number; remaining?: number };
+        assetDrivenExecution?: AssetDrivenExecutionSession;
+        assetDrivenQueue?: { id?: string; total?: number; remaining?: number };
       };
       if (!response.ok || !json.run) {
         if (json.plan) {
@@ -2671,10 +2789,11 @@ export function App() {
         }
         throw new Error(json.error ?? (json.activeRunId ? `设备正在执行：${json.activeRunId}` : "启动资产测试失败"));
       }
-      setAssetPatrolPlan(json.plan);
+      setAssetDrivenPanelRunId(json.run.id);
+      setAssetDrivenExecutionId(json.assetDrivenExecution?.id ?? json.assetDrivenQueue?.id ?? "");
+      setAssetDrivenExecution(json.assetDrivenExecution);
+      setAssetPatrolPlan(undefined);
       setCurrentRunId(json.run.id);
-      setActiveNavItem("runs");
-      setAutomationTab("runs");
       await refreshRuns();
       setMessage(assetDrivenTestStartMessage(json.run, json.assetDrivenQueue));
     } catch (error) {
@@ -2684,17 +2803,36 @@ export function App() {
     }
   }
 
-  async function stopAssetPatrol(runId: string) {
+  async function stopAssetPatrol(targetId: string) {
     try {
       setBusy(true);
-      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
-      const json = (await response.json().catch(() => ({}))) as { run?: TestRun; error?: string };
+      const shouldStopExecution = targetId === assetDrivenExecution?.id || targetId === assetDrivenExecutionId;
+      const response = await fetch(
+        shouldStopExecution
+          ? `/api/asset-patrols/executions/${encodeURIComponent(targetId)}/stop`
+          : `/api/runs/${encodeURIComponent(targetId)}/stop`,
+        { method: "POST" }
+      );
+      const json = (await response.json().catch(() => ({}))) as { run?: TestRun; execution?: AssetDrivenExecutionSession; error?: string };
       if (!response.ok) {
         throw new Error(json.error ?? "停止资产驱动巡检失败");
       }
-      setCurrentRunId(runId);
+      if (shouldStopExecution) {
+        if (json.execution) {
+          setAssetDrivenExecution(json.execution);
+          setAssetDrivenExecutionId(json.execution.id);
+          const currentExecutionRunId = json.execution.runningItem?.runId ?? assetDrivenPanelRunId;
+          if (currentExecutionRunId) {
+            setCurrentRunId(currentExecutionRunId);
+          }
+        }
+        await refreshRuns();
+        setMessage(`已停止本轮资产测试：${targetId}`);
+        return;
+      }
+      setCurrentRunId(targetId);
       await refreshRuns();
-      setMessage(`已停止资产驱动巡检：${runId}`);
+      setMessage(`已停止资产驱动巡检：${targetId}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -2812,11 +2950,19 @@ export function App() {
     runs.find((run) => run.config.runKind === "stability_exploration" && run.deviceSerial === selectedSerial && isActiveRunStatus(run)) ??
     runs.find((run) => run.config.runKind === "stability_exploration" && run.deviceSerial === selectedSerial);
   const stabilitySummary = stabilityRunProgressSummary(currentStabilityRun);
+  const trackedAssetDrivenRun =
+    (assetDrivenPanelRunId && currentRun?.id === assetDrivenPanelRunId ? currentRun : undefined) ??
+    (assetDrivenPanelRunId ? runs.find((run) => run.id === assetDrivenPanelRunId) : undefined);
+  const activeAssetDrivenGraphRun = assetDrivenPanelRunId
+    ? runs.find((run) => run.config.runKind === "business_graph" && run.deviceSerial === selectedSerial && isActiveRunStatus(run))
+    : undefined;
   const currentAssetPatrolRun =
+    trackedAssetDrivenRun ??
+    activeAssetDrivenGraphRun ??
     (currentRun?.config.runKind === "asset_patrol" ? currentRun : undefined) ??
     runs.find((run) => run.config.runKind === "asset_patrol" && run.deviceSerial === selectedSerial && isActiveRunStatus(run)) ??
     runs.find((run) => run.config.runKind === "asset_patrol" && run.deviceSerial === selectedSerial);
-  const assetPatrolSummary = assetPatrolRunProgressSummary(currentAssetPatrolRun);
+  const assetPatrolSummary = assetDrivenExecutionProgressSummary(assetDrivenExecution) ?? assetDrivenRunProgressSummary(currentAssetPatrolRun, assetPatrolPackageName);
 
   const stepsPanel = (
     <StepsPanel
@@ -3068,6 +3214,7 @@ export function App() {
             runtimeParamsText={assetPatrolRuntimeParamsText}
             runtimeParamDefinitions={assetPatrolRuntimeParamDefinitions}
             plan={assetPatrolPlan}
+            assetDrivenExecution={assetDrivenExecution}
             currentRun={currentAssetPatrolRun}
             summary={assetPatrolSummary}
             busy={busy}
@@ -3090,8 +3237,6 @@ export function App() {
             }}
             onRuntimeParamsChange={setAssetPatrolRuntimeParamsText}
             onSyncRuntimeParams={() => void syncAssetPatrolRuntimeParams()}
-            onPreview={() => void previewAssetPatrol()}
-            onStart={() => void startAssetPatrol()}
             onExecute={() => void startAssetDrivenTest()}
             onStop={(runId) => void stopAssetPatrol(runId)}
             onOpenRun={(runId) => {
@@ -3305,8 +3450,9 @@ type AssetPatrolPanelProps = {
   runtimeParamsText: string;
   runtimeParamDefinitions: AssetRuntimeParamDefinition[];
   plan?: AssetPatrolPlan;
+  assetDrivenExecution?: AssetDrivenExecutionSession;
   currentRun?: TestRun;
-  summary?: ReturnType<typeof assetPatrolRunProgressSummary>;
+  summary?: ReturnType<typeof assetDrivenExecutionProgressSummary> | ReturnType<typeof assetDrivenRunProgressSummary>;
   busy: boolean;
   onSelectDevice: (serial: string) => void;
   onPackageNameChange: (value: string) => void;
@@ -3319,14 +3465,12 @@ type AssetPatrolPanelProps = {
   onDangerousTextPatternsChange: (value: string) => void;
   onRuntimeParamsChange: (value: string) => void;
   onSyncRuntimeParams: () => void;
-  onPreview: () => void;
-  onStart: () => void;
   onExecute: () => void;
   onStop: (runId: string) => void;
   onOpenRun: (runId: string) => void;
 };
 
-function AssetPatrolPanel({
+export function AssetPatrolPanel({
   devices,
   selectedSerial,
   selectedDevice,
@@ -3343,6 +3487,7 @@ function AssetPatrolPanel({
   runtimeParamsText,
   runtimeParamDefinitions,
   plan,
+  assetDrivenExecution,
   currentRun,
   summary,
   busy,
@@ -3357,37 +3502,43 @@ function AssetPatrolPanel({
   onDangerousTextPatternsChange,
   onRuntimeParamsChange,
   onSyncRuntimeParams,
-  onPreview,
-  onStart,
   onExecute,
   onStop,
   onOpenRun
 }: AssetPatrolPanelProps) {
-  const running = Boolean(currentRun && isActiveRunStatus(currentRun));
-  const canUseDevice = Boolean(selectedSerial && packageName.trim() && !selectedDeviceBusy && !busy);
-  const displayMode = assetPatrolPanelDisplayMode({ plan, currentRun });
+  const running = Boolean(assetDrivenExecution?.status === "running" || (currentRun && isActiveRunStatus(currentRun)));
+  const stopTargetId = assetDrivenExecution?.status === "running" ? assetDrivenExecution.id : currentRun && isActiveRunStatus(currentRun) ? currentRun.id : "";
+  const canUseDevice = canStartAssetDrivenTest({
+    selectedSerial,
+    packageName,
+    selectedDeviceBusy,
+    busy,
+    running
+  });
+  const displayMode = assetPatrolPanelDisplayMode({ plan, currentRun, assetDrivenExecution });
   const runtimeParamValues = assetPatrolRuntimeParamValuesFromText(runtimeParamsText);
-  const displayRuntimeParamDefinitions = assetPatrolRuntimeParamDefinitionsForDisplay(runtimeParamDefinitions, plan?.startPage?.name ?? summary?.pageName);
+  const displayRuntimeParamDefinitions = assetPatrolRuntimeParamDefinitionsForDisplay(runtimeParamDefinitions, plan?.startPage?.name ?? assetDrivenExecution?.startNodeName ?? summary?.pageName);
   const assetDrivenTestNeedsBusinessSubmit = !allowBusinessSubmit && assetPatrolPlanRequiresBusinessSubmit(plan);
+  const panelSummary = summary ?? assetDrivenExecutionProgressSummary(assetDrivenExecution) ?? assetDrivenRunProgressSummary(currentRun, packageName);
 
   return (
     <section className="module-page stability-module">
       <div className="panel module-head-panel">
         <div>
           <span className="module-eyebrow">资产驱动巡检</span>
-          <h2>按 PageStateFlow 资产体检当前页面</h2>
+          <h2>按 PageStateFlow 资产测试当前页面</h2>
         </div>
         <div className="module-stat-grid">
           <div>
-            <strong>{plan ? `${plan.steps.length}` : "0"}</strong>
+            <strong>{assetDrivenExecution ? `${assetDrivenExecution.totalEdges}` : plan ? `${plan.steps.length}` : "0"}</strong>
             <span>计划检查</span>
           </div>
           <div>
-            <strong>{plan?.summary.needsRepair ?? summary?.needsRepair ?? 0}</strong>
+            <strong>{assetDrivenExecution?.needsRepair ?? plan?.summary.needsRepair ?? panelSummary?.needsRepair ?? 0}</strong>
             <span>建议修复</span>
           </div>
           <div>
-            <strong>{currentRun?.status ?? "idle"}</strong>
+            <strong>{assetDrivenExecution?.status ?? currentRun?.status ?? "idle"}</strong>
             <span>运行状态</span>
           </div>
         </div>
@@ -3396,7 +3547,7 @@ function AssetPatrolPanel({
       <div className="stability-layout">
         <div className="panel stability-config-panel">
           <div className="panel-head">
-            <h2>体检配置</h2>
+            <h2>测试配置</h2>
           </div>
           <div className="stability-form-grid">
             <label>
@@ -3506,20 +3657,12 @@ function AssetPatrolPanel({
           </div>
 
           <div className="action-row">
-            <button className="icon-button" type="button" disabled={!canUseDevice} onClick={onPreview}>
-              <RefreshCw size={16} />
-              预览计划
-            </button>
             <button className="icon-button primary" type="button" disabled={!canUseDevice} onClick={onExecute}>
               <PlayCircle size={16} />
               {ASSET_DRIVEN_TEST_ACTION_LABEL}
             </button>
-            <button className="icon-button" type="button" disabled={!canUseDevice} onClick={onStart}>
-              <RefreshCw size={16} />
-              {ASSET_PATROL_PRIMARY_ACTION_LABEL}
-            </button>
-            {running && currentRun ? (
-              <button className="icon-button danger" type="button" disabled={busy} onClick={() => onStop(currentRun.id)}>
+            {running && stopTargetId ? (
+              <button className="icon-button danger" type="button" disabled={busy} onClick={() => onStop(stopTargetId)}>
                 <Square size={16} />
                 停止
               </button>
@@ -3532,14 +3675,51 @@ function AssetPatrolPanel({
 
         <div className="panel stability-status-panel">
           <div className="panel-head">
-            <h2>{displayMode === "run" ? "体检结果" : "体检计划"}</h2>
-            {displayMode === "run" && currentRun ? (
+            <h2>{displayMode === "run" ? "执行结果" : "测试计划"}</h2>
+            {displayMode === "run" && assetDrivenExecution ? (
+              <span className={`run-status-mini ${assetDrivenExecution.status}`}>{assetDrivenExecution.status}</span>
+            ) : displayMode === "run" && currentRun ? (
               <span className={`run-status-mini ${currentRun.status}`}>{currentRun.status}</span>
             ) : plan ? (
               <span className={`run-status-mini ${plan.status === "ready" ? "passed" : "failed"}`}>{plan.status}</span>
             ) : null}
           </div>
-          {displayMode === "plan" && plan ? (
+          {displayMode === "run" && assetDrivenExecution ? (
+            <>
+              <div className="stability-run-card">
+                <strong>资产测试批次</strong>
+                <span>{assetDrivenExecution.id}</span>
+              </div>
+              <div className="stability-facts">
+                <div><span>当前页</span><strong>{assetDrivenExecution.startNodeName}</strong></div>
+                <div><span>总边数</span><strong>{assetDrivenExecution.totalEdges}</strong></div>
+                <div><span>已完成</span><strong>{assetDrivenExecution.completedEdges}/{assetDrivenExecution.totalEdges}</strong></div>
+                <div><span>当前执行</span><strong>{assetDrivenExecution.runningItem?.label ?? "等待下一条边"}</strong></div>
+                <div><span>待执行</span><strong>{assetDrivenExecution.pendingEdges}</strong></div>
+                <div><span>失败</span><strong>{assetDrivenExecution.failedEdges}</strong></div>
+              </div>
+              <div className="stability-timeline">
+                {assetDrivenExecution.items.map((item) => (
+                  <div key={item.id} className={`stability-step ${assetDrivenExecutionItemClassName(item.status)}`}>
+                    <strong>{item.order}. {item.label}</strong>
+                    <span>
+                      {item.fromPage} -&gt; {item.toPage} · {assetDrivenExecutionItemStatusLabel(item.status)}
+                      {item.latestStep ? ` · ${item.latestStep}` : ""}
+                      {item.runId ? ` · ${item.runId}` : ""}
+                    </span>
+                    {item.errorMessage ? <span>{item.errorMessage}</span> : null}
+                  </div>
+                ))}
+              </div>
+              <div className="action-row">
+                {assetDrivenExecution.runningItem?.runId ? (
+                  <button className="icon-button" type="button" onClick={() => onOpenRun(assetDrivenExecution.runningItem?.runId ?? "")}>
+                    查看当前执行
+                  </button>
+                ) : null}
+              </div>
+            </>
+          ) : displayMode === "plan" && plan ? (
             <>
               <div className="stability-facts">
                 <div><span>当前页</span><strong>{plan.startPage?.name ?? "-"}</strong></div>
@@ -3569,20 +3749,20 @@ function AssetPatrolPanel({
                 {!plan.steps.length ? <div className="empty">当前计划没有可执行检查项</div> : null}
               </div>
             </>
-          ) : displayMode === "run" && summary && currentRun ? (
+          ) : displayMode === "run" && currentRun ? (
             <>
               <div className="stability-run-card">
                 <strong>{currentRun.caseName}</strong>
                 <span>{currentRun.id}</span>
               </div>
-              <div className="stability-diagnostic-note">{ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE}</div>
+              {currentRun.config.runKind === "asset_patrol" ? <div className="stability-diagnostic-note">{ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE}</div> : null}
               <div className="stability-facts">
                 <div><span>设备</span><strong>{selectedDevice?.name || selectedSerial || currentRun.deviceSerial}</strong></div>
-                <div><span>包名</span><strong>{summary.packageName}</strong></div>
-                <div><span>页面</span><strong>{summary.pageName}</strong></div>
-                <div><span>最近检查</span><strong>{summary.latestCheck}</strong></div>
-                <div><span>失败</span><strong>{summary.failed}</strong></div>
-                <div><span>建议修复</span><strong>{summary.needsRepair}</strong></div>
+                <div><span>包名</span><strong>{panelSummary?.packageName ?? packageName}</strong></div>
+                <div><span>页面</span><strong>{panelSummary?.pageName ?? currentRun.caseName}</strong></div>
+                <div><span>最近执行</span><strong>{panelSummary?.latestCheck ?? "等待执行结果"}</strong></div>
+                <div><span>失败</span><strong>{panelSummary?.failed ?? 0}</strong></div>
+                <div><span>建议修复</span><strong>{panelSummary?.needsRepair ?? 0}</strong></div>
               </div>
               <div className="action-row">
                 <button className="icon-button" type="button" onClick={() => onOpenRun(currentRun.id)}>
@@ -3596,12 +3776,44 @@ function AssetPatrolPanel({
               </div>
             </>
           ) : (
-            <div className="empty">选择设备和目标包后预览资产巡检计划</div>
+            <div className="empty">选择设备和目标包后开始资产测试</div>
           )}
         </div>
       </div>
     </section>
   );
+}
+
+function assetDrivenExecutionItemClassName(status: AssetDrivenExecutionItem["status"]): string {
+  if (status === "passed") {
+    return "passed";
+  }
+  if (status === "failed" || status === "stopped") {
+    return "failed";
+  }
+  if (status === "skipped") {
+    return "skipped";
+  }
+  return "running";
+}
+
+function assetDrivenExecutionItemStatusLabel(status: AssetDrivenExecutionItem["status"]): string {
+  if (status === "pending") {
+    return "待执行";
+  }
+  if (status === "running") {
+    return "运行中";
+  }
+  if (status === "passed") {
+    return "成功";
+  }
+  if (status === "skipped") {
+    return "跳过";
+  }
+  if (status === "stopped") {
+    return "已停止";
+  }
+  return "失败";
 }
 
 type StabilityExplorerPanelProps = {

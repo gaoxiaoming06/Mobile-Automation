@@ -37,12 +37,42 @@ describe("AssetRecordingPanel", () => {
     ).toEqual({ id: "region", label: "动作区域", x: 10, y: 20, width: 35, height: 35, semanticArea: "content", coordinateSpace: "screen" });
   });
 
+  it("opens the candidate-driven v2 workbench by default", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "device-1",
+        busy: false,
+        currentPage: {
+          status: "matched",
+          pageName: "主页",
+          nodeId: "node-home",
+          ocrTexts: ["ocr_text:搜索@region(76,7,12,5)", "创建班级"],
+          elements: [],
+          transitions: [],
+          tasks: []
+        },
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: vi.fn()
+      })
+    );
+
+    expect(markup).toContain("v2 候选录入");
+    expect(markup).toContain("候选池");
+    expect(markup).toContain("先选候选，再确认语义");
+    expect(markup).toContain("直接录为页面身份");
+    expect(markup).toContain("录为可操作元素");
+    expect(markup).not.toContain("<h2>页面身份依据</h2>");
+    expect(markup).not.toContain("截图重点区域");
+  });
+
   it("renders the manual page asset recording workflow", () => {
     const markup = renderToStaticMarkup(
       React.createElement(AssetRecordingPanel, {
         selectedSerial: "device-1",
         selectedDeviceName: "Pixel 8",
         busy: false,
+        initialDetailTab: "match",
         previewSlot: React.createElement("div", { className: "mock-preview" }, "设备实时画面"),
         currentPage: {
           status: "matched",
@@ -313,6 +343,90 @@ describe("AssetRecordingPanel", () => {
     expect(markup).not.toContain("AI 说明");
   });
 
+  it("renders a candidate-driven v2 asset workbench instead of the old manual region workflow", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "device-1",
+        busy: false,
+        initialDetailTab: "workbench",
+        currentPage: {
+          status: "matched",
+          pageName: "主页",
+          nodeId: "node-home",
+          graphVersionId: "version-1",
+          screenshotUrl: "/api/devices/device-1/screenshot?force=true&t=1",
+          confirmedOcrTexts: ["ocr_text:主页@region(6,7,12,5)"],
+          ocrTexts: ["ocr_text:搜索@region(76,7,12,5)", "创建班级"],
+          elements: [
+            {
+              id: "search-entry",
+              label: "搜索入口",
+              locator: "runtime-locator:top-bar-icon:search",
+              locatorKind: "visual_locator",
+              coordinateSpace: "runtime",
+              action: "tap",
+              actionKind: "tap",
+              source: "manual",
+              quality: {
+                status: "pass",
+                score: 0.96,
+                warnings: [],
+                candidates: [],
+                evidence: {}
+              }
+            }
+          ],
+          transitions: [
+            {
+              id: "edge-search",
+              name: "主页 -> 搜索",
+              status: "ready",
+              actionKind: "tap",
+              actionLocator: "runtime-locator:top-bar-icon:search",
+              targetName: "搜索"
+            }
+          ],
+          tasks: [
+            {
+              id: "task-check-home",
+              name: "主页轻量巡检",
+              status: "active",
+              steps: [{ order: 1, fieldType: "wait", text: "主页" }]
+            }
+          ]
+        },
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: vi.fn()
+      })
+    );
+
+    expect(markup).toContain("v2 候选录入");
+    expect(markup).toContain("先选候选，再确认语义");
+    expect(markup).toContain("候选池");
+    expect(markup).toContain("搜索");
+    expect(markup).toContain("创建班级");
+    expect(markup).toContain("直接录为页面身份");
+    expect(markup).toContain("录为可操作元素");
+    expect(markup).toContain("缺少区域，先刷新候选");
+    expect(markup).not.toContain("ocr_text:搜索@region");
+    expect(markup).toContain("region_center 不直接执行");
+    expect(markup).toContain("OCR / 视觉 / 结构重定位成功才允许点击");
+    expect(markup).toContain("PageElement");
+    expect(markup).toContain("PageTransition");
+    expect(markup).toContain("DynamicRegion / ListTemplate");
+    expect(markup).toContain("当前页录入状态");
+    expect(markup).toContain("1 个可操作元素");
+    expect(markup).toContain("1 条连接边");
+    expect(markup).toContain("1 个页面任务");
+    expect(markup).toContain("搜索入口");
+    expect(markup).toContain("主页 -&gt; 搜索");
+    expect(markup).toContain("从已录入元素补连接边");
+    expect(markup).toContain("把元素编入页面任务");
+    expect(markup).toContain("打开详情编辑");
+    expect(markup).not.toContain("AI 说明");
+  });
+
   it("renders saved page element quality status in the actions tab", () => {
     const markup = renderToStaticMarkup(
       React.createElement(AssetRecordingPanel, {
@@ -564,6 +678,7 @@ describe("AssetRecordingPanel", () => {
       React.createElement(AssetRecordingPanel, {
         selectedSerial: "device-1",
         busy: false,
+        initialDetailTab: "match",
         currentPage: {
           status: "matched",
           graphVersionId: "version-1",
@@ -602,6 +717,7 @@ describe("AssetRecordingPanel", () => {
       React.createElement(AssetRecordingPanel, {
         selectedSerial: "device-1",
         busy: false,
+        initialDetailTab: "match",
         currentPage: {
           status: "matched",
           pageName: "主页",
@@ -651,6 +767,7 @@ describe("AssetRecordingPanel", () => {
       React.createElement(AssetRecordingPanel, {
         selectedSerial: "device-1",
         busy: false,
+        initialDetailTab: "match",
         currentPage: {
           status: "matched",
           pageName: "待办",
@@ -688,6 +805,7 @@ describe("AssetRecordingPanel", () => {
       React.createElement(AssetRecordingPanel, {
         selectedSerial: "device-1",
         busy: false,
+        initialDetailTab: "match",
         currentPage: {
           status: "matched",
           pageName: "主页",
@@ -780,6 +898,7 @@ describe("AssetRecordingPanel", () => {
       React.createElement(AssetRecordingPanel, {
         selectedSerial: "device-1",
         busy: false,
+        initialDetailTab: "match",
         currentPage: {
           status: "draft_created",
           graphVersionId: "version-1",
@@ -805,6 +924,7 @@ describe("AssetRecordingPanel", () => {
       React.createElement(AssetRecordingPanel, {
         selectedSerial: "device-1",
         busy: false,
+        initialDetailTab: "match",
         currentPage: {
           status: "draft_candidate",
           graphVersionId: "version-1",
@@ -858,6 +978,7 @@ describe("AssetRecordingPanel", () => {
       React.createElement(AssetRecordingPanel, {
         selectedSerial: "device-1",
         busy: false,
+        initialDetailTab: "match",
         currentPage: {
           status: "matched",
           graphVersionId: "version-1",

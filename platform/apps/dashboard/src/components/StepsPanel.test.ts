@@ -77,6 +77,17 @@ describe("StepsPanel", () => {
     expect(markup).toContain("task_dry_run · business_submit_disabled");
     expect(markup).not.toContain("<strong>wait</strong>");
   });
+
+  it("keeps execution results focused on run status without replay configuration", () => {
+    const markup = renderStepsPanel(false, {
+      activeTab: "runs",
+      runs: [createAssetPatrolRun()]
+    });
+
+    expect(markup).toContain("执行结果");
+    expect(markup).toContain("当前设备执行记录");
+    expect(markup).not.toContain("执行配置");
+  });
 });
 
 function renderStepsPanel(recording: boolean, overrides: Partial<React.ComponentProps<typeof StepsPanel>> = {}): string {

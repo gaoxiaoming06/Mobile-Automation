@@ -34,6 +34,9 @@ type GridScrollProfile = {
   targetKind?: string;
   targetQuery?: string;
   candidateItemHeightPercent?: number;
+  maxSearchSwipes?: number;
+  maxScrollAttempts?: number;
+  maxSwipes?: number;
   clickSafePoint: {
     xPercent: number;
     yPercent: number;
@@ -115,7 +118,7 @@ export class SemanticStepResolver {
     if (isOcrAnchorOffsetLocator(input.step.params)) {
       return this.resolveOcrAnchorOffsetTap(input);
     }
-    const region = readPercentRegion(input.step.params.region);
+    const region = readPercentRegion(input.step.params.region) ?? readGridCandidateSearchHintRegion(input.step.params);
     if (!region && isRuntimeTapStructuralLocator(input.step.params)) {
       return this.resolveRuntimeStructuralTap(input);
     }
@@ -1273,14 +1276,14 @@ export class SemanticStepResolver {
       return undefined;
     }
     const artifacts: ArtifactRef[] = [];
-    const maxSwipes = Math.max(0, Math.floor(nonNegativeNumberParam(input.step.params.maxSearchSwipes, nonNegativeNumberParam(input.step.params.maxSwipes, 3))));
+    const maxSwipes = maxGridSearchSwipes(input.step.params, scrollProfile);
     const intervalMs = positiveNumberParam(input.step.params.searchIntervalMs, positiveNumberParam(input.step.params.intervalMs, 250));
     const mode = tapTextMatchMode(input.step.params.mode);
     const tryFindAndTap = async (
       attempt: number,
       relocatedBy: "ocr_text_in_grid" | "ocr_text_in_grid_after_scroll",
       search?: Record<string, unknown>
-    ): Promise<SemanticResolutionOutcome | undefined> => {
+    ): Promise<{ outcome?: SemanticResolutionOutcome; signature?: string }> => {
       const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
       artifacts.push(screenshot.artifact);
       const layout = await this.deps.ocr.locateText?.({
@@ -1288,65 +1291,184 @@ export class SemanticStepResolver {
         mode
       });
       if (!layout) {
-        return undefined;
+        return {};
       }
+      const signature = gridSearchLayoutSignature(layout, region, input.deviceSize);
       const target = findTextCandidate(layout, targetQuery, {
         mode,
         deviceSize: input.deviceSize
       });
       if (!target || !candidateInsidePercentRegion(target, region, layout, input.deviceSize)) {
-        return undefined;
+        return { signature };
       }
       const grid = candidateGridCell(target, region, layout, scrollProfile, input.deviceSize);
       const pointPercent = gridCandidateSafePointPercent(grid, scrollProfile);
       const center = regionPoint(region, input.deviceSize, pointPercent);
       if (!center) {
-        return undefined;
+        return { signature };
       }
       const action = { type: "tap", x: center.x, y: center.y } satisfies DeviceActionRequest;
       const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
       return {
-        supported: true,
-        resolved: true,
-        action,
-        actionResult,
-        message: `Resolved grid candidate "${target.text}" by OCR inside the marked list region.`,
-        artifacts,
-        metadata: {
-          type: "image_region",
-          action: "tap",
-          abilityType: "grid_candidate",
-          region,
-          targetQuery,
-          actual: target.text,
-          relocatedBy,
-          locator: target,
-          candidateGrid: grid,
-          candidatePointPercent: pointPercent,
-          center,
-          ...(search ? { search } : {}),
-          driverChannel: actionResult?.driverChannel
+        signature,
+        outcome: {
+          supported: true,
+          resolved: true,
+          action,
+          actionResult,
+          message: `Resolved grid candidate "${target.text}" by OCR inside the marked list region.`,
+          artifacts,
+          metadata: {
+            type: "image_region",
+            action: "tap",
+            abilityType: "grid_candidate",
+            region,
+            targetQuery,
+            actual: target.text,
+            relocatedBy,
+            locator: target,
+            candidateGrid: grid,
+            candidatePointPercent: pointPercent,
+            center,
+            ...(search ? { search } : {}),
+            driverChannel: actionResult?.driverChannel
+          }
         }
       };
     };
 
-    const directOutcome = await tryFindAndTap(1, "ocr_text_in_grid");
-    if (directOutcome) {
-      return directOutcome;
+    const directProbe = await tryFindAndTap(1, "ocr_text_in_grid", {
+      strategy: gridSearchStrategy(input.step.params, scrollProfile),
+      phase: "current",
+      attempts: 1
+    });
+    if (directProbe.outcome) {
+      return directProbe.outcome;
     }
-    for (let swipes = 1; swipes <= maxSwipes; swipes += 1) {
+    const strategy = gridSearchStrategy(input.step.params, scrollProfile);
+    if (strategy === "current_then_top_down") {
+      let attempt = 1;
+      let resetSwipes = 0;
+      let scanSwipes = 0;
+      let reachedTop = false;
+      let reachedBottom = false;
+      let previousSignature = directProbe.signature;
+      for (resetSwipes = 1; resetSwipes <= maxSwipes; resetSwipes += 1) {
+        await this.deps.performAction(input.serial, reverseGridSearchSwipeAction(region, scrollProfile, input.deviceSize));
+        await sleep(intervalMs);
+        attempt += 1;
+        const resetProbe = await tryFindAndTap(attempt, "ocr_text_in_grid_after_scroll", {
+          strategy,
+          phase: "reset_to_top",
+          direction: "reverse",
+          maxSwipes,
+          resetSwipes,
+          attempts: attempt
+        });
+        if (resetProbe.outcome) {
+          return resetProbe.outcome;
+        }
+        if (previousSignature && resetProbe.signature && previousSignature === resetProbe.signature) {
+          reachedTop = true;
+          previousSignature = resetProbe.signature;
+          break;
+        }
+        previousSignature = resetProbe.signature ?? previousSignature;
+      }
+      for (scanSwipes = 1; scanSwipes <= maxSwipes; scanSwipes += 1) {
+        await this.deps.performAction(input.serial, gridSearchSwipeAction(region, scrollProfile, input.deviceSize));
+        await sleep(intervalMs);
+        attempt += 1;
+        const scrolledProbe = await tryFindAndTap(attempt, "ocr_text_in_grid_after_scroll", {
+          strategy,
+          phase: "scan_down",
+          direction: scrollProfile.direction,
+          maxSwipes,
+          resetSwipes,
+          swipes: scanSwipes,
+          attempts: attempt
+        });
+        if (scrolledProbe.outcome) {
+          return scrolledProbe.outcome;
+        }
+        if (previousSignature && scrolledProbe.signature && previousSignature === scrolledProbe.signature) {
+          reachedBottom = true;
+          previousSignature = scrolledProbe.signature;
+          break;
+        }
+        previousSignature = scrolledProbe.signature ?? previousSignature;
+      }
+      return {
+        supported: true,
+        resolved: false,
+        message: `Grid candidate target "${targetQuery}" was not found inside the marked list region.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          abilityType: "grid_candidate",
+          reason: "target_not_found",
+          targetQuery,
+          region,
+          search: {
+            strategy,
+            direction: scrollProfile.direction,
+            maxSwipes,
+            resetSwipes,
+            swipes: scanSwipes,
+            attempts: attempt,
+            reachedTop,
+            reachedBottom
+          }
+        }
+      };
+    }
+
+    let previousSignature = directProbe.signature;
+    let swipes = 0;
+    let reachedBoundary = false;
+    for (swipes = 1; swipes <= maxSwipes; swipes += 1) {
       await this.deps.performAction(input.serial, gridSearchSwipeAction(region, scrollProfile, input.deviceSize));
       await sleep(intervalMs);
-      const scrolledOutcome = await tryFindAndTap(swipes + 1, "ocr_text_in_grid_after_scroll", {
+      const scrolledProbe = await tryFindAndTap(swipes + 1, "ocr_text_in_grid_after_scroll", {
+        strategy,
+        phase: "scan",
         direction: scrollProfile.direction,
+        maxSwipes,
         swipes,
         attempts: swipes + 1
       });
-      if (scrolledOutcome) {
-        return scrolledOutcome;
+      if (scrolledProbe.outcome) {
+        return scrolledProbe.outcome;
       }
+      if (previousSignature && scrolledProbe.signature && previousSignature === scrolledProbe.signature) {
+        reachedBoundary = true;
+        break;
+      }
+      previousSignature = scrolledProbe.signature ?? previousSignature;
     }
-    return undefined;
+    return {
+      supported: true,
+      resolved: false,
+      message: `Grid candidate target "${targetQuery}" was not found inside the marked list region.`,
+      artifacts,
+      metadata: {
+        type: "image_region",
+        action: "fail",
+        abilityType: "grid_candidate",
+        reason: "target_not_found",
+        targetQuery,
+        region,
+        search: {
+          strategy,
+          direction: scrollProfile.direction,
+          maxSwipes,
+          swipes,
+          attempts: swipes + 1,
+          reachedBoundary
+        }
+      }
+    };
   }
 
   private async resolveTapOnText(input: {
@@ -3055,6 +3177,21 @@ function gridSearchSwipeAction(
   };
 }
 
+function reverseGridSearchSwipeAction(
+  region: { x: number; y: number; width: number; height: number },
+  scrollProfile: GridScrollProfile,
+  deviceSize?: { width: number; height: number }
+): Extract<DeviceActionRequest, { type: "swipe" }> {
+  const action = gridSearchSwipeAction(region, scrollProfile, deviceSize);
+  return {
+    ...action,
+    startX: action.endX,
+    startY: action.endY,
+    endX: action.startX,
+    endY: action.startY
+  };
+}
+
 function readPercentRegion(value: unknown): { x: number; y: number; width: number; height: number } | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -3070,6 +3207,14 @@ function readPercentRegion(value: unknown): { x: number; y: number; width: numbe
   return { x, y, width, height };
 }
 
+function readGridCandidateSearchHintRegion(params: Record<string, unknown>): { x: number; y: number; width: number; height: number } | undefined {
+  if (params.abilityType !== "grid_candidate") {
+    return undefined;
+  }
+  const structuralLocator = readRecord(params.structuralLocator);
+  return readPercentRegion(structuralLocator?.searchHintRegion ?? params.searchHintRegion);
+}
+
 function readScrollProfile(value: unknown): GridScrollProfile {
   const input = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
@@ -3079,9 +3224,34 @@ function readScrollProfile(value: unknown): GridScrollProfile {
     targetKind: textParam(input.targetKind),
     targetQuery: textParam(input.targetQuery),
     candidateItemHeightPercent: percentNumber(input.candidateItemHeightPercent),
+    maxSearchSwipes: optionalNonNegativeNumberParam(input.maxSearchSwipes),
+    maxScrollAttempts: optionalNonNegativeNumberParam(input.maxScrollAttempts),
+    maxSwipes: optionalNonNegativeNumberParam(input.maxSwipes),
     clickSafePoint: readClickSafePoint(input.clickSafePoint),
     scrollStepPercent: percentNumber(input.scrollStepPercent) ?? 65
   };
+}
+
+function maxGridSearchSwipes(params: Record<string, unknown>, scrollProfile: GridScrollProfile): number {
+  const configured =
+    optionalNonNegativeNumberParam(params.maxSearchSwipes) ??
+    optionalNonNegativeNumberParam(params.maxScrollAttempts) ??
+    optionalNonNegativeNumberParam(params.maxSwipes) ??
+    scrollProfile.maxSearchSwipes ??
+    scrollProfile.maxScrollAttempts ??
+    scrollProfile.maxSwipes;
+  if (configured !== undefined) {
+    return Math.max(0, Math.floor(configured));
+  }
+  return 20;
+}
+
+function gridSearchStrategy(params: Record<string, unknown>, scrollProfile: GridScrollProfile): "current_then_top_down" | "current_then_direction" {
+  const raw = textParam(params.searchStrategy ?? params.gridSearchStrategy).trim();
+  if (raw === "current_then_direction") {
+    return "current_then_direction";
+  }
+  return scrollProfile.direction === "vertical" ? "current_then_top_down" : "current_then_direction";
 }
 
 function readClickSafePoint(value: unknown): GridScrollProfile["clickSafePoint"] {
@@ -3103,6 +3273,32 @@ function candidateInsidePercentRegion(
 ): boolean {
   const point = candidatePercentPoint(candidate, layout, deviceSize);
   return point.x >= region.x && point.x <= region.x + region.width && point.y >= region.y && point.y <= region.y + region.height;
+}
+
+function gridSearchLayoutSignature(
+  layout: OcrLayoutResult,
+  region: { x: number; y: number; width: number; height: number },
+  deviceSize?: { width: number; height: number }
+): string {
+  const width = deviceSize?.width ?? layout.width;
+  const height = deviceSize?.height ?? layout.height;
+  const parts = layout.boxes
+    .map((box) => {
+      const centerX = scaleCoordinate(box.x + box.width / 2, layout.width, width);
+      const centerY = scaleCoordinate(box.y + box.height / 2, layout.height, height);
+      const percentX = width ? (centerX / width) * 100 : 0;
+      const percentY = height ? (centerY / height) * 100 : 0;
+      return {
+        text: normalizeOcrText(box.text),
+        x: Math.round(percentX / 2) * 2,
+        y: Math.round(percentY / 2) * 2,
+        inside: percentX >= region.x && percentX <= region.x + region.width && percentY >= region.y && percentY <= region.y + region.height
+      };
+    })
+    .filter((item) => item.inside && item.text)
+    .map((item) => `${item.text}@${item.x},${item.y}`)
+    .sort();
+  return parts.length ? parts.join("|") : normalizeOcrText(layout.text).slice(0, 240);
 }
 
 function inputVerificationRegion(
@@ -4174,6 +4370,10 @@ function percentNumber(value: unknown): number | undefined {
 
 function nonNegativeNumberParam(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function optionalNonNegativeNumberParam(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function roundPercent(value: number): number {

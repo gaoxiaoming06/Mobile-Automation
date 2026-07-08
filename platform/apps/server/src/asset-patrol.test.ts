@@ -144,24 +144,37 @@ describe("AssetPatrol", () => {
           name: "主页",
           matchers: [matcher("package", "com.demo", 2), matcher("ocr_text", "主页", 4)],
           metadata: {
-            assetRecordingManualElements: [
+            assetRecordingPageElements: [
               {
-                id: "manual-settings",
+                id: "home-settings",
                 label: "设置",
+                elementKind: "button",
                 locator: "text:设置",
                 locatorKind: "text_locator",
                 targetText: "设置",
-                actionKind: "tap",
                 semanticArea: "bottom",
-                availability: "visible",
-                outcomeType: "navigate"
+                coordinateSpace: "runtime",
+                actions: ["tap"]
               },
               {
-                id: "manual-region-only",
+                id: "home-region-only",
                 label: "旧坐标区域",
+                elementKind: "button",
                 locator: "image-region:50,50,10,10",
-                actionKind: "tap",
+                locatorKind: "visual_locator",
                 semanticArea: "content",
+                coordinateSpace: "screen",
+                actions: ["tap"]
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "home-open-settings",
+                elementId: "home-settings",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-settings",
+                targetLabel: "设置",
                 availability: "visible"
               }
             ]
@@ -205,7 +218,190 @@ describe("AssetPatrol", () => {
     expect(plan.summary.needsRepair).toBe(1);
   });
 
-  it("accepts legacy image-region elements when their visible label is present on the current page", () => {
+  it("keeps legacy page elements and operation edges available alongside V2 assets", () => {
+    const graphVersion = graphVersionWithNodes(
+      [
+        pageNode({
+          id: "node-home",
+          key: "home",
+          name: "主页",
+          matchers: [matcher("ocr_text", "主页", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "home-search",
+                label: "搜索",
+                elementKind: "icon_button",
+                locator: "top-bar-icon:search",
+                locatorKind: "top_bar_icon_locator",
+                semanticArea: "top",
+                coordinateSpace: "runtime",
+                actions: ["tap"],
+                role: "search",
+                slot: "trailing",
+                orderFromRight: 2
+              },
+              {
+                id: "home-class-grid",
+                label: "班级列表",
+                elementKind: "collection",
+                locator: "runtime-locator:home_class_grid",
+                locatorKind: "collection_item_locator",
+                semanticArea: "content",
+                coordinateSpace: "runtime",
+                actions: ["tap_item"],
+                collection: {
+                  kind: "vertical_grid",
+                  columns: 2,
+                  itemIdentity: { type: "ocr_title", param: "className" },
+                  candidateItemHeightPercent: 24.5,
+                  clickSafePoint: { xPercent: 50, yPercent: 28 },
+                  scrollStepPercent: 65,
+                  failureStrategy: "try_next_candidate"
+                }
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "home-open-search",
+                elementId: "home-search",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-search",
+                targetLabel: "搜索",
+                availability: "visible"
+              },
+              {
+                id: "home-open-class-detail",
+                elementId: "home-class-grid",
+                action: "tap_item",
+                outcomeType: "navigate",
+                targetNodeId: "node-detail",
+                targetLabel: "班级详情",
+                availability: "visible",
+                params: { itemText: "{{className}}" }
+              }
+            ],
+            assetRecordingManualElements: [
+              {
+                id: "legacy-settings",
+                label: "设置",
+                locator: "text:设置",
+                locatorKind: "text_locator",
+                targetText: "设置",
+                actionKind: "tap",
+                semanticArea: "bottom",
+                outcomeType: "navigate"
+              }
+            ]
+          }
+        }),
+        pageNode({ id: "node-search", key: "search", name: "搜索", matchers: [matcher("ocr_text", "搜索", 4)] }),
+        pageNode({ id: "node-detail", key: "detail", name: "班级详情", matchers: [matcher("ocr_text", "班级详情", 4)] }),
+        pageNode({ id: "node-settings", key: "settings", name: "设置", matchers: [matcher("ocr_text", "设置", 4)] })
+      ],
+      [
+        edge({
+          id: "legacy-edge-settings",
+          fromNodeId: "node-home",
+          toNodeId: "node-settings",
+          name: "主页 -> 设置",
+          actionTitle: "设置",
+          action: { type: "tap", x: 100, y: 100 }
+        })
+      ]
+    );
+
+    const plan = buildAssetPatrolPlan({
+      observation: observation({ ocrTexts: [{ text: "主页", region: { x: 150, y: 200, width: 120, height: 80 } }] }),
+      graphVersion,
+      config: normalizeAssetPatrolConfig({
+        packageName: "com.demo",
+        runtimeParams: { className: "班级四十二号" }
+      })
+    });
+
+    expect(plan.status).toBe("ready");
+    expect(plan.steps.map((step) => step.pageElementId).filter(Boolean)).toEqual(["home-search", "home-class-grid", "legacy-settings"]);
+    expect(plan.steps.map((step) => step.pageTransitionId).filter(Boolean)).toEqual([
+      "edge_pagetransition.home.search.home.open.search",
+      "edge_pagetransition.home.detail.home.open.class.detail",
+      "legacy-edge-settings"
+    ]);
+    expect(plan.steps.find((step) => step.pageElementId === "legacy-settings")?.evidence).toEqual(expect.objectContaining({ assetFormat: "legacy" }));
+    expect(plan.steps.find((step) => step.pageTransitionId === "legacy-edge-settings")?.evidence).toEqual(expect.objectContaining({ assetFormat: "legacy" }));
+    expect(plan.steps.find((step) => step.pageElementId === "home-search")?.evidence).toEqual(expect.objectContaining({ assetFormat: "v2" }));
+    expect(plan.steps.find((step) => step.pageTransitionId === "edge_pagetransition.home.search.home.open.search")?.evidence).toEqual(expect.objectContaining({ assetFormat: "v2" }));
+    expect(plan.summary).toEqual(
+      expect.objectContaining({
+        pageChecks: 1,
+        elementChecks: 3,
+        transitionChecks: 3,
+        needsRepair: 0
+      })
+    );
+  });
+
+  it("does not report NO_PAGE_ASSETS when only legacy assets are available", () => {
+    const graphVersion = graphVersionWithNodes(
+      [
+        pageNode({
+          id: "node-home",
+          key: "home",
+          name: "主页",
+          matchers: [matcher("ocr_text", "主页", 4)],
+          metadata: {
+            assetRecordingManualElements: [
+              {
+                id: "legacy-settings",
+                label: "设置",
+                locator: "text:设置",
+                locatorKind: "text_locator",
+                targetText: "设置",
+                actionKind: "tap",
+                semanticArea: "bottom",
+                outcomeType: "navigate"
+              }
+            ]
+          }
+        }),
+        pageNode({ id: "node-settings", key: "settings", name: "设置", matchers: [matcher("ocr_text", "设置", 4)] })
+      ],
+      [
+        edge({
+          id: "legacy-edge-settings",
+          fromNodeId: "node-home",
+          toNodeId: "node-settings",
+          name: "主页 -> 设置",
+          actionTitle: "设置",
+          action: { type: "tap", x: 100, y: 100 }
+        })
+      ]
+    );
+
+    const plan = buildAssetPatrolPlan({
+      observation: observation({ ocrTexts: [{ text: "主页", region: { x: 150, y: 200, width: 120, height: 80 } }] }),
+      graphVersion,
+      config: normalizeAssetPatrolConfig({ packageName: "com.demo" })
+    });
+
+    expect(plan.status).toBe("ready");
+    expect(plan.issues.some((issue) => issue.code === "NO_PAGE_ASSETS")).toBe(false);
+    expect(plan.steps.find((step) => step.pageElementId === "legacy-settings")).toEqual(
+      expect.objectContaining({
+        kind: "element_relocation",
+        status: "ready"
+      })
+    );
+    expect(plan.steps.find((step) => step.pageTransitionId === "legacy-edge-settings")).toEqual(
+      expect.objectContaining({
+        kind: "transition_validation",
+        status: "ready"
+      })
+    );
+  });
+
+  it("accepts V2 image-region elements when their visible label is present on the current page", () => {
     const graphVersion = graphVersionWithNodes([
       pageNode({
         id: "node-home",
@@ -213,14 +409,17 @@ describe("AssetPatrol", () => {
         name: "主页",
         matchers: [matcher("ocr_text", "主页", 4)],
         metadata: {
-          assetRecordingManualElements: [
+          assetRecordingPageElements: [
             {
-              id: "manual-public-lesson",
+              id: "home-public-lesson",
               label: "创建公开课",
+              targetText: "创建公开课",
+              elementKind: "button",
               locator: "image-region:53.85,15.84,38.63,7.33",
-              actionKind: "tap",
+              locatorKind: "visual_locator",
               semanticArea: "content",
-              availability: "visible"
+              coordinateSpace: "screen",
+              actions: ["tap"]
             }
           ]
         }
@@ -238,7 +437,7 @@ describe("AssetPatrol", () => {
       config: normalizeAssetPatrolConfig({ packageName: "com.demo" })
     });
 
-    expect(plan.steps.find((step) => step.pageElementId === "manual-public-lesson")).toEqual(
+    expect(plan.steps.find((step) => step.pageElementId === "home-public-lesson")).toEqual(
       expect.objectContaining({
         kind: "element_relocation",
         status: "ready",
@@ -259,14 +458,16 @@ describe("AssetPatrol", () => {
         name: "主页",
         matchers: [matcher("ocr_text", "主页", 4)],
         metadata: {
-          assetRecordingManualElements: [
+          assetRecordingPageElements: [
             {
-              id: "manual-home-tab-strip",
+              id: "home-tab-strip",
               label: "主页列表分类tab",
+              elementKind: "button",
               locator: "image-region:2.07,25.44,95.53,4.97",
-              actionKind: "scroll",
+              locatorKind: "visual_locator",
               semanticArea: "content",
-              availability: "visible"
+              coordinateSpace: "screen",
+              actions: ["scroll"]
             }
           ]
         }
@@ -284,7 +485,7 @@ describe("AssetPatrol", () => {
       config: normalizeAssetPatrolConfig({ packageName: "com.demo" })
     });
 
-    expect(plan.steps.find((step) => step.pageElementId === "manual-home-tab-strip")).toEqual(
+    expect(plan.steps.find((step) => step.pageElementId === "home-tab-strip")).toEqual(
       expect.objectContaining({
         kind: "element_relocation",
         status: "needs_repair",
@@ -306,21 +507,36 @@ describe("AssetPatrol", () => {
           name: "主页",
           matchers: [matcher("ocr_text", "主页", 4)],
           metadata: {
-            assetRecordingManualElements: [
+            assetRecordingPageElements: [
               {
-                id: "manual-class-grid",
+                id: "home-class-grid",
                 label: "班级列表",
-                locator: "image-region:3,30,94,59",
-                actionKind: "tap",
-                abilityType: "grid_candidate",
-                availability: "visible",
-                scrollProfile: {
-                  containerKind: "grid_list",
-                  direction: "vertical",
+                elementKind: "collection",
+                locator: "runtime-locator:home_class_grid",
+                locatorKind: "collection_item_locator",
+                semanticArea: "content",
+                coordinateSpace: "runtime",
+                actions: ["tap_item"],
+                collection: {
+                  kind: "vertical_grid",
                   columns: 2,
-                  targetKind: "nth_item",
-                  afterFoundAction: "tap_item"
+                  itemIdentity: { type: "ocr_title", param: "className" },
+                  candidateItemHeightPercent: 24.5,
+                  clickSafePoint: { xPercent: 50, yPercent: 28 },
+                  scrollStepPercent: 65
                 }
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "home-open-class-detail",
+                elementId: "home-class-grid",
+                action: "tap_item",
+                outcomeType: "navigate",
+                targetNodeId: "node-detail",
+                targetLabel: "班级详情",
+                availability: "visible",
+                params: { itemText: "{{className}}" }
               }
             ]
           }
@@ -332,14 +548,7 @@ describe("AssetPatrol", () => {
           matchers: [matcher("ocr_text", "班级详情", 4)]
         })
       ],
-      [
-        gridCandidateEdge({
-          id: "edge-class-detail",
-          fromNodeId: "node-home",
-          toNodeId: "node-detail",
-          name: "主页 -> 班级详情"
-        })
-      ]
+      []
     );
 
     const plan = buildAssetPatrolPlan({
@@ -356,7 +565,7 @@ describe("AssetPatrol", () => {
     });
 
     expect(plan.summary.needsRepair).toBe(0);
-    expect(plan.steps.find((step) => step.pageElementId === "manual-class-grid")).toEqual(
+    expect(plan.steps.find((step) => step.pageElementId === "home-class-grid")).toEqual(
       expect.objectContaining({
         status: "ready",
         evidence: expect.objectContaining({
@@ -364,7 +573,7 @@ describe("AssetPatrol", () => {
         })
       })
     );
-    expect(plan.steps.find((step) => step.pageTransitionId === "edge-class-detail")).toEqual(
+    expect(plan.steps.find((step) => step.pageTransitionId === "edge_pagetransition.home.detail.home.open.class.detail")).toEqual(
       expect.objectContaining({
         status: "ready",
         evidence: expect.objectContaining({
@@ -383,17 +592,30 @@ describe("AssetPatrol", () => {
           name: "主页",
           matchers: [matcher("ocr_text", "主页", 4)],
           metadata: {
-            assetRecordingManualElements: [
+            assetRecordingPageElements: [
               {
-                id: "manual-profile-entry",
+                id: "home-profile-entry",
                 label: "个人入口",
+                elementKind: "icon_button",
                 locator: "ocr-anchor:主页@offset(-11.5,0)",
                 locatorKind: "ocr_anchor_offset",
                 anchorText: "主页",
                 targetText: "主页",
                 anchorOffsetPercent: { x: -11.5, y: 0 },
-                actionKind: "tap",
-                semanticArea: "top"
+                semanticArea: "top",
+                coordinateSpace: "runtime",
+                actions: ["tap"]
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "home-open-settings",
+                elementId: "home-profile-entry",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-settings",
+                targetLabel: "设置",
+                availability: "visible"
               }
             ]
           }
@@ -405,14 +627,7 @@ describe("AssetPatrol", () => {
           matchers: [matcher("ocr_text", "设置", 4)]
         })
       ],
-      [
-        ocrAnchorTransitionEdge({
-          id: "edge-settings",
-          fromNodeId: "node-home",
-          toNodeId: "node-settings",
-          name: "主页 -> 设置"
-        })
-      ]
+      []
     );
 
     const plan = buildAssetPatrolPlan({
@@ -422,7 +637,7 @@ describe("AssetPatrol", () => {
     });
 
     expect(plan.summary.needsRepair).toBe(0);
-    expect(plan.steps.find((step) => step.pageElementId === "manual-profile-entry")).toEqual(
+    expect(plan.steps.find((step) => step.pageElementId === "home-profile-entry")).toEqual(
       expect.objectContaining({
         status: "ready",
         evidence: expect.objectContaining({
@@ -431,7 +646,7 @@ describe("AssetPatrol", () => {
         })
       })
     );
-    expect(plan.steps.find((step) => step.pageTransitionId === "edge-settings")).toEqual(
+    expect(plan.steps.find((step) => step.pageTransitionId === "edge_pagetransition.home.settings.home.open.settings")).toEqual(
       expect.objectContaining({
         status: "ready",
         evidence: expect.objectContaining({
@@ -449,17 +664,19 @@ describe("AssetPatrol", () => {
         name: "主页",
         matchers: [matcher("package", "com.demo", 2)],
         metadata: {
-          assetRecordingManualElements: [
+          assetRecordingPageElements: [
             {
-              id: "manual-profile-entry",
+              id: "home-profile-entry",
               label: "个人入口",
+              elementKind: "icon_button",
               locator: "ocr-anchor:主页@offset(-11.5,0)",
               locatorKind: "ocr_anchor_offset",
               anchorText: "主页",
               targetText: "主页",
               anchorOffsetPercent: { x: -11.5, y: 0 },
-              actionKind: "tap",
-              semanticArea: "top"
+              semanticArea: "top",
+              coordinateSpace: "runtime",
+              actions: ["tap"]
             }
           ]
         }
@@ -472,7 +689,7 @@ describe("AssetPatrol", () => {
       config: normalizeAssetPatrolConfig({ packageName: "com.demo" })
     });
 
-    expect(plan.steps.find((step) => step.pageElementId === "manual-profile-entry")).toEqual(
+    expect(plan.steps.find((step) => step.pageElementId === "home-profile-entry")).toEqual(
       expect.objectContaining({
         status: "needs_repair",
         skipReason: "runtime_relocation_required"
@@ -483,20 +700,41 @@ describe("AssetPatrol", () => {
   it("skips dangerous transitions by default", () => {
     const graphVersion = graphVersionWithNodes(
       [
-        pageNode({ id: "node-settings", key: "settings", name: "设置", matchers: [matcher("ocr_text", "设置", 4)] }),
+        pageNode({
+          id: "node-settings",
+          key: "settings",
+          name: "设置",
+          matchers: [matcher("ocr_text", "设置", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "settings-logout",
+                label: "退出登录",
+                targetText: "退出登录",
+                elementKind: "button",
+                locator: "text:退出登录",
+                locatorKind: "text_locator",
+                semanticArea: "content",
+                coordinateSpace: "runtime",
+                actions: ["tap"]
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "settings-logout-to-login",
+                elementId: "settings-logout",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-login",
+                targetLabel: "登录",
+                availability: "visible"
+              }
+            ]
+          }
+        }),
         pageNode({ id: "node-login", key: "login", name: "登录", matchers: [matcher("ocr_text", "登录", 4)] })
       ],
-      [
-        edge({
-          id: "edge-logout",
-          fromNodeId: "node-settings",
-          toNodeId: "node-login",
-          name: "退出登录",
-          intent: "退出登录并返回登录页",
-          actionTitle: "退出登录",
-          action: { type: "tap", x: 500, y: 1800 }
-        })
-      ]
+      []
     );
 
     const plan = buildAssetPatrolPlan({
@@ -505,7 +743,7 @@ describe("AssetPatrol", () => {
       config: normalizeAssetPatrolConfig({ packageName: "com.demo" })
     });
 
-    expect(plan.steps.find((step) => step.pageTransitionId === "edge-logout")).toEqual(
+    expect(plan.steps.find((step) => step.pageTransitionId === "edge_pagetransition.settings.login.settings.logout.to.login")).toEqual(
       expect.objectContaining({
         kind: "transition_validation",
         status: "skipped",
@@ -521,7 +759,32 @@ describe("AssetPatrol", () => {
           id: "node-home",
           key: "home",
           name: "主页",
-          matchers: [matcher("package", "com.demo", 2), matcher("ocr_text", "主页", 4)]
+          matchers: [matcher("package", "com.demo", 2), matcher("ocr_text", "主页", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "home-add-friend",
+                label: "打开更多菜单并选择添加好友",
+                elementKind: "icon_button",
+                locator: "image-region:84.78,8.14,7.73,3.69",
+                locatorKind: "visual_locator",
+                semanticArea: "top",
+                coordinateSpace: "screen",
+                actions: ["tap"]
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "home-open-add-friend",
+                elementId: "home-add-friend",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-add-friend",
+                targetLabel: "添加好友",
+                availability: "visible"
+              }
+            ]
+          }
         }),
         pageNode({
           id: "node-add-friend",
@@ -530,17 +793,7 @@ describe("AssetPatrol", () => {
           matchers: [matcher("ocr_text", "添加好友", 4)]
         })
       ],
-      [
-        imageRegionTransitionEdge({
-          id: "edge-add-friend",
-          fromNodeId: "node-home",
-          toNodeId: "node-add-friend",
-          name: "主页 -> 添加好友",
-          region: { x: 84.78, y: 8.14, width: 7.73, height: 3.69 },
-          elementLabel: "打开更多菜单并选择添加好友",
-          targetText: "打开更多菜单并选择添加好友"
-        })
-      ]
+      []
     );
 
     const plan = buildAssetPatrolPlan({
@@ -554,7 +807,7 @@ describe("AssetPatrol", () => {
       config: normalizeAssetPatrolConfig({ packageName: "com.demo" })
     });
 
-    expect(plan.steps.find((step) => step.pageTransitionId === "edge-add-friend")).toEqual(
+    expect(plan.steps.find((step) => step.pageTransitionId === "edge_pagetransition.home.add.friend.home.open.add.friend")).toEqual(
       expect.objectContaining({
         kind: "transition_validation",
         status: "needs_repair",
@@ -570,18 +823,39 @@ describe("AssetPatrol", () => {
   it("selects a ready transition as a real asset-driven execution target", () => {
     const graphVersion = graphVersionWithNodes(
       [
-        pageNode({ id: "node-login", key: "login", name: "登录", matchers: [matcher("ocr_text", "登录", 4)] }),
+        pageNode({
+          id: "node-login",
+          key: "login",
+          name: "登录",
+          matchers: [matcher("ocr_text", "登录", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "login-submit",
+                label: "登录",
+                targetText: "登录",
+                elementKind: "button",
+                locator: "text:登录",
+                locatorKind: "text_locator",
+                semanticArea: "content",
+                coordinateSpace: "runtime",
+                actions: ["tap"]
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "login-submit-home",
+                elementId: "login-submit",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-home",
+                targetLabel: "主页",
+                availability: "visible"
+              }
+            ]
+          }
+        }),
         pageNode({ id: "node-home", key: "home", name: "主页", matchers: [matcher("ocr_text", "主页", 4)] })
-      ],
-      [
-        taskNavigationEdge({
-          id: "edge-login-task-home",
-          fromNodeId: "node-login",
-          toNodeId: "node-home",
-          name: "登录 -> 主页",
-          taskId: "task-account-password-login",
-          taskName: "账号密码登录"
-        })
       ]
     );
     const plan = buildAssetPatrolPlan({
@@ -606,8 +880,7 @@ describe("AssetPatrol", () => {
         graphVersionId: graphVersion.id,
         startNodeId: "node-login",
         targetNodeId: "node-home",
-        transitionId: "edge-login-task-home",
-        pageTaskId: "task-account-password-login"
+        transitionId: "edge_pagetransition.login.home.login.submit.home"
       })
     );
     if (target.status === "ready") {
@@ -626,18 +899,23 @@ describe("AssetPatrol", () => {
   it("blocks source page navigation task execution until business submit is explicitly allowed", () => {
     const graphVersion = graphVersionWithNodes(
       [
-        pageNode({ id: "node-login", key: "login", name: "登录", matchers: [matcher("ocr_text", "登录", 4)] }),
+        pageNode({
+          id: "node-login",
+          key: "login",
+          name: "登录",
+          matchers: [matcher("ocr_text", "登录", 4)],
+          metadata: {
+            assetRecordingPageTasks: [
+              {
+                id: "task-account-password-login",
+                name: "账号密码登录",
+                status: "active",
+                steps: [{ id: "task-step-submit", order: 1, elementId: "login-submit", fieldType: "button", label: "登录" }]
+              }
+            ]
+          }
+        }),
         pageNode({ id: "node-home", key: "home", name: "主页", matchers: [matcher("ocr_text", "主页", 4)] })
-      ],
-      [
-        taskNavigationEdge({
-          id: "edge-login-task-home",
-          fromNodeId: "node-login",
-          toNodeId: "node-home",
-          name: "登录 -> 主页",
-          taskId: "task-account-password-login",
-          taskName: "账号密码登录"
-        })
       ]
     );
     const plan = buildAssetPatrolPlan({
@@ -654,30 +932,51 @@ describe("AssetPatrol", () => {
     );
   });
 
-  it("prefers page-task navigation transitions over plain tap transitions when executing assets", () => {
+  it("selects V2 page transitions before page task dry-runs when executing assets", () => {
     const graphVersion = graphVersionWithNodes(
       [
-        pageNode({ id: "node-login", key: "login", name: "登录", matchers: [matcher("ocr_text", "登录", 4)] }),
+        pageNode({
+          id: "node-login",
+          key: "login",
+          name: "登录",
+          matchers: [matcher("ocr_text", "登录", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "login-register",
+                label: "立即注册",
+                targetText: "立即注册",
+                elementKind: "button",
+                locator: "text:立即注册",
+                locatorKind: "text_locator",
+                semanticArea: "top",
+                coordinateSpace: "runtime",
+                actions: ["tap"]
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "login-open-register",
+                elementId: "login-register",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-register",
+                targetLabel: "注册",
+                availability: "visible"
+              }
+            ],
+            assetRecordingPageTasks: [
+              {
+                id: "task-account-password-login",
+                name: "账号密码登录",
+                status: "active",
+                steps: [{ id: "task-step-submit", order: 1, elementId: "login-submit", fieldType: "button", label: "登录" }]
+              }
+            ]
+          }
+        }),
         pageNode({ id: "node-register", key: "register", name: "注册", matchers: [matcher("ocr_text", "注册", 4)] }),
         pageNode({ id: "node-home", key: "home", name: "主页", matchers: [matcher("ocr_text", "主页", 4)] })
-      ],
-      [
-        edge({
-          id: "edge-login-register",
-          fromNodeId: "node-login",
-          toNodeId: "node-register",
-          name: "登录 -> 立即注册",
-          actionTitle: "立即注册",
-          action: { type: "tap", x: 900, y: 360 }
-        }),
-        taskNavigationEdge({
-          id: "edge-login-task-home",
-          fromNodeId: "node-login",
-          toNodeId: "node-home",
-          name: "登录 -> 主页",
-          taskId: "task-account-password-login",
-          taskName: "账号密码登录"
-        })
       ]
     );
     const plan = buildAssetPatrolPlan({
@@ -689,9 +988,8 @@ describe("AssetPatrol", () => {
     expect(selectAssetDrivenExecutionTarget({ plan, graphVersion, config: normalizeAssetPatrolConfig({ packageName: "com.demo", allowBusinessSubmit: true }) })).toEqual(
       expect.objectContaining({
         status: "ready",
-        transitionId: "edge-login-task-home",
-        targetNodeId: "node-home",
-        pageTaskId: "task-account-password-login"
+        transitionId: "edge_pagetransition.login.register.login.open.register",
+        targetNodeId: "node-register"
       })
     );
   });
@@ -699,25 +997,60 @@ describe("AssetPatrol", () => {
   it("selects all ready current-page transitions for asset-driven execution", () => {
     const graphVersion = graphVersionWithNodes(
       [
-        pageNode({ id: "node-home", key: "home", name: "主页", matchers: [matcher("ocr_text", "主页", 4)] }),
+        pageNode({
+          id: "node-home",
+          key: "home",
+          name: "主页",
+          matchers: [matcher("ocr_text", "主页", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "home-settings",
+                label: "设置",
+                targetText: "设置",
+                elementKind: "button",
+                locator: "text:设置",
+                locatorKind: "text_locator",
+                semanticArea: "bottom",
+                coordinateSpace: "runtime",
+                actions: ["tap"]
+              },
+              {
+                id: "home-add-friend",
+                label: "添加好友",
+                targetText: "添加好友",
+                elementKind: "button",
+                locator: "text:添加好友",
+                locatorKind: "text_locator",
+                semanticArea: "top",
+                coordinateSpace: "runtime",
+                actions: ["tap"]
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "home-open-settings",
+                elementId: "home-settings",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-settings",
+                targetLabel: "设置",
+                availability: "visible"
+              },
+              {
+                id: "home-open-add-friend",
+                elementId: "home-add-friend",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-add-friend",
+                targetLabel: "添加好友",
+                availability: "visible"
+              }
+            ]
+          }
+        }),
         pageNode({ id: "node-settings", key: "settings", name: "设置", matchers: [matcher("ocr_text", "设置", 4)] }),
         pageNode({ id: "node-add-friend", key: "add-friend", name: "添加好友", matchers: [matcher("ocr_text", "添加好友", 4)] })
-      ],
-      [
-        ocrAnchorTransitionEdge({
-          id: "edge-home-settings",
-          fromNodeId: "node-home",
-          toNodeId: "node-settings",
-          name: "主页 -> 设置"
-        }),
-        edge({
-          id: "edge-home-add-friend",
-          fromNodeId: "node-home",
-          toNodeId: "node-add-friend",
-          name: "主页 -> 添加好友",
-          actionTitle: "添加好友",
-          action: { type: "tap", x: 900, y: 300 }
-        })
       ]
     );
     const plan = buildAssetPatrolPlan({
@@ -737,8 +1070,8 @@ describe("AssetPatrol", () => {
         status: "ready",
         startNodeId: "node-home",
         targets: [
-          expect.objectContaining({ transitionId: "edge-home-settings", targetNodeId: "node-settings" }),
-          expect.objectContaining({ transitionId: "edge-home-add-friend", targetNodeId: "node-add-friend" })
+          expect.objectContaining({ transitionId: "edge_pagetransition.home.settings.home.open.settings", targetNodeId: "node-settings" }),
+          expect.objectContaining({ transitionId: "edge_pagetransition.home.add.friend.home.open.add.friend", targetNodeId: "node-add-friend" })
         ]
       })
     );
@@ -845,7 +1178,41 @@ describe("AssetPatrol", () => {
           id: "node-home",
           key: "home",
           name: "主页",
-          matchers: [matcher("ocr_text", "主页", 4)]
+          matchers: [matcher("ocr_text", "主页", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "home-class-grid",
+                label: "班级列表",
+                elementKind: "collection",
+                locator: "runtime-locator:home_class_grid",
+                locatorKind: "collection_item_locator",
+                semanticArea: "content",
+                coordinateSpace: "runtime",
+                actions: ["tap_item"],
+                collection: {
+                  kind: "vertical_grid",
+                  columns: 2,
+                  itemIdentity: { type: "ocr_title", param: "className" },
+                  candidateItemHeightPercent: 24.5,
+                  clickSafePoint: { xPercent: 50, yPercent: 28 },
+                  scrollStepPercent: 65
+                }
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "home-open-class-detail",
+                elementId: "home-class-grid",
+                action: "tap_item",
+                outcomeType: "navigate",
+                targetNodeId: "node-detail",
+                targetLabel: "班级详情",
+                availability: "visible",
+                params: { itemText: "{{className}}" }
+              }
+            ]
+          }
         }),
         pageNode({
           id: "node-detail",
@@ -877,14 +1244,6 @@ describe("AssetPatrol", () => {
               }
             ]
           }
-        })
-      ],
-      [
-        gridCandidateEdge({
-          id: "edge-class-detail",
-          fromNodeId: "node-home",
-          toNodeId: "node-detail",
-          name: "主页 -> 班级详情"
         })
       ]
     );
@@ -920,24 +1279,27 @@ describe("AssetPatrol", () => {
         name: "主页",
         matchers: [matcher("package", "com.demo", 2), matcher("ocr_text", "主页", 4)],
         metadata: {
-          assetRecordingManualElements: [
+          assetRecordingPageElements: [
             {
-              id: "manual-settings",
+              id: "home-settings",
               label: "设置",
+              elementKind: "button",
               locator: "text:设置",
               locatorKind: "text_locator",
               targetText: "设置",
-              actionKind: "tap",
               semanticArea: "bottom",
-              availability: "visible"
+              coordinateSpace: "runtime",
+              actions: ["tap"]
             },
             {
-              id: "manual-region-only",
+              id: "home-region-only",
               label: "旧坐标区域",
+              elementKind: "button",
               locator: "image-region:50,50,10,10",
-              actionKind: "tap",
+              locatorKind: "visual_locator",
               semanticArea: "content",
-              availability: "visible"
+              coordinateSpace: "screen",
+              actions: ["tap"]
             }
           ]
         }
@@ -970,7 +1332,7 @@ describe("AssetPatrol", () => {
     expect(completed.stepResults.at(-1)?.metadata?.assetPatrol).toEqual(
       expect.objectContaining({
         skipReason: "runtime_relocation_required",
-        pageElementId: "manual-region-only"
+        pageElementId: "home-region-only"
       })
     );
     expect(completed.artifacts.some((artifact) => artifact.type === "report_json" && artifact.name === "asset-patrol-summary.json")).toBe(true);

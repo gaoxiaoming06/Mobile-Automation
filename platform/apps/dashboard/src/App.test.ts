@@ -2,10 +2,11 @@ import React from "react";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import type { TestRun } from "@mobile-automation/shared";
 import {
   App,
+  AssetPatrolPanel,
   ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE,
-  ASSET_PATROL_PRIMARY_ACTION_LABEL,
   ASSET_DRIVEN_TEST_ACTION_LABEL,
   AiDiagnosisSettingsPanel,
   DEFAULT_ASSET_PATROL_PACKAGE_NAME,
@@ -17,7 +18,6 @@ import {
   actionStrategyForWorkspace,
   assetConnectionEdgeMessage,
   assetPatrolPanelDisplayMode,
-  assetPatrolPreviewMessage,
   assetPatrolPageScopeOptions,
   assetPatrolPlanRequiresBusinessSubmit,
   assetPatrolRequestBody,
@@ -27,7 +27,7 @@ import {
   assetPatrolRuntimeParamsTemplate,
   assetPatrolRuntimeParamValuesFromText,
   assetPatrolRunProgressSummary,
-  assetPatrolStartMessage,
+  assetDrivenExecutionProgressSummary,
   mergeAssetPatrolRuntimeParamsText,
   setAssetPatrolRuntimeParamValue,
   assetDrivenTestStartMessage,
@@ -36,6 +36,7 @@ import {
   assetRecordingIdentificationStateAfter,
   assetOperationTransitionRequestBody,
   currentPageAssetErrorMessage,
+  canStartAssetDrivenTest,
   loadStabilityDangerousTextForPackage,
   mapCurrentPageAssetResponse,
   pageAssetMessage,
@@ -44,6 +45,7 @@ import {
   stabilityExplorerRequestBody,
   stabilityRunProgressSummary,
   shouldAutoSyncAssetPatrolRuntimeParams,
+  shouldRestoreAssetDrivenExecution,
   validateAssetPageElementDraftForSave,
   workspaceStyleForNav
 } from "./App.js";
@@ -400,6 +402,332 @@ describe("App shell", () => {
     expect(DEFAULT_ASSET_PATROL_PACKAGE_NAME).toBe("cn.eeo.classin");
   });
 
+  it("exposes only the real asset-driven execution action in the asset patrol panel", () => {
+    const noop = () => undefined;
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetPatrolPanel, {
+        devices: [],
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        packageName: "cn.eeo.classin",
+        packageOptions: ["cn.eeo.classin"],
+        startMode: "current_state",
+        pageScope: "current_page",
+        maxDurationMinutes: 2,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: false,
+        dangerousTextPatternsText: "删除\n退出登录",
+        runtimeParamsText: "phone=18743085313\npassword=eeo123",
+        runtimeParamDefinitions: [],
+        busy: false,
+        onSelectDevice: noop,
+        onPackageNameChange: noop,
+        onStartModeChange: noop,
+        onPageScopeChange: noop,
+        onMaxDurationMinutesChange: noop,
+        onMaxTransitionsChange: noop,
+        onAllowRiskyActionsChange: noop,
+        onAllowBusinessSubmitChange: noop,
+        onDangerousTextPatternsChange: noop,
+        onRuntimeParamsChange: noop,
+        onSyncRuntimeParams: noop,
+        onExecute: noop,
+        onStop: noop,
+        onOpenRun: noop
+      })
+    );
+
+    expect(markup).toContain(ASSET_DRIVEN_TEST_ACTION_LABEL);
+    expect(markup).not.toContain("预览计划");
+    expect(markup).not.toContain("执行资产体检");
+  });
+
+  it("shows asset-driven execution status in the patrol panel even when the run is a graph execution", () => {
+    const noop = () => undefined;
+    const currentRun: TestRun = {
+      id: "run-asset-driven-graph",
+      caseName: "ClassIn Android 业务图谱 目标节点执行",
+      deviceSerial: "device-1",
+      status: "running",
+      config: {
+        runKind: "business_graph",
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 400,
+        stopOnFailure: true,
+        recordVideo: true,
+        keepVideoOnSuccess: true
+      },
+      steps: [],
+      stepResults: [],
+      metrics: [],
+      events: [],
+      artifacts: [],
+      startedAt: "2026-07-07T10:00:00.000Z"
+    };
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetPatrolPanel, {
+        devices: [],
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        packageName: "cn.eeo.classin",
+        packageOptions: ["cn.eeo.classin"],
+        startMode: "current_state",
+        pageScope: "current_page",
+        maxDurationMinutes: 2,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: false,
+        dangerousTextPatternsText: "删除\n退出登录",
+        runtimeParamsText: "phone=18743085313\npassword=eeo123",
+        runtimeParamDefinitions: [],
+        currentRun,
+        busy: false,
+        onSelectDevice: noop,
+        onPackageNameChange: noop,
+        onStartModeChange: noop,
+        onPageScopeChange: noop,
+        onMaxDurationMinutesChange: noop,
+        onMaxTransitionsChange: noop,
+        onAllowRiskyActionsChange: noop,
+        onAllowBusinessSubmitChange: noop,
+        onDangerousTextPatternsChange: noop,
+        onRuntimeParamsChange: noop,
+        onSyncRuntimeParams: noop,
+        onExecute: noop,
+        onStop: noop,
+        onOpenRun: noop
+      })
+    );
+
+    expect(markup).toContain("执行结果");
+    expect(markup).toContain("ClassIn Android 业务图谱 目标节点执行");
+    expect(markup).toContain("run-asset-driven-graph");
+    expect(markup).toContain("running");
+  });
+
+  it("shows asset-driven execution as a batch instead of a single finished run", () => {
+    const noop = () => undefined;
+    const execution: NonNullable<Parameters<typeof assetDrivenExecutionProgressSummary>[0]> = {
+      id: "asset-session-1",
+      deviceSerial: "device-1",
+      packageName: "cn.eeo.classin",
+      graphVersionId: "graph-1",
+      startNodeId: "node-home",
+      startNodeName: "主页",
+      status: "running",
+      totalEdges: 3,
+      completedEdges: 1,
+      runningEdges: 1,
+      pendingEdges: 1,
+      failedEdges: 0,
+      needsRepair: 0,
+      startedAt: "2026-07-07T10:00:00.000Z",
+      updatedAt: "2026-07-07T10:00:03.000Z",
+      runningItem: {
+        id: "asset-session-1-item-2",
+        order: 2,
+        label: "主页 -> 添加好友",
+        fromPage: "主页",
+        toPage: "添加好友",
+        status: "running",
+        runId: "run-add"
+      },
+      items: [
+        {
+          id: "asset-session-1-item-1",
+          order: 1,
+          label: "主页 -> 搜索",
+          fromPage: "主页",
+          toPage: "搜索",
+          status: "passed",
+          runId: "run-search"
+        },
+        {
+          id: "asset-session-1-item-2",
+          order: 2,
+          label: "主页 -> 添加好友",
+          fromPage: "主页",
+          toPage: "添加好友",
+          status: "running",
+          runId: "run-add"
+        },
+        {
+          id: "asset-session-1-item-3",
+          order: 3,
+          label: "主页 -> 设置",
+          fromPage: "主页",
+          toPage: "设置",
+          status: "pending"
+        }
+      ]
+    };
+
+    expect(assetDrivenExecutionProgressSummary(execution)).toEqual({
+      packageName: "cn.eeo.classin",
+      pageName: "主页",
+      progressText: "1/3",
+      latestCheck: "主页 -> 添加好友",
+      failed: 0,
+      skipped: 0,
+      needsRepair: 0
+    });
+
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetPatrolPanel, {
+        devices: [],
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        packageName: "cn.eeo.classin",
+        packageOptions: ["cn.eeo.classin"],
+        startMode: "current_state",
+        pageScope: "current_page",
+        maxDurationMinutes: 2,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: false,
+        dangerousTextPatternsText: "删除\n退出登录",
+        runtimeParamsText: "phone=18743085313\npassword=eeo123",
+        runtimeParamDefinitions: [],
+        assetDrivenExecution: execution,
+        busy: false,
+        onSelectDevice: noop,
+        onPackageNameChange: noop,
+        onStartModeChange: noop,
+        onPageScopeChange: noop,
+        onMaxDurationMinutesChange: noop,
+        onMaxTransitionsChange: noop,
+        onAllowRiskyActionsChange: noop,
+        onAllowBusinessSubmitChange: noop,
+        onDangerousTextPatternsChange: noop,
+        onRuntimeParamsChange: noop,
+        onSyncRuntimeParams: noop,
+        onExecute: noop,
+        onStop: noop,
+        onOpenRun: noop
+      })
+    );
+
+    expect(markup).toContain("资产测试批次");
+    expect(markup).toContain("asset-session-1");
+    expect(markup).toContain("已完成");
+    expect(markup).toContain("1/3");
+    expect(markup).toContain("当前执行");
+    expect(markup).toContain("主页 -&gt; 添加好友");
+    expect(markup).toContain("待执行");
+    expect(markup).not.toContain("ClassIn Android 业务图谱 目标节点执行");
+  });
+
+  it("allows stopping a refreshed asset-driven execution session without a selected current run", () => {
+    const noop = () => undefined;
+    const execution: NonNullable<Parameters<typeof assetDrivenExecutionProgressSummary>[0]> = {
+      id: "asset-session-refresh",
+      deviceSerial: "device-1",
+      packageName: "cn.eeo.classin",
+      graphVersionId: "graph-1",
+      startNodeId: "node-home",
+      startNodeName: "主页",
+      status: "running",
+      totalEdges: 2,
+      completedEdges: 0,
+      runningEdges: 1,
+      pendingEdges: 1,
+      failedEdges: 0,
+      needsRepair: 0,
+      startedAt: "2026-07-07T10:00:00.000Z",
+      updatedAt: "2026-07-07T10:00:01.000Z",
+      runningItem: {
+        id: "asset-session-refresh-item-1",
+        order: 1,
+        label: "主页 -> 搜索",
+        fromPage: "主页",
+        toPage: "搜索",
+        status: "running",
+        runId: "run-search"
+      },
+      items: [
+        {
+          id: "asset-session-refresh-item-1",
+          order: 1,
+          label: "主页 -> 搜索",
+          fromPage: "主页",
+          toPage: "搜索",
+          status: "running",
+          runId: "run-search"
+        },
+        {
+          id: "asset-session-refresh-item-2",
+          order: 2,
+          label: "主页 -> 添加好友",
+          fromPage: "主页",
+          toPage: "添加好友",
+          status: "pending"
+        }
+      ]
+    };
+
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetPatrolPanel, {
+        devices: [],
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        packageName: "cn.eeo.classin",
+        packageOptions: ["cn.eeo.classin"],
+        startMode: "current_state",
+        pageScope: "current_page",
+        maxDurationMinutes: 2,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: false,
+        dangerousTextPatternsText: "删除\n退出登录",
+        runtimeParamsText: "",
+        runtimeParamDefinitions: [],
+        assetDrivenExecution: execution,
+        busy: false,
+        onSelectDevice: noop,
+        onPackageNameChange: noop,
+        onStartModeChange: noop,
+        onPageScopeChange: noop,
+        onMaxDurationMinutesChange: noop,
+        onMaxTransitionsChange: noop,
+        onAllowRiskyActionsChange: noop,
+        onAllowBusinessSubmitChange: noop,
+        onDangerousTextPatternsChange: noop,
+        onRuntimeParamsChange: noop,
+        onSyncRuntimeParams: noop,
+        onExecute: noop,
+        onStop: noop,
+        onOpenRun: noop
+      })
+    );
+
+    expect(markup).toContain("asset-session-refresh");
+    expect(markup).toContain("停止");
+  });
+
+  it("disables starting another asset-driven execution while the batch is running", () => {
+    expect(
+      canStartAssetDrivenTest({
+        selectedSerial: "device-1",
+        packageName: "cn.eeo.classin",
+        selectedDeviceBusy: false,
+        busy: false,
+        running: true
+      })
+    ).toBe(false);
+    expect(
+      canStartAssetDrivenTest({
+        selectedSerial: "device-1",
+        packageName: "cn.eeo.classin",
+        selectedDeviceBusy: false,
+        busy: false,
+        running: false
+      })
+    ).toBe(true);
+  });
+
   it("auto-syncs asset patrol runtime params when opening the asset patrol page for a package", () => {
     expect(
       shouldAutoSyncAssetPatrolRuntimeParams({
@@ -427,6 +755,33 @@ describe("App shell", () => {
         activeNavItem: "assetPatrol",
         packageName: " ",
         lastSyncedPackageName: ""
+      })
+    ).toBe(false);
+  });
+
+  it("restores an asset-driven execution session after refreshing the asset patrol page", () => {
+    expect(
+      shouldRestoreAssetDrivenExecution({
+        activeNavItem: "assetPatrol",
+        selectedSerial: "device-1",
+        packageName: " cn.eeo.classin ",
+        assetDrivenExecutionId: ""
+      })
+    ).toBe(true);
+    expect(
+      shouldRestoreAssetDrivenExecution({
+        activeNavItem: "assetPatrol",
+        selectedSerial: "device-1",
+        packageName: "cn.eeo.classin",
+        assetDrivenExecutionId: "asset-session-1"
+      })
+    ).toBe(false);
+    expect(
+      shouldRestoreAssetDrivenExecution({
+        activeNavItem: "recording",
+        selectedSerial: "device-1",
+        packageName: "cn.eeo.classin",
+        assetDrivenExecutionId: ""
       })
     ).toBe(false);
   });
@@ -506,13 +861,10 @@ describe("App shell", () => {
     expect(assetPatrolPanelDisplayMode({ plan: { status: "ready" } as never })).toBe("plan");
   });
 
-  it("labels asset patrol health checks separately from real asset-driven execution", () => {
-    expect(ASSET_PATROL_PRIMARY_ACTION_LABEL).toBe("执行资产体检");
+  it("labels asset-driven execution separately from internal diagnostic notices", () => {
     expect(ASSET_DRIVEN_TEST_ACTION_LABEL).toBe("开始资产测试");
     expect(ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE).toContain("诊断模式");
     expect(ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE).toContain("不会触发页面点击或输入");
-    expect(assetPatrolPreviewMessage({ status: "ready", steps: [{ id: "step-1" }], issues: [] } as never)).toBe("已生成资产体检计划：1 项");
-    expect(assetPatrolStartMessage({ id: "run-1" } as never)).toBe("已启动资产体检：run-1");
     expect(assetDrivenTestStartMessage({ id: "run-2" } as never)).toBe("已启动资产测试：run-2");
     expect(assetDrivenTestStartMessage({ id: "run-2" } as never, { total: 3, remaining: 2 })).toBe(
       "已启动资产测试：run-2，本页面资产边 3 条，剩余 2 条后台巡检"

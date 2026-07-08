@@ -2689,12 +2689,90 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("resolves grid candidates by structural search hint instead of a primary image region locator", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "主页\n班级四十二号",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: [
+          {
+            text: "班级四十二号",
+            confidence: 0.95,
+            x: 600,
+            y: 735,
+            width: 100,
+            height: 50
+          }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:home_class_grid",
+        locatorKind: "collection_item_locator",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        abilityType: "grid_candidate",
+        structuralLocator: {
+          strategy: "collection_grid",
+          role: "class_grid",
+          searchHintRegion: { x: 10, y: 20, width: 80, height: 60 }
+        },
+        scrollProfile: {
+          containerKind: "grid_list",
+          direction: "vertical",
+          columns: 2,
+          targetKind: "item_text",
+          targetQuery: "班级四十二号",
+          candidateItemHeightPercent: 25,
+          clickSafePoint: { xPercent: 50, yPercent: 28 },
+          scrollStepPercent: 65
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 700, y: 784 }]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          action: "tap",
+          abilityType: "grid_candidate",
+          targetQuery: "班级四十二号",
+          relocatedBy: "ocr_text_in_grid"
+        })
+      })
+    );
+  });
+
   it("scrolls the marked list region until a target grid candidate text is visible", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
       ocr: new QueueLayoutOcrService([
         {
-          ...layout("主页"),
+          ...layout("中间位置"),
+          width: 1000,
+          height: 2000
+        },
+        {
+          ...layout("顶部位置"),
           width: 1000,
           height: 2000
         },
@@ -2751,6 +2829,7 @@ describe("SemanticStepResolver", () => {
     });
 
     expect(actions).toEqual([
+      { type: "swipe", startX: 500, startY: 700, endX: 500, endY: 1300, durationMs: 450 },
       { type: "swipe", startX: 500, startY: 1300, endX: 500, endY: 700, durationMs: 450 },
       { type: "tap", x: 700, y: 784 }
     ]);
@@ -2760,8 +2839,92 @@ describe("SemanticStepResolver", () => {
         metadata: expect.objectContaining({
           relocatedBy: "ocr_text_in_grid_after_scroll",
           search: expect.objectContaining({
+            strategy: "current_then_top_down",
+            phase: "scan_down",
             swipes: 1,
-            attempts: 2
+            attempts: 3
+          })
+        })
+      })
+    );
+  });
+
+  it("does not use maxCandidateAttempts as a hard grid OCR search window", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        { ...layout("中间"), width: 1000, height: 2000 },
+        { ...layout("顶部"), width: 1000, height: 2000 },
+        { ...layout("顶部"), width: 1000, height: 2000 },
+        { ...layout("第一页"), width: 1000, height: 2000 },
+        { ...layout("第二页"), width: 1000, height: 2000 },
+        {
+          text: "主页\n班级四十一号",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            {
+              text: "班级四十一号",
+              confidence: 0.95,
+              x: 600,
+              y: 735,
+              width: 100,
+              height: 50
+            }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return undefined;
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 10, y: 20, width: 80, height: 60 },
+        locator: "image-region:10,20,80,60",
+        targetMode: "image_region",
+        abilityType: "grid_candidate",
+        maxCandidateAttempts: 2,
+        searchIntervalMs: 1,
+        scrollProfile: {
+          containerKind: "grid_list",
+          direction: "vertical",
+          columns: 2,
+          targetKind: "item_text",
+          targetQuery: "班级四十一号",
+          candidateItemHeightPercent: 25,
+          clickSafePoint: { xPercent: 50, yPercent: 28 },
+          scrollStepPercent: 50
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "swipe", startX: 500, startY: 700, endX: 500, endY: 1300, durationMs: 450 },
+      { type: "swipe", startX: 500, startY: 700, endX: 500, endY: 1300, durationMs: 450 },
+      { type: "swipe", startX: 500, startY: 1300, endX: 500, endY: 700, durationMs: 450 },
+      { type: "swipe", startX: 500, startY: 1300, endX: 500, endY: 700, durationMs: 450 },
+      { type: "swipe", startX: 500, startY: 1300, endX: 500, endY: 700, durationMs: 450 },
+      { type: "tap", x: 700, y: 784 }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        resolved: true,
+        metadata: expect.objectContaining({
+          relocatedBy: "ocr_text_in_grid_after_scroll",
+          search: expect.objectContaining({
+            strategy: "current_then_top_down",
+            phase: "scan_down",
+            attempts: 6
           })
         })
       })

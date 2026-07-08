@@ -11,6 +11,13 @@ type UseRunExecutionOptions = {
   setMessage: (message: string) => void;
 };
 
+export const ACTIVE_RUN_LIST_REFRESH_INTERVAL_MS = 1000;
+export const IDLE_RUN_LIST_REFRESH_INTERVAL_MS = 5000;
+
+export function runListRefreshIntervalMs(runs: TestRun[]): number {
+  return runs.some(isActiveRun) ? ACTIVE_RUN_LIST_REFRESH_INTERVAL_MS : IDLE_RUN_LIST_REFRESH_INTERVAL_MS;
+}
+
 export function useRunExecution({ selectedSerial, caseName, steps, setMessage }: UseRunExecutionOptions) {
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [currentRunId, setCurrentRunId] = useState("");
@@ -38,12 +45,10 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
   }, [refreshRuns]);
 
   useEffect(() => {
-    if (!runs.some(isActiveRun)) {
-      return;
-    }
+    const intervalMs = runListRefreshIntervalMs(runs);
     const timer = window.setInterval(() => {
       refreshRuns().catch(() => undefined);
-    }, 1000);
+    }, intervalMs);
     return () => window.clearInterval(timer);
   }, [refreshRuns, runs]);
 

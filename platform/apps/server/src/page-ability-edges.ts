@@ -6,6 +6,7 @@ type ManualPageAbilityElement = {
   label?: string;
   targetText?: string;
   locator?: string;
+  elementKind?: string;
   semanticArea?: "top" | "content" | "bottom" | "unknown";
   coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
   actionKind?: "tap" | "scroll" | "long_press" | "input";
@@ -53,6 +54,53 @@ type ManualPageAbilityElement = {
   parameterMapping?: Record<string, unknown>;
 };
 
+type PageElementAsset = {
+  id: string;
+  label?: string;
+  targetText?: string;
+  locator?: string;
+  elementKind?: "button" | "icon_button" | "input" | "checkbox" | "picker" | "collection" | "tab" | "menu_item" | "unknown";
+  semanticArea?: "top" | "content" | "bottom" | "unknown";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
+  platformScope?: PlatformScope;
+  actions?: string[];
+  locatorKind?: ManualPageAbilityElement["locatorKind"];
+  visualLocator?: Record<string, unknown>;
+  anchorText?: string;
+  role?: string;
+  slot?: "leading" | "trailing";
+  orderFromRight?: number;
+  dynamicMasks?: Record<string, unknown>[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegionId?: string;
+  itemTemplateId?: string;
+  collection?: {
+    kind?: "vertical_list" | "vertical_grid" | "horizontal_list" | "carousel";
+    columns?: number;
+    itemIdentity?: Record<string, unknown>;
+    candidateItemHeightPercent?: number;
+    clickSafePoint?: {
+      xPercent: number;
+      yPercent: number;
+    };
+    scrollStepPercent?: number;
+    failureStrategy?: "none" | "try_next_candidate" | "back_and_try_next_candidate";
+  };
+};
+
+type PageTransitionAsset = {
+  id?: string;
+  elementId: string;
+  action?: "tap" | "tap_item" | "scroll" | "long_press" | "input";
+  outcomeType?: "navigate" | "compound_navigation" | "show_inline_state" | "local_state_change" | "no_visible_change";
+  targetNodeId?: string;
+  targetLabel?: string;
+  availability?: ManualPageAbilityElement["availability"];
+  platformScope?: PlatformScope;
+  params?: Record<string, unknown>;
+  compoundSteps?: ManualPageAbilityElement["compoundSteps"];
+};
+
 export function withPageAbilityEdges(graphVersion: BusinessGraphVersion, platform: PlatformScope = "android"): BusinessGraphVersion {
   const existingEdgeKeys = new Set(graphVersion.edges.map((edge) => edge.key));
   const abilityEdges = graphVersion.nodes.flatMap((node) => pageAbilityEdgesForNode(graphVersion, node, platform, existingEdgeKeys));
@@ -76,12 +124,17 @@ export function pageAbilityRouteGapIssues(
 ): RoutePlanIssue[] {
   return graphVersion.nodes
     .filter((node) => !options.startNodeId || node.id === options.startNodeId)
-    .flatMap((node) =>
-      readManualElements(node)
+    .flatMap((node) => {
+      const separatedElements = readPageElementAssets(node);
+      const separatedTransitions = readPageTransitionAssets(node);
+      if (separatedElements.length || separatedTransitions.length) {
+        return separatedPageAssetRouteGapIssues(graphVersion, node, separatedElements, separatedTransitions, platform);
+      }
+      return readManualElements(node)
         .filter((element) => isPotentialRouteAbility(element, platform))
         .map((element) => pageAbilityRouteGapIssue(graphVersion, node, element))
-        .filter((issue): issue is RoutePlanIssue => Boolean(issue))
-    );
+        .filter((issue): issue is RoutePlanIssue => Boolean(issue));
+    });
 }
 
 function pageAbilityEdgesForNode(
@@ -90,6 +143,16 @@ function pageAbilityEdgesForNode(
   platform: PlatformScope,
   existingEdgeKeys: Set<string>
 ): OperationEdge[] {
+  const separatedElements = readPageElementAssets(sourceNode);
+  const separatedTransitions = readPageTransitionAssets(sourceNode);
+  if (separatedElements.length || separatedTransitions.length) {
+    return separatedTransitions
+      .filter((transition) => isNavigablePageTransition(transition, platform))
+      .filter((transition) => isPageTransitionBoundaryValid(separatedElements, transition))
+      .map((transition) => pageTransitionEdge(graphVersion, sourceNode, separatedElements, transition, platform))
+      .filter((edge): edge is OperationEdge => Boolean(edge))
+      .filter((edge) => !existingEdgeKeys.has(edge.key));
+  }
   return readManualElements(sourceNode)
     .filter((element) => isNavigablePageAbility(element, platform))
     .map((element) => pageAbilityEdge(graphVersion, sourceNode, element, platform))
@@ -253,12 +316,65 @@ function readManualElements(sourceNode: BusinessNode): ManualPageAbilityElement[
   return Array.isArray(elements) ? elements.filter((item): item is ManualPageAbilityElement => Boolean(item) && typeof item === "object") : [];
 }
 
+function readPageElementAssets(sourceNode: BusinessNode): PageElementAsset[] {
+  const elements = sourceNode.metadata?.assetRecordingPageElements;
+  if (!Array.isArray(elements)) {
+    return [];
+  }
+  return elements
+    .map((item): PageElementAsset | undefined => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return undefined;
+      }
+      const record = item as Record<string, unknown>;
+      const id = stringValue(record.id).trim();
+      if (!id) {
+        return undefined;
+      }
+      return {
+        ...(record as PageElementAsset),
+        id
+      };
+    })
+    .filter((item): item is PageElementAsset => Boolean(item));
+}
+
+function readPageTransitionAssets(sourceNode: BusinessNode): PageTransitionAsset[] {
+  const transitions = sourceNode.metadata?.assetRecordingPageTransitions;
+  if (!Array.isArray(transitions)) {
+    return [];
+  }
+  return transitions
+    .map((item): PageTransitionAsset | undefined => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return undefined;
+      }
+      const record = item as Record<string, unknown>;
+      const elementId = stringValue(record.elementId).trim();
+      if (!elementId) {
+        return undefined;
+      }
+      return {
+        ...(record as PageTransitionAsset),
+        elementId
+      };
+    })
+    .filter((item): item is PageTransitionAsset => Boolean(item));
+}
+
 function isNavigablePageAbility(element: ManualPageAbilityElement, platform: PlatformScope): boolean {
   return (
     Boolean(element.locator) &&
     Boolean(element.targetNodeId) &&
     (element.outcomeType === "navigate" || element.outcomeType === "compound_navigation") &&
     (element.platformScope === undefined || element.platformScope === platform || element.platformScope === "mobile-both")
+  );
+}
+
+function isNavigablePageTransition(transition: PageTransitionAsset, platform: PlatformScope): boolean {
+  return (
+    (transition.outcomeType === "navigate" || transition.outcomeType === "compound_navigation") &&
+    (transition.platformScope === undefined || transition.platformScope === platform || transition.platformScope === "mobile-both")
   );
 }
 
@@ -293,6 +409,208 @@ function pageAbilityRouteGapIssue(
     };
   }
   return undefined;
+}
+
+function separatedPageAssetRouteGapIssues(
+  graphVersion: BusinessGraphVersion,
+  sourceNode: BusinessNode,
+  elements: PageElementAsset[],
+  transitions: PageTransitionAsset[],
+  platform: PlatformScope
+): RoutePlanIssue[] {
+  const issues: RoutePlanIssue[] = [];
+  for (const element of elements) {
+    const mixedFields = forbiddenPageElementTransitionFields(element);
+    if (mixedFields.length) {
+      issues.push({
+        code: "PAGE_ELEMENT_MIXED_TRANSITION_FIELD",
+        severity: "error",
+        nodeId: sourceNode.id,
+        message: `页面「${sourceNode.name}」的 PageElement「${element.id}」包含连接边字段：${mixedFields.join(", ")}；PageElement 只能描述元素定位和动作能力。`
+      });
+    }
+  }
+  for (const transition of transitions.filter((item) => isNavigablePageTransition(item, platform))) {
+    const mixedFields = forbiddenPageTransitionElementFields(transition);
+    if (mixedFields.length) {
+      issues.push({
+        code: "PAGE_TRANSITION_MIXED_ELEMENT_FIELD",
+        severity: "error",
+        nodeId: sourceNode.id,
+        message: `页面「${sourceNode.name}」的 PageTransition「${transition.id ?? transition.elementId}」包含元素定位字段：${mixedFields.join(", ")}；PageTransition 只能引用 elementId、动作、参数和结果。`
+      });
+    }
+    const element = elements.find((item) => item.id === transition.elementId);
+    if (!element) {
+      issues.push({
+        code: "PAGE_TRANSITION_ELEMENT_MISSING",
+        severity: "error",
+        nodeId: sourceNode.id,
+        message: `页面「${sourceNode.name}」的 PageTransition「${transition.id ?? transition.elementId}」引用的 PageElement 不存在：${transition.elementId}。`
+      });
+      continue;
+    }
+    if (!transition.targetNodeId) {
+      issues.push({
+        code: "PAGE_TRANSITION_TARGET_MISSING",
+        severity: "error",
+        nodeId: sourceNode.id,
+        message: `页面「${sourceNode.name}」的 PageTransition「${transition.id ?? transition.elementId}」是跳转结果，但还没有绑定目标页面。`
+      });
+      continue;
+    }
+    if (!graphVersion.nodes.some((node) => node.id === transition.targetNodeId)) {
+      issues.push({
+        code: "PAGE_TRANSITION_TARGET_NOT_FOUND",
+        severity: "error",
+        nodeId: sourceNode.id,
+        message: `页面「${sourceNode.name}」的 PageTransition「${transition.id ?? transition.elementId}」绑定的目标页面不存在：${transition.targetNodeId}。`
+      });
+    }
+  }
+  return issues;
+}
+
+function forbiddenPageElementTransitionFields(element: PageElementAsset): string[] {
+  const record = element as Record<string, unknown>;
+  return ["targetNodeId", "targetLabel", "outcomeType", "outcomeLabel", "transitionKind", "parameterMapping"]
+    .filter((field) => record[field] !== undefined);
+}
+
+function forbiddenPageTransitionElementFields(transition: PageTransitionAsset): string[] {
+  const record = transition as Record<string, unknown>;
+  return [
+    "locator",
+    "locatorKind",
+    "targetText",
+    "semanticArea",
+    "coordinateSpace",
+    "visualLocator",
+    "anchorText",
+    "role",
+    "slot",
+    "orderFromRight",
+    "dynamicMasks",
+    "structuralLocator",
+    "dynamicRegionId",
+    "itemTemplateId",
+    "collection",
+    "actions"
+  ].filter((field) => record[field] !== undefined);
+}
+
+function isPageTransitionBoundaryValid(elements: PageElementAsset[], transition: PageTransitionAsset): boolean {
+  const element = elements.find((item) => item.id === transition.elementId);
+  if (!element) {
+    return false;
+  }
+  return !forbiddenPageTransitionElementFields(transition).length && !forbiddenPageElementTransitionFields(element).length;
+}
+
+function pageTransitionEdge(
+  graphVersion: BusinessGraphVersion,
+  sourceNode: BusinessNode,
+  elements: PageElementAsset[],
+  transition: PageTransitionAsset,
+  platform: PlatformScope
+): OperationEdge | undefined {
+  const element = elements.find((item) => item.id === transition.elementId);
+  const targetNode = graphVersion.nodes.find((node) => node.id === transition.targetNodeId);
+  if (!element?.locator || !targetNode) {
+    return undefined;
+  }
+  const action = pageAbilityAction(pageTransitionBackedAbility(element, transition));
+  const edgeKey = `pagetransition.${slug(sourceNode.key)}.${slug(targetNode.key)}.${slug(transition.id ?? `${transition.elementId}.${transition.action ?? "tap"}`)}`;
+  return {
+    id: `edge_${edgeKey}`,
+    graphVersionId: graphVersion.id,
+    fromNodeId: sourceNode.id,
+    toNodeId: targetNode.id,
+    key: edgeKey,
+    name: `${sourceNode.name} -> ${targetNode.name}`,
+    intent: `${actionVerb(actionKindForTransition(transition))}：${element.label ?? element.locator}`,
+    status: "active",
+    source: "manual_edit",
+    preconditions: [],
+    actionPolicies: [pageAbilityActionPolicy(action)],
+    expectations: [],
+    failurePolicy: element.elementKind === "collection" ? { retryCount: 0, recoverTo: "replan" } : { retryCount: 1, recoverTo: "replan" },
+    platformScope: transition.platformScope ?? element.platformScope ?? platform,
+    reliabilityScore: element.elementKind === "collection" ? 0.76 : 0.82
+  };
+}
+
+function pageTransitionBackedAbility(element: PageElementAsset, transition: PageTransitionAsset): ManualPageAbilityElement {
+  return {
+    id: element.id,
+    label: element.label,
+    targetText: targetTextForTransition(element, transition),
+    locator: element.locator,
+    elementKind: element.elementKind,
+    semanticArea: element.semanticArea,
+    coordinateSpace: element.coordinateSpace,
+    actionKind: actionKindForTransition(transition),
+    abilityType: element.elementKind === "collection" ? "grid_candidate" : undefined,
+    availability: transition.availability ?? "visible",
+    outcomeType: transition.outcomeType,
+    targetNodeId: transition.targetNodeId,
+    targetLabel: transition.targetLabel,
+    platformScope: transition.platformScope ?? element.platformScope,
+    scrollProfile: element.elementKind === "collection" ? scrollProfileForCollection(element, transition) : undefined,
+    compoundSteps: transition.compoundSteps,
+    locatorKind: element.locatorKind,
+    visualLocator: element.visualLocator,
+    anchorText: element.anchorText,
+    role: element.role,
+    slot: element.slot,
+    orderFromRight: element.orderFromRight,
+    dynamicMasks: element.dynamicMasks,
+    structuralLocator: element.structuralLocator,
+    dynamicRegionId: element.dynamicRegionId,
+    itemTemplateId: element.itemTemplateId,
+    transitionKind: transitionParamText(transition, "itemText") ? "parameterized" : undefined,
+    parameterMapping: transitionParamText(transition, "itemText")?.includes("{{") ? { className: "scrollProfile.targetQuery" } : undefined
+  };
+}
+
+function actionKindForTransition(transition: PageTransitionAsset): ManualPageAbilityElement["actionKind"] {
+  if (transition.action === "scroll") {
+    return "scroll";
+  }
+  if (transition.action === "long_press") {
+    return "long_press";
+  }
+  if (transition.action === "input") {
+    return "input";
+  }
+  return "tap";
+}
+
+function targetTextForTransition(element: PageElementAsset, transition: PageTransitionAsset): string | undefined {
+  return transitionParamText(transition, "targetText") ?? transitionParamText(transition, "itemText") ?? element.targetText;
+}
+
+function scrollProfileForCollection(element: PageElementAsset, transition: PageTransitionAsset): NonNullable<ManualPageAbilityElement["scrollProfile"]> {
+  const collection = element.collection ?? {};
+  const isHorizontal = collection.kind === "horizontal_list" || collection.kind === "carousel";
+  const itemText = transitionParamText(transition, "itemText") ?? transitionParamText(transition, "targetQuery");
+  return {
+    containerKind: collection.kind === "vertical_grid" ? "grid_list" : collection.kind === "carousel" ? "carousel" : "list",
+    direction: isHorizontal ? "horizontal" : "vertical",
+    columns: collection.kind === "vertical_grid" ? Math.max(1, Math.floor(collection.columns ?? 1)) : 1,
+    targetKind: itemText ? "item_text" : "nth_item",
+    ...(itemText ? { targetQuery: itemText } : {}),
+    afterFoundAction: "tap_item",
+    candidateItemHeightPercent: collection.candidateItemHeightPercent,
+    clickSafePoint: collection.clickSafePoint,
+    scrollStepPercent: collection.scrollStepPercent,
+    failureStrategy: collection.failureStrategy
+  };
+}
+
+function transitionParamText(transition: PageTransitionAsset, key: string): string | undefined {
+  const value = transition.params?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function pageAbilityEdge(
@@ -341,6 +659,8 @@ function pageAbilityAction(element: ManualPageAbilityElement): ActionStep {
     params: {
       ...locatorParams(locator),
       locator,
+      ...(element.id ? { elementId: element.id } : {}),
+      ...(element.elementKind ? { elementKind: element.elementKind } : {}),
       elementLabel: element.label,
       availability: element.availability,
       outcomeType: element.outcomeType,

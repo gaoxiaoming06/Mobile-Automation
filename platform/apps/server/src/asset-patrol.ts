@@ -12,13 +12,14 @@ import {
   type TestCase,
   type TestRun
 } from "@mobile-automation/shared";
-import { detectNode, type BusinessGraph, type BusinessGraphVersion, type BusinessNode, type Observation, type OperationEdge, type RuntimeOverlay } from "@mobile-automation/graph-core";
+import { detectNode, type BusinessGraph, type BusinessGraphVersion, type BusinessNode, type Observation, type OperationEdge, type PlatformScope, type RuntimeOverlay } from "@mobile-automation/graph-core";
 import type { AutomationDeviceDriver } from "./mobile-driver.js";
 import { createDefaultOcrService, type OcrService } from "./ocr.js";
 import { ObservationService } from "./observation-service.js";
 import { RunArtifactService, type RunArtifactStorage } from "./run-artifact-service.js";
 import { artifactUrl, runArtifactPath } from "./artifacts.js";
 import { matchCurrentPage, type PageMatcherBaselineReader } from "./page-matcher.js";
+import { withPageAbilityEdges } from "./page-ability-edges.js";
 
 export type AssetPatrolStartMode = "current_state" | "launch_app" | "restart_app";
 export type AssetPatrolPageScope = "current_page" | "reachable_pages" | "tagged_pages" | "all_active_pages";
@@ -203,6 +204,43 @@ type ManualPageElementAsset = {
   availability?: string;
   outcomeType?: string;
   visualLocator?: unknown;
+  scrollProfile?: Record<string, unknown>;
+  platformScope?: PlatformScope;
+  assetFormat?: "v2" | "legacy";
+};
+
+type PageElementAsset = {
+  id: string;
+  label?: string;
+  targetText?: string;
+  locator?: string;
+  elementKind?: "button" | "icon_button" | "input" | "checkbox" | "picker" | "collection" | "tab" | "menu_item" | "unknown";
+  semanticArea?: string;
+  coordinateSpace?: string;
+  platformScope?: PlatformScope;
+  actions?: string[];
+  locatorKind?: string;
+  visualLocator?: Record<string, unknown>;
+  anchorText?: string;
+  role?: string;
+  slot?: string;
+  orderFromRight?: number;
+  dynamicMasks?: Record<string, unknown>[];
+  structuralLocator?: Record<string, unknown>;
+  dynamicRegionId?: string;
+  itemTemplateId?: string;
+  collection?: {
+    kind?: "vertical_list" | "vertical_grid" | "horizontal_list" | "carousel";
+    columns?: number;
+    itemIdentity?: Record<string, unknown>;
+    candidateItemHeightPercent?: number;
+    clickSafePoint?: {
+      xPercent: number;
+      yPercent: number;
+    };
+    scrollStepPercent?: number;
+    failureStrategy?: "none" | "try_next_candidate" | "back_and_try_next_candidate";
+  };
 };
 
 type ManualPageTaskAsset = {
@@ -646,13 +684,20 @@ export function buildAssetPatrolPlan(input: {
     }
   });
 
-  const elements = readManualPageElements(matched.node);
+  const platform = platformFromObservation(input.observation);
+  const graphVersionWithAssetEdges = withPageAbilityEdges(input.graphVersion, platform);
+  const elements = readPatrolPageElements(matched.node, platform);
+  const transitions = graphVersionWithAssetEdges.edges
+    .filter((edge) => edge.status === "active" && edge.fromNodeId === matched.node.id && Boolean(edge.actionPolicies[0]))
+    .sort((left, right) => Number(isV2PageTransitionEdge(right)) - Number(isV2PageTransitionEdge(left)))
+    .slice(0, input.config.maxTransitions);
+  const tasks = readManualPageTasks(matched.node);
   const issues: AssetPatrolIssue[] = [];
-  if (!elements.length) {
+  if (!elements.length && !transitions.length && !tasks.length) {
     issues.push({
       code: "NO_PAGE_ASSETS",
       severity: "warning",
-      message: `页面 ${matched.node.name} 没有录入可巡检的页面能力。`,
+      message: `页面 ${matched.node.name} 没有录入可巡检的页面资产。`,
       pageModelId: matched.node.id
     });
   }
@@ -677,14 +722,12 @@ export function buildAssetPatrolPlan(input: {
         semanticArea: element.semanticArea,
         actionKind: element.actionKind,
         abilityType: element.abilityType,
+        assetFormat: element.assetFormat ?? "legacy",
         parameterizedBy
       }
     });
   }
 
-  const transitions = input.graphVersion.edges
-    .filter((edge) => edge.status === "active" && edge.fromNodeId === matched.node.id)
-    .slice(0, input.config.maxTransitions);
   for (const transition of transitions) {
     const actionPolicy = transition.actionPolicies[0];
     const dangerous = !input.config.allowRiskyActions && isDangerousTransition(transition, input.config.dangerousTextPatterns);
@@ -705,8 +748,9 @@ export function buildAssetPatrolPlan(input: {
         intent: transition.intent,
         toNodeId: transition.toNodeId,
         actionTitle: actionPolicy?.action.title,
-        targetText: actionPolicy ? stringRecordField(actionPolicy.action.params ?? {}, "targetText") : undefined,
+        targetText: actionPolicy ? stringRecordField(actionPolicy.action.params ?? {}, "targetText") ?? stringRecordField(actionPolicy.action.params ?? {}, "anchorText") : undefined,
         visualLocator: actionPolicy ? hasVisualLocator((actionPolicy.action.params ?? {}).visualLocator) : undefined,
+        assetFormat: isV2PageTransitionEdge(transition) ? "v2" : "legacy",
         reliabilityScore: transition.reliabilityScore,
         executionMode: "dry_run",
         parameterizedBy
@@ -714,7 +758,7 @@ export function buildAssetPatrolPlan(input: {
     });
   }
 
-  for (const task of readManualPageTasks(matched.node)) {
+  for (const task of tasks) {
     const label = task.name ?? task.title ?? task.id ?? "未命名任务";
     steps.push({
       id: createId("asset_patrol_plan_step"),
@@ -780,10 +824,11 @@ export function selectAssetDrivenExecutionTargets(input: {
     };
   }
   const targets: AssetDrivenReadyExecutionTarget[] = [];
+  const graphVersionWithV2Edges = withPageAbilityEdges(input.graphVersion, "android");
   const transitionCandidates = input.plan.steps
     .filter((step) => step.kind === "transition_validation" && step.status === "ready" && Boolean(step.pageTransitionId))
     .map((step) => {
-      const edge = input.graphVersion.edges.find((item) => item.id === step.pageTransitionId && item.status === "active");
+      const edge = graphVersionWithV2Edges.edges.find((item) => item.id === step.pageTransitionId && item.status === "active");
       const action = edge?.actionPolicies[0]?.action;
       return edge && action && edge.fromNodeId === startPage.id
         ? {
@@ -804,7 +849,7 @@ export function selectAssetDrivenExecutionTargets(input: {
         message: "这条资产边会执行页面任务，请先勾选“允许业务提交”后再开始资产测试。"
       };
     }
-    const targetNode = input.graphVersion.nodes.find((node) => node.id === edge.toNodeId);
+    const targetNode = graphVersionWithV2Edges.nodes.find((node) => node.id === edge.toNodeId);
     targets.push({
       status: "ready",
       graphVersionId: input.graphVersion.id,
@@ -858,6 +903,13 @@ export function selectAssetDrivenExecutionTargets(input: {
       startNodeId: startPage.id,
       startNodeName: startPage.name,
       targets
+    };
+  }
+  if (input.plan.steps.some((step) => step.kind === "task_dry_run" && step.skipReason === "business_submit_disabled")) {
+    return {
+      status: "blocked",
+      code: "BUSINESS_SUBMIT_DISABLED",
+      message: "当前页面任务需要执行业务提交，请先勾选“允许业务提交”后再开始资产测试。"
     };
   }
   return {
@@ -964,11 +1016,12 @@ export function collectAssetRuntimeParamDefinitions(graphVersion: BusinessGraphV
       }
     }
   }
-  for (const edge of graphVersion.edges) {
+  const graphVersionWithAssetEdges = withPageAbilityEdges(graphVersion, "android");
+  for (const edge of graphVersionWithAssetEdges.edges) {
     if (edge.status !== "active") {
       continue;
     }
-    const sourceNode = graphVersion.nodes.find((node) => node.id === edge.fromNodeId);
+    const sourceNode = graphVersionWithAssetEdges.nodes.find((node) => node.id === edge.fromNodeId);
     if (!sourceNode || !isConfirmedStablePage(sourceNode)) {
       continue;
     }
@@ -1100,9 +1153,121 @@ function readManualPageElements(node: BusinessNode): ManualPageElementAsset[] {
   return Array.isArray(value) ? value.filter(isRecordObject).map((item) => item as ManualPageElementAsset) : [];
 }
 
+function readPatrolPageElements(node: BusinessNode, platform: PlatformScope): ManualPageElementAsset[] {
+  const v2Elements = readPageElementPatrolAssets(node, platform);
+  const legacyElements = readManualPageElements(node)
+    .filter((element) => supportsAssetPlatform(element.platformScope, platform))
+    .map((element) => ({ ...element, assetFormat: "legacy" as const }));
+  const seen = new Set<string>();
+  return [...v2Elements, ...legacyElements].filter((element) => {
+    const key = element.id ? `id:${element.id}` : `locator:${element.locator ?? ""}:${element.label ?? element.name ?? ""}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function readPageElementPatrolAssets(node: BusinessNode, platform: PlatformScope): ManualPageElementAsset[] {
+  return readPageElementAssets(node)
+    .filter((element) => supportsAssetPlatform(element.platformScope, platform))
+    .map(pageElementPatrolAsset);
+}
+
+function readPageElementAssets(node: BusinessNode): PageElementAsset[] {
+  const value = node.metadata?.assetRecordingPageElements;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item): PageElementAsset | undefined => {
+      if (!isRecordObject(item)) {
+        return undefined;
+      }
+      const id = stringRecordField(item, "id");
+      if (!id) {
+        return undefined;
+      }
+      return {
+        ...(item as PageElementAsset),
+        id
+      };
+    })
+    .filter((item): item is PageElementAsset => Boolean(item));
+}
+
+function pageElementPatrolAsset(element: PageElementAsset): ManualPageElementAsset {
+  return {
+    id: element.id,
+    label: element.label,
+    name: element.label,
+    targetText: element.targetText,
+    locator: element.locator,
+    locatorKind: element.locatorKind,
+    structuralLocator: element.structuralLocator,
+    semanticArea: element.semanticArea,
+    actionKind: actionKindForPageElement(element),
+    abilityType: element.elementKind === "collection" ? "grid_candidate" : undefined,
+    availability: "visible",
+    visualLocator: element.visualLocator,
+    scrollProfile: scrollProfileForPageElement(element),
+    assetFormat: "v2"
+  };
+}
+
+function actionKindForPageElement(element: PageElementAsset): string {
+  const actions = new Set(element.actions ?? []);
+  if (actions.has("input")) {
+    return "input";
+  }
+  if (actions.has("scroll")) {
+    return "scroll";
+  }
+  if (actions.has("long_press")) {
+    return "long_press";
+  }
+  return "tap";
+}
+
+function scrollProfileForPageElement(element: PageElementAsset): Record<string, unknown> | undefined {
+  if (element.elementKind !== "collection") {
+    return undefined;
+  }
+  const collection = element.collection ?? {};
+  const itemIdentity = collection.itemIdentity;
+  const param = itemIdentity && isRecordObject(itemIdentity) ? stringRecordField(itemIdentity, "param") : undefined;
+  const targetQuery = param ? `{{${param}}}` : undefined;
+  const horizontal = collection.kind === "horizontal_list" || collection.kind === "carousel";
+  return {
+    containerKind: collection.kind === "vertical_grid" ? "grid_list" : collection.kind === "carousel" ? "carousel" : "list",
+    direction: horizontal ? "horizontal" : "vertical",
+    columns: collection.kind === "vertical_grid" ? Math.max(1, Math.floor(collection.columns ?? 1)) : 1,
+    targetKind: targetQuery ? "item_text" : "nth_item",
+    ...(targetQuery ? { targetQuery } : {}),
+    afterFoundAction: "tap_item",
+    candidateItemHeightPercent: collection.candidateItemHeightPercent,
+    clickSafePoint: collection.clickSafePoint,
+    scrollStepPercent: collection.scrollStepPercent,
+    failureStrategy: collection.failureStrategy
+  };
+}
+
 function readManualPageTasks(node: BusinessNode): ManualPageTaskAsset[] {
   const value = node.metadata?.assetRecordingPageTasks;
   return Array.isArray(value) ? value.filter(isRecordObject).map((item) => item as ManualPageTaskAsset) : [];
+}
+
+function platformFromObservation(observation: Observation): PlatformScope {
+  return observation.platform === "ios" ? "ios" : "android";
+}
+
+function supportsAssetPlatform(scope: PlatformScope | undefined, platform: PlatformScope): boolean {
+  return scope === undefined || scope === "mobile-both" || scope === platform;
+}
+
+function isV2PageTransitionEdge(edge: OperationEdge): boolean {
+  return edge.key.startsWith("pagetransition.");
 }
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {

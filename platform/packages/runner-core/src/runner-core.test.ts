@@ -423,6 +423,67 @@ describe("graph runner", () => {
     expect(result.steps[0]?.nodeMatches.after?.node?.id).toBe("home");
   });
 
+  it("takes one fresh transition observation when slow matching consumes the wait window", async () => {
+    const basePlan = planTo("home");
+    const executionPlan = {
+      ...basePlan,
+      steps: basePlan.steps.map((step) => ({
+        ...step,
+        action: step.action
+          ? {
+              ...step.action,
+              params: {
+                ...step.action.params,
+                transitionTimeoutMs: 10,
+                pollIntervalMs: 1
+              }
+            }
+          : step.action
+      }))
+    };
+    const driver = new MockGraphDriver(["root", "old-page", "home"], {
+      advanceOnEveryStateTransitionObserve: true,
+      detectDelayMs: 25
+    });
+
+    const result = await new GraphRunner({
+      executionPlan,
+      driver,
+      idFactory: fixedIdFactory(),
+      now: fixedNow()
+    }).run();
+
+    expect(result.status).toBe("passed");
+    expect(result.deviations.map((deviation) => deviation.action)).toEqual(["retry_observe"]);
+    expect(result.steps[0]?.nodeMatches.after?.node?.id).toBe("home");
+  });
+
+  it("takes one fresh transition observation even when edge recovery retry count is zero", async () => {
+    const basePlan = planTo("home");
+    const executionPlan = {
+      ...basePlan,
+      steps: basePlan.steps.map((step) => ({
+        ...step,
+        failurePolicy: {
+          retryCount: 0,
+          recoverTo: "replan" as const
+        }
+      }))
+    };
+    const driver = new MockGraphDriver(["root", "old-page", "home"], { advanceOnEveryStateTransitionObserve: true });
+
+    const result = await new GraphRunner({
+      executionPlan,
+      driver,
+      idFactory: fixedIdFactory(),
+      now: fixedNow()
+    }).run();
+
+    expect(result.status).toBe("passed");
+    expect(result.deviations.map((deviation) => deviation.action)).toEqual(["retry_observe"]);
+    expect(result.steps[0]?.nodeMatches.after?.node?.id).toBe("home");
+  });
+
   it("passes the already detected node match to state expectations", async () => {
     const executionPlan = planTo("home");
     const driver = new MockGraphDriver(["root", "home"]);
@@ -753,6 +814,7 @@ class MockGraphDriver {
       failedExpectationIds?: Set<string>;
       advanceOnStateTransitionObserve?: boolean;
       advanceOnEveryStateTransitionObserve?: boolean;
+      detectDelayMs?: number;
     } = {}
   ) {}
 
@@ -781,6 +843,9 @@ class MockGraphDriver {
   }
 
   async detectNode(observation: Observation): Promise<NodeMatchResult> {
+    if (this.options.detectDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, this.options.detectDelayMs));
+    }
     const nodeId = String(observation.raw?.nodeId ?? "unknown");
     return {
       status: "matched",

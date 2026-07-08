@@ -100,6 +100,14 @@ import {
   type AssetPatrolStartMode
 } from "./asset-patrol.js";
 import {
+  createAssetDrivenExecutionSession,
+  markAssetDrivenExecutionItemStarted,
+  skipPendingAssetDrivenExecutionItems,
+  stopAssetDrivenExecutionSession,
+  updateAssetDrivenExecutionItemFromRun,
+  type AssetDrivenExecutionSession
+} from "./asset-driven-execution-session.js";
+import {
   previewAiDiagnosisSettingsUpdate,
   publicAiDiagnosisSettings,
   resolveAiDiagnosisConfig,
@@ -152,7 +160,8 @@ const assetPatrol = new AssetPatrol(storage, driver, ocr, readPageAssetBaselineA
 const observationService = new ObservationService(driver, ocr);
 const scrcpyStreamBridge = new ScrcpyStreamBridge();
 const artifactCleanupScheduler = new ArtifactCleanupScheduler(storage);
-const activeAssetDrivenExecutionQueues = new Map<string, { runId: string; promise: Promise<void> }>();
+const activeAssetDrivenExecutionQueues = new Map<string, { runId: string; sessionId: string; cancelled?: boolean; promise: Promise<void> }>();
+const assetDrivenExecutionSessions = new Map<string, AssetDrivenExecutionSession>();
 
 await storage.ensureDirs();
 const builtinCaseSeedResult = seedBuiltinCases(storage);
@@ -1818,6 +1827,59 @@ app.post("/api/asset-patrols", (req, res) => {
   }
 });
 
+app.get("/api/asset-patrols/executions", (req, res) => {
+  const deviceSerial = typeof req.query.deviceSerial === "string" ? req.query.deviceSerial.trim() : "";
+  const packageName = typeof req.query.packageName === "string" ? req.query.packageName.trim() : "";
+  const executions = Array.from(assetDrivenExecutionSessions.values())
+    .filter((execution) => !deviceSerial || execution.deviceSerial === deviceSerial)
+    .filter((execution) => !packageName || execution.packageName === packageName)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const activeExecution = executions.find((execution) => execution.status === "running");
+  res.json({ execution: activeExecution ?? executions[0] ?? null, executions });
+});
+
+app.get("/api/asset-patrols/executions/:executionId", (req, res) => {
+  const execution = assetDrivenExecutionSessions.get(req.params.executionId);
+  if (!execution) {
+    res.status(404).json({ error: "asset-driven execution not found" });
+    return;
+  }
+  res.json({ execution });
+});
+
+app.post("/api/asset-patrols/executions/:executionId/stop", async (req, res) => {
+  try {
+    const execution = assetDrivenExecutionSessions.get(req.params.executionId);
+    if (!execution) {
+      res.status(404).json({ error: "asset-driven execution not found" });
+      return;
+    }
+    const queueState = activeAssetDrivenExecutionQueues.get(execution.deviceSerial);
+    if (queueState?.sessionId === execution.id) {
+      queueState.cancelled = true;
+    }
+    const activeRunIds = Array.from(new Set([
+      execution.runningItem?.runId,
+      queueState?.sessionId === execution.id ? queueState.runId : undefined
+    ].filter((item): item is string => Boolean(item))));
+    for (const runId of activeRunIds) {
+      const run = storage.getRun(runId);
+      await stopRunByKind(runId, run?.config.runKind);
+      const stoppedRun = storage.getRun(runId);
+      if (stoppedRun) {
+        updateAssetDrivenExecutionItemFromRun(execution, stoppedRun);
+      }
+    }
+    stopAssetDrivenExecutionSession(execution, "用户停止本轮资产测试。");
+    if (queueState?.sessionId === execution.id) {
+      activeAssetDrivenExecutionQueues.delete(execution.deviceSerial);
+    }
+    res.json({ execution, stopped: true });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 app.post("/api/asset-patrols/execute", async (req, res) => {
   try {
     const body = readAssetPatrolRequest(req.body);
@@ -1877,17 +1939,29 @@ app.post("/api/asset-patrols/execute", async (req, res) => {
       });
       return;
     }
+    const assetDrivenExecution = createAssetDrivenExecutionSession({
+      deviceSerial: body.deviceSerial,
+      packageName: config.packageName,
+      graphVersionId: executionTargets.graphVersionId,
+      startNodeId: executionTargets.startNodeId,
+      startNodeName: executionTargets.startNodeName,
+      targets: executionTargets.targets
+    });
+    assetDrivenExecutionSessions.set(assetDrivenExecution.id, assetDrivenExecution);
     const started = await startAssetDrivenGraphTarget(body.deviceSerial, executionTarget);
-    const queueState = { runId: started.run.id, promise: Promise.resolve() };
+    markAssetDrivenExecutionItemStarted(assetDrivenExecution, 0, started.run);
+    const queueState = { runId: started.run.id, sessionId: assetDrivenExecution.id, cancelled: false, promise: Promise.resolve() };
     const queuePromise = continueAssetDrivenExecutionQueue({
       body,
       config,
       startNodeId: executionTargets.startNodeId,
       targets: executionTargets.targets,
       firstRunId: started.run.id,
+      session: assetDrivenExecution,
       queueState
     })
       .catch((error) => {
+        skipPendingAssetDrivenExecutionItems(assetDrivenExecution, error instanceof Error ? error.message : String(error));
         console.error("Asset-driven execution queue failed", error);
       })
       .finally(() => {
@@ -1908,7 +1982,9 @@ app.post("/api/asset-patrols/execute", async (req, res) => {
       targetResolution: started.targetResolution,
       executionTarget,
       executionTargets,
+      assetDrivenExecution,
       assetDrivenQueue: {
+        id: assetDrivenExecution.id,
         total: executionTargets.targets.length,
         started: 1,
         remaining: Math.max(0, executionTargets.targets.length - 1)
@@ -2692,13 +2768,25 @@ async function continueAssetDrivenExecutionQueue(input: {
   startNodeId: string;
   targets: AssetDrivenReadyExecutionTarget[];
   firstRunId: string;
-  queueState: { runId: string; promise: Promise<void> };
+  session: AssetDrivenExecutionSession;
+  queueState: { runId: string; sessionId: string; cancelled?: boolean; promise: Promise<void> };
 }): Promise<void> {
   let previousRunId = input.firstRunId;
   await graphRunner.waitForRun(previousRunId);
+  const firstRun = storage.getRun(previousRunId);
+  if (firstRun) {
+    updateAssetDrivenExecutionItemFromRun(input.session, firstRun);
+  }
+  if (input.queueState.cancelled) {
+    return;
+  }
   for (const target of input.targets.slice(1)) {
+    if (input.queueState.cancelled) {
+      return;
+    }
     const previousRun = storage.getRun(previousRunId);
     if (previousRun?.status !== "passed") {
+      skipPendingAssetDrivenExecutionItems(input.session, `前置边 ${previousRunId} 未通过，停止后续资产边执行。`);
       return;
     }
     const restored = await recoverAssetDrivenStartPage({
@@ -2707,13 +2795,26 @@ async function continueAssetDrivenExecutionQueue(input: {
       startNodeId: input.startNodeId
     });
     if (!restored) {
+      skipPendingAssetDrivenExecutionItems(input.session, "未能恢复到本轮资产测试的起始页面。");
+      return;
+    }
+    if (input.queueState.cancelled) {
       return;
     }
     await handleAssetDrivenRuntimeInterceptors(input.body.deviceSerial, input.config.packageName);
+    if (input.queueState.cancelled) {
+      return;
+    }
     const started = await startAssetDrivenGraphTarget(input.body.deviceSerial, target);
     previousRunId = started.run.id;
     input.queueState.runId = previousRunId;
+    const itemIndex = input.targets.indexOf(target);
+    markAssetDrivenExecutionItemStarted(input.session, itemIndex, started.run);
     await graphRunner.waitForRun(previousRunId);
+    const completedRun = storage.getRun(previousRunId);
+    if (completedRun) {
+      updateAssetDrivenExecutionItemFromRun(input.session, completedRun);
+    }
   }
 }
 

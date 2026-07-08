@@ -583,8 +583,18 @@ export class GraphRunner {
     const startedWaitingAt = Date.now();
     const timeWindowMaxAttempts = Math.max(1, Math.ceil(waitPolicy.timeoutMs / Math.max(1, waitPolicy.pollIntervalMs)));
     const retryLimit = typeof step.failurePolicy?.retryCount === "number" ? Math.max(0, Math.floor(step.failurePolicy.retryCount)) + 1 : undefined;
-    const maxAttempts = retryLimit === undefined ? timeWindowMaxAttempts : Math.min(timeWindowMaxAttempts, retryLimit);
-    while ((afterMatch.status !== "matched" || afterMatch.node?.id !== step.toNode.id) && Date.now() - startedWaitingAt < waitPolicy.timeoutMs && transitionAttempt < maxAttempts - 1) {
+    const maxAttempts = Math.max(2, retryLimit === undefined ? timeWindowMaxAttempts : Math.min(timeWindowMaxAttempts, retryLimit));
+    const shouldRetryTransitionObserve = () => {
+      if (afterMatch.status === "matched" && afterMatch.node?.id === step.toNode.id) {
+        return false;
+      }
+      if (transitionAttempt >= maxAttempts - 1) {
+        return false;
+      }
+      const withinWaitWindow = Date.now() - startedWaitingAt < waitPolicy.timeoutMs;
+      return withinWaitWindow || transitionAttempt === 0;
+    };
+    while (shouldRetryTransitionObserve()) {
       const actualNodeId = afterMatch.node?.id;
       if (transitionAttempt === 0) {
         base.deviations.push({

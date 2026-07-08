@@ -23,7 +23,7 @@ import {
   Video,
   XCircle
 } from "lucide-react";
-import { RunConfigDrawer, formatShortTime } from "./StepsPanelParts";
+import { formatShortTime } from "./StepsPanelParts";
 import { StepList } from "./StepList";
 import { expectationLabel } from "./StepExpectationPanel";
 import { GraphRunDetail, type GraphRunSummary } from "./GraphRunDetail";
@@ -86,13 +86,6 @@ export function StepsPanel({
   selectedCaseId,
   recording,
   caseName,
-  repeatCount,
-  stepIntervalMs,
-  loopUntilStopped,
-  pauseAfterEachStep,
-  startStrategy,
-  startAppPackageName,
-  startSetupScope,
   currentRun,
   currentGraphRun,
   runs,
@@ -101,13 +94,6 @@ export function StepsPanel({
   selectedSerial,
   setRecording,
   setCaseName,
-  setRepeatCount,
-  setStepIntervalMs,
-  setLoopUntilStopped,
-  setPauseAfterEachStep,
-  setStartStrategy,
-  setStartAppPackageName,
-  setStartSetupScope,
   moveStep,
   removeStep,
   insertWaitStep,
@@ -186,22 +172,6 @@ export function StepsPanel({
           </div>
           <Smartphone size={20} />
         </div>
-        <RunConfigDrawer
-          repeatCount={repeatCount}
-          stepIntervalMs={stepIntervalMs}
-          loopUntilStopped={loopUntilStopped}
-          pauseAfterEachStep={pauseAfterEachStep}
-          startStrategy={startStrategy}
-          startAppPackageName={startAppPackageName}
-          startSetupScope={startSetupScope}
-          setRepeatCount={setRepeatCount}
-          setStepIntervalMs={setStepIntervalMs}
-          setLoopUntilStopped={setLoopUntilStopped}
-          setPauseAfterEachStep={setPauseAfterEachStep}
-          setStartStrategy={setStartStrategy}
-          setStartAppPackageName={setStartAppPackageName}
-          setStartSetupScope={setStartSetupScope}
-        />
         <div className="panel-head">
           <h2>执行结果</h2>
           {!currentRun && (
