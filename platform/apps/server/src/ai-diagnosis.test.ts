@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildAiDiagnosisEvidencePack,
+  buildDiagnosisPrompt,
   createAiDiagnosisClient,
   createOpenAiCompatibleDiagnosisClient,
   parseAiDiagnosisResponse,
@@ -258,6 +259,31 @@ describe("ai diagnosis", () => {
         status: "draft"
       }
     });
+  });
+
+  it("includes the PageStateFlow asset rulebook and executable patch schema in the diagnosis prompt", () => {
+    const prompt = buildDiagnosisPrompt(
+      buildAiDiagnosisEvidencePack({
+        runId: "run-1",
+        deviceSerial: "device-1",
+        error: "Expected next node growth, got unknown"
+      })
+    );
+
+    expect(prompt).toContain("当前 PageStateFlow 资产规则");
+    expect(prompt).toContain("PageModel / 页面资产");
+    expect(prompt).toContain("PageMatcher / 页面识别资产");
+    expect(prompt).toContain("PageElement / 可操作元素资产");
+    expect(prompt).toContain("PageTransition / 连接边资产");
+    expect(prompt).toContain("PageTask / 页面任务资产");
+    expect(prompt).toContain("动态区域 / 列表模板 / 参数化");
+    expect(prompt).toContain("AI 需要按这些资产规则生成新的 matcher、元素、边或任务修复草稿");
+    expect(prompt).toContain("page_matcher.changes 只允许");
+    expect(prompt).toContain("addMatchersDraft");
+    expect(prompt).toContain("deprioritizeMatchersDraft");
+    expect(prompt).toContain("不要返回 matcherDraft、nodeName、reason 对象");
+    expect(prompt).toContain("page_transition.changes 只允许");
+    expect(prompt).toContain("page_element.changes 只允许");
   });
 
   it("calls an OpenAI-compatible chat completion endpoint and parses the response", async () => {

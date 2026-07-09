@@ -104,7 +104,29 @@ const CODEX_PROVIDER_BASE_URL = "codex://app-server";
 const CODEX_PROCESS_START_TIMEOUT_MS = 15_000;
 const CODEX_CLEANUP_TIMEOUT_MS = 8_000;
 const CODEX_DIAGNOSIS_DEVELOPER_INSTRUCTIONS =
-  "你是移动自动化测试异常诊断助手。只判断异常归因和受控修复建议，不执行设备操作，不修改文件。必须只返回 JSON 对象。";
+  "你是移动自动化测试异常诊断助手。只判断异常归因和受控资产修复建议，不直接执行设备操作，不直接修改文件。可以在证据充分时返回 apply_verified_asset_patch，由系统校验后更新资产。必须只返回 JSON 对象。必须严格遵守用户提示中的 assetPatch.changes 字段白名单。";
+const PAGE_STATE_FLOW_ASSET_RULES = [
+  "PageModel / 页面资产：一个节点代表一个可识别页面状态或稳定子状态；页面识别必须依赖多锚点 evidence，不依赖包名、历史点击坐标或 region_center。页面级动态内容如头像、昵称、数量、浮层、列表项变化不能作为强锚点。",
+  "PageMatcher / 页面识别资产：优先使用稳定 OCR 文案、语义区域、结构锚点和经过 dynamic mask 的视觉区域。critical matcher 只能给稳定、不随账号/时间/列表滑动变化的证据；过期或动态 matcher 应降权，不应删除全部旧证据。",
+  "PageElement / 可操作元素资产：元素是页面上的语义能力，不是固定坐标。必须包含 label/name、elementKind、semanticArea、actions，并用 text_locator、visual_locator、structural_locator 或 collection_item_locator 描述如何在当前截图重定位。个人头像、昵称、班级封面、数量等动态内容要用 dynamicMasks、structuralLocator、dynamicRegionId 或 itemTemplateId 排除。",
+  "PageTransition / 连接边资产：边表示从 source PageModel 通过某个 elementId/action 到 target PageModel 或本地状态变化。必须描述 outcomeType、targetNodeId/targetLabel、availability、params/parameterMapping；同页 tab 或局部状态变化不要误写成必须 back 恢复的跨页导航。",
+  "PageTask / 页面任务资产：任务是由 PageElement 引用组成的参数化步骤序列。输入类步骤必须使用 valueParamKey/desiredStateParamKey 从 runtimeParams 取值，不把真实账号密码写入资产。",
+  "动态区域 / 列表模板 / 参数化：列表、网格、feed、表单组应抽象为 dynamicRegion + itemTemplate。列表项点击要用 collection_item_locator、itemIdentity、targetQuery、clickSafePoint 和 scrollProfile，而不是保存某一屏某一行坐标。",
+  "AI 需要按这些资产规则生成新的 matcher、元素、边或任务修复草稿；如果当前 AssetPatch 协议无法表达所需新资产，返回 create_asset_patch 并在 reasoning 中明确说明需要扩展系统规则，不要伪造成坐标或随意发明字段。"
+];
+const ASSET_PATCH_SCHEMA_RULES = [
+  "assetPatch.kind 只允许 page_transition、page_element、page_matcher、page_task；operation 当前自动修复只接受 update。",
+  "page_matcher.changes 只允许：addMatchersDraft、addMatchers、deprioritizeMatchersDraft、deprioritizeMatchers、deprioritizeMatcherIds、matchers、visualLocator、ocrHints、semanticAnchors、identityHints、aiHints、quality。",
+  "page_matcher 用于页面识别修复时，优先返回 addMatchersDraft: [{ type: \"ocr_text\", expected: \"页面稳定文字\", weight: 1.4-2.2, critical?: true }]，以及 deprioritizeMatchersDraft: [\"过期 matcher id\"]。",
+  "不要返回 matcherDraft、nodeName、reason 对象、promoteExistingMatchers 这类说明性字段；说明写在 summary 或 reasoning，changes 里只放系统可执行字段。",
+  "page_transition.changes 只允许：id、elementId、action、outcomeType、targetNodeId、targetLabel、availability、platformScope、params、compoundSteps、aiHints、notes、quality。",
+  "page_element.changes 只允许：id、label、name、targetText、locator、locatorKind、structuralLocator、visualLocator、semanticArea、elementKind、actions、availability、platformScope、anchorText、role、slot、orderFromRight、dynamicMasks、dynamicRegionId、itemTemplateId、collection、scrollProfile、aiHints、quality。",
+  "page_element 修复只用于“操作元素找不到/无法重定位/点错元素”类资产问题。补丁必须更新可重定位规则：locatorKind 应为 text_locator、visual_locator、structural_locator、collection_item_locator、top_bar_icon_locator 或 ocr_anchor_offset；同时至少提供 locator、targetText、anchorText、role/slot/orderFromRight、structuralLocator、visualLocator、collection/scrollProfile 中的一类稳定证据。",
+  "page_element 补丁不能只改 label/name/notes；也不能把个人头像、昵称、封面、数量、时间、列表临时内容作为强识别。遇到动态内容时必须用 dynamicMasks、dynamicRegionId、itemTemplateId 或 collection.itemIdentity 表达排除/参数化规则。",
+  "如果 evidence 中有 elementId，请优先把 assetPatch.targetId 设为该 elementId；如果只能判断页面匹配过期而不是元素定位过期，使用 page_matcher，不要误改 page_element。",
+  "page_task.changes 只允许：name、description、steps、fields、params、aiHints、quality。",
+  "禁止任何坐标兜底字段或值：x、y、center、coordinate、bounds、image_region、region_center、fallback_tap、screen coordinate。"
+];
 
 type CodexJsonRpcMessage = Record<string, unknown>;
 
@@ -285,8 +307,7 @@ export function createOpenAiCompatibleDiagnosisClient(config: Extract<AiDiagnosi
             messages: [
               {
                 role: "system",
-                content:
-                  "你是移动自动化测试异常诊断助手。只判断异常归因和受控修复建议，不执行设备操作。必须只返回 JSON 对象。"
+                content: CODEX_DIAGNOSIS_DEVELOPER_INSTRUCTIONS
               },
               {
                 role: "user",
@@ -330,8 +351,19 @@ export function buildDiagnosisPrompt(evidence: AiDiagnosisEvidencePack): string 
     "",
     "分类只允许：app_issue、asset_issue、automation_issue、environment_issue、unknown。",
     "recommendedAction 只允许：report_only、restart_app_continue、create_asset_patch、apply_verified_asset_patch。",
-    "只有当证据非常明确、补丁很小、且不依赖设备坐标时，safeToAutoApply 才能为 true。",
+    "只有当证据非常明确、补丁很小、且不依赖设备坐标/截图百分比/region_center 时，safeToAutoApply 才能为 true。",
+    "如果你能确认是资产问题且能按规则直接修复，请使用 recommendedAction=apply_verified_asset_patch；否则使用 create_asset_patch 或 report_only。",
+    "assetPatch 只能描述资产字段修复，不能要求点击、输入、重启、创建临时页面或改运行逻辑。",
+    "禁止在 assetPatch.changes 中加入 x/y/center/coordinate/bounds/image-region/region_center/fallback_tap 等坐标兜底字段。",
+    "如果现有规则无法表达修复，请不要绕过规则；返回 create_asset_patch，并在 reasoning 说明需要扩展系统资产规则。",
+    "支持的自动修复优先级：page_transition 修改 targetNodeId/targetLabel/elementId/params；page_element 修改语义定位字段；page_matcher 补充页面识别草稿；page_task 修改参数化任务字段。",
     "如果建议更新资产，请在 assetPatch 中给出 draft 级别的结构化修复草稿。",
+    "",
+    "当前 PageStateFlow 资产规则：",
+    ...PAGE_STATE_FLOW_ASSET_RULES,
+    "",
+    "可执行 assetPatch 协议：",
+    ...ASSET_PATCH_SCHEMA_RULES,
     "",
     "返回 JSON schema:",
     JSON.stringify(

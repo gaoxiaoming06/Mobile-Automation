@@ -880,7 +880,8 @@ describe("AssetPatrol", () => {
         graphVersionId: graphVersion.id,
         startNodeId: "node-login",
         targetNodeId: "node-home",
-        transitionId: "edge_pagetransition.login.home.login.submit.home"
+        transitionId: "edge_pagetransition.login.home.login.submit.home",
+        elementId: "login-submit"
       })
     );
     if (target.status === "ready") {

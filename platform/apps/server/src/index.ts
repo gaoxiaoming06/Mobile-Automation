@@ -6,6 +6,7 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createId,
   nowIso,
   type ActionStep,
   type ArtifactRef,
@@ -102,15 +103,23 @@ import {
 import {
   createAssetDrivenExecutionSession,
   markAssetDrivenExecutionItemStarted,
+  recordAssetDrivenExecutionRepairAttempt,
   skipPendingAssetDrivenExecutionItems,
   stopAssetDrivenExecutionSession,
   updateAssetDrivenExecutionItemFromRun,
   type AssetDrivenExecutionSession
 } from "./asset-driven-execution-session.js";
 import {
+  applyVerifiedAiAssetPatch,
+  chooseAssetRepairDiagnosis,
+  decideAiAssetRepair,
+  type AiAssetRepairApplyResult
+} from "./asset-ai-repair.js";
+import {
   previewAiDiagnosisSettingsUpdate,
   publicAiDiagnosisSettings,
   resolveAiDiagnosisConfig,
+  type AiDiagnosisResult,
   type AiDiagnosisSettingsUpdateInput
 } from "./ai-diagnosis.js";
 import {
@@ -2776,6 +2785,18 @@ async function continueAssetDrivenExecutionQueue(input: {
   const firstRun = storage.getRun(previousRunId);
   if (firstRun) {
     updateAssetDrivenExecutionItemFromRun(input.session, firstRun);
+    if (firstRun.status !== "passed") {
+      previousRunId = await tryRepairAndRetryAssetDrivenTarget({
+        body: input.body,
+        config: input.config,
+        startNodeId: input.startNodeId,
+        target: input.targets[0],
+        itemIndex: 0,
+        failedRun: firstRun,
+        session: input.session,
+        queueState: input.queueState
+      }) ?? previousRunId;
+    }
   }
   if (input.queueState.cancelled) {
     return;
@@ -2814,8 +2835,267 @@ async function continueAssetDrivenExecutionQueue(input: {
     const completedRun = storage.getRun(previousRunId);
     if (completedRun) {
       updateAssetDrivenExecutionItemFromRun(input.session, completedRun);
+      if (completedRun.status !== "passed") {
+        previousRunId = await tryRepairAndRetryAssetDrivenTarget({
+          body: input.body,
+          config: input.config,
+          startNodeId: input.startNodeId,
+          target,
+          itemIndex,
+          failedRun: completedRun,
+          session: input.session,
+          queueState: input.queueState
+        }) ?? previousRunId;
+      }
     }
   }
+}
+
+async function tryRepairAndRetryAssetDrivenTarget(input: {
+  body: AssetPatrolStartInput;
+  config: ReturnType<typeof normalizeAssetPatrolConfig>;
+  startNodeId: string;
+  target: AssetDrivenReadyExecutionTarget | undefined;
+  itemIndex: number;
+  failedRun: TestRun;
+  session: AssetDrivenExecutionSession;
+  queueState: { runId: string; sessionId: string; cancelled?: boolean; promise: Promise<void> };
+}): Promise<string | undefined> {
+  if (!input.target || input.queueState.cancelled) {
+    return undefined;
+  }
+  const repair = await tryAutoRepairFailedAssetRun({
+    failedRun: input.failedRun,
+    target: input.target,
+    session: input.session
+  });
+  if (repair.status !== "applied" || input.queueState.cancelled) {
+    return undefined;
+  }
+  const restored = await recoverAssetDrivenStartPage({
+    body: input.body,
+    packageName: input.config.packageName,
+    startNodeId: input.startNodeId
+  });
+  if (!restored || input.queueState.cancelled) {
+    recordAssetDrivenExecutionRepairAttempt(input.session, input.failedRun.id, {
+      action: "failed",
+      summary: "AI 已修复资产，但未能恢复到本轮起始页面重试。",
+      detail: repair.summary
+    });
+    return undefined;
+  }
+  await handleAssetDrivenRuntimeInterceptors(input.body.deviceSerial, input.config.packageName);
+  if (input.queueState.cancelled) {
+    return undefined;
+  }
+  const retry = await startAssetDrivenGraphTarget(input.body.deviceSerial, input.target);
+  input.queueState.runId = retry.run.id;
+  markAssetDrivenExecutionItemStarted(input.session, input.itemIndex, retry.run);
+  await graphRunner.waitForRun(retry.run.id);
+  const retryRun = storage.getRun(retry.run.id);
+  if (retryRun) {
+    updateAssetDrivenExecutionItemFromRun(input.session, retryRun);
+  }
+  return retry.run.id;
+}
+
+async function tryAutoRepairFailedAssetRun(input: {
+  failedRun: TestRun;
+  target: AssetDrivenReadyExecutionTarget;
+  session: AssetDrivenExecutionSession;
+}): Promise<AiAssetRepairApplyResult> {
+  const aiDiagnosis = await readLatestAiDiagnosisResult(input.failedRun);
+  const graphVersion = storage.getBusinessGraphVersion(input.target.graphVersionId);
+  const repairContext = {
+    failedRunId: input.failedRun.id,
+    failedTargetLabel: input.target.transitionName ?? `${input.target.startNodeName} -> ${input.target.targetNodeName}`,
+    transitionId: input.target.transitionId,
+    pageTaskId: input.target.pageTaskId,
+    elementId: input.target.elementId,
+    startNodeId: input.target.startNodeId,
+    targetNodeId: input.target.targetNodeId
+  };
+  const diagnosisChoice = chooseAssetRepairDiagnosis({
+    aiDiagnosis,
+    targetNodeId: input.target.targetNodeId,
+    targetNodeName: input.target.targetNodeName,
+    afterMatch: readLatestGraphAfterMatch(input.failedRun),
+    graphVersion,
+    context: repairContext
+  });
+  const diagnosis = diagnosisChoice.diagnosis;
+  const diagnosisSource = diagnosisChoice.source;
+  if (aiDiagnosis && diagnosisChoice.rejectedAiDecision && diagnosis !== aiDiagnosis) {
+    recordAssetDrivenExecutionRepairAttempt(input.session, input.failedRun.id, {
+      classification: aiDiagnosis.classification,
+      confidence: aiDiagnosis.confidence,
+      action: "skipped",
+      summary: "AI 修复草稿未通过资产规则校验，改用本地运行证据生成受控补丁。",
+      detail: [
+        diagnosisChoice.rejectedAiDecision.reason,
+        ...(diagnosisChoice.rejectedAiDecision.validation?.reasons ?? [])
+      ].join("\n")
+    });
+    addAiRepairEvent(input.failedRun, aiDiagnosis, {
+      status: "skipped",
+      reason: diagnosisChoice.rejectedAiDecision.reason,
+      validation: diagnosisChoice.rejectedAiDecision.validation
+    }, "ai");
+  }
+  if (!diagnosis) {
+    return { status: "skipped", reason: "No AI diagnosis result is available for this failed run." };
+  }
+
+  const decision = decideAiAssetRepair(diagnosis);
+  if (decision.action === "skip") {
+    recordAssetDrivenExecutionRepairAttempt(input.session, input.failedRun.id, {
+      classification: diagnosis.classification,
+      confidence: diagnosis.confidence,
+      action: "skipped",
+      summary: diagnosis.summary,
+      detail: [
+        decision.reason,
+        ...(decision.validation?.reasons ?? [])
+      ].join("\n")
+    });
+    addAiRepairEvent(input.failedRun, diagnosis, { status: "skipped", reason: decision.reason, validation: decision.validation }, diagnosisSource);
+    return { status: "skipped", reason: decision.reason, validation: decision.validation };
+  }
+
+  const result = applyVerifiedAiAssetPatch({
+    storage,
+    graphVersionId: input.target.graphVersionId,
+    diagnosis,
+    context: repairContext
+  });
+
+  recordAssetDrivenExecutionRepairAttempt(input.session, input.failedRun.id, {
+    classification: diagnosis.classification,
+    confidence: diagnosis.confidence,
+    action: result.status === "applied" ? "applied" : "skipped",
+    summary: result.status === "applied"
+      ? `${diagnosisSource === "ai" ? "AI" : "本地证据"}自动修复资产：${result.summary}`
+      : diagnosis.summary,
+    detail: result.status === "applied" ? `${result.patchKind}:${result.targetId}` : result.reason
+  });
+  addAiRepairEvent(input.failedRun, diagnosis, result, diagnosisSource);
+  return result;
+}
+
+async function readLatestAiDiagnosisResult(run: TestRun): Promise<AiDiagnosisResult | undefined> {
+  const events = [...run.events].reverse().filter((event) => event.type === "ai_diagnosis");
+  for (const event of events) {
+    for (const artifactId of [...event.artifactIds].reverse()) {
+      const artifact = run.artifacts.find((item) => item.id === artifactId) ?? storage.getArtifact(artifactId);
+      if (!artifact?.path) {
+        continue;
+      }
+      const payload = await readJsonArtifact(artifact.path).catch(() => undefined);
+      const diagnosis = readDiagnosisFromPayload(payload);
+      if (diagnosis) {
+        return diagnosis;
+      }
+    }
+  }
+  return undefined;
+}
+
+function readLatestGraphAfterMatch(run: TestRun): unknown {
+  for (const step of [...run.stepResults].reverse()) {
+    const graph = recordValue(recordValue(step.metadata).graph);
+    if (graph.afterMatch) {
+      return graph.afterMatch;
+    }
+  }
+  return undefined;
+}
+
+async function readJsonArtifact(relativePath: string): Promise<unknown> {
+  return JSON.parse(await readFile(artifactFilePath(relativePath), "utf8"));
+}
+
+function readDiagnosisFromPayload(payload: unknown): AiDiagnosisResult | undefined {
+  const record = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : undefined;
+  const diagnosis = record?.diagnosis && typeof record.diagnosis === "object" && !Array.isArray(record.diagnosis) ? record.diagnosis as Record<string, unknown> : undefined;
+  if (!diagnosis) {
+    return undefined;
+  }
+  const classification = typeof diagnosis.classification === "string" ? diagnosis.classification : "";
+  const recommendedAction = typeof diagnosis.recommendedAction === "string" ? diagnosis.recommendedAction : "";
+  if (!["app_issue", "asset_issue", "automation_issue", "environment_issue", "unknown"].includes(classification)) {
+    return undefined;
+  }
+  if (!["report_only", "restart_app_continue", "create_asset_patch", "apply_verified_asset_patch"].includes(recommendedAction)) {
+    return undefined;
+  }
+  return {
+    classification: classification as AiDiagnosisResult["classification"],
+    confidence: typeof diagnosis.confidence === "number" ? diagnosis.confidence : 0,
+    summary: typeof diagnosis.summary === "string" ? diagnosis.summary : "AI diagnosis did not provide a summary.",
+    reasoning: Array.isArray(diagnosis.reasoning) ? diagnosis.reasoning.filter((item): item is string => typeof item === "string") : [],
+    recommendedAction: recommendedAction as AiDiagnosisResult["recommendedAction"],
+    safeToAutoApply: diagnosis.safeToAutoApply === true,
+    assetPatch: readAssetPatchCandidate(diagnosis.assetPatch)
+  };
+}
+
+function readAssetPatchCandidate(value: unknown): AiDiagnosisResult["assetPatch"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.kind !== "string" ||
+    typeof record.operation !== "string" ||
+    typeof record.summary !== "string" ||
+    !record.changes ||
+    typeof record.changes !== "object" ||
+    Array.isArray(record.changes)
+  ) {
+    return undefined;
+  }
+  if (!["page_matcher", "page_element", "page_transition", "page_task"].includes(record.kind)) {
+    return undefined;
+  }
+  if (!["create", "update", "delete"].includes(record.operation)) {
+    return undefined;
+  }
+  return {
+    kind: record.kind as NonNullable<AiDiagnosisResult["assetPatch"]>["kind"],
+    operation: record.operation as NonNullable<AiDiagnosisResult["assetPatch"]>["operation"],
+    targetId: typeof record.targetId === "string" && record.targetId.trim() ? record.targetId.trim() : undefined,
+    summary: record.summary.trim(),
+    changes: record.changes as Record<string, unknown>,
+    status: "draft"
+  };
+}
+
+function addAiRepairEvent(
+  run: TestRun,
+  diagnosis: AiDiagnosisResult,
+  result: AiAssetRepairApplyResult,
+  source: "ai" | "local_graph_evidence" = "ai"
+): void {
+  const actor = source === "ai" ? "AI" : "本地证据";
+  storage.addDeviceEvent({
+    id: createId("event"),
+    runId: run.id,
+    deviceSerial: run.deviceSerial,
+    type: "ai_diagnosis",
+    severity: result.status === "applied" ? "info" : "warning",
+    occurredAt: nowIso(),
+    summary: result.status === "applied" ? `${actor}自动修复资产：${result.summary}` : `${actor}未自动修复资产：${result.reason}`,
+    detail: JSON.stringify({
+      source,
+      classification: diagnosis.classification,
+      confidence: diagnosis.confidence,
+      recommendedAction: diagnosis.recommendedAction,
+      safeToAutoApply: diagnosis.safeToAutoApply,
+      repairResult: result
+    }),
+    artifactIds: []
+  });
 }
 
 async function recoverAssetDrivenStartPage(input: {
@@ -4509,6 +4789,10 @@ function summarizeRun(run: TestRun, active: boolean) {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function numberValue(value: unknown): number | undefined {

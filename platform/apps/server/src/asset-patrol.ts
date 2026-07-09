@@ -147,6 +147,7 @@ export type AssetDrivenExecutionTarget =
       transitionId?: string;
       transitionName?: string;
       pageTaskId?: string;
+      elementId?: string;
       overlay: RuntimeOverlay;
     }
   | {
@@ -256,6 +257,7 @@ const defaultDangerousTextPatterns = ["删除", "退出登录", "注销", "支�
 type AssetDrivenTransitionCandidate = {
   edge: OperationEdge;
   pageTaskId: string | undefined;
+  elementId: string | undefined;
 };
 
 export class AssetPatrolDeviceBusyError extends Error {
@@ -833,7 +835,8 @@ export function selectAssetDrivenExecutionTargets(input: {
       return edge && action && edge.fromNodeId === startPage.id
         ? {
             edge,
-            pageTaskId: sourcePageNavigationTaskId(action)
+            pageTaskId: sourcePageNavigationTaskId(action),
+            elementId: stringRecordField(action.params ?? {}, "elementId")
           }
         : undefined;
     })
@@ -842,6 +845,7 @@ export function selectAssetDrivenExecutionTargets(input: {
   for (const candidate of transitionCandidates) {
     const edge = candidate.edge;
     const pageTaskId = candidate.pageTaskId;
+    const elementId = candidate.elementId;
     if (pageTaskId && !input.config.allowBusinessSubmit) {
       return {
         status: "blocked",
@@ -860,6 +864,7 @@ export function selectAssetDrivenExecutionTargets(input: {
       transitionId: edge.id,
       transitionName: edge.name,
       pageTaskId,
+      elementId,
       overlay: {
         id: `asset-driven-${edge.id}`,
         targetNodeId: edge.toNodeId,

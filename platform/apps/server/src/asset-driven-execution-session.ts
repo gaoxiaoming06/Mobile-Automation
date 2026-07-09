@@ -4,6 +4,17 @@ import type { AssetDrivenReadyExecutionTarget } from "./asset-patrol.js";
 export type AssetDrivenExecutionItemStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "stopped";
 export type AssetDrivenExecutionSessionStatus = "running" | "passed" | "failed" | "stopped";
 
+export type AssetDrivenExecutionRepairAttempt = {
+  id: string;
+  runId: string;
+  classification?: string;
+  confidence?: number;
+  action: "diagnosed" | "applied" | "skipped" | "failed";
+  summary: string;
+  detail?: string;
+  createdAt: string;
+};
+
 export type AssetDrivenExecutionItem = {
   id: string;
   order: number;
@@ -19,6 +30,7 @@ export type AssetDrivenExecutionItem = {
   reportHtmlPath?: string;
   startedAt?: string;
   endedAt?: string;
+  repairAttempts?: AssetDrivenExecutionRepairAttempt[];
 };
 
 export type AssetDrivenExecutionSession = {
@@ -120,6 +132,28 @@ export function updateAssetDrivenExecutionItemFromRun(
   if (item.status !== "running" && !item.endedAt) {
     item.endedAt = timestamp;
   }
+  return recomputeAssetDrivenExecutionSession(session, timestamp);
+}
+
+export function recordAssetDrivenExecutionRepairAttempt(
+  session: AssetDrivenExecutionSession,
+  runId: string,
+  attempt: Omit<AssetDrivenExecutionRepairAttempt, "id" | "runId" | "createdAt">,
+  timestamp = nowIso()
+): AssetDrivenExecutionSession {
+  const item = session.items.find((candidate) => candidate.runId === runId);
+  if (!item) {
+    return recomputeAssetDrivenExecutionSession(session, timestamp);
+  }
+  item.repairAttempts = [
+    ...(item.repairAttempts ?? []),
+    {
+      id: createId("asset_repair"),
+      runId,
+      ...attempt,
+      createdAt: timestamp
+    }
+  ];
   return recomputeAssetDrivenExecutionSession(session, timestamp);
 }
 

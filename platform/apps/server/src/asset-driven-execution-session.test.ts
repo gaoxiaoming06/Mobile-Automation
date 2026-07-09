@@ -3,6 +3,7 @@ import type { TestRun } from "@mobile-automation/shared";
 import {
   createAssetDrivenExecutionSession,
   markAssetDrivenExecutionItemStarted,
+  recordAssetDrivenExecutionRepairAttempt,
   stopAssetDrivenExecutionSession,
   updateAssetDrivenExecutionItemFromRun
 } from "./asset-driven-execution-session.js";
@@ -72,6 +73,46 @@ describe("asset-driven execution session", () => {
       ["主页 -> 添加好友", "stopped", "用户停止本轮资产测试。"],
       ["主页 -> 设置", "stopped", "用户停止本轮资产测试。"]
     ]);
+  });
+
+  it("records AI repair attempts on the failed item without resetting the whole batch", () => {
+    const session = createAssetDrivenExecutionSession({
+      id: "asset-session-1",
+      deviceSerial: "device-1",
+      packageName: "cn.eeo.classin",
+      graphVersionId: "graph-1",
+      startNodeId: "node-home",
+      startNodeName: "主页",
+      targets: [
+        target({ transitionName: "主页 -> 搜索", targetNodeId: "node-search", targetNodeName: "搜索" }),
+        target({ transitionName: "主页 -> 添加好友", targetNodeId: "node-add-friend", targetNodeName: "添加好友" })
+      ],
+      now: "2026-07-07T10:00:00.000Z"
+    });
+
+    markAssetDrivenExecutionItemStarted(session, 0, run({ id: "run-search", status: "running", caseName: "搜索" }), "2026-07-07T10:00:01.000Z");
+    updateAssetDrivenExecutionItemFromRun(session, run({ id: "run-search", status: "failed", caseName: "搜索" }), "2026-07-07T10:00:02.000Z");
+    recordAssetDrivenExecutionRepairAttempt(
+      session,
+      "run-search",
+      {
+        classification: "asset_issue",
+        confidence: 0.91,
+        action: "applied",
+        summary: "修复搜索资产目标",
+        detail: "page_transition:home-search"
+      },
+      "2026-07-07T10:00:03.000Z"
+    );
+
+    expect(session.items[0]?.repairAttempts).toEqual([
+      expect.objectContaining({
+        action: "applied",
+        summary: "修复搜索资产目标"
+      })
+    ]);
+    expect(session.needsRepair).toBe(1);
+    expect(session.status).toBe("running");
   });
 });
 
