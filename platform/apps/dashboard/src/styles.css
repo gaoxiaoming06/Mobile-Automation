@@ -2460,6 +2460,229 @@ button:disabled {
   align-self: start;
 }
 
+.asset-locator-workbench-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #dbe7f5;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.asset-locator-workbench-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.asset-locator-workbench-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.asset-locator-workbench-head strong {
+  color: #17202a;
+  font-size: 14px;
+}
+
+.asset-locator-workbench-head span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.asset-page-health-panel {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.asset-page-health-panel > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid #dbe7f5;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 8px 10px;
+}
+
+.asset-page-health-panel span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.asset-page-health-panel strong {
+  color: #17202a;
+  font-size: 15px;
+}
+
+.asset-locator-summary {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #dbe7f5;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 8px;
+}
+
+.asset-locator-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.asset-locator-title-row em {
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.asset-locator-title-row em.v2 {
+  background: #e8f4ff;
+  color: #1155cc;
+}
+
+.asset-locator-title-row em.legacy {
+  background: #fff7ed;
+  color: #9a4c05;
+}
+
+.asset-locator-title-row strong {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.asset-locator-instruction-list {
+  display: grid;
+  gap: 5px;
+}
+
+.asset-locator-instruction-list > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #edf3fa;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 6px 8px;
+}
+
+.asset-locator-instruction-list span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.asset-locator-instruction-list strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #17202a;
+  font-size: 12px;
+}
+
+.asset-locator-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.asset-locator-detail-grid span,
+.asset-locator-summary code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #50627a;
+  font-size: 12px;
+}
+
+.asset-locator-summary code {
+  border: 1px solid #dbe7f5;
+  border-radius: 6px;
+  background: #fff;
+  padding: 4px 6px;
+}
+
+.asset-locator-click-point {
+  color: #0f5cc0;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.asset-locator-preview-details,
+.asset-raw-debug {
+  border: 1px solid #dbe7f5;
+  border-radius: 7px;
+  background: #fff;
+  color: #50627a;
+  font-size: 12px;
+}
+
+.asset-locator-preview-details summary,
+.asset-raw-debug summary {
+  cursor: pointer;
+  padding: 5px 7px;
+  color: #1f63d4;
+  font-weight: 800;
+}
+
+.asset-locator-preview-details div {
+  display: grid;
+  gap: 3px;
+  border-top: 1px solid #edf3fa;
+  padding: 6px 8px;
+}
+
+.asset-locator-preview-details strong {
+  color: #17202a;
+}
+
+.asset-raw-debug pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  border-top: 1px solid #edf3fa;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
+.asset-strategy-fields {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  border: 1px solid #dbe7f5;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 8px;
+}
+
+.asset-strategy-fields > div:first-child,
+.asset-strategy-fields > strong {
+  display: grid;
+  gap: 2px;
+}
+
+.asset-strategy-fields strong {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.asset-strategy-fields span {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .asset-element-quality {
   display: grid;
   gap: 3px;

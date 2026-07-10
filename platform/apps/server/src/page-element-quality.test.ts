@@ -76,6 +76,36 @@ describe("validatePageElementAssetQuality", () => {
     );
   });
 
+  it("passes a text locator without a marked region when the exact OCR target is unique", () => {
+    const result = validatePageElementAssetQuality({
+      element: {
+        locator: "text:作业",
+        actionKind: "tap",
+        elementLabel: "作业",
+        targetText: "作业",
+        semanticArea: "content",
+        locatorKind: "text_locator"
+      },
+      observation: observation({
+        ocrTexts: [
+          { text: "课堂", confidence: 0.95, region: { x: 100, y: 1180, width: 110, height: 44 } },
+          { text: "作业", confidence: 0.97, region: { x: 100, y: 1500, width: 100, height: 44 } },
+          { text: "支持图片、语音、视频多格式作业提交，AI智能自动批改", confidence: 0.9, region: { x: 100, y: 1560, width: 660, height: 40 } }
+        ]
+      })
+    });
+
+    expect(result.status).toBe("pass");
+    expect(result.candidates).toEqual([
+      expect.objectContaining({
+        source: "ocr_text",
+        text: "作业"
+      })
+    ]);
+    expect(result.warnings.map((item) => item.code)).not.toContain("region_missing");
+    expect(result.warnings.map((item) => item.code)).not.toContain("ambiguous_target_text");
+  });
+
   it("fails when the marked image region is too small to be a stable operation target", () => {
     const result = validatePageElementAssetQuality({
       element: {

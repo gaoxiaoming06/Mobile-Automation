@@ -72,13 +72,13 @@ export function validatePageElementAssetQuality(input: PageElementQualityInput):
   const region = input.element.region ?? parseImageRegionLocator(input.element.locator);
   const semanticArea = readSemanticArea(input.element.semanticArea) ?? (region ? semanticAreaForRegion(region) : "unknown");
   const targetText = textValue(input.element.targetText);
-  const locatorKind = readLocatorKind(input.element.locatorKind);
+  const locatorKind = readLocatorKind(input.element.locatorKind) ?? readLocatorKindFromLocator(input.element.locator);
   const dynamicMaskCount = Array.isArray(input.element.dynamicMasks) ? input.element.dynamicMasks.length : 0;
   const warnings: PageElementQualityWarning[] = [];
 
-  if (!region) {
+  if (!region && locatorKindRequiresMarkedRegion(locatorKind)) {
     warnings.push(warning("region_missing", "error", "缺少截图圈选区域，无法建立稳定的视觉定位资产。"));
-  } else if (isRegionTooSmall(region)) {
+  } else if (region && isRegionTooSmall(region)) {
     warnings.push(warning("region_too_small", "error", "圈选区域过小，执行时很容易点偏或无法重定位。"));
   }
   if (!input.element.semanticArea || semanticArea === "unknown") {
@@ -102,7 +102,7 @@ export function validatePageElementAssetQuality(input: PageElementQualityInput):
   }
 
   const candidates = targetText && input.observation
-    ? matchingCandidates(input.observation, targetText, semanticArea, region)
+    ? matchingCandidates(input.observation, targetText, semanticArea, region, { preferExactText: locatorKind === "text_locator" })
     : [];
   if (targetText && input.observation && candidates.length === 0) {
     warnings.push(warning("target_text_not_found", "warning", "当前页面 OCR/UI 树没有找到执行识别文字，请确认圈选区域或识别文字。"));
@@ -151,6 +151,17 @@ function readLocatorKind(value: unknown): PageElementQualityInput["element"]["lo
     : undefined;
 }
 
+function readLocatorKindFromLocator(locator: string | undefined): PageElementQualityInput["element"]["locatorKind"] {
+  if (locator?.startsWith("text:")) {
+    return "text_locator";
+  }
+  return undefined;
+}
+
+function locatorKindRequiresMarkedRegion(locatorKind: PageElementQualityInput["element"]["locatorKind"] | undefined): boolean {
+  return locatorKind !== "text_locator";
+}
+
 function hasStructuralLocatorEvidence(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -178,7 +189,8 @@ function matchingCandidates(
   observation: Observation,
   targetText: string,
   semanticArea: VisualSemanticArea,
-  markedRegion: Rect | undefined
+  markedRegion: Rect | undefined,
+  options: { preferExactText?: boolean } = {}
 ): PageElementQualityCandidate[] {
   const ocrResolution = screenshotResolution(observation) ?? observation.resolution;
   const uiResolution = observation.resolution ?? ocrResolution;
@@ -220,9 +232,16 @@ function matchingCandidates(
         insideMarkedRegion
       };
     });
-  return dedupeCandidates([...ocrCandidates, ...uiCandidates])
+  const semanticCandidates = dedupeCandidates([...ocrCandidates, ...uiCandidates])
     .filter((candidate) => semanticArea === "unknown" || candidate.semanticArea === "unknown" || candidate.semanticArea === semanticArea)
     .sort((left, right) => right.score - left.score);
+  if (options.preferExactText) {
+    const exactCandidates = semanticCandidates.filter((candidate) => textMatchesExactly(candidate.text || candidate.label, targetText));
+    if (exactCandidates.length > 0) {
+      return exactCandidates;
+    }
+  }
+  return semanticCandidates;
 }
 
 function screenshotResolution(observation: Observation): { width: number; height: number } | undefined {
@@ -307,6 +326,12 @@ function textMatches(actual: string | undefined, expected: string): boolean {
   const actualText = normalizeOcrText(actual ?? "").toLowerCase();
   const expectedText = normalizeOcrText(expected).toLowerCase();
   return Boolean(actualText && expectedText && (actualText.includes(expectedText) || expectedText.includes(actualText)));
+}
+
+function textMatchesExactly(actual: string | undefined, expected: string): boolean {
+  const actualText = normalizeOcrText(actual ?? "").toLowerCase();
+  const expectedText = normalizeOcrText(expected).toLowerCase();
+  return Boolean(actualText && expectedText && actualText === expectedText);
 }
 
 function candidateScore(confidence: number | undefined, insideMarkedRegion: boolean): number {

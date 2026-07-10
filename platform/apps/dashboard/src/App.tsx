@@ -2315,53 +2315,6 @@ export function App() {
     }
   }
 
-  async function confirmAssetOperationTransition(draft: AssetRecordingOperationTransitionDraft) {
-    const graphVersionId = assetRecordingPage.graphVersionId;
-    const sourceNodeId = draft.sourceNodeId ?? assetRecordingPage.nodeId;
-    if (!graphVersionId || !sourceNodeId) {
-      setMessage(assetConnectionEdgeMessage("missing_source"));
-      return;
-    }
-    if (draft.outcomeType === "navigate" && !draft.targetNodeId) {
-      setMessage("请选择已保存的目标页面资产");
-      return;
-    }
-    try {
-      setBusy(true);
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/transitions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          assetOperationTransitionRequestBody(draft, {
-            sourceNodeId,
-            platformScope: selectedDevice?.platform ?? "android"
-          })
-        )
-      });
-      const json = (await response.json().catch(() => ({}))) as CurrentPageAssetApiResponse & {
-        result?: { status?: string; edge?: { id?: string; name?: string } };
-        error?: string;
-      };
-      if (!response.ok || !json.result?.edge) {
-        throw new Error(json.error ?? assetConnectionEdgeMessage("confirm_failed"));
-      }
-      setAssetRecordingPage((page) => ({
-        ...page,
-        savedAssets: mapPageAssets(json.assets),
-        transitions: mapAssetTransitions(json.assets, sourceNodeId),
-        elements: mergeOperationElements(
-          [manualElementFromOperationDraft(draft, selectedDevice?.platform ?? "android")],
-          page.elements ?? []
-        )
-      }));
-      setMessage(assetConnectionEdgeMessage("confirmed", json.result.edge.name ?? draft.targetLabel));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function saveAssetPageElement(draft: AssetRecordingPageElementDraft): Promise<boolean> {
     const graphVersionId = assetRecordingPage.graphVersionId;
     const sourceNodeId = draft.sourceNodeId ?? assetRecordingPage.nodeId;
@@ -2539,53 +2492,6 @@ export function App() {
         tasks: (page.tasks ?? []).filter((item) => item.id !== task.id)
       }));
       setMessage(`已删除页面任务：${task.name}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function confirmAssetPageTaskTransition(draft: AssetRecordingPageTaskTransitionDraft) {
-    const graphVersionId = assetRecordingPage.graphVersionId;
-    const sourceNodeId = draft.sourceNodeId ?? assetRecordingPage.nodeId;
-    if (!graphVersionId || !sourceNodeId) {
-      setMessage(assetConnectionEdgeMessage("missing_source"));
-      return;
-    }
-    if (!draft.targetNodeId) {
-      setMessage("请选择已保存的目标页面资产");
-      return;
-    }
-    if (!draft.taskId) {
-      setMessage("请选择页面任务");
-      return;
-    }
-    try {
-      setBusy(true);
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/task-transitions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          assetPageTaskTransitionRequestBody(draft, {
-            sourceNodeId,
-            platformScope: selectedDevice?.platform ?? "android"
-          })
-        )
-      });
-      const json = (await response.json().catch(() => ({}))) as CurrentPageAssetApiResponse & {
-        result?: { status?: string; edge?: { id?: string; name?: string } };
-        error?: string;
-      };
-      if (!response.ok || !json.result?.edge) {
-        throw new Error(json.error ?? assetConnectionEdgeMessage("confirm_failed"));
-      }
-      setAssetRecordingPage((page) => ({
-        ...page,
-        savedAssets: mapPageAssets(json.assets),
-        transitions: mapAssetTransitions(json.assets, sourceNodeId)
-      }));
-      setMessage(assetConnectionEdgeMessage("confirmed", json.result.edge.name ?? draft.taskName));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -2909,40 +2815,6 @@ export function App() {
     }
   }
 
-  async function deleteAssetOperationTransition(transition: NonNullable<AssetRecordingCurrentPage["transitions"]>[number]) {
-    const graphVersionId = assetRecordingPage.graphVersionId;
-    if (!graphVersionId) {
-      setMessage("当前页面还没有关联业务图谱版本");
-      return;
-    }
-    try {
-      setBusy(true);
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/transitions/${encodeURIComponent(transition.id)}`, {
-        method: "DELETE"
-      });
-      const json = (await response.json().catch(() => ({}))) as {
-        assets?: CurrentPageAssetApiResponse["assets"];
-        result?: { status?: string };
-        error?: string;
-      };
-      if (!response.ok || json.result?.status !== "deleted") {
-        throw new Error(json.error ?? assetConnectionEdgeMessage("delete_failed"));
-      }
-      const sourceNodeId = assetRecordingPage.nodeId;
-      setAssetRecordingPage((page) => ({
-        ...page,
-        savedAssets: mapPageAssets(json.assets),
-        transitions: mapAssetTransitions(json.assets, sourceNodeId),
-        elements: removeManualElementForTransition(page.elements ?? [], transition)
-      }));
-      setMessage(assetConnectionEdgeMessage("deleted", transition.name));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const workspaceStyle: RecordingWorkspaceStyle = workspaceStyleForNav(activeNavItem, recordingPreviewWidth, assetRecordingPreviewWidth);
   const stabilityPackageOptions = knownStabilityPackages(cases, structuredFlows, runs);
   const assetPatrolPackageOptions = stabilityPackageOptions;
@@ -3136,9 +3008,6 @@ export function App() {
             onPageDraftChange={(patch) => setAssetRecordingPage((page) => ({ ...page, ...patch }))}
             onIdentifyCurrentPage={identifyCurrentPageAsset}
             onSaveCurrentPageAsset={saveCurrentPageAsset}
-            onConfirmOperationTransition={confirmAssetOperationTransition}
-            onConfirmPageTaskTransition={confirmAssetPageTaskTransition}
-            onDeleteOperationTransition={deleteAssetOperationTransition}
             onSavePageElement={saveAssetPageElement}
             onDeletePageElement={deleteAssetPageElement}
             onSavePageTask={saveAssetPageTask}
@@ -4885,16 +4754,6 @@ function manualElementFromOperationDraft(
   };
 }
 
-function removeManualElementForTransition(
-  elements: NonNullable<AssetRecordingCurrentPage["elements"]>,
-  transition: NonNullable<AssetRecordingCurrentPage["transitions"]>[number]
-): NonNullable<AssetRecordingCurrentPage["elements"]> {
-  if (!transition.actionLocator) {
-    return elements;
-  }
-  return elements.filter((element) => !(element.source === "manual" && element.locator === transition.actionLocator && (!transition.actionKind || transition.actionKind === element.actionKind)));
-}
-
 function imageRegionMetadata(locator: string): { x: number; y: number; width: number; height: number } | undefined {
   if (!locator.startsWith("image-region:")) {
     return undefined;
@@ -4944,7 +4803,9 @@ function locatorKindMetadata(value: unknown): AssetRecordingLocatorKind | undefi
   return value === "text_locator" ||
     value === "visual_locator" ||
     value === "structural_locator" ||
-    value === "collection_item_locator"
+    value === "collection_item_locator" ||
+    value === "top_bar_icon_locator" ||
+    value === "ocr_anchor_offset"
     ? value
     : undefined;
 }

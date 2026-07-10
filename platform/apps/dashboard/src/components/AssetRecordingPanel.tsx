@@ -51,7 +51,7 @@ export type AssetRecordingPageElement = {
   parameterMapping?: Record<string, string>;
 };
 
-export type AssetRecordingLocatorKind = "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator";
+export type AssetRecordingLocatorKind = "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator" | "top_bar_icon_locator" | "ocr_anchor_offset";
 
 export type AssetRecordingDynamicMask = {
   kind: "avatar" | "text" | "image" | "number" | "custom";
@@ -342,9 +342,6 @@ export type AssetRecordingPanelProps = {
   onPageDraftChange: (patch: Partial<AssetRecordingCurrentPage>) => void;
   onIdentifyCurrentPage: () => void | Promise<void>;
   onSaveCurrentPageAsset: (mode: "create" | "update") => void | Promise<void>;
-  onConfirmOperationTransition?: (draft: AssetRecordingOperationTransitionDraft) => void | Promise<void>;
-  onConfirmPageTaskTransition?: (draft: AssetRecordingPageTaskTransitionDraft) => void | Promise<void>;
-  onDeleteOperationTransition?: (transition: AssetRecordingPageTransition) => void | Promise<void>;
   onSavePageElement?: (draft: AssetRecordingPageElementDraft) => boolean | void | Promise<boolean | void>;
   onDeletePageElement?: (element: AssetRecordingPageElement) => void | Promise<void>;
   onSavePageTask?: (draft: AssetRecordingPageTaskDraft) => void | Promise<void>;
@@ -424,9 +421,6 @@ export function AssetRecordingPanel({
   onPageDraftChange,
   onIdentifyCurrentPage,
   onSaveCurrentPageAsset,
-  onConfirmOperationTransition,
-  onConfirmPageTaskTransition,
-  onDeleteOperationTransition,
   onSavePageElement,
   onDeletePageElement,
   onSavePageTask,
@@ -456,6 +450,8 @@ export function AssetRecordingPanel({
   const [manualActionKind, setManualActionKind] = useState<ManualActionKind>("tap");
   const [manualOutcomeType, setManualOutcomeType] = useState<AssetRecordingElementOutcomeType>("navigate");
   const [manualTargetQuery, setManualTargetQuery] = useState("");
+  const [manualLocatorKind, setManualLocatorKind] = useState<AssetRecordingLocatorKind>("visual_locator");
+  const [manualSemanticAreaOverride, setManualSemanticAreaOverride] = useState<VisualSemanticArea>("content");
   const [manualElementSeed, setManualElementSeed] = useState<ManualElementSeed>();
   const [manualActionEdit, setManualActionEdit] = useState<EditableRegionOperation>();
   const [manualActionRegion, setManualActionRegion] = useState<AssetRecordingScreenshotRegion>();
@@ -660,6 +656,8 @@ export function AssetRecordingPanel({
   function startAddPageElement() {
     setEditingPageElement(undefined);
     setManualElementSeed(undefined);
+    setManualLocatorKind("visual_locator");
+    setManualSemanticAreaOverride("content");
     setManualAbilityType("fixed_tap");
     setManualActionKind("tap");
     setManualOutcomeType("navigate");
@@ -680,6 +678,8 @@ export function AssetRecordingPanel({
       targetText: label,
       locatorKind: item.kind === "OCR 文字" ? "text_locator" : "visual_locator"
     });
+    setManualLocatorKind(item.kind === "OCR 文字" ? "text_locator" : "visual_locator");
+    setManualSemanticAreaOverride(region.semanticArea ?? semanticAreaForRegion(region));
     setManualAbilityType("fixed_tap");
     setManualActionKind("tap");
     setManualOutcomeType("navigate");
@@ -693,6 +693,9 @@ export function AssetRecordingPanel({
   function startEditPageElement(element: AssetRecordingPageElement) {
     setEditingPageElement(element);
     setManualElementSeed(undefined);
+    const nextLocatorKind = element.locatorKind ?? locatorKindFromLocator(element.locator) ?? "visual_locator";
+    setManualLocatorKind(nextLocatorKind);
+    setManualSemanticAreaOverride(element.semanticArea ?? semanticAreaForLocator(element.locator) ?? defaultSemanticAreaForLocatorKind(nextLocatorKind));
     setManualAbilityType(element.abilityType ?? abilityTypeFromElement(element));
     const actionKind = normalizeActionKind(element);
     setManualActionKind(actionKind === "unknown" ? "tap" : actionKind);
@@ -719,19 +722,22 @@ export function AssetRecordingPanel({
     setManualActionEdit(undefined);
     setManualOutcomeType("navigate");
     setManualTargetQuery("");
+    setManualLocatorKind("visual_locator");
+    setManualSemanticAreaOverride("content");
     setManualAbilityType("fixed_tap");
     setIsAddingPageElement(false);
   }
 
   async function submitManualPageElement(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!manualActionRegion || manualActionRegion.width < 1 || manualActionRegion.height < 1) {
+    const region = manualActionRegion ?? defaultRegionForLocatorKind(manualLocatorKind);
+    if ((!region || region.width < 1 || region.height < 1) && locatorKindNeedsMarkedRegion(manualLocatorKind, manualAbilityType)) {
       return;
     }
     const form = new FormData(event.currentTarget);
     const draft = manualOperationDraftFromForm(form, {
       sourceNodeId: page.nodeId,
-      region: manualActionRegion
+      ...(region ? { region } : {})
     });
     const saved = await onSavePageElement?.(draft);
     if (saved === false) {
@@ -741,6 +747,7 @@ export function AssetRecordingPanel({
     setManualElementSeed(undefined);
     setManualActionRegion(undefined);
     setManualActionEdit(undefined);
+    setManualSemanticAreaOverride("content");
     setIsAddingPageElement(false);
   }
 
@@ -775,6 +782,9 @@ export function AssetRecordingPanel({
   }
 
   function renderManualPageElementEditor() {
+    const manualRegionRequired = locatorKindNeedsMarkedRegion(manualLocatorKind, manualAbilityType);
+    const manualSemanticArea = manualActionRegion?.semanticArea ??
+      (manualActionRegion ? semanticAreaForRegion(manualActionRegion) : manualSemanticAreaOverride);
     return (
       <div className="asset-manual-action-card">
         <div className="asset-manual-action-head">
@@ -838,13 +848,26 @@ export function AssetRecordingPanel({
               {editingPageElement?.id ? <input type="hidden" name="elementId" value={editingPageElement.id} /> : null}
               <label>
                 定位方式
-                <select name="locatorKind" defaultValue={editingPageElement?.locatorKind ?? manualElementSeed?.locatorKind ?? (manualAbilityType === "grid_candidate" ? "collection_item_locator" : "visual_locator")}>
+                <select
+                  name="locatorKind"
+                  value={manualLocatorKind}
+                  onChange={(event) => {
+                    const nextLocatorKind = readLocatorKind(event.target.value) ?? "visual_locator";
+                    setManualLocatorKind(nextLocatorKind);
+                    if (!manualActionRegion) {
+                      setManualSemanticAreaOverride(defaultSemanticAreaForLocatorKind(nextLocatorKind));
+                    }
+                  }}
+                >
                   <option value="visual_locator">视觉重定位</option>
                   <option value="text_locator">文字重定位</option>
                   <option value="structural_locator">结构型入口</option>
                   <option value="collection_item_locator">动态列表项</option>
+                  <option value="top_bar_icon_locator">顶部栏图标</option>
+                  <option value="ocr_anchor_offset">OCR 锚点偏移</option>
                 </select>
               </label>
+              <LocatorStrategyFields locatorKind={manualLocatorKind} element={editingPageElement ?? manualElementSeed} />
               <label>
                 能力类型
                 <select name="abilityType" value={manualAbilityType} onChange={(event) => setManualAbilityType(readAbilityType(event.target.value))}>
@@ -868,13 +891,15 @@ export function AssetRecordingPanel({
                 <select
                   aria-label="动作区域语义"
                   name="semanticArea"
-                  disabled={!manualActionRegion}
-                  value={manualActionRegion?.semanticArea ?? (manualActionRegion ? semanticAreaForRegion(manualActionRegion) : "unknown")}
+                  disabled={!manualActionRegion && manualRegionRequired}
+                  value={manualSemanticArea}
                   onChange={(event) => {
+                    const nextSemanticArea = readVisualSemanticArea(event.target.value) ?? "unknown";
                     if (!manualActionRegion) {
+                      setManualSemanticAreaOverride(nextSemanticArea);
                       return;
                     }
-                    setManualActionRegion(applySemanticAreaOverrideToRegion(manualActionRegion, readVisualSemanticArea(event.target.value) ?? "unknown"));
+                    setManualActionRegion(applySemanticAreaOverrideToRegion(manualActionRegion, nextSemanticArea));
                   }}
                 >
                   {semanticAreaOptions.map((option) => (
@@ -980,7 +1005,7 @@ export function AssetRecordingPanel({
                   }
                 />
               ) : null}
-              <button type="submit" disabled={!manualActionRegion || !onSavePageElement}>
+              <button type="submit" disabled={(!manualActionRegion && manualRegionRequired) || !onSavePageElement}>
                 保存可操作元素
               </button>
             </form>
@@ -1209,6 +1234,7 @@ export function AssetRecordingPanel({
                         <strong>已录入可操作元素</strong>
                         <span>{savedManualElements.length} 个元素</span>
                       </div>
+                      <PageElementHealthPanel elements={savedManualElements} transitions={transitions} />
                       {savedManualElements.length ? (
                         <div className="asset-element-list">
                           {savedManualElements.map((element, index) => (
@@ -1218,10 +1244,11 @@ export function AssetRecordingPanel({
                                   <OperationRegionPreview element={element} screenshotUrl={page.screenshotUrl} />
                                   <div className="asset-operation-preview-info">
                                     <strong>{element.label}</strong>
-                                    <span>{element.locator}</span>
+                                    <ElementLocatorSummary element={element} />
                                     <small>{abilityTypeLabel(element.abilityType ?? abilityTypeFromElement(element))} · {operationKindLabel(normalizeActionKind(element))} · {availabilityLabel(element.availability)}</small>
                                     <PageElementQualitySummary quality={element.quality} />
                                     <CompoundStepsSummary steps={element.compoundSteps} />
+                                    <RawAssetDebug element={element} />
                                   </div>
                                 </div>
                                 <div className="asset-saved-action-controls">
@@ -1252,87 +1279,6 @@ export function AssetRecordingPanel({
                   <div className="asset-detail-section asset-transition-connection-card">
                     <section className="asset-saved-actions">
                       <div className="asset-action-summary">
-                        <strong>通过页面任务连接</strong>
-                        <span>{tasks.filter((task) => task.status !== "deprecated").length} 个任务</span>
-                      </div>
-                      {tasks.filter((task) => task.status !== "deprecated").length ? (
-                        <PageTaskTransitionEditor
-                          busy={busy}
-                          pageNodeId={page.nodeId}
-                          tasks={tasks.filter((task) => task.status !== "deprecated")}
-                          targetAssets={savedAssets}
-                          canConfirm={Boolean(onConfirmPageTaskTransition)}
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            const form = new FormData(event.currentTarget);
-                            const taskId = readFormString(form.get("taskId"));
-                            const task = tasks.find((item) => item.id === taskId);
-                            const targetNodeId = readFormString(form.get("targetNodeId"));
-                            if (!taskId || !targetNodeId) {
-                              return;
-                            }
-                            void onConfirmPageTaskTransition?.({
-                              sourceNodeId: page.nodeId,
-                              targetNodeId,
-                              taskId,
-                              taskName: task?.name
-                            });
-                          }}
-                        />
-                      ) : (
-                        <div className="empty">登录、表单提交这类多步跳转，先在“页面任务”里编排任务，再在这里连接到目标页面。</div>
-                      )}
-                    </section>
-                    <section className="asset-saved-actions">
-                      <div className="asset-action-summary">
-                        <strong>连接边编辑</strong>
-                        <span>{savedManualElements.length} 个可连接元素</span>
-                      </div>
-                      {savedManualElements.length ? (
-                        <div className="asset-element-list">
-                          {savedManualElements.map((element, index) => (
-                            <div className="asset-saved-action-item asset-connection-item" key={`connect-${element.id ?? element.locator}-${index}`}>
-                              <div className="asset-element-row asset-saved-action-row">
-                                <div className="asset-element-summary">
-                                  <OperationRegionPreview element={element} screenshotUrl={page.screenshotUrl} />
-                                  <div className="asset-operation-preview-info">
-                                    <strong>{element.label}</strong>
-                                    <span>{element.locator}</span>
-                                    <small>{abilityTypeLabel(element.abilityType ?? abilityTypeFromElement(element))} · {operationKindLabel(normalizeActionKind(element))} · {semanticAreaLabel(element.semanticArea ?? semanticAreaForLocator(element.locator) ?? "unknown")}</small>
-                                    <CompoundStepsSummary steps={element.compoundSteps} />
-                                  </div>
-                                </div>
-                              </div>
-                              <OperationEditor
-                                element={element}
-                                pageNodeId={page.nodeId}
-                                targetAssets={savedAssets}
-                                canConfirm={Boolean(onConfirmOperationTransition)}
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  const form = new FormData(event.currentTarget);
-                                  const draft = operationTransitionDraftFromForm(form, {
-                                    sourceNodeId: page.nodeId,
-                                    locator: element.locator,
-                                    elementLabel: element.label,
-                                    targetText: element.targetText,
-                                    abilityType: element.abilityType ?? abilityTypeFromElement(element),
-                                    semanticArea: element.semanticArea,
-                                    coordinateSpace: element.coordinateSpace,
-                                    scrollProfile: element.scrollProfile
-                                  });
-                                  void onConfirmOperationTransition?.(draft);
-                                }}
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="empty">先在“页面能力”里录入当前页可操作元素，再到这里把元素连接到目标页面。</div>
-                      )}
-                    </section>
-                    <section className="asset-saved-actions">
-                      <div className="asset-action-summary">
                         <strong>已录入连接边</strong>
                         <span>{transitions.length} 条</span>
                       </div>
@@ -1348,17 +1294,13 @@ export function AssetRecordingPanel({
                               <div className="asset-transition-meta">
                                 <code>{transitionStatusLabel(transition.status)}</code>
                                 {typeof transition.reliabilityScore === "number" ? <code>可靠度 {Math.round(transition.reliabilityScore * 100)}%</code> : null}
-                                {onDeleteOperationTransition ? (
-                                  <button className="asset-action-button delete" type="button" disabled={busy} onClick={() => void onDeleteOperationTransition(transition)}>
-                                    删除
-                                  </button>
-                                ) : null}
+                                <small>由页面能力生成</small>
                               </div>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <div className="empty">暂无连接边；从上方选择可操作元素并确认目标页面后会进入路径规划。</div>
+                        <div className="empty">暂无连接边；请在页面能力或页面任务中配置跳转结果，保存后系统会派生连接边。</div>
                       )}
                     </section>
                   </div>
@@ -1787,6 +1729,8 @@ function roundPercent(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+const defaultTopBarIconRegion = { x: 78, y: 0, width: 20, height: 12, semanticArea: "top" as const };
+
 function normalizeRegion(region: AssetRecordingScreenshotRegion): AssetRecordingScreenshotRegion {
   const x = region.width < 0 ? region.x + region.width : region.x;
   const y = region.height < 0 ? region.y + region.height : region.y;
@@ -1871,6 +1815,164 @@ function resizeEditableRegion(region: AssetRecordingScreenshotRegion, handle: Re
   };
 }
 
+function PageElementHealthPanel({ elements, transitions }: { elements: AssetRecordingPageElement[]; transitions: AssetRecordingPageTransition[] }) {
+  const legacyCount = elements.filter(isLegacyMarkedRegionElement).length;
+  const v2Count = elements.length - legacyCount;
+  const reviewCount = elements.filter((element) => element.quality?.status === "needs_review").length;
+  const failedCount = elements.filter((element) => element.quality?.status === "fail").length;
+  const actionableTransitions = transitions.filter((transition) => transition.status === "active").length;
+  return (
+    <div className="asset-locator-workbench-panel">
+      <div className="asset-locator-workbench-head">
+        <div>
+          <strong>定位策略工作台</strong>
+          <span>保存的是定位策略，不是固定坐标；执行时必须在当前截图上重定位成功后才点击。</span>
+        </div>
+      </div>
+      <div className="asset-page-health-panel">
+        <div>
+          <span>页面能力</span>
+          <strong>{elements.length}</strong>
+        </div>
+        <div>
+          <span>语义定位</span>
+          <strong>{v2Count}</strong>
+        </div>
+        <div>
+          <span>旧版圈选</span>
+          <strong>{legacyCount}</strong>
+        </div>
+        <div>
+          <span>需复核</span>
+          <strong>{reviewCount + failedCount}</strong>
+        </div>
+        <div>
+          <span>可执行边</span>
+          <strong>{actionableTransitions}</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ElementLocatorSummary({ element }: { element: AssetRecordingPageElement }) {
+  const summary = pageElementLocatorStrategySummary(element);
+  return (
+    <div className="asset-locator-summary">
+      <div className="asset-locator-title-row">
+        <em className={summary.assetClass === "v2" ? "v2" : "legacy"}>{summary.assetLabel}</em>
+        <strong>策略：{summary.strategyLabel}</strong>
+      </div>
+      <div className="asset-locator-instruction-list">
+        <div>
+          <span>语义目标</span>
+          <strong>{summary.findInstruction}</strong>
+        </div>
+        <div>
+          <span>当前截图</span>
+          <strong>{summary.previewStatusLabel}</strong>
+        </div>
+        <div>
+          <span>执行动作</span>
+          <strong>{summary.executionInstruction}</strong>
+        </div>
+      </div>
+      <small className="asset-locator-click-point">点击点：{summary.clickPointLabel}</small>
+      <details className="asset-locator-preview-details">
+        <summary>定位预览</summary>
+        <div>
+          <strong>{summary.previewDetail}</strong>
+          <span>识别区域：{summary.regionLabel}</span>
+          <span>使用证据：{summary.evidenceLabel}</span>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function RawAssetDebug({ element }: { element: AssetRecordingPageElement }) {
+  return (
+    <details className="asset-raw-debug">
+      <summary>原始资产 / 高级调试</summary>
+      <pre>{JSON.stringify(rawAssetDebugPayload(element), undefined, 2)}</pre>
+    </details>
+  );
+}
+
+function LocatorStrategyFields({
+  locatorKind,
+  element
+}: {
+  locatorKind: AssetRecordingLocatorKind;
+  element?: Partial<AssetRecordingPageElement> & ManualElementSeed;
+}) {
+  if (locatorKind === "top_bar_icon_locator") {
+    return (
+      <div className="asset-strategy-fields">
+        <div>
+          <strong>顶部栏图标策略</strong>
+          <span>按当前截图中的顶部图标候选重定位，点击点由运行时结果计算。</span>
+        </div>
+        <div className="asset-operation-inline-fields">
+          <label>
+            图标语义
+            <input name="topBarIconRole" placeholder="例如：search / add / more" defaultValue={topBarIconRoleFromElement(element)} />
+          </label>
+          <label>
+            顶部栏位置
+            <select name="topBarIconSlot" defaultValue={topBarIconSlotFromElement(element)}>
+              <option value="right">右侧操作区</option>
+              <option value="left">左侧返回区</option>
+            </select>
+          </label>
+          <label>
+            右侧顺序
+            <input name="topBarIconOrderFromRight" type="number" min="1" step="1" defaultValue={topBarIconOrderFromRight(element) ?? 1} />
+          </label>
+        </div>
+      </div>
+    );
+  }
+  if (locatorKind === "text_locator") {
+    return (
+      <div className="asset-strategy-fields">
+        <strong>OCR 文字策略</strong>
+        <span>运行时先在当前截图中找匹配文字，再按文字框或相邻区域计算点击点。</span>
+      </div>
+    );
+  }
+  if (locatorKind === "structural_locator") {
+    return (
+      <div className="asset-strategy-fields">
+        <strong>结构上下文策略</strong>
+        <span>用圈选区域内的稳定文本、图标、相邻关系描述入口，不把头像/昵称等动态内容作为强识别。</span>
+      </div>
+    );
+  }
+  if (locatorKind === "collection_item_locator") {
+    return (
+      <div className="asset-strategy-fields">
+        <strong>列表模板策略</strong>
+        <span>先定位列表区域，再按参数找到目标 item，最后点击 item 内动作区域。</span>
+      </div>
+    );
+  }
+  if (locatorKind === "ocr_anchor_offset") {
+    return (
+      <div className="asset-strategy-fields">
+        <strong>OCR 锚点偏移策略</strong>
+        <span>先找稳定锚点文字，再按相对方向和偏移定位目标区域。</span>
+      </div>
+    );
+  }
+  return (
+    <div className="asset-strategy-fields">
+      <strong>视觉模板策略</strong>
+      <span>保留圈选 crop、动态 mask 和搜索范围，运行时按视觉模板重新找候选。</span>
+    </div>
+  );
+}
+
 function OperationRegionPreview({ element, screenshotUrl }: { element: AssetRecordingPageElement; screenshotUrl?: string }) {
   if (screenshotUrl && element.region) {
     const frame = operationPreviewFrame(element.region, element.previewCrop, element.viewport);
@@ -1896,10 +1998,19 @@ function OperationRegionPreview({ element, screenshotUrl }: { element: AssetReco
 }
 
 function isRuntimeLocatedElement(element: AssetRecordingPageElement): boolean {
-  return element.coordinateSpace === "runtime" || element.locator.startsWith("runtime-locator:") || element.locatorKind === "structural_locator";
+  return element.coordinateSpace === "runtime" ||
+    element.locator.startsWith("runtime-locator:") ||
+    element.locator.startsWith("top-bar-icon:") ||
+    element.locator.startsWith("ocr-anchor:") ||
+    element.locatorKind === "structural_locator" ||
+    element.locatorKind === "top_bar_icon_locator" ||
+    element.locatorKind === "ocr_anchor_offset";
 }
 
 function runtimeLocatorSummary(element: AssetRecordingPageElement): string {
+  if (element.locatorKind === "top_bar_icon_locator" || element.locator.startsWith("top-bar-icon:")) {
+    return topBarIconRoleFromElement(element) || "顶部栏图标";
+  }
   const role = typeof element.structuralLocator?.role === "string" ? element.structuralLocator.role : undefined;
   if (element.targetText && role) {
     return `${element.targetText} · ${role}`;
@@ -1924,6 +2035,12 @@ function locatorKindLabel(kind?: AssetRecordingLocatorKind): string {
   if (kind === "text_locator") {
     return "文字重定位";
   }
+  if (kind === "top_bar_icon_locator") {
+    return "顶部栏图标";
+  }
+  if (kind === "ocr_anchor_offset") {
+    return "OCR 锚点偏移";
+  }
   if (kind === "structural_locator") {
     return "结构上下文";
   }
@@ -1931,6 +2048,218 @@ function locatorKindLabel(kind?: AssetRecordingLocatorKind): string {
     return "列表模板";
   }
   return "视觉重定位";
+}
+
+function pageElementLocatorStrategySummary(element: AssetRecordingPageElement): {
+  assetClass: "v2" | "legacy";
+  assetLabel: string;
+  strategyLabel: string;
+  regionLabel: string;
+  evidenceLabel: string;
+  previewStatusLabel: string;
+  previewDetail: string;
+  findInstruction: string;
+  executionInstruction: string;
+  clickPointLabel: string;
+} {
+  const locatorKind = element.locatorKind ?? locatorKindFromLocator(element.locator) ?? "visual_locator";
+  const isLegacy = isLegacyMarkedRegionElement(element);
+  const candidateCount = element.quality?.candidates?.length ?? 0;
+  return {
+    assetClass: isLegacy ? "legacy" : "v2",
+    assetLabel: isLegacy ? "旧版圈选" : "语义定位",
+    strategyLabel: locatorKindLabel(locatorKind),
+    regionLabel: semanticAreaLabel(element.semanticArea ?? semanticAreaForLocator(element.locator) ?? "unknown"),
+    evidenceLabel: locatorEvidenceLabel(locatorKind),
+    previewStatusLabel: pageElementPreviewStatusLabel(element),
+    previewDetail: candidateCount ? `当前记录了 ${candidateCount} 个候选，执行时会重新在实时截图里计算。` : "暂无候选详情，执行时会按定位方式重新查找。",
+    findInstruction: pageElementFindInstruction(element, locatorKind, isLegacy),
+    executionInstruction: pageElementExecutionInstruction(element),
+    clickPointLabel: pageElementClickPointInstruction(element, isLegacy)
+  };
+}
+
+function pageElementFindInstruction(element: AssetRecordingPageElement, locatorKind: AssetRecordingLocatorKind, isLegacy: boolean): string {
+  if (locatorKind === "top_bar_icon_locator" || element.locator.startsWith("top-bar-icon:")) {
+    const slotLabel = topBarIconSlotFromElement(element) === "left" ? "左侧" : "右侧";
+    const order = topBarIconOrderFromRight(element);
+    const orderLabel = order ? `第 ${order} 个 ` : "";
+    const role = topBarIconRoleFromElement(element) || element.label || "目标";
+    return `找顶部栏${slotLabel}${orderLabel}${role} 图标`;
+  }
+  if (locatorKind === "text_locator") {
+    return `找文字 "${element.targetText || element.label}"`;
+  }
+  if (locatorKind === "collection_item_locator" || element.abilityType === "grid_candidate") {
+    return `在列表里找 "${element.scrollProfile?.targetQuery || element.targetLabel || element.label}"`;
+  }
+  if (locatorKind === "ocr_anchor_offset") {
+    return `先找锚点 "${element.targetText || element.label}"，再按相对位置找目标`;
+  }
+  if (locatorKind === "structural_locator") {
+    return `按稳定文字、图标和相邻关系找 "${element.label}"`;
+  }
+  if (isLegacy) {
+    return `按旧版圈选截图重新匹配 "${element.label}"`;
+  }
+  return `按视觉特征重新找 "${element.label}"`;
+}
+
+function pageElementExecutionInstruction(element: AssetRecordingPageElement): string {
+  const actionKind = normalizeActionKind(element);
+  if (actionKind === "input") {
+    return "运行时重新找到目标后再输入";
+  }
+  if (actionKind === "scroll") {
+    return "运行时重新找到区域后再滑动";
+  }
+  if (actionKind === "long_press") {
+    return "运行时重新找到目标后再长按";
+  }
+  return "运行时重新找到目标后再点击";
+}
+
+function pageElementClickPointInstruction(element: AssetRecordingPageElement, isLegacy: boolean): string {
+  if (isRuntimeLocatedElement(element)) {
+    return "运行时计算";
+  }
+  if (isLegacy) {
+    return "旧版圈选中心仅用于诊断，建议迁移为语义定位";
+  }
+  if (element.tapPointPercent) {
+    return "由重定位候选内安全点计算";
+  }
+  return "由 OCR / 视觉 / 结构候选计算";
+}
+
+function isLegacyMarkedRegionElement(element: AssetRecordingPageElement): boolean {
+  return (!element.locatorKind || element.locatorKind === "visual_locator") &&
+    element.locator.startsWith("image-region:") &&
+    !element.visualLocator &&
+    !element.quality &&
+    !element.structuralLocator;
+}
+
+function locatorEvidenceLabel(locatorKind: AssetRecordingLocatorKind): string {
+  if (locatorKind === "top_bar_icon_locator") {
+    return "图标候选 + 顶部栏约束";
+  }
+  if (locatorKind === "text_locator") {
+    return "OCR 文字";
+  }
+  if (locatorKind === "structural_locator") {
+    return "OCR / 结构上下文";
+  }
+  if (locatorKind === "collection_item_locator") {
+    return "动态区域 / 列表模板";
+  }
+  if (locatorKind === "ocr_anchor_offset") {
+    return "OCR 锚点 + 相对偏移";
+  }
+  return "视觉 crop / 模板";
+}
+
+function pageElementPreviewStatusLabel(element: AssetRecordingPageElement): string {
+  if (!element.quality) {
+    return isRuntimeLocatedElement(element) ? "等待当前截图预览" : "未校验";
+  }
+  if (element.quality.status === "pass") {
+    return "当前截图可定位";
+  }
+  if (element.quality.status === "needs_review") {
+    return "多候选，建议复核";
+  }
+  return "当前截图找不到";
+}
+
+function rawAssetDebugPayload(element: AssetRecordingPageElement): Record<string, unknown> {
+  return {
+    label: element.label,
+    locatorKind: element.locatorKind,
+    locator: element.locator,
+    role: topBarIconRoleFromElement(element) || undefined,
+    semanticArea: element.semanticArea,
+    coordinateSpace: element.coordinateSpace,
+    targetText: element.targetText,
+    tapPointPercent: element.tapPointPercent,
+    structuralLocator: element.structuralLocator,
+    visualLocator: element.visualLocator,
+    dynamicMasks: element.dynamicMasks,
+    dynamicRegionId: element.dynamicRegionId,
+    itemTemplateId: element.itemTemplateId
+  };
+}
+
+function locatorKindFromLocator(locator: string): AssetRecordingLocatorKind | undefined {
+  if (locator.startsWith("top-bar-icon:")) {
+    return "top_bar_icon_locator";
+  }
+  if (locator.startsWith("ocr-anchor:")) {
+    return "ocr_anchor_offset";
+  }
+  if (locator.startsWith("text:")) {
+    return "text_locator";
+  }
+  if (locator.startsWith("runtime-locator:")) {
+    return "structural_locator";
+  }
+  return undefined;
+}
+
+function topBarIconRoleFromElement(element?: Partial<AssetRecordingPageElement> & ManualElementSeed): string {
+  const structuralRole = typeof element?.structuralLocator?.role === "string" ? element.structuralLocator.role : undefined;
+  const locatorRole = typeof element?.locator === "string" && element.locator.startsWith("top-bar-icon:")
+    ? element.locator.replace(/^top-bar-icon:\s*/, "").trim()
+    : undefined;
+  return structuralRole || locatorRole || iconRoleFromText(element?.targetText || element?.label || "");
+}
+
+function topBarIconSlotFromElement(element?: Partial<AssetRecordingPageElement>): "left" | "right" {
+  return element?.structuralLocator?.slot === "left" ? "left" : "right";
+}
+
+function topBarIconOrderFromRight(element?: Partial<AssetRecordingPageElement>): number | undefined {
+  const value = element?.structuralLocator?.orderFromRight;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+function iconRoleFromText(value: string): string {
+  const text = value.trim().toLowerCase();
+  if (!text) {
+    return "";
+  }
+  const knownRoles: Array<[string, string]> = [
+    ["搜索", "search"],
+    ["search", "search"],
+    ["添加", "add"],
+    ["add", "add"],
+    ["加号", "add"],
+    ["更多", "more"],
+    ["more", "more"],
+    ["返回", "back"],
+    ["back", "back"],
+    ["关闭", "close"],
+    ["close", "close"]
+  ];
+  return knownRoles.find(([keyword]) => text.includes(keyword))?.[1] ?? slugForAsset(text);
+}
+
+function locatorKindNeedsMarkedRegion(locatorKind: AssetRecordingLocatorKind, _abilityType: AssetRecordingAbilityType): boolean {
+  return locatorKind !== "top_bar_icon_locator" && locatorKind !== "text_locator";
+}
+
+function defaultRegionForLocatorKind(locatorKind: AssetRecordingLocatorKind): Pick<AssetRecordingScreenshotRegion, "x" | "y" | "width" | "height" | "semanticArea"> | undefined {
+  return locatorKind === "top_bar_icon_locator" ? defaultTopBarIconRegion : undefined;
+}
+
+function defaultSemanticAreaForLocatorKind(locatorKind: AssetRecordingLocatorKind): VisualSemanticArea {
+  if (locatorKind === "top_bar_icon_locator") {
+    return "top";
+  }
+  if (locatorKind === "text_locator") {
+    return "content";
+  }
+  return "unknown";
 }
 
 function summarizeV2ElementQuality(elements: AssetRecordingPageElement[]): { reviewCount: number } {
@@ -2010,131 +2339,6 @@ function PageElementQualitySummary({ quality }: { quality?: AssetRecordingPageEl
       <strong>{pageElementQualityStatusLabel(quality.status)} · {Math.round(quality.score * 100)}%</strong>
       {firstWarning ? <small>{firstWarning.message}</small> : null}
     </div>
-  );
-}
-
-function OperationEditor({
-  element,
-  pageNodeId,
-  targetAssets,
-  canConfirm,
-  onSubmit
-}: {
-  element: AssetRecordingPageElement;
-  pageNodeId?: string;
-  targetAssets: AssetRecordingSavedAsset[];
-  canConfirm: boolean;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-}) {
-  const [outcomeType, setOutcomeType] = useState<AssetRecordingOperationTransitionDraft["outcomeType"]>("navigate");
-  const [targetQuery, setTargetQuery] = useState("");
-  const fields = operationOutcomeFields(outcomeType);
-  const filteredTargetAssets = targetAssets.filter((asset) => matchesTargetAsset(asset, targetQuery)).slice(0, 20);
-  const defaultTargetNodeId = "";
-
-  return (
-    <form className="asset-element-actions asset-operation-editor" onSubmit={onSubmit}>
-      <label>
-        动作方式
-        <select name="actionKind" defaultValue={normalizeActionKind(element)}>
-          <option value="tap">点击</option>
-          <option value="scroll">滑动</option>
-          <option value="long_press">长按</option>
-          <option value="input">输入</option>
-        </select>
-      </label>
-      <label>
-        出现条件
-        <select name="availability" defaultValue={element.availability ?? "visible"}>
-          <option value="visible">当前可见</option>
-          <option value="after_scroll">滚动后出现</option>
-          <option value="conditional">条件出现</option>
-        </select>
-      </label>
-      <label>
-        结果类型
-        <select name="outcomeType" value={outcomeType} onChange={(event) => setOutcomeType(readOutcomeType(event.target.value))}>
-          <option value="navigate">跳转页面</option>
-          <option value="compound_navigation">复合跳转</option>
-          <option value="show_inline_state">出现页面内状态</option>
-          <option value="local_state_change">页面局部变化</option>
-          <option value="no_visible_change">无明显变化</option>
-        </select>
-      </label>
-      {normalizeActionKind(element) === "scroll" ? <ScrollContainerEditor profile={element.scrollProfile} /> : null}
-      {outcomeType === "compound_navigation" ? <CompoundNavigationEditor /> : null}
-      {fields.requiresTargetPage ? (
-        <label>
-          {fields.targetLabel}
-          <input value={targetQuery} onChange={(event) => setTargetQuery(event.target.value)} placeholder={fields.targetPlaceholder} />
-          <select className="asset-operation-target-options" name="targetNodeId" defaultValue={defaultTargetNodeId} key={targetQuery || "all-targets"}>
-            <option value="">选择已保存页面</option>
-            {filteredTargetAssets.map((asset) => (
-              <option value={asset.id} key={asset.id}>{asset.name}</option>
-            ))}
-          </select>
-        </label>
-      ) : (
-        <label>
-          {fields.targetLabel}
-          <input name="targetNodeId" type="hidden" value="" />
-          <input name="targetLabel" placeholder={fields.targetPlaceholder} />
-        </label>
-      )}
-      {fields.requiresTargetPage ? (
-        <label className="asset-operation-target">
-          {fields.resultLabel}
-          <input name="targetLabel" placeholder={fields.resultPlaceholder} />
-        </label>
-      ) : null}
-      <label className="asset-operation-target">
-        执行识别文字
-        <input name="targetText" placeholder="可选，例如：学习方案 / 课堂" defaultValue={element.targetText ?? ""} />
-      </label>
-      <button type="submit" disabled={!pageNodeId || (fields.requiresTargetPage && !targetAssets.length) || !canConfirm}>确认连接</button>
-    </form>
-  );
-}
-
-function PageTaskTransitionEditor({
-  busy,
-  pageNodeId,
-  tasks,
-  targetAssets,
-  canConfirm,
-  onSubmit
-}: {
-  busy: boolean;
-  pageNodeId?: string;
-  tasks: AssetRecordingPageTask[];
-  targetAssets: AssetRecordingSavedAsset[];
-  canConfirm: boolean;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-}) {
-  const [targetQuery, setTargetQuery] = useState("");
-  const filteredTargetAssets = targetAssets.filter((asset) => matchesTargetAsset(asset, targetQuery)).slice(0, 20);
-  return (
-    <form className="asset-element-actions asset-operation-editor" onSubmit={onSubmit}>
-      <label>
-        页面任务
-        <select name="taskId" defaultValue={tasks[0]?.id ?? ""}>
-          {tasks.map((task) => (
-            <option value={task.id} key={task.id}>{task.name}</option>
-          ))}
-        </select>
-      </label>
-      <label>
-        目标页面
-        <input value={targetQuery} onChange={(event) => setTargetQuery(event.target.value)} placeholder="搜索已保存页面" />
-        <select className="asset-operation-target-options" name="targetNodeId" defaultValue="" key={targetQuery || "all-task-targets"}>
-          <option value="">选择已保存页面</option>
-          {filteredTargetAssets.map((asset) => (
-            <option value={asset.id} key={asset.id}>{asset.name}</option>
-          ))}
-        </select>
-      </label>
-      <button type="submit" disabled={busy || !pageNodeId || !tasks.length || !targetAssets.length || !canConfirm}>确认任务连接</button>
-    </form>
   );
 }
 
@@ -2676,7 +2880,7 @@ export function operationTransitionDraftFromForm(
 
 export function manualOperationDraftFromForm(
   input: FormData | Record<string, FormDataEntryValue | string | undefined>,
-  context: { sourceNodeId?: string; region: Pick<AssetRecordingScreenshotRegion, "x" | "y" | "width" | "height" | "semanticArea"> }
+  context: { sourceNodeId?: string; region?: Pick<AssetRecordingScreenshotRegion, "x" | "y" | "width" | "height" | "semanticArea"> }
 ): AssetRecordingPageElementDraft {
   const get = (name: string) => (input instanceof FormData ? input.get(name) : input[name] ?? null);
   const abilityType = readAbilityType(get("abilityType"));
@@ -2689,7 +2893,88 @@ export function manualOperationDraftFromForm(
   const outcomeLabel = readFormString(get("outcomeLabel"));
   const targetNodeId = readFormString(get("targetNodeId"));
   const targetLabel = readFormString(get("targetLabel"));
-  const dynamicMasks = dynamicMasksForPreset(get("dynamicMaskPreset"), context.region);
+  const dynamicMasks = context.region ? dynamicMasksForPreset(get("dynamicMaskPreset"), context.region) : undefined;
+  const semanticArea = readVisualSemanticArea(get("semanticArea")) ??
+    context.region?.semanticArea ??
+    (context.region ? semanticAreaForRegion(context.region) : defaultSemanticAreaForLocatorKind(locatorKind));
+  if (locatorKind === "top_bar_icon_locator") {
+    const region = context.region ?? defaultTopBarIconRegion;
+    const role = readFormString(get("topBarIconRole")) ?? (iconRoleFromText(elementLabel) || "unknown");
+    const slot = readTopBarIconSlot(get("topBarIconSlot"));
+    const orderFromRight = readPositiveInteger(get("topBarIconOrderFromRight"));
+    return {
+      elementId: readFormString(get("elementId")),
+      sourceNodeId: context.sourceNodeId,
+      ...(abilityType === "fixed_tap" ? {} : { abilityType }),
+      actionKind,
+      availability: readAvailability(get("availability")),
+      locator: `top-bar-icon:${role}`,
+      semanticArea: "top",
+      coordinateSpace: "runtime",
+      elementLabel,
+      locatorKind,
+      ...(targetText ? { targetText } : {}),
+      ...(outcomeType ? { outcomeType } : {}),
+      ...(outcomeLabel ? { outcomeLabel } : {}),
+      ...(targetNodeId ? { targetNodeId } : {}),
+      ...(targetLabel ? { targetLabel } : {}),
+      structuralLocator: {
+        kind: "top_bar_icon",
+        role,
+        slot,
+        ...(orderFromRight ? { orderFromRight } : {}),
+        regionConstraint: { semanticArea: "top", region }
+      },
+      visualLocator: {
+        strategy: "top_bar_icon_shape",
+        role,
+        slot,
+        ...(orderFromRight ? { orderFromRight } : {}),
+        searchRegion: region
+      },
+      ...(outcomeType === "compound_navigation" ? { compoundSteps: readCompoundSteps(input) } : {})
+    };
+  }
+  if (locatorKind === "text_locator") {
+    const textTarget = targetText || elementLabel;
+    return {
+      elementId: readFormString(get("elementId")),
+      sourceNodeId: context.sourceNodeId,
+      ...(abilityType === "fixed_tap" ? {} : { abilityType }),
+      actionKind,
+      availability: readAvailability(get("availability")),
+      locator: `text:${textTarget}`,
+      semanticArea,
+      coordinateSpace: "runtime",
+      elementLabel,
+      locatorKind,
+      targetText: textTarget,
+      ...(outcomeType ? { outcomeType } : {}),
+      ...(outcomeLabel ? { outcomeLabel } : {}),
+      ...(targetNodeId ? { targetNodeId } : {}),
+      ...(targetLabel ? { targetLabel } : {}),
+      structuralLocator: {
+        kind: "ocr_text",
+        role: "text_target",
+        text: textTarget,
+        semanticArea,
+        ...(context.region ? { regionConstraint: { semanticArea, region: context.region } } : {})
+      },
+      ...(context.region
+        ? {
+            visualLocator: {
+              strategy: "ocr_text",
+              targetText: textTarget,
+              searchRegion: context.region
+            }
+          }
+        : {}),
+      ...(outcomeType === "compound_navigation" ? { compoundSteps: readCompoundSteps(input) } : {})
+    };
+  }
+  if (!context.region) {
+    throw new Error("marked region is required for this locator kind");
+  }
   const structuralLocator = locatorKind === "structural_locator" ? structuralLocatorForRegion(context.region, elementLabel) : undefined;
   const collectionModel = locatorKind === "collection_item_locator" || abilityType === "grid_candidate"
     ? collectionModelFromForm(input, context.region, elementLabel, context.sourceNodeId)
@@ -2701,7 +2986,7 @@ export function manualOperationDraftFromForm(
     actionKind,
     availability: readAvailability(get("availability")),
     locator: imageRegionLocator(context.region),
-    semanticArea: readVisualSemanticArea(get("semanticArea")) ?? context.region.semanticArea ?? semanticAreaForRegion(context.region),
+    semanticArea,
     coordinateSpace: "screen",
     elementLabel,
     locatorKind,
@@ -2728,9 +3013,15 @@ function readLocatorKind(value: FormDataEntryValue | null): AssetRecordingLocato
   return value === "text_locator" ||
     value === "visual_locator" ||
     value === "structural_locator" ||
-    value === "collection_item_locator"
+    value === "collection_item_locator" ||
+    value === "top_bar_icon_locator" ||
+    value === "ocr_anchor_offset"
     ? value
     : undefined;
+}
+
+function readTopBarIconSlot(value: FormDataEntryValue | null): "left" | "right" {
+  return value === "left" ? "left" : "right";
 }
 
 function structuralLocatorForRegion(
@@ -3166,10 +3457,6 @@ function pageTaskFieldTypeLabel(fieldType: AssetRecordingPageTaskFieldType): str
     return "等待文字";
   }
   return "点击";
-}
-
-function readOutcomeType(value: FormDataEntryValue | null): AssetRecordingOperationTransitionDraft["outcomeType"] {
-  return value === "compound_navigation" || value === "show_inline_state" || value === "local_state_change" || value === "no_visible_change" ? value : "navigate";
 }
 
 function readVisualSemanticArea(value: FormDataEntryValue | string | null): VisualSemanticArea | undefined {

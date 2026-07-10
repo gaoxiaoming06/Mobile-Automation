@@ -477,6 +477,60 @@ describe("AssetRecordingPanel", () => {
     expect(markup).toContain("同一区域内存在多个相似文字候选");
   });
 
+  it("presents saved page elements as locator strategies instead of marked regions", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "device-1",
+        busy: false,
+        initialDetailTab: "actions",
+        currentPage: {
+          status: "matched",
+          pageName: "主页",
+          nodeId: "node-home",
+          graphVersionId: "version-1",
+          elements: [
+            {
+              id: "home-search",
+              label: "搜索",
+              locator: "top-bar-icon:search",
+              locatorKind: "top_bar_icon_locator",
+              action: "tap",
+              actionKind: "tap",
+              source: "manual",
+              coordinateSpace: "runtime",
+              semanticArea: "top",
+              structuralLocator: {
+                kind: "top_bar_icon",
+                role: "search",
+                slot: "right",
+                orderFromRight: 2
+              },
+              quality: {
+                status: "pass",
+                score: 0.96,
+                warnings: [],
+                candidates: [{ x: 88, y: 6, width: 4, height: 4 }],
+                evidence: { source: "top_bar_icon_shape" }
+              }
+            }
+          ]
+        },
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: vi.fn()
+      })
+    );
+
+    expect(markup).toContain("定位策略工作台");
+    expect(markup).toContain("保存的是定位策略，不是固定坐标");
+    expect(markup).toContain("策略：顶部栏图标");
+    expect(markup).toContain("语义目标");
+    expect(markup).toContain("找顶部栏右侧第 2 个 search 图标");
+    expect(markup).toContain("当前截图可定位");
+    expect(markup).toContain("点击点：运行时计算");
+    expect(markup).toContain("原始资产 / 高级调试");
+  });
+
   it("shows an identifying state while the next page is being recognized", () => {
     const markup = renderToStaticMarkup(
       React.createElement(AssetRecordingPanel, {
@@ -1337,6 +1391,43 @@ describe("AssetRecordingPanel", () => {
     });
   });
 
+  it("builds text locator page abilities without requiring a marked screenshot region", () => {
+    const draft = manualOperationDraftFromForm(
+      {
+        locatorKind: "text_locator",
+        actionKind: "tap",
+        availability: "visible",
+        elementLabel: "作业",
+        targetText: "作业",
+        semanticArea: "content",
+        outcomeType: "navigate",
+        targetNodeId: "node-homework-create",
+        targetLabel: "新建作业"
+      },
+      {
+        sourceNodeId: "node-publish-activity"
+      }
+    );
+
+    expect(draft).toEqual(
+      expect.objectContaining({
+        sourceNodeId: "node-publish-activity",
+        actionKind: "tap",
+        availability: "visible",
+        locator: "text:作业",
+        locatorKind: "text_locator",
+        coordinateSpace: "runtime",
+        semanticArea: "content",
+        elementLabel: "作业",
+        targetText: "作业",
+        targetNodeId: "node-homework-create",
+        targetLabel: "新建作业"
+      })
+    );
+    expect(draft.locator).not.toContain("image-region");
+    expect(draft.tapPointPercent).toBeUndefined();
+  });
+
   it("builds structural locator page abilities with dynamic masks", () => {
     const draft = manualOperationDraftFromForm(
       {
@@ -1532,6 +1623,105 @@ describe("AssetRecordingPanel", () => {
     expect(markup).not.toContain("未采集到控件位置");
   });
 
+  it("explains top bar icon elements with operator-friendly locator instructions", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "device-1",
+        busy: false,
+        initialDetailTab: "actions",
+        currentPage: {
+          status: "matched",
+          pageName: "主页",
+          screenshotUrl: "/api/devices/device-1/screenshot?force=true&t=9",
+          elements: [
+            {
+              label: "搜索",
+              locator: "top-bar-icon:search",
+              locatorKind: "top_bar_icon_locator",
+              coordinateSpace: "runtime",
+              semanticArea: "top",
+              action: "tap",
+              actionKind: "tap",
+              availability: "visible",
+              source: "manual",
+              structuralLocator: { kind: "top_bar_icon", role: "search", slot: "right", orderFromRight: 2 },
+              quality: {
+                status: "pass",
+                score: 0.92,
+                warnings: [],
+                candidates: [{ region: { x: 88, y: 4, width: 5, height: 4 }, source: "icon_shape" }],
+                evidence: { source: "top_bar_icon_shape" }
+              }
+            }
+          ],
+          savedAssets: []
+        },
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: vi.fn()
+      })
+    );
+
+    expect(markup).toContain("语义定位");
+    expect(markup).toContain("语义目标");
+    expect(markup).toContain("找顶部栏右侧第 2 个 search 图标");
+    expect(markup).toContain("当前截图");
+    expect(markup).toContain("可定位");
+    expect(markup).toContain("执行动作");
+    expect(markup).toContain("运行时重新找到目标后再点击");
+    expect(markup).toContain("点击点：运行时计算");
+    expect(markup).toContain("定位预览");
+    expect(markup).toContain("高级调试");
+    expect(markup).toContain("&quot;locatorKind&quot;: &quot;top_bar_icon_locator&quot;");
+    expect(markup).not.toContain("搜索策略：");
+    expect(markup).not.toContain("定位源：");
+    expect(markup).not.toContain("未采集到控件位置");
+  });
+
+  it("builds top bar icon page abilities as runtime semantic locators", () => {
+    const draft = manualOperationDraftFromForm(
+      {
+        locatorKind: "top_bar_icon_locator",
+        topBarIconRole: "search",
+        topBarIconSlot: "right",
+        topBarIconOrderFromRight: "2",
+        actionKind: "tap",
+        availability: "visible",
+        semanticArea: "top",
+        elementLabel: "搜索",
+        outcomeType: "navigate",
+        targetNodeId: "node-search",
+        targetLabel: "搜索"
+      },
+      {
+        sourceNodeId: "node-home",
+        region: { x: 86, y: 3, width: 8, height: 5, semanticArea: "top" }
+      }
+    );
+
+    expect(draft).toEqual(
+      expect.objectContaining({
+        sourceNodeId: "node-home",
+        locator: "top-bar-icon:search",
+        locatorKind: "top_bar_icon_locator",
+        coordinateSpace: "runtime",
+        semanticArea: "top",
+        elementLabel: "搜索",
+        structuralLocator: expect.objectContaining({
+          kind: "top_bar_icon",
+          role: "search",
+          slot: "right",
+          orderFromRight: 2
+        }),
+        visualLocator: expect.objectContaining({
+          strategy: "top_bar_icon_shape",
+          role: "search"
+        })
+      })
+    );
+    expect(draft.locator).not.toContain("image-region");
+  });
+
   it("uses a change description instead of target page selection for local outcomes", () => {
     expect(operationOutcomeFields("navigate")).toEqual({
       requiresTargetPage: true,
@@ -1664,8 +1854,7 @@ describe("AssetRecordingPanel", () => {
         },
         onPageDraftChange: () => undefined,
         onIdentifyCurrentPage: () => undefined,
-        onSaveCurrentPageAsset: vi.fn(),
-        onConfirmOperationTransition: vi.fn()
+        onSaveCurrentPageAsset: vi.fn()
       })
     );
 
@@ -1870,9 +2059,7 @@ describe("AssetRecordingPanel", () => {
         },
         onPageDraftChange: () => undefined,
         onIdentifyCurrentPage: () => undefined,
-        onSaveCurrentPageAsset: vi.fn(),
-        onConfirmOperationTransition: vi.fn(),
-        onDeleteOperationTransition: vi.fn()
+        onSaveCurrentPageAsset: vi.fn()
       })
     );
 
@@ -1881,8 +2068,11 @@ describe("AssetRecordingPanel", () => {
     expect(markup).toContain("可用于路径规划");
     expect(markup).toContain("主页 -&gt; 班级详情");
     expect(markup).toContain("班级列表");
-    expect(markup).toContain("确认连接");
-    expect(markup).toContain("<option value=\"node-class-detail\">班级详情</option>");
+    expect(markup).toContain("由页面能力生成");
+    expect(markup).not.toContain("连接边编辑");
+    expect(markup).not.toContain("通过页面任务连接");
+    expect(markup).not.toContain("确认连接");
+    expect(markup).not.toContain("<option value=\"node-class-detail\">班级详情</option>");
   });
 
   it("renders saved page tasks as editable page-internal tasks", () => {
