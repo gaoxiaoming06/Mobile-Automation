@@ -4,7 +4,7 @@ doc_type: changelog
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-05
+updated_at: 2026-07-10
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -12,6 +12,16 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 ---
 
 # 自动化测试平台 Spec 变更记录
+
+## 2026-07-10
+
+### Added
+
+- 新增 `asset-driven-testing-requirements.md`，沉淀资产驱动测试的产品形态：App 级资产工作区、页面能力作为原子能力源头、连接边派生规则、参数中心、资产驱动巡检、元功能、组合用例、AI/MCP 诊断修复和全 App 巡检路线。
+
+### Changed
+
+- 平台 README 的 Spec 文件索引新增资产驱动测试产品形态需求入口，方便后续实现和评审引用。
 
 ## 2026-07-05
 
