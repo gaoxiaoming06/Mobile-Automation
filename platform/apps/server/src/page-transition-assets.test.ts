@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { planRoute, type BusinessGraphVersion, type BusinessNode, type OperationEdge } from "@mobile-automation/graph-core";
+import { withPageAbilityEdges } from "./page-ability-edges.js";
 import { deleteManualPageElementAsset, deleteManualPageTransitionAsset, persistManualPageElementAsset, persistManualPageTransitionAsset, persistPageTaskNavigationTransitionAsset } from "./page-transition-assets.js";
 
 describe("persistManualPageTransitionAsset", () => {
@@ -841,6 +842,108 @@ describe("persistManualPageTransitionAsset", () => {
 
     expect(result.status).toBe("deleted");
     expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toEqual([]);
+  });
+
+  it("deletes a navigational manual page element and rejects its derived transition edge", () => {
+    const storage = new MemoryPageTransitionStorage();
+    const source = pageNode({ id: "node-home", key: "classin.home", name: "主页" });
+    const target = pageNode({ id: "node-search", key: "classin.search", name: "搜索页" });
+    storage.nodes.push(source, target);
+    const saved = persistManualPageElementAsset({
+      graphVersionId: "version-1",
+      storage,
+      sourceNodeId: source.id,
+      targetNodeId: target.id,
+      actionKind: "tap",
+      locator: "text: 搜索",
+      elementLabel: "搜索",
+      availability: "visible",
+      outcomeType: "navigate",
+      targetLabel: "搜索页"
+    });
+
+    expect(storage.edges).toEqual([
+      expect.objectContaining({
+        fromNodeId: source.id,
+        toNodeId: target.id,
+        status: "active"
+      })
+    ]);
+
+    const result = deleteManualPageElementAsset({
+      graphVersionId: "version-1",
+      storage,
+      sourceNodeId: source.id,
+      elementId: saved.element!.id as string
+    });
+
+    expect(result.status).toBe("deleted");
+    expect(storage.edges).toEqual([
+      expect.objectContaining({
+        fromNodeId: source.id,
+        toNodeId: target.id,
+        status: "rejected"
+      })
+    ]);
+    expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toEqual([]);
+
+    const route = planRoute({
+      graphVersion: graph([source, target], storage.edges),
+      appId: "classin-android",
+      targetApp: { androidPackageName: "cn.eeo.classin" },
+      startNodeId: source.id,
+      targetNodeId: target.id,
+      platform: "android",
+      now: "2026-06-18T12:00:00.000Z",
+      idFactory: (prefix) => `${prefix}-fixed`
+    });
+    expect(route.edges).toEqual([]);
+  });
+
+  it("deletes a v2 page element and removes transitions derived from that element", () => {
+    const storage = new MemoryPageTransitionStorage();
+    const source = pageNode({ id: "node-home", key: "classin.home", name: "主页" });
+    const target = pageNode({ id: "node-search", key: "classin.search", name: "搜索页" });
+    source.metadata = {
+      ...source.metadata,
+      assetRecordingPageElements: [
+        {
+          id: "element-search",
+          label: "搜索",
+          locator: "text: 搜索",
+          elementKind: "button",
+          actions: ["tap"],
+          platformScope: "android"
+        }
+      ],
+      assetRecordingPageTransitions: [
+        {
+          id: "transition-search",
+          elementId: "element-search",
+          action: "tap",
+          outcomeType: "navigate",
+          targetNodeId: target.id,
+          targetLabel: "搜索页",
+          platformScope: "android"
+        }
+      ]
+    };
+    storage.nodes.push(source, target);
+
+    expect(withPageAbilityEdges(graph(storage.nodes, storage.edges)).edges).toHaveLength(1);
+
+    const result = deleteManualPageElementAsset({
+      graphVersionId: "version-1",
+      storage,
+      sourceNodeId: source.id,
+      elementId: "element-search"
+    });
+
+    expect(result.status).toBe("deleted");
+    const updatedSource = storage.nodes.find((node) => node.id === source.id);
+    expect(updatedSource?.metadata?.assetRecordingPageElements).toEqual([]);
+    expect(updatedSource?.metadata?.assetRecordingPageTransitions).toEqual([]);
+    expect(withPageAbilityEdges(graph(storage.nodes, storage.edges)).edges).toHaveLength(0);
   });
 
   it("creates an active manual transition between confirmed page assets that can be planned", () => {

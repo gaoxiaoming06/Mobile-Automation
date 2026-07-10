@@ -163,6 +163,8 @@ export type DeleteManualPageElementInput = {
 export type DeleteManualPageElementResult = {
   status: "deleted" | "skipped";
   reason?: string;
+  rejectedEdgeIds?: string[];
+  removedTransitionIds?: string[];
 };
 
 export type DeleteManualPageTransitionInput = {
@@ -324,19 +326,104 @@ export function deleteManualPageElementAsset(input: DeleteManualPageElementInput
   if (!isConfirmedPageAsset(sourceNode)) {
     return { status: "skipped", reason: "source_page_asset_missing" };
   }
-  const existingElements = readManualPageElements(sourceNode.metadata?.assetRecordingManualElements);
-  const nextElements = existingElements.filter((element) => element.id !== input.elementId);
-  if (nextElements.length === existingElements.length) {
+  const existingManualElements = readManualPageElements(sourceNode.metadata?.assetRecordingManualElements);
+  const removedManualElement = existingManualElements.find((element) => element.id === input.elementId);
+  const existingPageElements = readRecordArray(sourceNode.metadata?.assetRecordingPageElements);
+  const removedPageElement = existingPageElements.find((element) => readRecordId(element) === input.elementId);
+  if (!removedManualElement && !removedPageElement) {
     return { status: "skipped", reason: "element_not_found" };
   }
+
+  const metadata: Record<string, unknown> = {
+    ...(sourceNode.metadata ?? {}),
+    updatedAt: nowIso()
+  };
+  const rejectedEdgeIds = removedManualElement ? rejectDerivedManualEdgesForElement(input, sourceNode, removedManualElement) : [];
+  let removedTransitionIds: string[] = [];
+  if (removedManualElement) {
+    metadata.assetRecordingManualElements = existingManualElements.filter((element) => element.id !== input.elementId);
+  }
+  if (removedPageElement) {
+    const existingPageTransitions = readRecordArray(sourceNode.metadata?.assetRecordingPageTransitions);
+    const nextPageTransitions = existingPageTransitions.filter((transition) => {
+      const belongsToDeletedElement = readRecordString(transition, "elementId") === input.elementId;
+      if (belongsToDeletedElement) {
+        const transitionId = readRecordId(transition);
+        if (transitionId) {
+          removedTransitionIds.push(transitionId);
+        }
+      }
+      return !belongsToDeletedElement;
+    });
+    metadata.assetRecordingPageElements = existingPageElements.filter((element) => readRecordId(element) !== input.elementId);
+    metadata.assetRecordingPageTransitions = nextPageTransitions;
+  }
   input.storage.updateBusinessNodeDetails(sourceNode.id, {
-    metadata: {
-      ...(sourceNode.metadata ?? {}),
-      assetRecordingManualElements: nextElements,
-      updatedAt: nowIso()
-    }
+    metadata
   });
-  return { status: "deleted" };
+  return { status: "deleted", rejectedEdgeIds, removedTransitionIds };
+}
+
+function rejectDerivedManualEdgesForElement(
+  input: DeleteManualPageElementInput,
+  sourceNode: BusinessNode,
+  element: Record<string, unknown>
+): string[] {
+  const descriptor = manualPageElementActionDescriptor(element);
+  if (!descriptor) {
+    return [];
+  }
+  const targetNodeId = readRecordString(element, "targetNodeId");
+  const rejectedEdgeIds: string[] = [];
+  const edges = input.storage.listOperationEdges?.(input.graphVersionId) ?? [];
+  for (const edge of edges) {
+    if (edge.status === "rejected" || edge.source !== "manual_edit" || edge.fromNodeId !== sourceNode.id) {
+      continue;
+    }
+    if (targetNodeId && edge.toNodeId !== targetNodeId) {
+      continue;
+    }
+    const action = manualActionDescriptor(edge);
+    if (
+      !action ||
+      action.locator !== descriptor.locator ||
+      action.actionKind !== descriptor.actionKind ||
+      action.compoundSignature !== descriptor.compoundSignature
+    ) {
+      continue;
+    }
+    input.storage.updateOperationEdgeStatus(edge.id, "rejected");
+    rejectedEdgeIds.push(edge.id);
+  }
+  if (!targetNodeId || rejectedEdgeIds.length) {
+    return rejectedEdgeIds;
+  }
+  const targetNode = input.storage.findBusinessNodeById(input.graphVersionId, targetNodeId);
+  if (!targetNode) {
+    return rejectedEdgeIds;
+  }
+  const key = manualTransitionKey(sourceNode.key, targetNode.key, descriptor.actionKind, descriptor.locator, descriptor.compoundSignature);
+  const edge = input.storage.findOperationEdgeByKey(input.graphVersionId, key);
+  if (edge && edge.status !== "rejected") {
+    input.storage.updateOperationEdgeStatus(edge.id, "rejected");
+    rejectedEdgeIds.push(edge.id);
+  }
+  return rejectedEdgeIds;
+}
+
+function manualPageElementActionDescriptor(
+  element: Record<string, unknown>
+): { locator: string; actionKind: ManualPageTransitionActionKind; compoundSignature?: string } | undefined {
+  const locator = readRecordString(element, "locator");
+  const actionKind = readManualActionKind(element.actionKind) ?? readManualActionKind(element.action);
+  if (!locator || !actionKind) {
+    return undefined;
+  }
+  return {
+    locator,
+    actionKind,
+    compoundSignature: readRecordString(element, "compoundSignature")
+  };
 }
 
 export function deleteManualPageTransitionAsset(input: DeleteManualPageTransitionInput): DeleteManualPageTransitionResult {
@@ -474,6 +561,19 @@ function readRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
     : [];
+}
+
+function readRecordId(record: Record<string, unknown>): string | undefined {
+  return readRecordString(record, "id");
+}
+
+function readRecordString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readManualActionKind(value: unknown): ManualPageTransitionActionKind | undefined {
+  return value === "tap" || value === "scroll" || value === "long_press" || value === "input" ? value : undefined;
 }
 
 function upsertManualPageElement(
