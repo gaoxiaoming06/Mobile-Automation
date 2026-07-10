@@ -161,6 +161,13 @@ export function decideAiAssetRepair(diagnosis: AiDiagnosisResult, options: { min
   if (!validation.valid) {
     return { action: "skip", reason: "AI asset patch did not pass validation.", validation };
   }
+  if (diagnosis.assetPatch.kind === "page_element" && !hasPageElementRelocationEvidence(diagnosis.assetPatch.changes)) {
+    return {
+      action: "skip",
+      reason: "AI page_element asset patch lacks relocation evidence.",
+      validation
+    };
+  }
   return { action: "apply", patch: diagnosis.assetPatch, validation };
 }
 

@@ -30,6 +30,29 @@ describe("AI asset repair", () => {
     expect(decision.action).toBe("apply");
   });
 
+  it("does not auto-apply page element patches that lack relocation evidence", () => {
+    const decision = decideAiAssetRepair(
+      diagnosis({
+        confidence: 0.94,
+        recommendedAction: "apply_verified_asset_patch",
+        safeToAutoApply: true,
+        assetPatch: {
+          kind: "page_element",
+          operation: "update",
+          targetId: "home-search",
+          summary: "只把搜索入口改名为搜索按钮",
+          changes: { label: "搜索按钮" },
+          status: "draft"
+        }
+      })
+    );
+
+    expect(decision).toEqual(expect.objectContaining({
+      action: "skip",
+      reason: expect.stringContaining("relocation evidence")
+    }));
+  });
+
   it("does not auto-apply unverified create_asset_patch drafts", () => {
     const decision = decideAiAssetRepair(
       diagnosis({

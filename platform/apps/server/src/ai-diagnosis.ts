@@ -104,7 +104,7 @@ const CODEX_PROVIDER_BASE_URL = "codex://app-server";
 const CODEX_PROCESS_START_TIMEOUT_MS = 15_000;
 const CODEX_CLEANUP_TIMEOUT_MS = 8_000;
 const CODEX_DIAGNOSIS_DEVELOPER_INSTRUCTIONS =
-  "你是移动自动化测试异常诊断助手。只判断异常归因和受控资产修复建议，不直接执行设备操作，不直接修改文件。可以在证据充分时返回 apply_verified_asset_patch，由系统校验后更新资产。必须只返回 JSON 对象。必须严格遵守用户提示中的 assetPatch.changes 字段白名单。";
+  "你是移动自动化测试异常诊断助手。只判断异常归因和受控资产修复建议，不直接执行设备操作，不直接修改文件。可以在证据充分时返回 apply_verified_asset_patch，由系统校验后更新资产。必须先按 PageStateFlow 资产规则判断要修页面、元素、边还是任务，再用字段白名单表达可执行补丁。必须只返回 JSON 对象。";
 const PAGE_STATE_FLOW_ASSET_RULES = [
   "PageModel / 页面资产：一个节点代表一个可识别页面状态或稳定子状态；页面识别必须依赖多锚点 evidence，不依赖包名、历史点击坐标或 region_center。页面级动态内容如头像、昵称、数量、浮层、列表项变化不能作为强锚点。",
   "PageMatcher / 页面识别资产：优先使用稳定 OCR 文案、语义区域、结构锚点和经过 dynamic mask 的视觉区域。critical matcher 只能给稳定、不随账号/时间/列表滑动变化的证据；过期或动态 matcher 应降权，不应删除全部旧证据。",
@@ -112,6 +112,8 @@ const PAGE_STATE_FLOW_ASSET_RULES = [
   "PageTransition / 连接边资产：边表示从 source PageModel 通过某个 elementId/action 到 target PageModel 或本地状态变化。必须描述 outcomeType、targetNodeId/targetLabel、availability、params/parameterMapping；同页 tab 或局部状态变化不要误写成必须 back 恢复的跨页导航。",
   "PageTask / 页面任务资产：任务是由 PageElement 引用组成的参数化步骤序列。输入类步骤必须使用 valueParamKey/desiredStateParamKey 从 runtimeParams 取值，不把真实账号密码写入资产。",
   "动态区域 / 列表模板 / 参数化：列表、网格、feed、表单组应抽象为 dynamicRegion + itemTemplate。列表项点击要用 collection_item_locator、itemIdentity、targetQuery、clickSafePoint 和 scrollProfile，而不是保存某一屏某一行坐标。",
+  "AI 生成修复时必须先选择要修复的资产类型，再按对应 PageStateFlow 资产模型生成完整语义；字段白名单只是系统可执行补丁协议，不是资产设计规则本身。",
+  "page_element 补丁必须说明定位策略、语义目标、动态内容处理和验证证据；如果缺少这些证据，只能返回 create_asset_patch 并说明需要补录或扩展规则。",
   "AI 需要按这些资产规则生成新的 matcher、元素、边或任务修复草稿；如果当前 AssetPatch 协议无法表达所需新资产，返回 create_asset_patch 并在 reasoning 中明确说明需要扩展系统规则，不要伪造成坐标或随意发明字段。"
 ];
 const ASSET_PATCH_SCHEMA_RULES = [

@@ -278,6 +278,9 @@ describe("ai diagnosis", () => {
     expect(prompt).toContain("PageTask / 页面任务资产");
     expect(prompt).toContain("动态区域 / 列表模板 / 参数化");
     expect(prompt).toContain("AI 需要按这些资产规则生成新的 matcher、元素、边或任务修复草稿");
+    expect(prompt).toContain("先选择要修复的资产类型，再按对应 PageStateFlow 资产模型生成完整语义");
+    expect(prompt).toContain("字段白名单只是系统可执行补丁协议，不是资产设计规则本身");
+    expect(prompt).toContain("page_element 补丁必须说明定位策略、语义目标、动态内容处理和验证证据");
     expect(prompt).toContain("page_matcher.changes 只允许");
     expect(prompt).toContain("addMatchersDraft");
     expect(prompt).toContain("deprioritizeMatchersDraft");
