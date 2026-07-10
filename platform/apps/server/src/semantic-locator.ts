@@ -137,8 +137,7 @@ export class SemanticStepResolver {
     }
     const semanticArea = readSemanticArea(input.step.params.semanticArea) ?? semanticAreaForPercentRegion(region);
     const tapPointPercent = readTapPointPercent(input.step.params.tapPointPercent);
-    const candidatePointPercent = candidateTapPointPercent(input.step.params, tapPointPercent);
-    const center = regionPoint(region, input.deviceSize, candidatePointPercent ?? tapPointPercent);
+    const center = regionPoint(region, input.deviceSize, tapPointPercent);
     if (!center) {
       return {
         supported: true,
@@ -171,6 +170,23 @@ export class SemanticStepResolver {
             abilityType: "grid_candidate",
             reason: "target_not_found",
             targetQuery: scrollProfile.targetQuery,
+            region
+          }
+        };
+      }
+      if (gridCandidateMissingSemanticTarget(input.step.params)) {
+        const scrollProfile = readScrollProfile(input.step.params.scrollProfile);
+        return {
+          supported: true,
+          resolved: false,
+          message: "Legacy grid candidate index assets are deprecated. Record a list region with an OCR/parameter target instead.",
+          artifacts: [],
+          metadata: {
+            type: "image_region",
+            action: "fail",
+            abilityType: "grid_candidate",
+            reason: "deprecated_grid_candidate_without_target",
+            targetKind: scrollProfile.targetKind,
             region
           }
         };
@@ -320,31 +336,6 @@ export class SemanticStepResolver {
         }
       };
     }
-    if (input.step.params.abilityType === "grid_candidate" && candidatePointPercent) {
-      const action = { type: "tap", x: center.x, y: center.y } satisfies DeviceActionRequest;
-      const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
-      return {
-        supported: true,
-        resolved: true,
-        action,
-        actionResult,
-        message: `Resolved marked list item by structural grid candidate geometry.`,
-        artifacts: [],
-        metadata: {
-          type: "image_region",
-          action: "tap",
-          ...pageTaskSemanticMetadata(input.step.params),
-          region,
-          semanticArea,
-          relocatedBy: "structural_grid_candidate",
-          ...(tapPointPercent ? { tapPointPercent } : {}),
-          ...(typeof numberParam(input.step.params.candidateIndex) === "number" ? { candidateIndex: numberParam(input.step.params.candidateIndex) } : {}),
-          candidatePointPercent,
-          center,
-          driverChannel: actionResult?.driverChannel
-        }
-      };
-    }
     return {
       supported: true,
       resolved: false,
@@ -358,7 +349,6 @@ export class SemanticStepResolver {
         semanticArea,
         ...(tapPointPercent ? { tapPointPercent } : {}),
         ...(typeof numberParam(input.step.params.candidateIndex) === "number" ? { candidateIndex: numberParam(input.step.params.candidateIndex) } : {}),
-        ...(candidatePointPercent ? { candidatePointPercent } : {}),
         recordedCenter: center,
         fallback: "region_center_disabled",
         reason: "runtime_relocation_required",
@@ -1302,8 +1292,8 @@ export class SemanticStepResolver {
         return { signature };
       }
       const grid = candidateGridCell(target, region, layout, scrollProfile, input.deviceSize);
-      const pointPercent = gridCandidateSafePointPercent(grid, scrollProfile);
-      const center = regionPoint(region, input.deviceSize, pointPercent);
+      const center = textCandidateDevicePoint(target, layout, input.deviceSize);
+      const pointPercent = candidatePercentPoint(target, layout, input.deviceSize);
       if (!center) {
         return { signature };
       }
@@ -1329,6 +1319,7 @@ export class SemanticStepResolver {
             locator: target,
             candidateGrid: grid,
             candidatePointPercent: pointPercent,
+            clickSource: "ocr_matched_item",
             center,
             ...(search ? { search } : {}),
             driverChannel: actionResult?.driverChannel
@@ -3516,16 +3507,6 @@ function candidateGridCell(
   return { column, row };
 }
 
-function gridCandidateSafePointPercent(grid: { column: number; row: number }, scrollProfile: GridScrollProfile): { x: number; y: number } {
-  const columns = Math.max(1, scrollProfile.columns);
-  const itemHeight = scrollProfile.candidateItemHeightPercent ?? 100;
-  const columnWidth = 100 / columns;
-  return {
-    x: roundPercent(grid.column * columnWidth + (columnWidth * scrollProfile.clickSafePoint.xPercent) / 100),
-    y: roundPercent(grid.row * itemHeight + (itemHeight * scrollProfile.clickSafePoint.yPercent) / 100)
-  };
-}
-
 function candidatePercentPoint(candidate: TextLocatorCandidate, layout: OcrLayoutResult, deviceSize?: { width: number; height: number }): { x: number; y: number } {
   const width = deviceSize?.width ?? layout.width;
   const height = deviceSize?.height ?? layout.height;
@@ -3590,6 +3571,14 @@ function gridCandidateRequiresTargetQuery(params: Record<string, unknown>): bool
   }
   const scrollProfile = readScrollProfile(params.scrollProfile);
   return Boolean(scrollProfile.targetQuery && scrollProfile.targetKind !== "nth_item");
+}
+
+function gridCandidateMissingSemanticTarget(params: Record<string, unknown>): boolean {
+  if (params.abilityType !== "grid_candidate") {
+    return false;
+  }
+  const scrollProfile = readScrollProfile(params.scrollProfile);
+  return !scrollProfile.targetQuery || scrollProfile.targetKind === "nth_item";
 }
 
 function regionPoint(
@@ -4292,29 +4281,6 @@ function visualCandidateEffectiveScore(
   const roleBonus = options.targetRole && candidate.role?.toLowerCase() === options.targetRole ? 0.16 : 0;
   const areaBonus = options.semanticArea !== "unknown" && candidate.semanticArea === options.semanticArea ? 0.08 : 0;
   return candidate.score + roleBonus + areaBonus;
-}
-
-function candidateTapPointPercent(params: Record<string, unknown>, tapPointPercent?: { x: number; y: number }): { x: number; y: number } | undefined {
-  if (params.abilityType !== "grid_candidate" || !tapPointPercent) {
-    return undefined;
-  }
-  const candidateIndex = Math.max(0, Math.floor(numberParam(params.candidateIndex) ?? 0));
-  if (candidateIndex <= 0) {
-    return tapPointPercent;
-  }
-  const scrollProfile = params.scrollProfile && typeof params.scrollProfile === "object" ? params.scrollProfile as Record<string, unknown> : {};
-  const columns = Math.max(1, Math.floor(numberParam(scrollProfile.columns) ?? 1));
-  const candidateHeight = percentNumber(scrollProfile.candidateItemHeightPercent) ?? 0;
-  if (candidateHeight <= 0) {
-    return tapPointPercent;
-  }
-  const columnWidth = 100 / columns;
-  const column = candidateIndex % columns;
-  const row = Math.floor(candidateIndex / columns);
-  return {
-    x: roundPercent(Math.min(100, Math.max(0, tapPointPercent.x + column * columnWidth))),
-    y: roundPercent(Math.min(100, Math.max(0, tapPointPercent.y + row * candidateHeight)))
-  };
 }
 
 function isOcrAnchorOffsetLocator(params: Record<string, unknown>): boolean {

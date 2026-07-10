@@ -401,6 +401,127 @@ describe("AssetPatrol", () => {
     );
   });
 
+  it("does not patrol deprecated legacy grid candidates without a semantic target", () => {
+    const graphVersion = graphVersionWithNodes(
+      [
+        pageNode({
+          id: "node-home",
+          key: "home",
+          name: "主页",
+          matchers: [matcher("ocr_text", "主页", 4)],
+          metadata: {
+            assetRecordingManualElements: [
+              {
+                id: "legacy-grid",
+                label: "班级列表",
+                locator: "image-region:3,30,94,59",
+                actionKind: "tap",
+                abilityType: "grid_candidate",
+                outcomeType: "navigate",
+                targetNodeId: "node-detail",
+                scrollProfile: {
+                  containerKind: "grid_list",
+                  direction: "vertical",
+                  columns: 2,
+                  targetKind: "nth_item",
+                  candidateItemHeightPercent: 24.5,
+                  clickSafePoint: { xPercent: 50, yPercent: 28 }
+                }
+              }
+            ]
+          }
+        }),
+        pageNode({ id: "node-detail", key: "detail", name: "班级详情", matchers: [matcher("ocr_text", "班级详情", 4)] })
+      ],
+      [
+        gridCandidateEdge({
+          id: "legacy-grid-edge",
+          fromNodeId: "node-home",
+          toNodeId: "node-detail",
+          name: "主页 -> 班级详情"
+        })
+      ]
+    );
+
+    const plan = buildAssetPatrolPlan({
+      observation: observation({ ocrTexts: [{ text: "主页", region: { x: 150, y: 200, width: 120, height: 80 } }] }),
+      graphVersion,
+      config: normalizeAssetPatrolConfig({ packageName: "com.demo" })
+    });
+
+    expect(plan.steps.map((step) => step.pageElementId).filter(Boolean)).not.toContain("legacy-grid");
+    expect(plan.steps.map((step) => step.pageTransitionId).filter(Boolean)).not.toContain("legacy-grid-edge");
+    expect(plan.issues).toEqual([
+      expect.objectContaining({
+        code: "NO_PAGE_ASSETS"
+      })
+    ]);
+  });
+
+  it("keeps collection regions without an item identity as structure only", () => {
+    const graphVersion = graphVersionWithNodes(
+      [
+        pageNode({
+          id: "node-home",
+          key: "home",
+          name: "主页",
+          matchers: [matcher("ocr_text", "主页", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "home-class-grid",
+                label: "班级列表",
+                elementKind: "collection",
+                locator: "runtime-locator:home_class_grid",
+                locatorKind: "collection_item_locator",
+                semanticArea: "content",
+                coordinateSpace: "runtime",
+                actions: ["tap_item"],
+                collection: {
+                  kind: "vertical_grid",
+                  columns: 3,
+                  itemIdentity: { type: "ocr_title" },
+                  candidateItemHeightPercent: 24.5,
+                  clickSafePoint: { xPercent: 50, yPercent: 28 }
+                }
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "home-open-class-detail",
+                elementId: "home-class-grid",
+                action: "tap_item",
+                outcomeType: "navigate",
+                targetNodeId: "node-detail",
+                targetLabel: "班级详情"
+              }
+            ]
+          }
+        }),
+        pageNode({ id: "node-detail", key: "detail", name: "班级详情", matchers: [matcher("ocr_text", "班级详情", 4)] })
+      ],
+      []
+    );
+
+    const plan = buildAssetPatrolPlan({
+      observation: observation({ ocrTexts: [{ text: "主页", region: { x: 150, y: 200, width: 120, height: 80 } }] }),
+      graphVersion,
+      config: normalizeAssetPatrolConfig({ packageName: "com.demo" })
+    });
+
+    expect(plan.steps.find((step) => step.pageElementId === "home-class-grid")).toEqual(
+      expect.objectContaining({
+        status: "ready",
+        evidence: expect.objectContaining({
+          assetFormat: "v2",
+          abilityType: undefined,
+          parameterizedBy: undefined
+        })
+      })
+    );
+    expect(plan.steps.map((step) => step.pageTransitionId).filter(Boolean)).not.toContain("edge_pagetransition.home.detail.home.open.class.detail");
+  });
+
   it("accepts V2 image-region elements when their visible label is present on the current page", () => {
     const graphVersion = graphVersionWithNodes([
       pageNode({

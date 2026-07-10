@@ -691,6 +691,7 @@ export function buildAssetPatrolPlan(input: {
   const elements = readPatrolPageElements(matched.node, platform);
   const transitions = graphVersionWithAssetEdges.edges
     .filter((edge) => edge.status === "active" && edge.fromNodeId === matched.node.id && Boolean(edge.actionPolicies[0]))
+    .filter((edge) => !isDeprecatedGridCandidateOperationEdge(edge))
     .sort((left, right) => Number(isV2PageTransitionEdge(right)) - Number(isV2PageTransitionEdge(left)))
     .slice(0, input.config.maxTransitions);
   const tasks = readManualPageTasks(matched.node);
@@ -832,7 +833,7 @@ export function selectAssetDrivenExecutionTargets(input: {
     .map((step) => {
       const edge = graphVersionWithV2Edges.edges.find((item) => item.id === step.pageTransitionId && item.status === "active");
       const action = edge?.actionPolicies[0]?.action;
-      return edge && action && edge.fromNodeId === startPage.id
+      return edge && action && edge.fromNodeId === startPage.id && !isDeprecatedGridCandidateOperationEdge(edge)
         ? {
             edge,
             pageTaskId: sourcePageNavigationTaskId(action),
@@ -891,6 +892,7 @@ export function selectAssetDrivenExecutionTargets(input: {
       startNodeName: startPage.name,
       targetNodeId: startPage.id,
       targetNodeName: startPage.name,
+      transitionName: `${startPage.name} / ${step.label}`,
       pageTaskId: step.pageTaskId,
       overlay: {
         id: `asset-driven-task-${step.pageTaskId}`,
@@ -1056,7 +1058,7 @@ function gridCandidateAcceptsClassNameParam(params: Record<string, unknown>): bo
   }
   const targetQuery = stringRecordField(params.scrollProfile, "targetQuery");
   const targetKind = stringRecordField(params.scrollProfile, "targetKind");
-  return !targetQuery || targetKind === "nth_item" || targetQuery.includes("{{className}}");
+  return Boolean(targetQuery && targetKind !== "nth_item" && targetQuery.includes("{{className}}"));
 }
 
 function gridCandidateResolvedByClassName(params: Record<string, unknown>, runtimeParams: Record<string, string>): boolean {
@@ -1162,6 +1164,7 @@ function readPatrolPageElements(node: BusinessNode, platform: PlatformScope): Ma
   const v2Elements = readPageElementPatrolAssets(node, platform);
   const legacyElements = readManualPageElements(node)
     .filter((element) => supportsAssetPlatform(element.platformScope, platform))
+    .filter((element) => !isDeprecatedGridCandidatePatrolAsset(element))
     .map((element) => ({ ...element, assetFormat: "legacy" as const }));
   const seen = new Set<string>();
   return [...v2Elements, ...legacyElements].filter((element) => {
@@ -1203,6 +1206,7 @@ function readPageElementAssets(node: BusinessNode): PageElementAsset[] {
 }
 
 function pageElementPatrolAsset(element: PageElementAsset): ManualPageElementAsset {
+  const scrollProfile = scrollProfileForPageElement(element);
   return {
     id: element.id,
     label: element.label,
@@ -1213,10 +1217,10 @@ function pageElementPatrolAsset(element: PageElementAsset): ManualPageElementAss
     structuralLocator: element.structuralLocator,
     semanticArea: element.semanticArea,
     actionKind: actionKindForPageElement(element),
-    abilityType: element.elementKind === "collection" ? "grid_candidate" : undefined,
+    abilityType: scrollProfile ? "grid_candidate" : undefined,
     availability: "visible",
     visualLocator: element.visualLocator,
-    scrollProfile: scrollProfileForPageElement(element),
+    scrollProfile,
     assetFormat: "v2"
   };
 }
@@ -1243,19 +1247,45 @@ function scrollProfileForPageElement(element: PageElementAsset): Record<string, 
   const itemIdentity = collection.itemIdentity;
   const param = itemIdentity && isRecordObject(itemIdentity) ? stringRecordField(itemIdentity, "param") : undefined;
   const targetQuery = param ? `{{${param}}}` : undefined;
+  if (!targetQuery) {
+    return undefined;
+  }
   const horizontal = collection.kind === "horizontal_list" || collection.kind === "carousel";
   return {
     containerKind: collection.kind === "vertical_grid" ? "grid_list" : collection.kind === "carousel" ? "carousel" : "list",
     direction: horizontal ? "horizontal" : "vertical",
     columns: collection.kind === "vertical_grid" ? Math.max(1, Math.floor(collection.columns ?? 1)) : 1,
-    targetKind: targetQuery ? "item_text" : "nth_item",
-    ...(targetQuery ? { targetQuery } : {}),
+    targetKind: "item_text",
+    targetQuery,
     afterFoundAction: "tap_item",
     candidateItemHeightPercent: collection.candidateItemHeightPercent,
     clickSafePoint: collection.clickSafePoint,
     scrollStepPercent: collection.scrollStepPercent,
     failureStrategy: collection.failureStrategy
   };
+}
+
+function isDeprecatedGridCandidatePatrolAsset(element: ManualPageElementAsset): boolean {
+  if (element.abilityType !== "grid_candidate") {
+    return false;
+  }
+  return !gridCandidateHasSemanticTarget(element.scrollProfile);
+}
+
+function isDeprecatedGridCandidateOperationEdge(edge: OperationEdge): boolean {
+  return edge.actionPolicies.some((policy) => {
+    const params = policy.action.params ?? {};
+    return params.abilityType === "grid_candidate" && !gridCandidateHasSemanticTarget(isRecordObject(params.scrollProfile) ? params.scrollProfile : undefined);
+  });
+}
+
+function gridCandidateHasSemanticTarget(scrollProfile: Record<string, unknown> | undefined): boolean {
+  if (!scrollProfile) {
+    return false;
+  }
+  const targetQuery = stringRecordField(scrollProfile, "targetQuery");
+  const targetKind = stringRecordField(scrollProfile, "targetKind");
+  return Boolean(targetQuery && targetKind !== "nth_item");
 }
 
 function readManualPageTasks(node: BusinessNode): ManualPageTaskAsset[] {

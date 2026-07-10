@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 describe("grid candidate recovery action", () => {
-  it("maps recovery attempts to the next visual candidate index", async () => {
+  it("does not switch candidate indexes for deprecated grid candidates without a semantic target", async () => {
     const { actionWithGridCandidateAttempt } = await import("./graph-run-service.js");
     const action = {
       id: "step-grid",
@@ -39,8 +39,8 @@ describe("grid candidate recovery action", () => {
     } as ActionStep;
 
     expect(actionWithGridCandidateAttempt(action, undefined).params.candidateIndex).toBe(0);
-    expect(actionWithGridCandidateAttempt(action, 1).params.candidateIndex).toBe(1);
-    expect(actionWithGridCandidateAttempt(action, 8).params.candidateIndex).toBe(2);
+    expect(actionWithGridCandidateAttempt(action, 1).params.candidateIndex).toBe(0);
+    expect(actionWithGridCandidateAttempt(action, 8).params.candidateIndex).toBe(0);
   });
 
   it("does not switch candidates for parameterized grid targets", async () => {
@@ -1714,13 +1714,13 @@ describe("GraphRunService", () => {
     expect(driver.actions.filter((action: { type: string }) => action.type === "tap")).toHaveLength(2);
     expect(run.stepResults).toHaveLength(2);
     expect(run.stepResults.map((step: { status: string }) => step.status)).toEqual(["failed", "passed"]);
-    expect(run.stepResults[0]?.metadata.graph.deviations).toEqual([
+    expect(run.stepResults[0]?.metadata.graph.deviations).toEqual(expect.arrayContaining([
       expect.objectContaining({
         expectedNodeId: targetNode.id,
         actualNodeId: detourNode.id,
         action: "replan_required"
       })
-    ]);
+    ]));
     expect(run.stepResults[1]?.metadata.graph).toEqual(
       expect.objectContaining({
         recoveryAttempt: 1,
@@ -1747,7 +1747,7 @@ describe("GraphRunService", () => {
     );
   });
 
-  it("backs to the list page and tries the next grid candidate when a downstream path fails", async () => {
+  it("fails deprecated grid candidate edges instead of trying the next recorded slot", async () => {
     context = await createContext();
     const { storage } = context;
     const driver = new ClassGridRetryGraphMockDriver(context.tempRoot);
@@ -1766,44 +1766,30 @@ describe("GraphRunService", () => {
     await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
 
     const run = storage.getRun(started.run.id);
-    expect(run.status).toBe("passed");
-    expect(driver.actions).toEqual([
-      { type: "tap", x: 270, y: 384 },
-      { type: "back" },
-      { type: "tap", x: 810, y: 384 },
-      { type: "tap", x: 240, y: 360 }
-    ]);
-    expect(run.stepResults.map((step: { status: string }) => step.status)).toEqual(["passed", "failed", "passed", "passed"]);
-    expect(run.stepResults[2]?.metadata.graph).toEqual(
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(run.stepResults.map((step: { status: string }) => step.status)).toEqual(["failed"]);
+    expect(run.stepResults[0]?.metadata.semantic).toEqual(
       expect.objectContaining({
-        recoveryAttempt: 1,
-        edgeKey: "home.grid.to.class-detail"
+        reason: "deprecated_grid_candidate_without_target"
       })
     );
-    expect(run.stepResults[2]?.metadata.semantic).toEqual(
-      expect.objectContaining({
-        candidateIndex: 1
-      })
-    );
-    expect(run.events).toEqual(
+    expect(run.events).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: "runner_error",
-          severity: "warning",
-          summary: "Graph run returned to a grid candidate source page before retrying the next candidate",
-          detail: expect.stringContaining('"candidateIndex":1')
+          summary: expect.stringContaining("retrying the next candidate")
         })
       ])
     );
   });
 
-  it("uses className runtime param to enter the matching class card from a legacy grid ability", async () => {
+  it("uses className runtime param to enter the matching class card from a semantic grid ability", async () => {
     context = await createContext();
     const { storage } = context;
     const driver = new ClassGridRetryGraphMockDriver(context.tempRoot);
     const { GraphRunService } = await import("./graph-run-service.js");
     const service = new GraphRunService(storage, driver, new ClassGridTargetOcrService(() => driver.currentText));
-    const { graph, targetNode } = seedClassGridRetryGraph(storage);
+    const { graph, targetNode } = seedClassGridRetryGraph(storage, { semanticGridTarget: true });
 
     const started = await service.start({
       deviceSerial: driver.device.serial,
@@ -1831,7 +1817,7 @@ describe("GraphRunService", () => {
       })
     );
     expect(driver.actions).toEqual([
-      { type: "tap", x: 810, y: 300 },
+      { type: "tap", x: 840, y: 295 },
       { type: "tap", x: 240, y: 360 }
     ]);
     expect(run.stepResults[0]?.metadata.semantic).toEqual(
@@ -2786,7 +2772,7 @@ function seedDetourGraph(storage: any): { graph: { id: string }; detourNode: Bus
   return { graph, detourNode: detour, targetNode: target };
 }
 
-function seedClassGridRetryGraph(storage: any): { graph: { id: string }; targetNode: BusinessNode } {
+function seedClassGridRetryGraph(storage: any, options: { semanticGridTarget?: boolean } = {}): { graph: { id: string }; targetNode: BusinessNode } {
   const graph = storage.createBusinessGraph({
     appId: "demo-app",
     targetApp: { androidPackageName: "com.demo" },
@@ -2846,14 +2832,19 @@ function seedClassGridRetryGraph(storage: any): { graph: { id: string }; targetN
           abilityType: "grid_candidate",
           elementLabel: "班级列表",
           region: { x: 0, y: 10, width: 100, height: 30 },
-          candidateIndex: 0,
-          maxCandidateAttempts: 2,
-          tapPointPercent: { x: 25, y: 20 },
+          ...(!options.semanticGridTarget
+            ? {
+                candidateIndex: 0,
+                maxCandidateAttempts: 2,
+                tapPointPercent: { x: 25, y: 20 }
+              }
+            : {}),
           scrollProfile: {
             containerKind: "grid_list",
             direction: "vertical",
             columns: 2,
-            targetKind: "nth_item",
+            targetKind: options.semanticGridTarget ? "item_text" : "nth_item",
+            ...(options.semanticGridTarget ? { targetQuery: "{{className}}" } : {}),
             afterFoundAction: "tap_item",
             candidateItemHeightPercent: 30,
             clickSafePoint: { xPercent: 50, yPercent: 28 },

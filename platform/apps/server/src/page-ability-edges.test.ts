@@ -266,7 +266,7 @@ describe("page ability route edges", () => {
     expect(withPageAbilityEdges(graph([home, search]), "android").edges).toEqual([]);
   });
 
-  it("turns saved grid candidate and conditional page abilities into plannable edges", () => {
+  it("turns semantic grid candidate and conditional page abilities into plannable edges", () => {
     const home = pageNode("node-home", "classin.home", "主页", {
       assetRecordingManualElements: [
         {
@@ -283,7 +283,8 @@ describe("page ability route edges", () => {
             containerKind: "grid_list",
             direction: "vertical",
             columns: 2,
-            targetKind: "nth_item",
+            targetKind: "item_text",
+            targetQuery: "{{className}}",
             afterFoundAction: "tap_item",
             candidateItemHeightPercent: 24.5,
             clickSafePoint: { xPercent: 50, yPercent: 28 },
@@ -328,15 +329,18 @@ describe("page ability route edges", () => {
         type: "tap_on_image",
         params: expect.objectContaining({
           abilityType: "grid_candidate",
-          tapPointPercent: { x: 25, y: 6.86 },
-          candidateIndex: 0,
-          maxCandidateAttempts: 8,
           scrollProfile: expect.objectContaining({
+            targetKind: "item_text",
+            targetQuery: "{{className}}",
             failureStrategy: "try_next_candidate"
           })
         })
       })
     );
+    expect(routePlan.edges[0]?.edge.actionPolicies[0]?.action.params).not.toEqual(expect.objectContaining({
+      candidateIndex: expect.any(Number),
+      tapPointPercent: expect.any(Object)
+    }));
   });
 
   it("keeps top bar icon locator metadata on generated page ability edges", () => {
@@ -398,19 +402,15 @@ describe("page ability route edges", () => {
     const home = pageNode("node-home", "classin.home", "主页", {
       assetRecordingManualElements: [
         {
-          id: "manual_grid",
-          label: "班级列表",
-          locator: "image-region:3.06,30.44,93.99,59.13",
+          id: "manual_settings",
+          label: "设置",
+          locator: "text:设置",
+          locatorKind: "text_locator",
+          targetText: "设置",
           actionKind: "tap",
-          abilityType: "grid_candidate",
           availability: "visible",
           outcomeType: "navigate",
-          targetLabel: "班级详情",
-          scrollProfile: {
-            containerKind: "grid_list",
-            direction: "vertical",
-            columns: 2
-          }
+          targetLabel: "设置"
         }
       ]
     });
@@ -422,12 +422,12 @@ describe("page ability route edges", () => {
         code: "PAGE_ABILITY_TARGET_MISSING",
         severity: "error",
         nodeId: home.id,
-        message: expect.stringContaining("班级列表")
+        message: expect.stringContaining("设置")
       })
     ]);
   });
 
-  it("executes grid candidate abilities as visual candidate taps even when the recorded action kind is scroll", () => {
+  it("ignores legacy grid candidate abilities without a semantic target", () => {
     const home = pageNode("node-home", "classin.home", "主页", {
       assetRecordingManualElements: [
         {
@@ -453,17 +453,7 @@ describe("page ability route edges", () => {
     const target = pageNode("node-class-detail", "classin.class.detail", "班级详情");
     const nextGraphVersion = withPageAbilityEdges(graph([home, target]), "android");
 
-    expect(nextGraphVersion.edges[0]?.actionPolicies[0]?.action).toEqual(
-      expect.objectContaining({
-        type: "tap_on_image",
-        params: expect.objectContaining({
-          abilityType: "grid_candidate",
-          tapPointPercent: { x: 25, y: 6.86 },
-          candidateIndex: 0,
-          maxCandidateAttempts: 8
-        })
-      })
-    );
+    expect(nextGraphVersion.edges).toEqual([]);
   });
 
   it("passes semantic area and target text to visual tap actions for runtime relocation", () => {

@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const defaultRapidOcrEndpoint = "http://127.0.0.1:8766/ocr";
 const defaultStartupTimeoutMs = 30_000;
+const defaultReadinessTimeoutMs = 5_000;
+const smokeTestPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 export type OcrSidecarHandle = {
   started: boolean;
@@ -18,13 +21,31 @@ export async function ensureRapidOcrSidecar(env: NodeJS.ProcessEnv = process.env
 
   const endpoint = env.RAPID_OCR_ENDPOINT || defaultRapidOcrEndpoint;
   const healthUrl = rapidOcrHealthUrl(endpoint);
-  if (await isHealthy(healthUrl)) {
+  const readiness = await checkRapidOcrReadiness(endpoint);
+  if (readiness.ok) {
     console.log(`RapidOCR sidecar already available at ${healthUrl}`);
+    return noopSidecar();
+  }
+  if (readiness.healthOk) {
+    const message = `RapidOCR sidecar at ${healthUrl} failed OCR smoke test: ${readiness.error ?? "unknown error"}`;
+    if (isRapidOcrRequired(env)) {
+      throw new Error(message);
+    }
+    console.warn(message);
     return noopSidecar();
   }
 
   const scriptPath = env.RAPID_OCR_SCRIPT || defaultRapidOcrScriptPath();
-  const python = env.RAPID_OCR_PYTHON || defaultRapidOcrPythonPath();
+  const python = resolveRapidOcrPythonPath(env);
+  if (!python) {
+    const message =
+      "RapidOCR sidecar not started: .venv-paddleocr/bin/python is missing. Run `uv venv .venv-paddleocr --python 3.11 && uv pip install --python .venv-paddleocr/bin/python rapidocr onnxruntime pillow`, or set RAPID_OCR_PYTHON explicitly.";
+    if (isRapidOcrRequired(env)) {
+      throw new Error(message);
+    }
+    console.warn(message);
+    return noopSidecar();
+  }
   const child = spawn(python, [scriptPath], {
     cwd: projectRoot(),
     env: {
@@ -50,7 +71,7 @@ export async function ensureRapidOcrSidecar(env: NodeJS.ProcessEnv = process.env
 
   const startupTimeoutMs = positiveNumber(env.RAPID_OCR_STARTUP_TIMEOUT_MS) ?? defaultStartupTimeoutMs;
   try {
-    await waitForHealth(healthUrl, child, startupTimeoutMs);
+    await waitForReadiness(endpoint, child, startupTimeoutMs);
     console.log(`RapidOCR sidecar started at ${healthUrl}`);
     return {
       started: true,
@@ -58,7 +79,11 @@ export async function ensureRapidOcrSidecar(env: NodeJS.ProcessEnv = process.env
     };
   } catch (error) {
     await stopChild(child);
-    console.warn(`RapidOCR sidecar failed to start: ${errorToString(error)}`);
+    const message = `RapidOCR sidecar failed to start: ${errorToString(error)}`;
+    if (isRapidOcrRequired(env)) {
+      throw new Error(message);
+    }
+    console.warn(message);
     return noopSidecar();
   }
 }
@@ -75,13 +100,23 @@ export function shouldAutoStartRapidOcrSidecar(env: NodeJS.ProcessEnv = process.
   return isLocalRapidOcrEndpoint(endpoint);
 }
 
+function isRapidOcrRequired(env: NodeJS.ProcessEnv): boolean {
+  return (env.OCR_ENGINE || "auto").toLowerCase() === "rapid";
+}
+
 export function rapidOcrHealthUrl(endpoint: string): string {
   return endpoint.replace(/\/ocr\/?$/, "/health");
 }
 
-function defaultRapidOcrPythonPath(): string {
+export function resolveRapidOcrPythonPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (env.RAPID_OCR_PYTHON) {
+    return env.RAPID_OCR_PYTHON;
+  }
   const localPython = path.join(projectRoot(), ".venv-paddleocr", "bin", "python");
-  return existsSync(localPython) ? localPython : "python3";
+  if (existsSync(localPython)) {
+    return localPython;
+  }
+  return env.RAPID_OCR_ALLOW_SYSTEM_PYTHON === "1" ? "python3" : undefined;
 }
 
 function defaultRapidOcrScriptPath(): string {
@@ -111,18 +146,55 @@ async function isHealthy(healthUrl: string): Promise<boolean> {
   }
 }
 
-async function waitForHealth(healthUrl: string, child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<void> {
+type RapidOcrReadiness = {
+  ok: boolean;
+  healthOk: boolean;
+  error?: string;
+};
+
+async function checkRapidOcrReadiness(endpoint: string, timeoutMs = defaultReadinessTimeoutMs): Promise<RapidOcrReadiness> {
+  const healthUrl = rapidOcrHealthUrl(endpoint);
+  const healthOk = await isHealthy(healthUrl);
+  if (!healthOk) {
+    return { ok: false, healthOk: false };
+  }
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        imageBase64: smokeTestPngBase64,
+        lang: "eng+chi_sim"
+      }),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!response.ok) {
+      return { ok: false, healthOk: true, error: `HTTP ${response.status}: ${await response.text()}` };
+    }
+    const payload = (await response.json()) as { engine?: unknown; boxes?: unknown };
+    if (payload.engine !== "rapidocr" || !Array.isArray(payload.boxes)) {
+      return { ok: false, healthOk: true, error: "unexpected RapidOCR smoke response" };
+    }
+    return { ok: true, healthOk: true };
+  } catch (error) {
+    return { ok: false, healthOk: true, error: errorToString(error) };
+  }
+}
+
+async function waitForReadiness(endpoint: string, child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (child.exitCode !== null) {
       throw new Error(`process exited with code ${child.exitCode}`);
     }
-    if (await isHealthy(healthUrl)) {
+    if ((await checkRapidOcrReadiness(endpoint)).ok) {
       return;
     }
     await sleep(250);
   }
-  throw new Error(`health check timed out after ${timeoutMs}ms`);
+  throw new Error(`readiness check timed out after ${timeoutMs}ms`);
 }
 
 function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {

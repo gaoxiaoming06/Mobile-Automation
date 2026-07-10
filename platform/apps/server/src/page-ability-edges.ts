@@ -366,6 +366,7 @@ function isNavigablePageAbility(element: ManualPageAbilityElement, platform: Pla
   return (
     Boolean(element.locator) &&
     Boolean(element.targetNodeId) &&
+    !isDeprecatedGridCandidateAbility(element) &&
     (element.outcomeType === "navigate" || element.outcomeType === "compound_navigation") &&
     (element.platformScope === undefined || element.platformScope === platform || element.platformScope === "mobile-both")
   );
@@ -381,6 +382,7 @@ function isNavigablePageTransition(transition: PageTransitionAsset, platform: Pl
 function isPotentialRouteAbility(element: ManualPageAbilityElement, platform: PlatformScope): boolean {
   return (
     Boolean(element.locator) &&
+    !isDeprecatedGridCandidateAbility(element) &&
     (element.outcomeType === "navigate" || element.outcomeType === "compound_navigation") &&
     (element.platformScope === undefined || element.platformScope === platform || element.platformScope === "mobile-both")
   );
@@ -519,7 +521,11 @@ function pageTransitionEdge(
   if (!element?.locator || !targetNode) {
     return undefined;
   }
-  const action = pageAbilityAction(pageTransitionBackedAbility(element, transition));
+  const ability = pageTransitionBackedAbility(element, transition);
+  if (isDeprecatedGridCandidateAbility(ability)) {
+    return undefined;
+  }
+  const action = pageAbilityAction(ability);
   const edgeKey = `pagetransition.${slug(sourceNode.key)}.${slug(targetNode.key)}.${slug(transition.id ?? `${transition.elementId}.${transition.action ?? "tap"}`)}`;
   return {
     id: `edge_${edgeKey}`,
@@ -808,30 +814,19 @@ function abilityActionParams(element: ManualPageAbilityElement): Record<string, 
   if (element.abilityType !== "grid_candidate" || element.scrollProfile?.containerKind !== "grid_list") {
     return base;
   }
-  const columns = Math.max(1, Math.floor(element.scrollProfile.columns ?? 1));
-  const candidateHeight = element.scrollProfile.candidateItemHeightPercent;
-  const clickSafePoint = element.scrollProfile.clickSafePoint;
-  if (!candidateHeight || !clickSafePoint) {
-    return base;
-  }
-  return {
-    ...base,
-    candidateIndex: 0,
-    maxCandidateAttempts: maxCandidateAttemptsForGrid(element.scrollProfile),
-    tapPointPercent: {
-      x: roundPercent(clickSafePoint.xPercent / columns),
-      y: roundPercent((candidateHeight * clickSafePoint.yPercent) / 100)
-    }
-  };
+  return base;
 }
 
-function maxCandidateAttemptsForGrid(scrollProfile: NonNullable<ManualPageAbilityElement["scrollProfile"]>): number {
-  const columns = Math.max(1, Math.floor(scrollProfile.columns ?? 1));
-  const candidateHeight = scrollProfile.candidateItemHeightPercent;
-  if (!candidateHeight || candidateHeight <= 0) {
-    return columns;
+function isDeprecatedGridCandidateAbility(element: Pick<ManualPageAbilityElement, "abilityType" | "scrollProfile">): boolean {
+  if (element.abilityType !== "grid_candidate") {
+    return false;
   }
-  return Math.max(columns, Math.floor(100 / candidateHeight) * columns);
+  return !gridCandidateHasSemanticTarget(element.scrollProfile);
+}
+
+function gridCandidateHasSemanticTarget(scrollProfile: ManualPageAbilityElement["scrollProfile"]): boolean {
+  const targetQuery = scrollProfile?.targetQuery?.trim();
+  return Boolean(targetQuery && scrollProfile?.targetKind !== "nth_item");
 }
 
 function semanticAreaForLocator(locator: string): NonNullable<ManualPageAbilityElement["semanticArea"]> | undefined {
@@ -876,10 +871,6 @@ function actionVerb(actionKind: ManualPageAbilityElement["actionKind"]): string 
     return "输入";
   }
   return "点击";
-}
-
-function roundPercent(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 function stringValue(value: unknown): string {

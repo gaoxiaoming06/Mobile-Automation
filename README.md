@@ -126,7 +126,11 @@ export RAPID_OCR_ENDPOINT=http://127.0.0.1:8766/ocr
 pnpm --filter @mobile-automation/server dev
 ```
 
-The server will launch `scripts/rapidocr-http-service.py` with `.venv-paddleocr/bin/python` automatically when `OCR_ENGINE=auto` or `OCR_ENGINE=rapid` uses the default local endpoint. To manage RapidOCR yourself, start it manually and the server will reuse the existing service:
+The server will launch `scripts/rapidocr-http-service.py` with `.venv-paddleocr/bin/python` automatically when `OCR_ENGINE=auto` or `OCR_ENGINE=rapid` uses the default local endpoint. It does not fall back to the system `python3` by default, because Homebrew / IDE-bundled Python versions often do not have the OCR modules installed. If you intentionally want to use a non-project Python runtime, set `RAPID_OCR_PYTHON=/path/to/python` or `RAPID_OCR_ALLOW_SYSTEM_PYTHON=1`.
+
+When reusing an existing RapidOCR service on `127.0.0.1:8766`, the server checks both `/health` and a tiny real `/ocr` smoke request. A service that only answers `/health` but cannot import `rapidocr` is rejected with an explicit startup warning. If `OCR_ENGINE=rapid` is forced, this becomes a startup error; with `OCR_ENGINE=auto`, the server can continue and let the OCR composite fall back to other engines.
+
+To manage RapidOCR yourself, start it manually with the project venv and the server will reuse the existing service:
 
 ```bash
 .venv-paddleocr/bin/python scripts/rapidocr-http-service.py

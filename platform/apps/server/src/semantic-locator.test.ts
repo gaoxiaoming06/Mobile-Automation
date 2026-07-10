@@ -84,7 +84,7 @@ describe("SemanticStepResolver", () => {
     );
   });
 
-  it("uses grid candidate index to tap different cells inside a marked visual list region", async () => {
+  it("rejects legacy grid candidate index taps without a semantic target", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
       ocr: new LayoutOcrService(layout("主页")),
@@ -114,13 +114,15 @@ describe("SemanticStepResolver", () => {
       })
     });
 
-    expect(actions).toEqual([{ type: "tap", x: 700, y: 784 }]);
+    expect(actions).toEqual([]);
     expect(outcome).toEqual(
       expect.objectContaining({
-        resolved: true,
+        supported: true,
+        resolved: false,
         metadata: expect.objectContaining({
-          candidateIndex: 3,
-          candidatePointPercent: { x: 75, y: 32 }
+          action: "fail",
+          abilityType: "grid_candidate",
+          reason: "deprecated_grid_candidate_without_target"
         })
       })
     );
@@ -2579,7 +2581,7 @@ describe("SemanticStepResolver", () => {
     );
   });
 
-  it("executes grid candidate image regions by tapping the configured safe point", async () => {
+  it("rejects grid candidate image regions without a semantic target instead of tapping the configured safe point", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
       ocr: new LayoutOcrService(layout("首页")),
@@ -2606,16 +2608,16 @@ describe("SemanticStepResolver", () => {
       })
     });
 
-    expect(actions).toEqual([{ type: "tap", x: 287, y: 828 }]);
+    expect(actions).toEqual([]);
     expect(outcome).toEqual(
       expect.objectContaining({
         supported: true,
-        resolved: true,
+        resolved: false,
         metadata: expect.objectContaining({
           type: "image_region",
-          action: "tap",
-          tapPointPercent: { x: 25, y: 6.86 },
-          center: { x: 287, y: 828 }
+          action: "fail",
+          abilityType: "grid_candidate",
+          reason: "deprecated_grid_candidate_without_target"
         })
       })
     );
@@ -2673,7 +2675,7 @@ describe("SemanticStepResolver", () => {
       })
     });
 
-    expect(actions).toEqual([{ type: "tap", x: 700, y: 784 }]);
+    expect(actions).toEqual([{ type: "tap", x: 650, y: 760 }]);
     expect(outcome).toEqual(
       expect.objectContaining({
         supported: true,
@@ -2747,7 +2749,7 @@ describe("SemanticStepResolver", () => {
       })
     });
 
-    expect(actions).toEqual([{ type: "tap", x: 700, y: 784 }]);
+    expect(actions).toEqual([{ type: "tap", x: 650, y: 760 }]);
     expect(outcome).toEqual(
       expect.objectContaining({
         supported: true,
@@ -2757,6 +2759,89 @@ describe("SemanticStepResolver", () => {
           abilityType: "grid_candidate",
           targetQuery: "班级四十二号",
           relocatedBy: "ocr_text_in_grid"
+        })
+      })
+    );
+  });
+
+  it("taps the OCR matched collection item instead of a stale recorded grid column", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "主页\n班级七十号\n415641",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1200,
+        height: 2000,
+        boxes: [
+          {
+            text: "班级七十号",
+            confidence: 0.95,
+            x: 84,
+            y: 1640,
+            width: 130,
+            height: 28
+          },
+          {
+            text: "415641",
+            confidence: 0.99,
+            x: 467,
+            y: 1646,
+            width: 95,
+            height: 24
+          }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:home_class_grid",
+        locatorKind: "collection_item_locator",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        abilityType: "grid_candidate",
+        structuralLocator: {
+          strategy: "collection_grid",
+          role: "class_grid",
+          searchHintRegion: { x: 3.06, y: 30.44, width: 93.99, height: 59.13 }
+        },
+        scrollProfile: {
+          containerKind: "grid_list",
+          direction: "vertical",
+          columns: 2,
+          targetKind: "item_text",
+          targetQuery: "415641",
+          candidateItemHeightPercent: 24.5,
+          clickSafePoint: { xPercent: 50, yPercent: 28 },
+          scrollStepPercent: 65
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 515, y: 1658 }]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          action: "tap",
+          abilityType: "grid_candidate",
+          targetQuery: "415641",
+          actual: "415641",
+          relocatedBy: "ocr_text_in_grid",
+          center: { x: 515, y: 1658 }
         })
       })
     );
@@ -2831,7 +2916,7 @@ describe("SemanticStepResolver", () => {
     expect(actions).toEqual([
       { type: "swipe", startX: 500, startY: 700, endX: 500, endY: 1300, durationMs: 450 },
       { type: "swipe", startX: 500, startY: 1300, endX: 500, endY: 700, durationMs: 450 },
-      { type: "tap", x: 700, y: 784 }
+      { type: "tap", x: 650, y: 760 }
     ]);
     expect(outcome).toEqual(
       expect.objectContaining({
@@ -2914,7 +2999,7 @@ describe("SemanticStepResolver", () => {
       { type: "swipe", startX: 500, startY: 1300, endX: 500, endY: 700, durationMs: 450 },
       { type: "swipe", startX: 500, startY: 1300, endX: 500, endY: 700, durationMs: 450 },
       { type: "swipe", startX: 500, startY: 1300, endX: 500, endY: 700, durationMs: 450 },
-      { type: "tap", x: 700, y: 784 }
+      { type: "tap", x: 650, y: 760 }
     ]);
     expect(outcome).toEqual(
       expect.objectContaining({

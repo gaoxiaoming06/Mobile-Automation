@@ -15,7 +15,7 @@ export type ManualPageTransitionCompoundStep = {
 };
 export type ManualPageTransitionAvailability = "visible" | "after_scroll" | "conditional";
 export type ManualPageAbilityType = "scroll_candidate" | "grid_candidate" | "conditional_tap";
-export type ManualPageElementLocatorKind = "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator";
+export type ManualPageElementLocatorKind = "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator" | "top_bar_icon_locator" | "ocr_anchor_offset";
 export type ManualPageElementDynamicMask = {
   kind: "avatar" | "text" | "image" | "number" | "custom";
   label?: string;
@@ -183,6 +183,9 @@ export function persistManualPageTransitionAsset(input: PersistManualPageTransit
   if (!isConfirmedPageAsset(sourceNode) || !isConfirmedPageAsset(targetNode)) {
     return { status: "skipped", reason: "source_or_target_page_asset_missing" };
   }
+  if (isDeprecatedGridCandidateAsset(input)) {
+    return { status: "skipped", reason: "grid_candidate_target_required" };
+  }
 
   rejectStaleManualTransitionEdges(input, sourceNode, targetNode);
   const key = manualTransitionKey(sourceNode.key, targetNode.key, input.actionKind, input.locator, compoundStepsSignature(input.compoundSteps));
@@ -268,6 +271,9 @@ export function persistManualPageElementAsset(input: PersistManualPageElementInp
   const sourceNode = input.storage.findBusinessNodeById(input.graphVersionId, input.sourceNodeId);
   if (!isConfirmedPageAsset(sourceNode)) {
     return { status: "skipped", reason: "source_page_asset_missing" };
+  }
+  if (isDeprecatedGridCandidateAsset(input)) {
+    return { status: "skipped", reason: "grid_candidate_target_required" };
   }
   if ((input.outcomeType === "navigate" || input.outcomeType === "compound_navigation") && input.targetNodeId) {
     const targetNode = input.storage.findBusinessNodeById(input.graphVersionId, input.targetNodeId);
@@ -582,6 +588,14 @@ function edgeStatusFor(input: PersistManualPageTransitionInput): OperationEdge["
   return input.outcomeType === "navigate" || input.outcomeType === "compound_navigation" ? "active" : "draft";
 }
 
+function isDeprecatedGridCandidateAsset(input: Pick<PersistManualPageElementInput, "abilityType" | "scrollProfile">): boolean {
+  if (input.abilityType !== "grid_candidate") {
+    return false;
+  }
+  const targetQuery = input.scrollProfile?.targetQuery?.trim();
+  return !targetQuery || input.scrollProfile?.targetKind === "nth_item";
+}
+
 function isConfirmedPageAsset(node: BusinessNode | undefined): node is BusinessNode {
   if (!node || node.status === "deprecated") {
     return false;
@@ -689,39 +703,13 @@ function manualAbilityActionParams(input: PersistManualPageTransitionInput): Rec
   if ((input.locator.startsWith("image-region:") || input.locator.startsWith("runtime-locator:")) && input.abilityType !== "grid_candidate" && targetText) {
     base.targetText = targetText;
   }
-  if (input.locator.startsWith("image-region:") && input.tapPointPercent) {
+  if (input.locator.startsWith("image-region:") && input.tapPointPercent && input.abilityType !== "grid_candidate") {
     base.tapPointPercent = input.tapPointPercent;
   }
   if (input.locator.startsWith("image-region:") && input.visualLocator) {
     base.visualLocator = input.visualLocator;
   }
-  if (input.abilityType !== "grid_candidate" || input.scrollProfile?.containerKind !== "grid_list") {
-    return base;
-  }
-  const columns = Math.max(1, Math.floor(input.scrollProfile.columns ?? 1));
-  const candidateHeight = input.scrollProfile.candidateItemHeightPercent;
-  const clickSafePoint = input.scrollProfile.clickSafePoint;
-  if (!candidateHeight || !clickSafePoint) {
-    return base;
-  }
-  return {
-    ...base,
-    candidateIndex: 0,
-    maxCandidateAttempts: maxCandidateAttemptsForGrid(input.scrollProfile),
-    tapPointPercent: {
-      x: roundPercent(clickSafePoint.xPercent / columns),
-      y: roundPercent((candidateHeight * clickSafePoint.yPercent) / 100)
-    }
-  };
-}
-
-function maxCandidateAttemptsForGrid(scrollProfile: ManualPageTransitionScrollProfile): number {
-  const columns = Math.max(1, Math.floor(scrollProfile.columns ?? 1));
-  const candidateHeight = scrollProfile.candidateItemHeightPercent;
-  if (!candidateHeight || candidateHeight <= 0) {
-    return columns;
-  }
-  return Math.max(columns, Math.floor(100 / candidateHeight) * columns);
+  return base;
 }
 
 function semanticAreaForLocator(locator: string): PersistManualPageTransitionInput["semanticArea"] | undefined {
@@ -738,10 +726,6 @@ function semanticAreaForRegion(region: { x: number; y: number; width: number; he
     return "bottom";
   }
   return "content";
-}
-
-function roundPercent(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 function actionTypeFor(input: PersistManualPageTransitionInput): ActionStep["type"] {

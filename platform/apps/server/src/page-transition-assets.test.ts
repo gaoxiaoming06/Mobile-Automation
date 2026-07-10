@@ -41,7 +41,7 @@ describe("persistManualPageTransitionAsset", () => {
     ]);
   });
 
-  it("persists a grid candidate page ability with candidate layout metadata", () => {
+  it("rejects legacy grid candidate page abilities without an OCR target", () => {
     const storage = new MemoryPageTransitionStorage();
     const source = pageNode({ id: "node-home", key: "classin.home", name: "主页" });
     const target = pageNode({ id: "node-class-detail", key: "classin.class.detail", name: "班级详情" });
@@ -73,23 +73,11 @@ describe("persistManualPageTransitionAsset", () => {
       }
     });
 
-    expect(result.status).toBe("saved");
-    expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toEqual([
-      expect.objectContaining({
-        label: "打开班级详情",
-        abilityType: "grid_candidate",
-        actionKind: "tap",
-        scrollProfile: expect.objectContaining({
-          containerKind: "grid_list",
-          columns: 2,
-          candidateItemHeightPercent: 24.5,
-          clickSafePoint: { xPercent: 50, yPercent: 28 },
-          scrollStepPercent: 65,
-          failureStrategy: "try_next_candidate"
-        }),
-        targetNodeId: target.id
-      })
-    ]);
+    expect(result).toEqual({
+      status: "skipped",
+      reason: "grid_candidate_target_required"
+    });
+    expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toBeUndefined();
   });
 
   it("persists structural locator evidence and dynamic masks for non-text profile entries", () => {
@@ -194,7 +182,8 @@ describe("persistManualPageTransitionAsset", () => {
         containerKind: "grid_list",
         direction: "vertical",
         columns: 2,
-        targetKind: "nth_item",
+        targetKind: "item_text",
+        targetQuery: "{{className}}",
         afterFoundAction: "tap_item",
         candidateItemHeightPercent: 24.5,
         clickSafePoint: { xPercent: 50, yPercent: 28 },
@@ -240,6 +229,11 @@ describe("persistManualPageTransitionAsset", () => {
         }
       })
     );
+    expect(storage.edges[0]?.actionPolicies[0]?.action.params).not.toEqual(expect.objectContaining({
+      candidateIndex: expect.any(Number),
+      maxCandidateAttempts: expect.any(Number),
+      tapPointPercent: expect.any(Object)
+    }));
   });
 
   it("persists a manual input element with a separate tap point inside the visual region", () => {
@@ -1136,7 +1130,7 @@ describe("persistManualPageTransitionAsset", () => {
     ]);
   });
 
-  it("uses the first grid candidate safe point instead of the whole container center", () => {
+  it("rejects legacy grid candidate transitions without an OCR target", () => {
     const storage = new MemoryPageTransitionStorage();
     const source = pageNode({ id: "node-home", key: "classin.home", name: "主页" });
     const target = pageNode({ id: "node-class-detail", key: "classin.class.detail", name: "班级详情" });
@@ -1167,26 +1161,15 @@ describe("persistManualPageTransitionAsset", () => {
       }
     });
 
-    expect(result.status).toBe("created");
-    expect(result.edge?.actionPolicies[0]?.action).toEqual(
-      expect.objectContaining({
-        type: "tap_on_image",
-        params: expect.objectContaining({
-          abilityType: "grid_candidate",
-          candidateIndex: 0,
-          maxCandidateAttempts: 8,
-          tapPointPercent: { x: 25, y: 6.86 },
-          scrollProfile: expect.objectContaining({
-            containerKind: "grid_list",
-            columns: 2,
-            failureStrategy: "try_next_candidate"
-          })
-        })
-      })
-    );
+    expect(result).toEqual({
+      status: "skipped",
+      reason: "grid_candidate_target_required"
+    });
+    expect(storage.edges).toEqual([]);
+    expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toBeUndefined();
   });
 
-  it("uses visual candidate tap for grid candidate scroll actions", () => {
+  it("rejects legacy grid candidate scroll transitions without an OCR target", () => {
     const storage = new MemoryPageTransitionStorage();
     const source = pageNode({ id: "node-home", key: "classin.home", name: "主页" });
     const target = pageNode({ id: "node-class-detail", key: "classin.class.detail", name: "班级详情" });
@@ -1216,17 +1199,11 @@ describe("persistManualPageTransitionAsset", () => {
       }
     });
 
-    expect(result.edge?.actionPolicies[0]?.action).toEqual(
-      expect.objectContaining({
-        type: "tap_on_image",
-        params: expect.objectContaining({
-          abilityType: "grid_candidate",
-          candidateIndex: 0,
-          maxCandidateAttempts: 8,
-          tapPointPercent: { x: 25, y: 6.86 }
-        })
-      })
-    );
+    expect(result).toEqual({
+      status: "skipped",
+      reason: "grid_candidate_target_required"
+    });
+    expect(storage.edges).toEqual([]);
   });
 
   it("adds manually marked operation regions back to the source page asset", () => {

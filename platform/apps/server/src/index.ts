@@ -2767,8 +2767,42 @@ async function startAssetDrivenGraphTarget(deviceSerial: string, target: AssetDr
     startAppScope: "current_device",
     executionProfile: "fast_visual",
     stopOnFailure: true,
-    overlay: target.overlay
+    overlay: target.overlay,
+    caseName: assetDrivenGraphRunCaseName(target)
   });
+}
+
+const ASSET_DRIVEN_CASE_NAME_PARAM_KEYS = ["className", "lessonName"] as const;
+
+function assetDrivenGraphRunCaseName(target: AssetDrivenReadyExecutionTarget): string {
+  const prefix = target.overlay.id?.startsWith("asset-driven-recovery-") ? "资产恢复" : "资产测试";
+  const label = target.transitionName?.trim() || `${target.startNodeName} -> ${target.targetNodeName}`;
+  const runtimeParams = assetDrivenRuntimeParamSummary(target.overlay.runtimeParams);
+  return runtimeParams ? `${prefix}｜${label}｜${runtimeParams}` : `${prefix}｜${label}`;
+}
+
+function assetDrivenRuntimeParamSummary(params: Record<string, unknown> | undefined): string | undefined {
+  if (!params) {
+    return undefined;
+  }
+  const parts = ASSET_DRIVEN_CASE_NAME_PARAM_KEYS
+    .map((key) => {
+      const rawValue = params[key];
+      if (typeof rawValue !== "string" && typeof rawValue !== "number" && typeof rawValue !== "boolean") {
+        return undefined;
+      }
+      const value = String(rawValue).trim();
+      if (!value) {
+        return undefined;
+      }
+      return `${key}=${truncateAssetDrivenCaseNameValue(value)}`;
+    })
+    .filter((item): item is string => Boolean(item));
+  return parts.length ? parts.join("，") : undefined;
+}
+
+function truncateAssetDrivenCaseNameValue(value: string): string {
+  return value.length > 24 ? `${value.slice(0, 24)}...` : value;
 }
 
 async function continueAssetDrivenExecutionQueue(input: {
@@ -3617,7 +3651,9 @@ function readManualLocatorKind(value: unknown): ManualPageElementLocatorKind | u
   return value === "text_locator" ||
     value === "visual_locator" ||
     value === "structural_locator" ||
-    value === "collection_item_locator"
+    value === "collection_item_locator" ||
+    value === "top_bar_icon_locator" ||
+    value === "ocr_anchor_offset"
     ? value
     : undefined;
 }

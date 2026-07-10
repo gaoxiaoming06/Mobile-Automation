@@ -129,6 +129,7 @@ export type StartGraphRunInput = {
   overlay?: RuntimeOverlay;
   executionProfile?: "full" | "fast_visual";
   startAppScope?: StartAppScope;
+  caseName?: string;
 };
 
 export type StartedGraphRun = {
@@ -266,7 +267,7 @@ export class GraphRunService {
       input.executionProfile,
       input.startAppPackageName
     );
-    const testCase = graphExecutionPlanToCase(graph.name, executionPlan.steps, graph.targetApp, input.overlay);
+    const testCase = graphExecutionPlanToCase(graph.name, executionPlan.steps, graph.targetApp, input.overlay, input.caseName);
     const run = this.storage.createRun({
       caseName: testCase.name,
       deviceSerial: input.deviceSerial,
@@ -1495,15 +1496,7 @@ export class GraphRunService {
       if (planStep.action?.params.abilityType !== "grid_candidate") {
         continue;
       }
-      if (gridCandidateHasTargetQuery(planStep.action.params)) {
-        return undefined;
-      }
-      const maxCandidateAttempts = typeof planStep.action.params.maxCandidateAttempts === "number" ? Math.floor(planStep.action.params.maxCandidateAttempts) : MAX_GRAPH_REPLAN_ATTEMPTS + 1;
-      const attemptedCount = result.steps.filter((step) => step.edgeId === planStep.edgeId).length;
-      if (attemptedCount >= maxCandidateAttempts) {
-        return undefined;
-      }
-      return { failedStep, gridStep: planStep };
+      return undefined;
     }
     return undefined;
   }
@@ -1530,7 +1523,6 @@ export class GraphRunService {
       }
       await sleep(250);
     }
-    const candidateIndex = Math.min(input.attempt, Math.max(1, Number(input.gridStep.action?.params.maxCandidateAttempts ?? MAX_GRAPH_REPLAN_ATTEMPTS + 1)) - 1);
     this.addDeviceEvent({
       id: createId("event"),
       runId: input.runId,
@@ -1548,7 +1540,6 @@ export class GraphRunService {
         failedEdgeId: input.failedStep.edgeId,
         sourceNodeId: input.gridStep.fromNode.id,
         sourceNodeName: input.gridStep.fromNode.name,
-        candidateIndex,
         latestMatch: summarizeNodeMatch(latestMatch),
         observation: latestObservation ? summarizeObservation(latestObservation) : undefined
       }),
@@ -1563,7 +1554,7 @@ export class GraphRunService {
         status: latestMatch?.node?.id === input.gridStep.fromNode.id ? "planned" : "blocked",
         message:
           latestMatch?.node?.id === input.gridStep.fromNode.id
-            ? `Returned to ${input.gridStep.fromNode.name}; retrying grid candidate #${candidateIndex}.`
+            ? `Returned to ${input.gridStep.fromNode.name}; retrying after semantic relocation.`
             : `Could not return to ${input.gridStep.fromNode.name}; latest state was ${latestMatch?.node?.id ?? latestMatch?.status ?? "unknown"}.`,
         recordedAt: nowIso()
       },
@@ -2141,11 +2132,17 @@ export class GraphTargetResolutionError extends Error {
   }
 }
 
-function graphExecutionPlanToCase(name: string, steps: ExecutionPlanStep[], targetApp?: GraphTargetApp, overlay?: RuntimeOverlay): TestCase {
+function graphExecutionPlanToCase(
+  name: string,
+  steps: ExecutionPlanStep[],
+  targetApp?: GraphTargetApp,
+  overlay?: RuntimeOverlay,
+  caseName?: string
+): TestCase {
   const now = nowIso();
   return {
     id: createId("graph_case"),
-    name: `${name} 目标节点执行`,
+    name: caseName?.trim() || `${name} 目标节点执行`,
     platformScope: "mobile-both",
     targetApp,
     tags: overlay ? ["graph-run", "runtime-overlay"] : ["graph-run"],
@@ -3400,31 +3397,8 @@ function positiveNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-export function actionWithGridCandidateAttempt(action: ActionStep, recoveryAttempt?: number): ActionStep {
-  if (action.params?.abilityType !== "grid_candidate") {
-    return action;
-  }
-  if (gridCandidateHasTargetQuery(action.params)) {
-    return action;
-  }
-  const attempt = Math.max(0, Math.floor(typeof recoveryAttempt === "number" && Number.isFinite(recoveryAttempt) ? recoveryAttempt : 0));
-  const maxCandidateAttempts = Math.max(1, Math.floor(typeof action.params.maxCandidateAttempts === "number" && Number.isFinite(action.params.maxCandidateAttempts) ? action.params.maxCandidateAttempts : MAX_GRAPH_REPLAN_ATTEMPTS + 1));
-  return {
-    ...action,
-    params: {
-      ...action.params,
-      candidateIndex: Math.min(attempt, maxCandidateAttempts - 1)
-    }
-  };
-}
-
-function gridCandidateHasTargetQuery(params: Record<string, unknown>): boolean {
-  const scrollProfile = params.scrollProfile;
-  if (!scrollProfile || typeof scrollProfile !== "object") {
-    return false;
-  }
-  const targetQuery = (scrollProfile as Record<string, unknown>).targetQuery;
-  return typeof targetQuery === "string" && targetQuery.trim().length > 0;
+export function actionWithGridCandidateAttempt(action: ActionStep, _recoveryAttempt?: number): ActionStep {
+  return action;
 }
 
 function latestFailedStep(steps: StepResult[]): StepResult | undefined {

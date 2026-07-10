@@ -2041,7 +2041,10 @@ export function App() {
     setActiveNavItem("settings");
   }
 
-  function openRuns() {
+  function openRuns(options: { keepCurrentRun?: boolean } = {}) {
+    if (!options.keepCurrentRun) {
+      setCurrentRunId("");
+    }
     setActiveNavItem("runs");
     setAutomationTab("runs");
   }
@@ -2734,7 +2737,6 @@ export function App() {
       setAssetDrivenExecution(json.execution);
       if (json.execution.runningItem?.runId) {
         setAssetDrivenPanelRunId(json.execution.runningItem.runId);
-        setCurrentRunId(json.execution.runningItem.runId);
       }
       if (!options.silent) {
         setMessage(`已同步资产测试批次：${json.execution.id}`);
@@ -2793,7 +2795,6 @@ export function App() {
       setAssetDrivenExecutionId(json.assetDrivenExecution?.id ?? json.assetDrivenQueue?.id ?? "");
       setAssetDrivenExecution(json.assetDrivenExecution);
       setAssetPatrolPlan(undefined);
-      setCurrentRunId(json.run.id);
       await refreshRuns();
       setMessage(assetDrivenTestStartMessage(json.run, json.assetDrivenQueue));
     } catch (error) {
@@ -3241,7 +3242,7 @@ export function App() {
             onStop={(runId) => void stopAssetPatrol(runId)}
             onOpenRun={(runId) => {
               setCurrentRunId(runId);
-              openRuns();
+              openRuns({ keepCurrentRun: true });
             }}
           />
         )}
@@ -3288,7 +3289,7 @@ export function App() {
             onStop={(runId) => void stopStabilityExploration(runId)}
             onOpenRun={(runId) => {
               setCurrentRunId(runId);
-              openRuns();
+              openRuns({ keepCurrentRun: true });
             }}
           />
         )}
