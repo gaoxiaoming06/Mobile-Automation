@@ -256,8 +256,24 @@ const defaultDangerousTextPatterns = ["删除", "退出登录", "注销", "支�
 
 type AssetDrivenTransitionCandidate = {
   edge: OperationEdge;
+  sourceNodeId: string;
+  sourceNodeName: string | undefined;
+  routeStartNodeId: string;
   pageTaskId: string | undefined;
   elementId: string | undefined;
+};
+
+type PatrolPageEntry = {
+  node: BusinessNode;
+  depth: number;
+  viaEdge?: OperationEdge;
+};
+
+type PatrolTransitionEntry = {
+  edge: OperationEdge;
+  sourceNode: BusinessNode;
+  targetNode?: BusinessNode;
+  depth: number;
 };
 
 export class AssetPatrolDeviceBusyError extends Error {
@@ -661,7 +677,7 @@ export function buildAssetPatrolPlan(input: {
   if (!isConfirmedStablePage(matched.node)) {
     return diagnosticPlan("CURRENT_PAGE_NOT_CONFIRMED", unconfirmedPageMessage(matched.node, input.config), input.graphVersion.id, matched.node.id);
   }
-  if (input.config.pageScope !== "current_page") {
+  if (input.config.pageScope !== "current_page" && input.config.pageScope !== "reachable_pages") {
     return diagnosticPlan("UNSUPPORTED_SCOPE", "第一版资产驱动巡检先支持当前页面范围；跨页面轮巡后续接入。", input.graphVersion.id, matched.node.id);
   }
   const steps: AssetPatrolPlanStep[] = [];
@@ -671,32 +687,23 @@ export function buildAssetPatrolPlan(input: {
     name: matched.node.name,
     score: matched.score
   };
-  steps.push({
-    id: createId("asset_patrol_plan_step"),
-    order: steps.length + 1,
-    kind: "page_match",
-    label: `页面匹配：${matched.node.name}`,
-    status: "ready",
-    pageModelId: matched.node.id,
-    pageModelName: matched.node.name,
-    evidence: {
-      score: matched.score,
-      observedTexts: input.observation.ocrTexts.slice(0, 12).map((item) => item.text),
-      matcherCount: matched.node.matchers.length
-    }
-  });
-
   const platform = platformFromObservation(input.observation);
   const graphVersionWithAssetEdges = withPageAbilityEdges(input.graphVersion, platform);
-  const elements = readPatrolPageElements(matched.node, platform);
-  const transitions = graphVersionWithAssetEdges.edges
-    .filter((edge) => edge.status === "active" && edge.fromNodeId === matched.node.id && Boolean(edge.actionPolicies[0]))
-    .filter((edge) => !isDeprecatedGridCandidateOperationEdge(edge))
-    .sort((left, right) => Number(isV2PageTransitionEdge(right)) - Number(isV2PageTransitionEdge(left)))
-    .slice(0, input.config.maxTransitions);
-  const tasks = readManualPageTasks(matched.node);
+  const scope = collectPatrolScope({
+    graphVersion: graphVersionWithAssetEdges,
+    startNode: matched.node,
+    config: input.config
+  });
   const issues: AssetPatrolIssue[] = [];
-  if (!elements.length && !transitions.length && !tasks.length) {
+  const assetCounts = scope.pages.reduce(
+    (counts, page) => {
+      counts.elements += readPatrolPageElements(page.node, platform).length;
+      counts.tasks += readManualPageTasks(page.node).length;
+      return counts;
+    },
+    { elements: 0, tasks: 0 }
+  );
+  if (!assetCounts.elements && !scope.transitions.length && !assetCounts.tasks) {
     issues.push({
       code: "NO_PAGE_ASSETS",
       severity: "warning",
@@ -704,78 +711,115 @@ export function buildAssetPatrolPlan(input: {
       pageModelId: matched.node.id
     });
   }
-  for (const element of elements) {
-    const label = elementLabel(element);
-    const parameterizedBy = gridCandidateResolvedByClassName(element as Record<string, unknown>, input.config.runtimeParams) ? "className" : undefined;
-    const needsRepair = isRegionOnlyElement(element, input.observation, input.config.runtimeParams);
+
+  for (const page of scope.pages) {
+    const isStartPage = page.node.id === matched.node.id;
     steps.push({
       id: createId("asset_patrol_plan_step"),
       order: steps.length + 1,
-      kind: "element_relocation",
-      label: `元素可重定位：${label}`,
-      status: needsRepair ? "needs_repair" : "ready",
-      skipReason: needsRepair ? "runtime_relocation_required" : undefined,
-      pageModelId: matched.node.id,
-      pageModelName: matched.node.name,
-      pageElementId: element.id,
-      evidence: {
-        locator: element.locator,
-        locatorKind: element.locatorKind,
-        targetText: elementSemanticText(element, input.observation) ?? element.targetText ?? element.executeText,
-        semanticArea: element.semanticArea,
-        actionKind: element.actionKind,
-        abilityType: element.abilityType,
-        assetFormat: element.assetFormat ?? "legacy",
-        parameterizedBy
-      }
+      kind: "page_match",
+      label: isStartPage ? `页面匹配：${page.node.name}` : `可达页面：${page.node.name}`,
+      status: "ready",
+      pageModelId: page.node.id,
+      pageModelName: page.node.name,
+      evidence: isStartPage
+        ? {
+            score: matched.score,
+            observedTexts: input.observation.ocrTexts.slice(0, 12).map((item) => item.text),
+            matcherCount: page.node.matchers.length,
+            depth: page.depth
+          }
+        : {
+            matcherCount: page.node.matchers.length,
+            depth: page.depth,
+            viaTransitionId: page.viaEdge?.id,
+            viaTransitionName: page.viaEdge?.name
+          }
     });
+
+    const pageObservation = isStartPage ? input.observation : undefined;
+    for (const element of readPatrolPageElements(page.node, platform)) {
+      const label = elementLabel(element);
+      const parameterizedBy = gridCandidateResolvedByClassName(element as Record<string, unknown>, input.config.runtimeParams) ? "className" : undefined;
+      const needsRepair = isRegionOnlyElement(element, pageObservation, input.config.runtimeParams);
+      steps.push({
+        id: createId("asset_patrol_plan_step"),
+        order: steps.length + 1,
+        kind: "element_relocation",
+        label: `元素可重定位：${label}`,
+        status: needsRepair ? "needs_repair" : "ready",
+        skipReason: needsRepair ? "runtime_relocation_required" : undefined,
+        pageModelId: page.node.id,
+        pageModelName: page.node.name,
+        pageElementId: element.id,
+        evidence: {
+          locator: element.locator,
+          locatorKind: element.locatorKind,
+          targetText: elementSemanticText(element, pageObservation) ?? element.targetText ?? element.executeText,
+          semanticArea: element.semanticArea,
+          actionKind: element.actionKind,
+          abilityType: element.abilityType,
+          assetFormat: element.assetFormat ?? "legacy",
+          parameterizedBy,
+          depth: page.depth
+        }
+      });
+    }
+
+    for (const task of readManualPageTasks(page.node)) {
+      const label = task.name ?? task.title ?? task.id ?? "未命名任务";
+      steps.push({
+        id: createId("asset_patrol_plan_step"),
+        order: steps.length + 1,
+        kind: "task_dry_run",
+        label: `任务编排体检：${label}`,
+        status: input.config.allowBusinessSubmit ? "ready" : "skipped",
+        skipReason: input.config.allowBusinessSubmit ? undefined : "business_submit_disabled",
+        pageModelId: page.node.id,
+        pageModelName: page.node.name,
+        pageTaskId: task.id,
+        evidence: {
+          stepCount: task.steps?.length ?? 0,
+          executionMode: "dry_run",
+          depth: page.depth
+        }
+      });
+    }
   }
 
-  for (const transition of transitions) {
-    const actionPolicy = transition.actionPolicies[0];
-    const dangerous = !input.config.allowRiskyActions && isDangerousTransition(transition, input.config.dangerousTextPatterns);
-    const repairReason = actionPolicy ? imageRegionActionRepairReason(actionPolicy.action, input.observation, input.config.runtimeParams) : "missing_action_policy";
+  for (const transition of scope.transitions) {
+    const actionPolicy = transition.edge.actionPolicies[0];
+    const dangerous = !input.config.allowRiskyActions && isDangerousTransition(transition.edge, input.config.dangerousTextPatterns);
+    const sourceObservation = transition.sourceNode.id === matched.node.id ? input.observation : undefined;
+    const repairReason = actionPolicy ? imageRegionActionRepairReason(actionPolicy.action, sourceObservation, input.config.runtimeParams) : "missing_action_policy";
     const parameterizedBy = actionPolicy && gridCandidateResolvedByClassName(actionPolicy.action.params ?? {}, input.config.runtimeParams) ? "className" : undefined;
     steps.push({
       id: createId("asset_patrol_plan_step"),
       order: steps.length + 1,
       kind: "transition_validation",
-      label: `边巡检：${transition.name}`,
+      label: `边巡检：${transition.edge.name}`,
       status: dangerous ? "skipped" : repairReason ? "needs_repair" : "ready",
       skipReason: dangerous ? "dangerous_action" : repairReason,
-      pageModelId: matched.node.id,
-      pageModelName: matched.node.name,
-      pageTransitionId: transition.id,
+      pageModelId: transition.sourceNode.id,
+      pageModelName: transition.sourceNode.name,
+      pageTransitionId: transition.edge.id,
       evidence: {
-        edgeKey: transition.key,
-        intent: transition.intent,
-        toNodeId: transition.toNodeId,
+        edgeKey: transition.edge.key,
+        intent: transition.edge.intent,
+        toNodeId: transition.edge.toNodeId,
+        sourceNodeId: transition.sourceNode.id,
+        sourceNodeName: transition.sourceNode.name,
+        targetNodeName: transition.targetNode?.name,
+        routeStartNodeId: matched.node.id,
+        routeStartNodeName: matched.node.name,
         actionTitle: actionPolicy?.action.title,
         targetText: actionPolicy ? stringRecordField(actionPolicy.action.params ?? {}, "targetText") ?? stringRecordField(actionPolicy.action.params ?? {}, "anchorText") : undefined,
         visualLocator: actionPolicy ? hasVisualLocator((actionPolicy.action.params ?? {}).visualLocator) : undefined,
-        assetFormat: isV2PageTransitionEdge(transition) ? "v2" : "legacy",
-        reliabilityScore: transition.reliabilityScore,
+        assetFormat: isV2PageTransitionEdge(transition.edge) ? "v2" : "legacy",
+        reliabilityScore: transition.edge.reliabilityScore,
         executionMode: "dry_run",
+        depth: transition.depth,
         parameterizedBy
-      }
-    });
-  }
-
-  for (const task of tasks) {
-    const label = task.name ?? task.title ?? task.id ?? "未命名任务";
-    steps.push({
-      id: createId("asset_patrol_plan_step"),
-      order: steps.length + 1,
-      kind: "task_dry_run",
-      label: `任务编排体检：${label}`,
-      status: input.config.allowBusinessSubmit ? "ready" : "skipped",
-      skipReason: input.config.allowBusinessSubmit ? undefined : "business_submit_disabled",
-      pageModelId: matched.node.id,
-      pageModelName: matched.node.name,
-      pageTaskId: task.id,
-      evidence: {
-        stepCount: task.steps?.length ?? 0,
-        executionMode: "dry_run"
       }
     });
   }
@@ -833,9 +877,12 @@ export function selectAssetDrivenExecutionTargets(input: {
     .map((step) => {
       const edge = graphVersionWithV2Edges.edges.find((item) => item.id === step.pageTransitionId && item.status === "active");
       const action = edge?.actionPolicies[0]?.action;
-      return edge && action && edge.fromNodeId === startPage.id && !isDeprecatedGridCandidateOperationEdge(edge)
+      return edge && action && !isDeprecatedGridCandidateOperationEdge(edge)
         ? {
             edge,
+            sourceNodeId: stringRecordField(step.evidence ?? {}, "sourceNodeId") ?? edge.fromNodeId,
+            sourceNodeName: stringRecordField(step.evidence ?? {}, "sourceNodeName"),
+            routeStartNodeId: stringRecordField(step.evidence ?? {}, "routeStartNodeId") ?? startPage.id,
             pageTaskId: sourcePageNavigationTaskId(action),
             elementId: stringRecordField(action.params ?? {}, "elementId")
           }
@@ -847,6 +894,9 @@ export function selectAssetDrivenExecutionTargets(input: {
     const edge = candidate.edge;
     const pageTaskId = candidate.pageTaskId;
     const elementId = candidate.elementId;
+    if (candidate.routeStartNodeId !== startPage.id) {
+      continue;
+    }
     if (pageTaskId && !input.config.allowBusinessSubmit) {
       return {
         status: "blocked",
@@ -855,6 +905,10 @@ export function selectAssetDrivenExecutionTargets(input: {
       };
     }
     const targetNode = graphVersionWithV2Edges.nodes.find((node) => node.id === edge.toNodeId);
+    const sourceNode = graphVersionWithV2Edges.nodes.find((node) => node.id === candidate.sourceNodeId);
+    const transitionName = edge.fromNodeId === startPage.id
+      ? edge.name
+      : `${startPage.name} -> ${targetNode?.name ?? edge.toNodeId}（经 ${sourceNode?.name ?? candidate.sourceNodeName ?? edge.fromNodeId}）`;
     targets.push({
       status: "ready",
       graphVersionId: input.graphVersion.id,
@@ -863,14 +917,14 @@ export function selectAssetDrivenExecutionTargets(input: {
       targetNodeId: edge.toNodeId,
       targetNodeName: targetNode?.name ?? edge.toNodeId,
       transitionId: edge.id,
-      transitionName: edge.name,
+      transitionName,
       pageTaskId,
       elementId,
       overlay: {
         id: `asset-driven-${edge.id}`,
         targetNodeId: edge.toNodeId,
         ...(input.config.runtimeParams && Object.keys(input.config.runtimeParams).length ? { runtimeParams: input.config.runtimeParams } : {}),
-        note: `资产驱动测试：${startPage.name} -> ${targetNode?.name ?? edge.toNodeId}`
+        note: `资产驱动测试：${transitionName}`
       }
     });
   }
@@ -890,16 +944,18 @@ export function selectAssetDrivenExecutionTargets(input: {
       graphVersionId: input.graphVersion.id,
       startNodeId: startPage.id,
       startNodeName: startPage.name,
-      targetNodeId: startPage.id,
-      targetNodeName: startPage.name,
-      transitionName: `${startPage.name} / ${step.label}`,
+      targetNodeId: step.pageModelId ?? startPage.id,
+      targetNodeName: step.pageModelName ?? startPage.name,
+      transitionName: step.pageModelId && step.pageModelId !== startPage.id ? `${startPage.name} -> ${step.pageModelName ?? step.pageModelId} / ${step.label}` : `${startPage.name} / ${step.label}`,
       pageTaskId: step.pageTaskId,
       overlay: {
         id: `asset-driven-task-${step.pageTaskId}`,
-        targetNodeId: startPage.id,
+        targetNodeId: step.pageModelId ?? startPage.id,
         targetTaskId: step.pageTaskId,
         ...(input.config.runtimeParams && Object.keys(input.config.runtimeParams).length ? { runtimeParams: input.config.runtimeParams } : {}),
-        note: `资产驱动测试：${startPage.name} / ${step.label}`
+        note: step.pageModelId && step.pageModelId !== startPage.id
+          ? `资产驱动测试：${startPage.name} -> ${step.pageModelName ?? step.pageModelId} / ${step.label}`
+          : `资产驱动测试：${startPage.name} / ${step.label}`
       }
     });
   }
@@ -979,6 +1035,60 @@ export function shouldAvoidBackRecovery(input: {
     return false;
   }
   return isBottomTabPageNode(currentNode) && isBottomTabPageNode(startNode);
+}
+
+export type AssetDrivenRecoveryAction = "complete" | "run_transition" | "back" | "retry_match" | "stop";
+
+export function decideAssetDrivenRecoveryAction(input: {
+  matchedNodeId?: string;
+  knownCurrentNodeId?: string;
+  startNodeId: string;
+  unmatchedAttempts: number;
+  maxUnmatchedAttempts: number;
+  backAttempts: number;
+  maxBacks: number;
+  hasRecoveryTarget: boolean;
+  avoidBack: boolean;
+}): AssetDrivenRecoveryAction {
+  const currentNodeId = input.matchedNodeId ?? input.knownCurrentNodeId;
+  if (currentNodeId === input.startNodeId) {
+    return "complete";
+  }
+  if (!currentNodeId) {
+    return input.unmatchedAttempts < input.maxUnmatchedAttempts ? "retry_match" : "stop";
+  }
+  if (input.hasRecoveryTarget) {
+    return "run_transition";
+  }
+  if (input.avoidBack || input.backAttempts >= input.maxBacks) {
+    return "stop";
+  }
+  return "back";
+}
+
+export function shouldApplyAssetDrivenRecoveryHintImmediately(input: {
+  knownCurrentNodeId?: string;
+  startNodeId: string;
+}): boolean {
+  return Boolean(input.knownCurrentNodeId && input.knownCurrentNodeId !== input.startNodeId);
+}
+
+export function canDeferAssetDrivenRecoveryVerification(input: {
+  usedVerifiedTargetHint: boolean;
+  recoveryActionSucceeded: boolean;
+}): boolean {
+  return input.usedVerifiedTargetHint && input.recoveryActionSucceeded;
+}
+
+export function shouldUseForegroundComponentRecovery(input: {
+  currentComponentName?: string;
+  startComponentName?: string;
+}): boolean {
+  return Boolean(
+    input.currentComponentName &&
+    input.startComponentName &&
+    input.currentComponentName !== input.startComponentName
+  );
 }
 
 export function collectAssetRuntimeParamDefinitions(graphVersion: BusinessGraphVersion): AssetRuntimeParamDefinition[] {
@@ -1098,6 +1208,94 @@ function unconfirmedPageMessage(node: BusinessNode, config: AssetPatrolConfig): 
   return `当前匹配页面 ${node.name} 还不是已确认页面资产。`;
 }
 
+function collectPatrolScope(input: {
+  graphVersion: BusinessGraphVersion;
+  startNode: BusinessNode;
+  config: AssetPatrolConfig;
+}): { pages: PatrolPageEntry[]; transitions: PatrolTransitionEntry[] } {
+  if (input.config.pageScope === "current_page") {
+    return {
+      pages: [{ node: input.startNode, depth: 0 }],
+      transitions: patrolTransitionsFromNode(input.graphVersion, input.startNode)
+        .slice(0, input.config.maxTransitions)
+        .map((edge) => ({
+          edge,
+          sourceNode: input.startNode,
+          targetNode: input.graphVersion.nodes.find((node) => node.id === edge.toNodeId),
+          depth: 1
+        }))
+    };
+  }
+
+  const nodeById = new Map(input.graphVersion.nodes.map((node) => [node.id, node]));
+  const visitedNodeIds = new Set<string>([input.startNode.id]);
+  const pages: PatrolPageEntry[] = [{ node: input.startNode, depth: 0 }];
+  const transitions: PatrolTransitionEntry[] = [];
+  const edgeCursorByNodeId = new Map<string, number>();
+
+  while (transitions.length < input.config.maxTransitions) {
+    const pagesInRound = [...pages];
+    let addedTransition = false;
+    for (const current of pagesInRound) {
+      if (transitions.length >= input.config.maxTransitions) {
+        break;
+      }
+      const outgoingEdges = patrolTransitionsFromNode(input.graphVersion, current.node);
+      let edgeCursor = edgeCursorByNodeId.get(current.node.id) ?? 0;
+      while (edgeCursor < outgoingEdges.length) {
+        const edge = outgoingEdges[edgeCursor++];
+        edgeCursorByNodeId.set(current.node.id, edgeCursor);
+        if (!edge) {
+          continue;
+        }
+        const targetNode = nodeById.get(edge.toNodeId);
+        if (!targetNode || !isConfirmedStablePage(targetNode)) {
+          continue;
+        }
+        if (current.node.id !== input.startNode.id && targetNode.id === input.startNode.id) {
+          continue;
+        }
+        if (current.node.id !== input.startNode.id && isBottomTabPageNode(current.node) && isBottomTabPageNode(targetNode)) {
+          continue;
+        }
+        const transitionDepth = current.depth + 1;
+        transitions.push({
+          edge,
+          sourceNode: current.node,
+          targetNode,
+          depth: transitionDepth
+        });
+        addedTransition = true;
+        if (!input.config.allowRiskyActions && isDangerousTransition(edge, input.config.dangerousTextPatterns)) {
+          break;
+        }
+        if (!visitedNodeIds.has(targetNode.id)) {
+          const pageEntry = {
+            node: targetNode,
+            depth: transitionDepth,
+            viaEdge: edge
+          };
+          visitedNodeIds.add(targetNode.id);
+          pages.push(pageEntry);
+        }
+        break;
+      }
+    }
+    if (!addedTransition) {
+      break;
+    }
+  }
+
+  return { pages, transitions };
+}
+
+function patrolTransitionsFromNode(graphVersion: BusinessGraphVersion, node: BusinessNode): OperationEdge[] {
+  return graphVersion.edges
+    .filter((edge) => edge.status === "active" && edge.fromNodeId === node.id && Boolean(edge.actionPolicies[0]))
+    .filter((edge) => !isDeprecatedGridCandidateOperationEdge(edge))
+    .sort((left, right) => Number(isV2PageTransitionEdge(right)) - Number(isV2PageTransitionEdge(left)));
+}
+
 function isStartupPlaceholderNode(node: BusinessNode): boolean {
   return node.tags.includes("root") || node.key.includes("app.root") || node.name.includes("启动前");
 }
@@ -1111,26 +1309,7 @@ function isBottomTabPageNode(node: BusinessNode): boolean {
   if (Array.isArray(intentTags) && intentTags.some((tag) => typeof tag === "string" && tag === "bottom-tab")) {
     return true;
   }
-  const screenshotRegions = node.metadata?.screenshotRegions;
-  if (
-    Array.isArray(screenshotRegions) &&
-    screenshotRegions.some((region) => isBottomTabAssetRecord(region))
-  ) {
-    return true;
-  }
-  return readManualPageElements(node).some((element) => {
-    const label = [element.label, element.targetText, element.name, element.actionName].filter(Boolean).join(" ");
-    return element.semanticArea === "bottom" && Array.from(bottomTabNames).some((name) => label.includes(name));
-  });
-}
-
-function isBottomTabAssetRecord(value: unknown): boolean {
-  if (!isRecordObject(value)) {
-    return false;
-  }
-  const semanticArea = typeof value.semanticArea === "string" ? value.semanticArea : "";
-  const label = [value.id, value.label].filter((item): item is string => typeof item === "string").join(" ");
-  return semanticArea === "bottom" && (label.includes("tab") || label.includes("Tab") || label.includes("底部选中"));
+  return false;
 }
 
 function summarizePlanSteps(steps: AssetPatrolPlanStep[]): AssetPatrolPlan["summary"] {
@@ -1338,7 +1517,8 @@ function elementLabel(element: ManualPageElementAsset): string {
 function isRegionOnlyElement(element: ManualPageElementAsset, observation?: Observation, runtimeParams: Record<string, string> = {}): boolean {
   const locator = (element.locator ?? "").trim();
   const locatorKind = (element.locatorKind ?? "").trim();
-  const hasSemanticText = Boolean(elementSemanticText(element, observation));
+  const hasDeclaredSemanticText = Boolean(element.targetText?.trim() || element.executeText?.trim());
+  const hasSemanticText = Boolean(elementSemanticText(element, observation)) || (!observation && hasDeclaredSemanticText);
   if (locatorKind === "ocr_anchor_offset") {
     return !hasSemanticText;
   }
@@ -1376,7 +1556,7 @@ function imageRegionActionRepairReason(action: ActionStep, observation?: Observa
   const locatorKind = stringRecordField(params, "locatorKind") ?? "";
   if (locatorKind === "ocr_anchor_offset") {
     const anchorText = stringRecordField(params, "anchorText") ?? stringRecordField(params, "targetText");
-    return anchorText && observationHasText(observation, anchorText) ? undefined : "runtime_relocation_required";
+    return anchorText && (!observation || observationHasText(observation, anchorText)) ? undefined : "runtime_relocation_required";
   }
   const hasImageRegion = locator.startsWith("image-region:") || Boolean(params.region && typeof params.region === "object");
   if (!hasImageRegion) {
@@ -1389,7 +1569,7 @@ function imageRegionActionRepairReason(action: ActionStep, observation?: Observa
     return undefined;
   }
   const targetText = stringRecordField(params, "targetText");
-  if (targetText && observationHasText(observation, targetText)) {
+  if (targetText && (!observation || observationHasText(observation, targetText))) {
     return undefined;
   }
   return "runtime_relocation_required";

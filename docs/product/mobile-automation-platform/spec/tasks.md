@@ -4,7 +4,7 @@ doc_type: tasks
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-05
+updated_at: 2026-07-12
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -1682,7 +1682,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 
 ### T-092：资产驱动巡检入口与执行器
 
-- 状态：planned
+- 状态：in_progress
 - 关联需求：REQ-044、REQ-042、REQ-009、REQ-011、REQ-012、REQ-013、REQ-014、REQ-032
 - 关联设计：DES-044、DES-042、DES-016、DES-030
 - 目标平台：Dashboard + server patrol service + runner adapter + report-core
@@ -1702,6 +1702,17 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
   11. Report Core 新增资产巡检摘要：页面覆盖率、元素定位成功率、连接边成功率、PageTask 可执行性、跳过原因、失败分类、耗时分布、性能指标和异常事件。
   12. 候选闭环：巡检发现的新页面、新元素、新边和页面变体进入 candidate queue 或报告候选区；点击候选跳转到资产录制 / 失败修复 UI，默认不能自动写入 active 资产。若修复建议来自 REQ-045 AI 诊断且满足高置信、低风险、验证通过和自动修复策略，可通过受控 AssetPatch 流程自动应用。
 - 验证方式：先写失败测试覆盖 planner 起点匹配、未知页停止、页面健康检查、区域滚动边界、元素重定位失败、region_center 禁止执行、危险边 skipped、显式允许高风险动作、PageTask dry-run、报告 summary 和 Dashboard 请求体；再实现服务端和 UI；最后用真实 Android 主流程页面跑一次资产巡检手动验证。
+- 进展：
+  - 已支持 `current_page` 与 `reachable_pages` 计划生成；`reachable_pages` 从当前匹配页按 active PageTransition 做受控 BFS，只覆盖已确认 PageModel，不执行未确认 OCR / UI 候选。
+  - 已开放 Dashboard 巡检范围中的“可达页面”，并把计划预览按“页面 / 能力 / 连接边 / 任务”分组展示。
+  - 已补齐批次失败判定与自动起点恢复：跳过项计入失败；每条边成功后利用已验证目标页作为一次性恢复提示，页面刷新匹配暂不稳定时仍能返回原起点并继续下一条边，不向用户暴露手工续跑流程。根导航只认明确名称 / `bottom-tab` 标签，局部 bottom tabs 不阻止 Back；单边失败按 fail-collect 记录后继续巡检其他独立边。
+  - 已补批次级 HTML 报告和 Dashboard 报告入口，按边汇总执行结果、错误、恢复策略、恢复耗时和 fail-collect 行为；执行会话持久化每次起点恢复记录。
+  - 已优化边间恢复性能：不再重新生成完整巡检计划；普通子 Activity 使用轻量 foreground component 观测和受控 Back 恢复，同一 Activity 内根页面切换继续使用正式 PageTransition / 视觉 PageMatcher；恢复前可统一执行 `hide_keyboard`。
+  - `reachable_pages` 的边预算已改为按已发现页面轮转分配，并过滤返回批次起点、非起点根 Tab 互跳等恢复型导航；非起点页的 OCR / 视觉动作允许依据已保存的 runtime locator 进入执行队列，到达来源页后再做真实重定位。
+  - 已补顶部头像专用视觉定位，`主页 -> 设置` 不依赖 Android UI tree、平台 id 或固定坐标。
+  - 真机 `ERLDU20115007395 / YAL-AL10` 批次 `asset_execution_51716a0e-1eac-46aa-8505-193374da7f7b` 已验证主页 8 条出口边 8/8 通过；每条边完成后自动恢复主页继续，包含 `加入班级 -> 主页 -> 课程表` 的多 Back 恢复和头像入口设置页定位。
+  - 真机批次 `asset_execution_61331554-a760-4bfe-b8f6-8cac63d9d7f2` 已验证有限预算下覆盖二级页面：`主页 -> 班级聊天（经班级详情）`、`主页 -> 学习方案（经班级详情）` 与其余 5 条可执行边全部通过；危险发布边保持 skipped。
+  - `tagged_pages` 与 `all_active_pages` 仍保留为后续入口，当前 UI 禁用且请求会回退到 `current_page`。
 
 ### T-093：探索异常 AI 诊断与受控资产修复
 

@@ -90,11 +90,15 @@ import {
   AssetPatrol,
   AssetPatrolDeviceBusyError,
   assetPatrolStartActions,
+  canDeferAssetDrivenRecoveryVerification,
   collectAssetRuntimeParamDefinitions,
+  decideAssetDrivenRecoveryAction,
   normalizeAssetPatrolConfig,
   selectAssetDrivenRecoveryTarget,
   selectAssetDrivenExecutionTargets,
+  shouldApplyAssetDrivenRecoveryHintImmediately,
   shouldAvoidBackRecovery,
+  shouldUseForegroundComponentRecovery,
   type AssetDrivenReadyExecutionTarget,
   type AssetPatrolPageScope,
   type AssetPatrolStartInput,
@@ -104,6 +108,9 @@ import {
   createAssetDrivenExecutionSession,
   markAssetDrivenExecutionItemStarted,
   recordAssetDrivenExecutionRepairAttempt,
+  recordAssetDrivenExecutionRecovery,
+  renderAssetDrivenExecutionReportHtml,
+  shouldAttemptNextAssetDrivenTarget,
   skipPendingAssetDrivenExecutionItems,
   stopAssetDrivenExecutionSession,
   updateAssetDrivenExecutionItemFromRun,
@@ -1856,6 +1863,15 @@ app.get("/api/asset-patrols/executions/:executionId", (req, res) => {
   res.json({ execution });
 });
 
+app.get("/api/asset-patrols/executions/:executionId/report", (req, res) => {
+  const execution = assetDrivenExecutionSessions.get(req.params.executionId);
+  if (!execution) {
+    res.status(404).type("text/plain").send("asset-driven execution not found");
+    return;
+  }
+  res.type("html").send(renderAssetDrivenExecutionReportHtml(execution));
+});
+
 app.post("/api/asset-patrols/executions/:executionId/stop", async (req, res) => {
   try {
     const execution = assetDrivenExecutionSessions.get(req.params.executionId);
@@ -1957,6 +1973,7 @@ app.post("/api/asset-patrols/execute", async (req, res) => {
       targets: executionTargets.targets
     });
     assetDrivenExecutionSessions.set(assetDrivenExecution.id, assetDrivenExecution);
+    const startForeground = await collectForegroundObservation(body.deviceSerial);
     const started = await startAssetDrivenGraphTarget(body.deviceSerial, executionTarget);
     markAssetDrivenExecutionItemStarted(assetDrivenExecution, 0, started.run);
     const queueState = { runId: started.run.id, sessionId: assetDrivenExecution.id, cancelled: false, promise: Promise.resolve() };
@@ -1966,6 +1983,7 @@ app.post("/api/asset-patrols/execute", async (req, res) => {
       startNodeId: executionTargets.startNodeId,
       targets: executionTargets.targets,
       firstRunId: started.run.id,
+      startComponentName: startForeground.componentName,
       session: assetDrivenExecution,
       queueState
     })
@@ -2640,6 +2658,14 @@ async function collectFastVisualObservation(deviceSerial: string): Promise<Obser
   });
 }
 
+async function collectForegroundObservation(deviceSerial: string): Promise<Observation> {
+  return observationService.collect(deviceSerial, {
+    includeScreenshot: false,
+    includeUiTree: false,
+    includeOcr: false
+  });
+}
+
 async function resolveAutoExploreSource(
   graphVersion: ReturnType<Storage["getBusinessGraphVersion"]> extends infer T ? NonNullable<T> : never,
   observation: Observation,
@@ -2811,6 +2837,7 @@ async function continueAssetDrivenExecutionQueue(input: {
   startNodeId: string;
   targets: AssetDrivenReadyExecutionTarget[];
   firstRunId: string;
+  startComponentName?: string;
   session: AssetDrivenExecutionSession;
   queueState: { runId: string; sessionId: string; cancelled?: boolean; promise: Promise<void> };
 }): Promise<void> {
@@ -2826,6 +2853,7 @@ async function continueAssetDrivenExecutionQueue(input: {
         startNodeId: input.startNodeId,
         target: input.targets[0],
         itemIndex: 0,
+        startComponentName: input.startComponentName,
         failedRun: firstRun,
         session: input.session,
         queueState: input.queueState
@@ -2835,28 +2863,40 @@ async function continueAssetDrivenExecutionQueue(input: {
   if (input.queueState.cancelled) {
     return;
   }
-  for (const target of input.targets.slice(1)) {
+  for (let targetIndex = 1; targetIndex < input.targets.length; targetIndex += 1) {
+    const target = input.targets[targetIndex];
+    if (!target) {
+      continue;
+    }
     if (input.queueState.cancelled) {
       return;
     }
     const previousRun = storage.getRun(previousRunId);
-    if (previousRun?.status !== "passed") {
+    if (!shouldAttemptNextAssetDrivenTarget(previousRun?.status)) {
       skipPendingAssetDrivenExecutionItems(input.session, `前置边 ${previousRunId} 未通过，停止后续资产边执行。`);
       return;
     }
-    const restored = await recoverAssetDrivenStartPage({
+    const recovery = await recoverAssetDrivenStartPage({
       body: input.body,
       packageName: input.config.packageName,
-      startNodeId: input.startNodeId
+      startNodeId: input.startNodeId,
+      graphVersionId: input.targets[0]?.graphVersionId,
+      startComponentName: input.startComponentName,
+      knownCurrentNodeId: previousRun?.status === "passed" ? input.targets[targetIndex - 1]?.targetNodeId : undefined
     });
-    if (!restored) {
+    recordAssetDrivenExecutionRecovery(input.session, {
+      afterItemOrder: targetIndex,
+      fromPage: input.targets[targetIndex - 1]?.targetNodeName ?? "未知页面",
+      toPage: input.session.startNodeName,
+      status: recovery.restored ? "passed" : "failed",
+      strategy: recovery.strategy,
+      durationMs: recovery.durationMs,
+      message: recovery.message
+    });
+    if (!recovery.restored) {
       skipPendingAssetDrivenExecutionItems(input.session, "未能恢复到本轮资产测试的起始页面。");
       return;
     }
-    if (input.queueState.cancelled) {
-      return;
-    }
-    await handleAssetDrivenRuntimeInterceptors(input.body.deviceSerial, input.config.packageName);
     if (input.queueState.cancelled) {
       return;
     }
@@ -2876,6 +2916,7 @@ async function continueAssetDrivenExecutionQueue(input: {
           startNodeId: input.startNodeId,
           target,
           itemIndex,
+          startComponentName: input.startComponentName,
           failedRun: completedRun,
           session: input.session,
           queueState: input.queueState
@@ -2891,6 +2932,7 @@ async function tryRepairAndRetryAssetDrivenTarget(input: {
   startNodeId: string;
   target: AssetDrivenReadyExecutionTarget | undefined;
   itemIndex: number;
+  startComponentName?: string;
   failedRun: TestRun;
   session: AssetDrivenExecutionSession;
   queueState: { runId: string; sessionId: string; cancelled?: boolean; promise: Promise<void> };
@@ -2906,12 +2948,23 @@ async function tryRepairAndRetryAssetDrivenTarget(input: {
   if (repair.status !== "applied" || input.queueState.cancelled) {
     return undefined;
   }
-  const restored = await recoverAssetDrivenStartPage({
+  const recovery = await recoverAssetDrivenStartPage({
     body: input.body,
     packageName: input.config.packageName,
-    startNodeId: input.startNodeId
+    startNodeId: input.startNodeId,
+    graphVersionId: input.target.graphVersionId,
+    startComponentName: input.startComponentName
   });
-  if (!restored || input.queueState.cancelled) {
+  recordAssetDrivenExecutionRecovery(input.session, {
+    afterItemOrder: input.itemIndex + 1,
+    fromPage: input.target.targetNodeName,
+    toPage: input.session.startNodeName,
+    status: recovery.restored ? "passed" : "failed",
+    strategy: recovery.strategy,
+    durationMs: recovery.durationMs,
+    message: `自动修复后的重试恢复：${recovery.message}`
+  });
+  if (!recovery.restored || input.queueState.cancelled) {
     recordAssetDrivenExecutionRepairAttempt(input.session, input.failedRun.id, {
       action: "failed",
       summary: "AI 已修复资产，但未能恢复到本轮起始页面重试。",
@@ -3136,52 +3189,155 @@ async function recoverAssetDrivenStartPage(input: {
   body: AssetPatrolStartInput;
   packageName: string;
   startNodeId: string;
+  graphVersionId?: string;
+  startComponentName?: string;
+  knownCurrentNodeId?: string;
   maxBacks?: number;
-}): Promise<boolean> {
+}): Promise<{ restored: boolean; strategy: string; durationMs: number; message: string }> {
+  const startedAt = Date.now();
+  const strategies: string[] = [];
+  const result = (restored: boolean, message: string) => ({
+    restored,
+    strategy: strategies.length ? strategies.join("+") : restored ? "already_at_start" : "recovery_failed",
+    durationMs: Date.now() - startedAt,
+    message
+  });
   const maxBacks = input.maxBacks ?? 3;
-  for (let attempt = 0; attempt <= maxBacks; attempt += 1) {
-    await handleAssetDrivenRuntimeInterceptors(input.body.deviceSerial, input.packageName);
-    const plan = await assetPatrol.preview({
-      ...input.body,
-      startMode: "current_state",
-      pageScope: "current_page"
+  const maxUnmatchedAttempts = 2;
+  let backAttempts = 0;
+  let unmatchedAttempts = 0;
+  let recoveryTransitionAttempts = 0;
+  let knownCurrentNodeId = input.knownCurrentNodeId;
+  const graphVersion = input.graphVersionId
+    ? storage.getBusinessGraphVersion(input.graphVersionId)
+    : input.body.graphVersionId
+      ? storage.getBusinessGraphVersion(input.body.graphVersionId)
+      : undefined;
+  if (!graphVersion) {
+    return result(false, "没有找到用于恢复的业务图谱版本。");
+  }
+  if (shouldApplyAssetDrivenRecoveryHintImmediately({ knownCurrentNodeId, startNodeId: input.startNodeId })) {
+    const recoveryTarget = selectAssetDrivenRecoveryTarget({
+      graphVersion,
+      currentNodeId: knownCurrentNodeId!,
+      startNodeId: input.startNodeId,
+      runtimeParams: input.body.runtimeParams
     });
-    if (plan.status === "ready" && plan.startPage?.id === input.startNodeId) {
-      return true;
+    if (recoveryTarget) {
+      strategies.push("verified_target_transition");
+      const started = await startAssetDrivenGraphTarget(input.body.deviceSerial, recoveryTarget);
+      await graphRunner.waitForRun(started.run.id);
+      if (storage.getRun(started.run.id)?.status !== "passed") {
+        return result(false, "上一条成功边的目标页恢复边执行失败。");
+      }
+      if (canDeferAssetDrivenRecoveryVerification({ usedVerifiedTargetHint: true, recoveryActionSucceeded: true })) {
+        return result(true, "正式恢复边已验证到达起点，直接继续下一条图运行。");
+      }
+    } else {
+      if (shouldAvoidBackRecovery({ graphVersion, currentNodeId: knownCurrentNodeId!, startNodeId: input.startNodeId })) {
+        return result(false, "当前页和起点都是根导航页，但没有可执行的正式恢复边。");
+      }
+      strategies.push("verified_target_back");
+      await driver.performAction(input.body.deviceSerial, { type: "hide_keyboard" });
+      await delay(120);
+      const beforeBack = await collectForegroundObservation(input.body.deviceSerial);
+      const useComponentRecovery = shouldUseForegroundComponentRecovery({
+        currentComponentName: beforeBack.componentName,
+        startComponentName: input.startComponentName
+      });
+      for (let attempt = 0; attempt < maxBacks; attempt += 1) {
+        await driver.performAction(input.body.deviceSerial, { type: "back" });
+        backAttempts += 1;
+        await delay(700);
+        if (!useComponentRecovery) {
+          break;
+        }
+        const afterBack = await collectForegroundObservation(input.body.deviceSerial);
+        if (afterBack.componentName === input.startComponentName) {
+          strategies.push("foreground_component_confirmed");
+          return result(true, "系统前台组件已恢复到批次起点，直接继续下一条图运行。");
+        }
+        await driver.performAction(input.body.deviceSerial, { type: "hide_keyboard" });
+        await delay(120);
+      }
     }
-    const graphVersion = plan.graphVersionId ? storage.getBusinessGraphVersion(plan.graphVersionId) : undefined;
-    const recoveryTarget = graphVersion && plan.status === "ready" && plan.startPage?.id
+    knownCurrentNodeId = undefined;
+  }
+  let interceptorAttempted = false;
+  while (true) {
+    const observation = await collectFastVisualObservation(input.body.deviceSerial);
+    const match = await matchCurrentPage({
+      graphVersion,
+      observation,
+      baselineReader: readPageAssetBaselineArtifact
+    });
+    const matchedNodeId = match.match.status === "matched" ? match.match.node?.id : undefined;
+    const recoveryNodeId = matchedNodeId ?? knownCurrentNodeId;
+    if (matchedNodeId) {
+      unmatchedAttempts = 0;
+    }
+    const recoveryTarget = graphVersion && recoveryNodeId && recoveryTransitionAttempts < maxBacks
       ? selectAssetDrivenRecoveryTarget({
           graphVersion,
-          currentNodeId: plan.startPage.id,
+          currentNodeId: recoveryNodeId,
           startNodeId: input.startNodeId,
           runtimeParams: input.body.runtimeParams
         })
       : undefined;
-    if (recoveryTarget) {
+    const avoidBack = Boolean(
+      graphVersion && recoveryNodeId && shouldAvoidBackRecovery({
+        graphVersion,
+        currentNodeId: recoveryNodeId,
+        startNodeId: input.startNodeId
+      })
+    );
+    const action = decideAssetDrivenRecoveryAction({
+      matchedNodeId,
+      knownCurrentNodeId,
+      startNodeId: input.startNodeId,
+      unmatchedAttempts,
+      maxUnmatchedAttempts,
+      backAttempts,
+      maxBacks,
+      hasRecoveryTarget: Boolean(recoveryTarget),
+      avoidBack
+    });
+    if (action === "complete") {
+      return result(true, "已确认恢复到本轮资产测试起点。");
+    }
+    if (action === "run_transition" && recoveryTarget) {
+      strategies.push("matched_page_transition");
+      knownCurrentNodeId = undefined;
+      recoveryTransitionAttempts += 1;
       const started = await startAssetDrivenGraphTarget(input.body.deviceSerial, recoveryTarget);
       await graphRunner.waitForRun(started.run.id);
       if (storage.getRun(started.run.id)?.status !== "passed") {
-        return false;
+        return result(false, "运行期匹配页面的恢复边执行失败。");
       }
       await delay(500);
       continue;
     }
-    if (
-      graphVersion &&
-      plan.status === "ready" &&
-      plan.startPage?.id &&
-      shouldAvoidBackRecovery({ graphVersion, currentNodeId: plan.startPage.id, startNodeId: input.startNodeId })
-    ) {
-      return false;
+    if (action === "retry_match") {
+      if (!interceptorAttempted) {
+        strategies.push("runtime_interceptor_retry");
+        interceptorAttempted = true;
+        await handleAssetDrivenRuntimeInterceptors(input.body.deviceSerial, input.packageName);
+      }
+      unmatchedAttempts += 1;
+      await delay(350);
+      continue;
     }
-    if (attempt >= maxBacks) {
-      break;
+    if (action === "stop") {
+      return result(false, "页面状态不确定或已达到恢复预算，停止继续 Back。");
     }
+    strategies.push("matched_page_back");
+    backAttempts += 1;
+    knownCurrentNodeId = undefined;
+    await driver.performAction(input.body.deviceSerial, { type: "hide_keyboard" });
+    await delay(120);
     await driver.performAction(input.body.deviceSerial, { type: "back" });
-    await delay(700);
+    await delay(900);
   }
-  return false;
 }
 
 function isObservationInTargetApp(observation: Observation, targetApp: GraphTargetApp | undefined): boolean {

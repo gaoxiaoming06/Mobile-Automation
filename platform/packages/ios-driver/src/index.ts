@@ -125,6 +125,10 @@ export class IosDriver {
     }
 
     const session = await this.ensureWdaSession(serial);
+    if (action.type === "hide_keyboard") {
+      await wdaRequest(session, "POST", `/session/${session.sessionId}/wda/keyboard/dismiss`, {}).catch(() => undefined);
+      return wdaActionResult();
+    }
     if (action.type === "tap") {
       await wdaRequest(session, "POST", `/session/${session.sessionId}/wda/tap/0`, { x: action.x, y: action.y });
       return wdaActionResult();

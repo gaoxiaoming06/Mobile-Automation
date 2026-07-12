@@ -692,6 +692,35 @@ button:disabled {
   overflow: auto;
 }
 
+.asset-patrol-plan-groups {
+  display: grid;
+  gap: 12px;
+}
+
+.asset-patrol-plan-group {
+  display: grid;
+  gap: 8px;
+}
+
+.asset-patrol-plan-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #17202a;
+  font-size: 13px;
+}
+
+.asset-patrol-plan-group-title span {
+  min-width: 24px;
+  border-radius: 999px;
+  background: #edf2f8;
+  color: #526279;
+  padding: 2px 8px;
+  text-align: center;
+  font-size: 12px;
+}
+
 .stability-step {
   display: grid;
   gap: 3px;

@@ -3856,12 +3856,18 @@ async function locateCurrentTopBarIconInScreenshot(input: {
       }
     };
   }
-  const components = mergeNearbyTopBarIconComponents(findDarkVisualComponents(sample, pixelSearchRegion), sample)
+  const avatarContainerStrategy = input.role.trim().toLowerCase() === "avatar" && input.slot === "leading";
+  const rawComponents = avatarContainerStrategy
+    ? findAvatarVisualComponents(sample, pixelSearchRegion)
+    : findDarkVisualComponents(sample, pixelSearchRegion);
+  const components = mergeNearbyTopBarIconComponents(rawComponents, sample)
     .map((component) => ({
       ...component,
-      score: topBarIconComponentScore(component, input.candidate, sample, {
-        broadTrailingSearch: input.slot === "trailing"
-      })
+      score: avatarContainerStrategy
+        ? topBarAvatarComponentScore(component, input.candidate, sample, input.anchorXPercent)
+        : topBarIconComponentScore(component, input.candidate, sample, {
+            broadTrailingSearch: input.slot === "trailing"
+          })
     }))
     .filter((component) => component.score >= 0.36);
   const selected = selectCurrentTopBarIconComponent(components, {
@@ -3870,6 +3876,7 @@ async function locateCurrentTopBarIconInScreenshot(input: {
   });
   const diagnostic = {
     reason: selected ? "current_visual_icon_selected" : "current_visual_icon_not_found",
+    strategy: avatarContainerStrategy ? "avatar_container" : "dark_icon_shape",
     role: input.role || undefined,
     slot: input.slot,
     orderFromRight: input.orderFromRight,
@@ -3935,6 +3942,14 @@ function topBarIconSearchRegion(
       height
     });
   }
+  if (options.role.trim().toLowerCase() === "avatar" && options.slot === "leading") {
+    const height = Math.min(15, Math.max(candidate.region.height * 4.2, 10));
+    const topLimit = options.semanticArea === "top" ? 2.5 : 0;
+    const bottomLimit = options.semanticArea === "top" ? 17.5 : 100;
+    const width = Math.min(28, Math.max(18, options.anchorXPercent ?? 20));
+    const y = Math.max(topLimit, Math.min(bottomLimit - height, centerY - height / 2));
+    return clampPercentRegion({ x: 0, y, width, height });
+  }
   const minWidth = 11;
   const minHeight = 7.5;
   const width = Math.min(16, Math.max(candidate.region.width * 2.6, minWidth));
@@ -3983,6 +3998,109 @@ function findDarkVisualComponents(sample: ImageSample, rect: { x: number; y: num
     }
   }
   return components;
+}
+
+function findAvatarVisualComponents(sample: ImageSample, rect: { x: number; y: number; width: number; height: number }): TopBarIconVisualComponent[] {
+  const startX = Math.max(0, Math.floor(rect.x));
+  const startY = Math.max(0, Math.floor(rect.y));
+  const endX = Math.min(sample.width, Math.ceil(rect.x + rect.width));
+  const endY = Math.min(sample.height, Math.ceil(rect.y + rect.height));
+  if (startX >= endX || startY >= endY) {
+    return [];
+  }
+  const values: number[] = [];
+  for (let y = startY; y < endY; y += 1) {
+    for (let x = startX; x < endX; x += 1) {
+      const value = sample.pixels[y * sample.width + x];
+      if (typeof value === "number" && value >= 0) {
+        values.push(value);
+      }
+    }
+  }
+  values.sort((left, right) => left - right);
+  const background = values[Math.max(0, Math.min(values.length - 1, Math.floor(values.length * 0.9)))] ?? 255;
+  const foregroundThreshold = Math.min(248, background - 8);
+  const isForeground = (value: number | undefined) => typeof value === "number" && value >= 0 && value <= foregroundThreshold;
+  const visited = new Uint8Array(sample.width * sample.height);
+  const components: TopBarIconVisualComponent[] = [];
+  const minSize = Math.max(18, Math.round(Math.min(sample.width, sample.height) * 0.03));
+  const maxSize = Math.max(72, Math.round(Math.min(sample.width, sample.height) * 0.14));
+  for (let y = startY; y < endY; y += 1) {
+    for (let x = startX; x < endX; x += 1) {
+      const index = y * sample.width + x;
+      if (visited[index] || !isForeground(sample.pixels[index])) {
+        continue;
+      }
+      const component = floodFillAvatarComponent(sample, { startX, startY, endX, endY }, x, y, visited, isForeground);
+      if (!component) {
+        continue;
+      }
+      const aspectRatio = component.bounds.width / Math.max(1, component.bounds.height);
+      const density = component.darkPixelCount / Math.max(1, component.bounds.width * component.bounds.height);
+      if (
+        component.bounds.width < minSize ||
+        component.bounds.height < minSize ||
+        component.bounds.width > maxSize ||
+        component.bounds.height > maxSize ||
+        aspectRatio < 0.68 ||
+        aspectRatio > 1.32 ||
+        density < 0.28
+      ) {
+        continue;
+      }
+      components.push(component);
+    }
+  }
+  return components;
+}
+
+function floodFillAvatarComponent(
+  sample: ImageSample,
+  bounds: { startX: number; startY: number; endX: number; endY: number },
+  startX: number,
+  startY: number,
+  visited: Uint8Array,
+  isForeground: (value: number | undefined) => boolean
+): TopBarIconVisualComponent | undefined {
+  const stack: Array<{ x: number; y: number }> = [{ x: startX, y: startY }];
+  let minX = startX;
+  let maxX = startX;
+  let minY = startY;
+  let maxY = startY;
+  let pixelCount = 0;
+  while (stack.length) {
+    const point = stack.pop()!;
+    if (point.x < bounds.startX || point.x >= bounds.endX || point.y < bounds.startY || point.y >= bounds.endY) {
+      continue;
+    }
+    const index = point.y * sample.width + point.x;
+    if (visited[index] || !isForeground(sample.pixels[index])) {
+      continue;
+    }
+    visited[index] = 1;
+    pixelCount += 1;
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minY = Math.min(minY, point.y);
+    maxY = Math.max(maxY, point.y);
+    stack.push(
+      { x: point.x - 1, y: point.y },
+      { x: point.x + 1, y: point.y },
+      { x: point.x, y: point.y - 1 },
+      { x: point.x, y: point.y + 1 }
+    );
+  }
+  if (!pixelCount) {
+    return undefined;
+  }
+  const width = maxX - minX + 1;
+  const height = maxY - minY + 1;
+  return {
+    bounds: { x: minX, y: minY, width, height },
+    center: { x: Math.round((minX + maxX) / 2), y: Math.round((minY + maxY) / 2) },
+    darkPixelCount: pixelCount,
+    score: 0
+  };
 }
 
 function mergeNearbyTopBarIconComponents(components: TopBarIconVisualComponent[], sample: ImageSample): TopBarIconVisualComponent[] {
@@ -4134,6 +4252,30 @@ function topBarIconComponentScore(
     return distanceScore * 0.2 + aspectScore * 0.22 + sizeScore * 0.22 + densityScore * 0.36;
   }
   return distanceScore * 0.58 + aspectScore * 0.14 + sizeScore * 0.16 + densityScore * 0.12;
+}
+
+function topBarAvatarComponentScore(
+  component: TopBarIconVisualComponent,
+  candidate: VisualImageRegionCandidate,
+  sample: ImageSample,
+  anchorXPercent: number | undefined
+): number {
+  const candidateCenter = {
+    x: ((candidate.region.x + candidate.region.width / 2) / 100) * sample.width,
+    y: ((candidate.region.y + candidate.region.height / 2) / 100) * sample.height
+  };
+  const distance = Math.hypot(component.center.x - candidateCenter.x, component.center.y - candidateCenter.y);
+  const distanceLimit = Math.max(1, Math.min(sample.width, sample.height) * 0.14);
+  const distanceScore = Math.max(0, 1 - distance / distanceLimit);
+  const aspectRatio = component.bounds.width / Math.max(1, component.bounds.height);
+  const aspectScore = Math.max(0, 1 - Math.abs(1 - aspectRatio) / 0.45);
+  const sizePercent = (Math.max(component.bounds.width, component.bounds.height) / Math.min(sample.width, sample.height)) * 100;
+  const sizeScore = Math.max(0, 1 - Math.abs(sizePercent - 8) / 7);
+  const density = component.darkPixelCount / Math.max(1, component.bounds.width * component.bounds.height);
+  const densityScore = density >= 0.28 && density <= 0.95 ? 1 : 0.4;
+  const componentCenterPercent = (component.center.x / sample.width) * 100;
+  const leadingScore = anchorXPercent === undefined || componentCenterPercent < anchorXPercent ? 1 : 0;
+  return distanceScore * 0.15 + aspectScore * 0.3 + sizeScore * 0.25 + densityScore * 0.25 + leadingScore * 0.05;
 }
 
 function percentRegionToSampleRect(region: { x: number; y: number; width: number; height: number }, sample: ImageSample): { x: number; y: number; width: number; height: number } | undefined {

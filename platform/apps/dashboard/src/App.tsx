@@ -82,7 +82,18 @@ type AssetPatrolPlanStep = {
   pageModelName?: string;
   pageElementId?: string;
   pageTransitionId?: string;
+  pageTaskId?: string;
   evidence?: Record<string, unknown>;
+};
+type AssetPatrolPlanGroup = {
+  key: "page" | "element" | "transition" | "task";
+  title: string;
+  items: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    status: AssetPatrolPlanStep["status"];
+  }>;
 };
 type AssetPatrolPlan = {
   status: "ready" | "diagnostic";
@@ -604,7 +615,7 @@ export function stabilityExplorerRequestBody(input: {
 export function assetPatrolPageScopeOptions(): Array<{ value: AssetPatrolPageScope; label: string; disabled: boolean }> {
   return [
     { value: "current_page", label: "当前页", disabled: false },
-    { value: "reachable_pages", label: "可达页面（后续接入）", disabled: true },
+    { value: "reachable_pages", label: "可达页面", disabled: false },
     { value: "tagged_pages", label: "标记页面（后续接入）", disabled: true },
     { value: "all_active_pages", label: "全部已激活页面（后续接入）", disabled: true }
   ];
@@ -822,7 +833,48 @@ function runtimeParamKeysFromText(value: string): Set<string> {
 }
 
 function supportedAssetPatrolPageScope(value: AssetPatrolPageScope): AssetPatrolPageScope {
-  return value === "current_page" ? value : "current_page";
+  return value === "current_page" || value === "reachable_pages" ? value : "current_page";
+}
+
+export function assetPatrolPlanGroups(plan: AssetPatrolPlan | undefined): AssetPatrolPlanGroup[] {
+  if (!plan) {
+    return [];
+  }
+  const groups: AssetPatrolPlanGroup[] = [
+    { key: "page", title: "页面", items: [] },
+    { key: "element", title: "能力", items: [] },
+    { key: "transition", title: "连接边", items: [] },
+    { key: "task", title: "任务", items: [] }
+  ];
+  for (const step of plan.steps) {
+    const group = groups.find((item) => item.key === assetPatrolPlanStepGroupKey(step.kind));
+    if (!group) {
+      continue;
+    }
+    group.items.push({
+      id: step.id,
+      label: step.label,
+      detail: [step.pageModelName, step.status, step.skipReason].filter(Boolean).join(" · "),
+      status: step.status
+    });
+  }
+  return groups.filter((group) => group.items.length > 0);
+}
+
+function assetPatrolPlanStepGroupKey(kind: string): AssetPatrolPlanGroup["key"] | undefined {
+  if (kind === "page_match" || kind === "screenshot_region_match" || kind === "ocr_region_match") {
+    return "page";
+  }
+  if (kind === "element_relocation" || kind === "content_scroll") {
+    return "element";
+  }
+  if (kind === "transition_validation") {
+    return "transition";
+  }
+  if (kind === "task_dry_run") {
+    return "task";
+  }
+  return undefined;
 }
 
 export function loadStabilityDangerousTextForPackage(packageName: string, storage: TextStorage | undefined = browserTextStorage()): string {
@@ -3390,6 +3442,7 @@ export function AssetPatrolPanel({
   const displayRuntimeParamDefinitions = assetPatrolRuntimeParamDefinitionsForDisplay(runtimeParamDefinitions, plan?.startPage?.name ?? assetDrivenExecution?.startNodeName ?? summary?.pageName);
   const assetDrivenTestNeedsBusinessSubmit = !allowBusinessSubmit && assetPatrolPlanRequiresBusinessSubmit(plan);
   const panelSummary = summary ?? assetDrivenExecutionProgressSummary(assetDrivenExecution) ?? assetDrivenRunProgressSummary(currentRun, packageName);
+  const planGroups = assetPatrolPlanGroups(plan);
 
   return (
     <section className="module-page stability-module">
@@ -3582,6 +3635,9 @@ export function AssetPatrolPanel({
                 ))}
               </div>
               <div className="action-row">
+                <a className="report-link" href={`/api/asset-patrols/executions/${encodeURIComponent(assetDrivenExecution.id)}/report`} target="_blank" rel="noreferrer">
+                  打开批次报告
+                </a>
                 {assetDrivenExecution.runningItem?.runId ? (
                   <button className="icon-button" type="button" onClick={() => onOpenRun(assetDrivenExecution.runningItem?.runId ?? "")}>
                     查看当前执行
@@ -3609,15 +3665,28 @@ export function AssetPatrolPanel({
                   ))}
                 </div>
               ) : null}
-              <div className="stability-timeline">
-                {plan.steps.slice(0, 10).map((step) => (
-                  <div key={step.id} className={`stability-step ${step.status === "ready" ? "passed" : step.status === "skipped" ? "skipped" : "failed"}`}>
-                    <strong>{step.order}. {step.label}</strong>
-                    <span>{step.kind} · {step.status}{step.skipReason ? ` · ${step.skipReason}` : ""}</span>
-                  </div>
-                ))}
-                {!plan.steps.length ? <div className="empty">当前计划没有可执行检查项</div> : null}
-              </div>
+              {planGroups.length ? (
+                <div className="asset-patrol-plan-groups">
+                  {planGroups.map((group) => (
+                    <div className="asset-patrol-plan-group" key={group.key}>
+                      <div className="asset-patrol-plan-group-title">
+                        <strong>{group.title}</strong>
+                        <span>{group.items.length}</span>
+                      </div>
+                      <div className="stability-timeline">
+                        {group.items.map((item) => (
+                          <div key={item.id} className={`stability-step ${item.status === "ready" ? "passed" : item.status === "skipped" ? "skipped" : "failed"}`}>
+                            <strong>{item.label}</strong>
+                            <span>{item.detail}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty">当前计划没有可执行检查项</div>
+              )}
             </>
           ) : displayMode === "run" && currentRun ? (
             <>

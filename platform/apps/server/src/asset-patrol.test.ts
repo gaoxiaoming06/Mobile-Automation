@@ -18,7 +18,11 @@ import {
   AssetPatrol,
   assetPatrolStartActions,
   buildAssetPatrolPlan,
+  canDeferAssetDrivenRecoveryVerification,
   collectAssetRuntimeParamDefinitions,
+  decideAssetDrivenRecoveryAction,
+  shouldApplyAssetDrivenRecoveryHintImmediately,
+  shouldUseForegroundComponentRecovery,
   normalizeAssetPatrolConfig,
   selectAssetDrivenRecoveryTarget,
   selectAssetDrivenExecutionTarget,
@@ -704,6 +708,409 @@ describe("AssetPatrol", () => {
     );
   });
 
+  it("plans reachable page assets from the matched start page", () => {
+    const graphVersion = graphVersionWithNodes(
+      [
+        pageNode({
+          id: "node-home",
+          key: "home",
+          name: "主页",
+          matchers: [matcher("ocr_text", "主页", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "home-class-grid",
+                label: "班级列表",
+                elementKind: "collection",
+                locator: "runtime-locator:home_class_grid",
+                locatorKind: "collection_item_locator",
+                semanticArea: "content",
+                coordinateSpace: "runtime",
+                actions: ["tap_item"],
+                collection: {
+                  kind: "vertical_grid",
+                  columns: 2,
+                  itemIdentity: { type: "ocr_title", param: "className" },
+                  candidateItemHeightPercent: 24.5,
+                  clickSafePoint: { xPercent: 50, yPercent: 28 },
+                  scrollStepPercent: 65
+                }
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "home-open-class-detail",
+                elementId: "home-class-grid",
+                action: "tap_item",
+                outcomeType: "navigate",
+                targetNodeId: "node-detail",
+                targetLabel: "班级详情",
+                availability: "visible",
+                params: { itemText: "{{className}}" }
+              }
+            ]
+          }
+        }),
+        pageNode({
+          id: "node-detail",
+          key: "detail",
+          name: "班级详情",
+          matchers: [matcher("ocr_text", "班级详情", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "detail-create-lesson",
+                label: "新建课堂",
+                targetText: "新建课堂",
+                elementKind: "button",
+                locator: "text:新建课堂",
+                locatorKind: "text_locator",
+                semanticArea: "top",
+                coordinateSpace: "runtime",
+                actions: ["tap"]
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "detail-open-create",
+                elementId: "detail-create-lesson",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-create",
+                targetLabel: "新建课堂",
+                availability: "conditional"
+              }
+            ]
+          }
+        }),
+        pageNode({
+          id: "node-create",
+          key: "create_lesson",
+          name: "新建课堂",
+          matchers: [matcher("ocr_text", "新建课堂", 4)],
+          metadata: {
+            assetRecordingPageTasks: [
+              {
+                id: "task-create-lesson",
+                name: "填写课堂信息",
+                status: "active",
+                steps: [{ id: "task-step-title", order: 1, elementId: "title", fieldType: "text_input", label: "课堂标题" }]
+              }
+            ]
+          }
+        })
+      ],
+      []
+    );
+
+    const plan = buildAssetPatrolPlan({
+      observation: observation({ ocrTexts: [{ text: "主页", region: { x: 150, y: 200, width: 120, height: 80 } }] }),
+      graphVersion,
+      config: normalizeAssetPatrolConfig({
+        packageName: "com.demo",
+        pageScope: "reachable_pages",
+        runtimeParams: { className: "班级四十二号" }
+      })
+    });
+
+    expect(plan.status).toBe("ready");
+    expect(plan.issues.map((issue) => issue.code)).not.toContain("UNSUPPORTED_SCOPE");
+    expect(plan.steps.filter((step) => step.kind === "page_match").map((step) => [step.pageModelId, step.label])).toEqual([
+      ["node-home", "页面匹配：主页"],
+      ["node-detail", "可达页面：班级详情"],
+      ["node-create", "可达页面：新建课堂"]
+    ]);
+    expect(plan.steps.map((step) => step.pageElementId).filter(Boolean)).toEqual(["home-class-grid", "detail-create-lesson"]);
+    expect(plan.steps.map((step) => step.pageTransitionId).filter(Boolean)).toEqual([
+      "edge_pagetransition.home.detail.home.open.class.detail",
+      "edge_pagetransition.detail.create.lesson.detail.open.create"
+    ]);
+    expect(plan.steps.find((step) => step.pageTaskId === "task-create-lesson")).toEqual(
+      expect.objectContaining({
+        kind: "task_dry_run",
+        pageModelId: "node-create"
+      })
+    );
+    expect(plan.summary).toEqual(
+      expect.objectContaining({
+        pageChecks: 3,
+        elementChecks: 2,
+        transitionChecks: 2,
+        taskChecks: 1
+      })
+    );
+  });
+
+  it("shares a limited reachable-page transition budget with discovered child pages", () => {
+    const nodes = [
+      pageNode({ id: "node-home", key: "home", name: "主页", matchers: [matcher("ocr_text", "主页", 4)] }),
+      pageNode({ id: "node-detail", key: "detail", name: "班级详情", matchers: [matcher("ocr_text", "班级详情", 4)] }),
+      pageNode({ id: "node-create", key: "create", name: "新建课堂", matchers: [matcher("ocr_text", "新建课堂", 4)] }),
+      pageNode({ id: "node-friend", key: "friend", name: "添加好友", matchers: [matcher("ocr_text", "添加好友", 4)] }),
+      pageNode({ id: "node-growth", key: "growth", name: "成长", matchers: [matcher("ocr_text", "成长", 4)] }),
+      pageNode({ id: "node-schedule", key: "schedule", name: "课程表", matchers: [matcher("ocr_text", "课程表", 4)] })
+    ];
+    const graphVersion = graphVersionWithNodes(nodes, [
+      edge({ id: "edge-home-detail", fromNodeId: "node-home", toNodeId: "node-detail", name: "主页 -> 班级详情", action: { type: "tap", x: 100, y: 100 } }),
+      edge({ id: "edge-home-friend", fromNodeId: "node-home", toNodeId: "node-friend", name: "主页 -> 添加好友", action: { type: "tap", x: 110, y: 100 } }),
+      edge({ id: "edge-home-growth", fromNodeId: "node-home", toNodeId: "node-growth", name: "主页 -> 成长", action: { type: "tap", x: 120, y: 100 } }),
+      edge({ id: "edge-home-schedule", fromNodeId: "node-home", toNodeId: "node-schedule", name: "主页 -> 课程表", action: { type: "tap", x: 130, y: 100 } }),
+      edge({ id: "edge-detail-home", fromNodeId: "node-detail", toNodeId: "node-home", name: "班级详情 -> 主页", action: { type: "tap", x: 140, y: 100 } }),
+      imageRegionTransitionEdge({
+        id: "edge-detail-create",
+        fromNodeId: "node-detail",
+        toNodeId: "node-create",
+        name: "班级详情 -> 新建课堂",
+        region: { x: 80, y: 70, width: 10, height: 8 },
+        elementLabel: "创建课堂",
+        targetText: "新建课堂"
+      })
+    ]);
+
+    const plan = buildAssetPatrolPlan({
+      observation: observation({ ocrTexts: [{ text: "主页", region: { x: 150, y: 200, width: 120, height: 80 } }] }),
+      graphVersion,
+      config: normalizeAssetPatrolConfig({
+        packageName: "com.demo",
+        pageScope: "reachable_pages",
+        maxTransitions: 4
+      })
+    });
+
+    const transitionIds = plan.steps
+      .filter((step) => step.kind === "transition_validation")
+      .map((step) => step.pageTransitionId);
+    expect(transitionIds).toHaveLength(4);
+    expect(transitionIds).toContain("edge-detail-create");
+    expect(transitionIds).not.toContain("edge-detail-home");
+    expect(plan.steps.find((step) => step.pageTransitionId === "edge-detail-create")).toEqual(
+      expect.objectContaining({ status: "ready" })
+    );
+  });
+
+  it("does not spend reachable-page patrol budget on root-tab cross navigation", () => {
+    const graphVersion = graphVersionWithNodes(
+      [
+        pageNode({ id: "node-home", key: "home", name: "主页", matchers: [matcher("ocr_text", "主页", 4)] }),
+        pageNode({ id: "node-growth", key: "growth", name: "成长", matchers: [matcher("ocr_text", "成长", 4)] }),
+        pageNode({ id: "node-message", key: "message", name: "消息", matchers: [matcher("ocr_text", "消息", 4)] }),
+        pageNode({ id: "node-growth-detail", key: "growth-detail", name: "成长详情", matchers: [matcher("ocr_text", "成长详情", 4)] })
+      ],
+      [
+        edge({ id: "edge-home-growth", fromNodeId: "node-home", toNodeId: "node-growth", name: "主页 -> 成长", action: { type: "tap", x: 100, y: 100 } }),
+        edge({ id: "edge-growth-message", fromNodeId: "node-growth", toNodeId: "node-message", name: "成长 -> 消息", action: { type: "tap", x: 110, y: 100 } }),
+        edge({ id: "edge-growth-detail", fromNodeId: "node-growth", toNodeId: "node-growth-detail", name: "成长 -> 成长详情", action: { type: "tap", x: 120, y: 100 } })
+      ]
+    );
+
+    const plan = buildAssetPatrolPlan({
+      observation: observation({ ocrTexts: [{ text: "主页", region: { x: 150, y: 200, width: 120, height: 80 } }] }),
+      graphVersion,
+      config: normalizeAssetPatrolConfig({ packageName: "com.demo", pageScope: "reachable_pages", maxTransitions: 3 })
+    });
+
+    const transitionIds = plan.steps
+      .filter((step) => step.kind === "transition_validation")
+      .map((step) => step.pageTransitionId);
+    expect(transitionIds).toHaveLength(3);
+    expect(transitionIds).toContain("edge-home-growth");
+    expect(transitionIds).toContain("edge-growth-detail");
+    expect(transitionIds).not.toContain("edge-growth-message");
+  });
+
+  it("selects reachable page targets as routes from the original start page", () => {
+    const graphVersion = graphVersionWithNodes(
+      [
+        pageNode({
+          id: "node-home",
+          key: "home",
+          name: "主页",
+          matchers: [matcher("ocr_text", "主页", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "home-class-grid",
+                label: "班级列表",
+                elementKind: "collection",
+                locator: "runtime-locator:home_class_grid",
+                locatorKind: "collection_item_locator",
+                semanticArea: "content",
+                coordinateSpace: "runtime",
+                actions: ["tap_item"],
+                collection: {
+                  kind: "vertical_grid",
+                  columns: 2,
+                  itemIdentity: { type: "ocr_title", param: "className" },
+                  candidateItemHeightPercent: 24.5,
+                  clickSafePoint: { xPercent: 50, yPercent: 28 }
+                }
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "home-open-class-detail",
+                elementId: "home-class-grid",
+                action: "tap_item",
+                outcomeType: "navigate",
+                targetNodeId: "node-detail",
+                targetLabel: "班级详情",
+                availability: "visible",
+                params: { itemText: "{{className}}" }
+              }
+            ]
+          }
+        }),
+        pageNode({
+          id: "node-detail",
+          key: "detail",
+          name: "班级详情",
+          matchers: [matcher("ocr_text", "班级详情", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "detail-create-lesson",
+                label: "新建课堂",
+                targetText: "新建课堂",
+                elementKind: "button",
+                locator: "text:新建课堂",
+                locatorKind: "text_locator",
+                semanticArea: "top",
+                coordinateSpace: "runtime",
+                actions: ["tap"]
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "detail-open-create",
+                elementId: "detail-create-lesson",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-create",
+                targetLabel: "新建课堂",
+                availability: "conditional"
+              }
+            ]
+          }
+        }),
+        pageNode({ id: "node-create", key: "create_lesson", name: "新建课堂", matchers: [matcher("ocr_text", "新建课堂", 4)] })
+      ],
+      []
+    );
+    const plan = buildAssetPatrolPlan({
+      observation: observation({ ocrTexts: [{ text: "主页", region: { x: 150, y: 200, width: 120, height: 80 } }] }),
+      graphVersion,
+      config: normalizeAssetPatrolConfig({
+        packageName: "com.demo",
+        pageScope: "reachable_pages",
+        runtimeParams: { className: "班级四十二号" }
+      })
+    });
+
+    const targets = selectAssetDrivenExecutionTargets({
+      plan,
+      graphVersion,
+      config: normalizeAssetPatrolConfig({
+        packageName: "com.demo",
+        pageScope: "reachable_pages",
+        runtimeParams: { className: "班级四十二号" }
+      })
+    });
+
+    expect(targets).toEqual(
+      expect.objectContaining({
+        status: "ready",
+        startNodeId: "node-home",
+        targets: [
+          expect.objectContaining({
+            startNodeId: "node-home",
+            targetNodeId: "node-detail",
+            transitionId: "edge_pagetransition.home.detail.home.open.class.detail"
+          }),
+          expect.objectContaining({
+            startNodeId: "node-home",
+            targetNodeId: "node-create",
+            transitionId: "edge_pagetransition.detail.create.lesson.detail.open.create",
+            transitionName: "主页 -> 新建课堂（经 班级详情）"
+          })
+        ]
+      })
+    );
+  });
+
+  it("does not expand reachable pages through dangerous transitions by default", () => {
+    const graphVersion = graphVersionWithNodes(
+      [
+        pageNode({
+          id: "node-settings",
+          key: "settings",
+          name: "设置",
+          matchers: [matcher("ocr_text", "设置", 4)],
+          metadata: {
+            assetRecordingPageElements: [
+              {
+                id: "settings-logout",
+                label: "退出登录",
+                targetText: "退出登录",
+                elementKind: "button",
+                locator: "text:退出登录",
+                locatorKind: "text_locator",
+                semanticArea: "content",
+                coordinateSpace: "runtime",
+                actions: ["tap"]
+              }
+            ],
+            assetRecordingPageTransitions: [
+              {
+                id: "settings-logout-to-login",
+                elementId: "settings-logout",
+                action: "tap",
+                outcomeType: "navigate",
+                targetNodeId: "node-login",
+                targetLabel: "登录",
+                availability: "visible"
+              }
+            ]
+          }
+        }),
+        pageNode({
+          id: "node-login",
+          key: "login",
+          name: "登录",
+          matchers: [matcher("ocr_text", "登录", 4)],
+          metadata: {
+            assetRecordingPageTasks: [
+              {
+                id: "task-login",
+                name: "账号密码登录",
+                status: "active",
+                steps: [{ id: "task-step-submit", order: 1, elementId: "login-submit", fieldType: "button", label: "登录" }]
+              }
+            ]
+          }
+        })
+      ],
+      []
+    );
+
+    const plan = buildAssetPatrolPlan({
+      observation: observation({ ocrTexts: [{ text: "设置", region: { x: 150, y: 200, width: 120, height: 80 } }] }),
+      graphVersion,
+      config: normalizeAssetPatrolConfig({
+        packageName: "com.demo",
+        pageScope: "reachable_pages"
+      })
+    });
+
+    expect(plan.steps.filter((step) => step.kind === "page_match").map((step) => step.pageModelId)).toEqual(["node-settings"]);
+    expect(plan.steps.find((step) => step.pageTransitionId === "edge_pagetransition.settings.login.settings.logout.to.login")).toEqual(
+      expect.objectContaining({
+        status: "skipped",
+        skipReason: "dangerous_action"
+      })
+    );
+    expect(plan.steps.map((step) => step.pageTaskId).filter(Boolean)).not.toContain("task-login");
+  });
+
   it("accepts OCR anchor offset elements and transitions when the anchor text is visible", () => {
     const graphVersion = graphVersionWithNodes(
       [
@@ -1272,6 +1679,101 @@ describe("AssetPatrol", () => {
     ]);
 
     expect(shouldAvoidBackRecovery({ graphVersion, currentNodeId: "node-growth", startNodeId: "node-home" })).toBe(true);
+  });
+
+  it("allows back from a detail page whose local tabs are not app root navigation", () => {
+    const graphVersion = graphVersionWithNodes([
+      pageNode({
+        id: "node-home",
+        key: "home",
+        name: "主页",
+        matchers: [matcher("ocr_text", "主页", 4)]
+      }),
+      pageNode({
+        id: "node-detail",
+        key: "class-detail",
+        name: "班级详情",
+        matchers: [matcher("ocr_text", "目录", 4)],
+        metadata: {
+          screenshotRegions: [{ id: "class-detail-bottom-tabs", semanticArea: "bottom", label: "目录 聊天 待办 公告" }]
+        }
+      })
+    ]);
+
+    expect(shouldAvoidBackRecovery({ graphVersion, currentNodeId: "node-detail", startNodeId: "node-home" })).toBe(false);
+  });
+
+  it("retries page matching instead of blindly backing when recovery observation is unmatched", () => {
+    expect(
+      decideAssetDrivenRecoveryAction({
+        startNodeId: "node-home",
+        unmatchedAttempts: 0,
+        maxUnmatchedAttempts: 2,
+        backAttempts: 1,
+        maxBacks: 3,
+        hasRecoveryTarget: false,
+        avoidBack: false
+      })
+    ).toBe("retry_match");
+    expect(
+      decideAssetDrivenRecoveryAction({
+        startNodeId: "node-home",
+        unmatchedAttempts: 2,
+        maxUnmatchedAttempts: 2,
+        backAttempts: 1,
+        maxBacks: 3,
+        hasRecoveryTarget: false,
+        avoidBack: false
+      })
+    ).toBe("stop");
+  });
+
+  it("backs only from a positively matched non-root page", () => {
+    expect(
+      decideAssetDrivenRecoveryAction({
+        matchedNodeId: "node-detail",
+        startNodeId: "node-home",
+        unmatchedAttempts: 0,
+        maxUnmatchedAttempts: 2,
+        backAttempts: 0,
+        maxBacks: 3,
+        hasRecoveryTarget: false,
+        avoidBack: false
+      })
+    ).toBe("back");
+  });
+
+  it("uses the previous passed target as a one-shot recovery hint when fresh matching is uncertain", () => {
+    expect(
+      decideAssetDrivenRecoveryAction({
+        knownCurrentNodeId: "node-detail",
+        startNodeId: "node-home",
+        unmatchedAttempts: 0,
+        maxUnmatchedAttempts: 2,
+        backAttempts: 0,
+        maxBacks: 3,
+        hasRecoveryTarget: false,
+        avoidBack: false
+      })
+    ).toBe("back");
+  });
+
+  it("applies a verified previous target before collecting another recovery observation", () => {
+    expect(shouldApplyAssetDrivenRecoveryHintImmediately({ knownCurrentNodeId: "node-detail", startNodeId: "node-home" })).toBe(true);
+    expect(shouldApplyAssetDrivenRecoveryHintImmediately({ knownCurrentNodeId: "node-home", startNodeId: "node-home" })).toBe(false);
+    expect(shouldApplyAssetDrivenRecoveryHintImmediately({ startNodeId: "node-home" })).toBe(false);
+  });
+
+  it("defers duplicate recovery verification to the next graph run after a verified action", () => {
+    expect(canDeferAssetDrivenRecoveryVerification({ usedVerifiedTargetHint: true, recoveryActionSucceeded: true })).toBe(true);
+    expect(canDeferAssetDrivenRecoveryVerification({ usedVerifiedTargetHint: true, recoveryActionSucceeded: false })).toBe(false);
+    expect(canDeferAssetDrivenRecoveryVerification({ usedVerifiedTargetHint: false, recoveryActionSucceeded: true })).toBe(false);
+  });
+
+  it("uses foreground component recovery only when source and start components differ", () => {
+    expect(shouldUseForegroundComponentRecovery({ currentComponentName: "JoinClassActivity", startComponentName: "MainActivity" })).toBe(true);
+    expect(shouldUseForegroundComponentRecovery({ currentComponentName: "MainActivity", startComponentName: "MainActivity" })).toBe(false);
+    expect(shouldUseForegroundComponentRecovery({ currentComponentName: undefined, startComponentName: "MainActivity" })).toBe(false);
   });
 
   it("collects runtime parameter definitions from all active page tasks in the graph", () => {

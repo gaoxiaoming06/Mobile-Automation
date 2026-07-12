@@ -73,6 +73,7 @@ describe("AndroidActionExecutor", () => {
     await actions.performAction("device-1", { type: "tap", x: 10, y: 20 });
     await actions.performAction("device-1", { type: "long_press", x: 30, y: 40, durationMs: 900 });
     await actions.performAction("device-1", { type: "swipe", startX: 1, startY: 2, endX: 3, endY: 4 });
+    await actions.performAction("device-1", { type: "hide_keyboard" });
     await actions.performAction("device-1", { type: "back" });
     await actions.performAction("device-1", { type: "home" });
     await actions.performAction("device-1", { type: "recent_apps" });
@@ -81,6 +82,7 @@ describe("AndroidActionExecutor", () => {
       ["input", "tap", "10", "20"],
       ["input", "swipe", "30", "40", "30", "40", "900"],
       ["input", "swipe", "1", "2", "3", "4", "450"],
+      ["input", "keyevent", "111"],
       ["input", "keyevent", "4"],
       ["input", "keyevent", "3"],
       ["input", "keyevent", "KEYCODE_APP_SWITCH"]

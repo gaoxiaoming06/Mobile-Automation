@@ -203,6 +203,10 @@ export class AndroidActionExecutor {
       ]);
       return adbInputResult();
     }
+    if (action.type === "hide_keyboard") {
+      await this.shell(serial, ["input", "keyevent", "111"]);
+      return adbInputResult();
+    }
     if (action.type === "back") {
       await this.shell(serial, ["input", "keyevent", "4"]);
       return adbInputResult();

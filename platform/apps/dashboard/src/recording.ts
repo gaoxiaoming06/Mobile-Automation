@@ -294,6 +294,14 @@ export function createRecordedStep(options: RecordedStepOptions): ActionStep {
     };
   }
 
+  if (action.type === "hide_keyboard") {
+    return {
+      ...base,
+      type: "wait",
+      params: { durationMs: 0, internalDeviceAction: "hide_keyboard" }
+    };
+  }
+
   return {
     ...base,
     type: action.type,

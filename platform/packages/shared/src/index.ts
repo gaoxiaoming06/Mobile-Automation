@@ -442,6 +442,7 @@ export type DeviceActionRequest =
   | { type: "tap"; x: number; y: number }
   | { type: "long_press"; x: number; y: number; durationMs?: number }
   | { type: "swipe"; startX: number; startY: number; endX: number; endY: number; durationMs?: number }
+  | { type: "hide_keyboard" }
   | { type: "back" }
   | { type: "home" }
   | { type: "recent_apps" }

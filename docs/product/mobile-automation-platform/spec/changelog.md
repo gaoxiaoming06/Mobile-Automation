@@ -4,7 +4,7 @@ doc_type: changelog
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-10
+updated_at: 2026-07-12
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -12,6 +12,46 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 ---
 
 # 自动化测试平台 Spec 变更记录
+
+## 2026-07-12
+
+### Added
+
+- 资产测试批次新增独立 HTML 汇总报告，按出口边展示执行结果、错误、起点恢复策略、恢复耗时和 fail-collect 行为；Dashboard 可从巡检运行态直接打开批次报告。
+- Driver 新增 `hide_keyboard` 通用动作：Android 使用 `KEYCODE_ESCAPE`，iOS 通过 WDA dismiss keyboard，为表单页离开和批次起点恢复提供统一键盘收起能力。
+
+### Changed
+
+- `reachable_pages` 批次不再在每条边之间重新生成完整巡检计划，改用轻量前台观测和已确认 PageTransition 继续队列，减少重复 OCR、页面匹配和图规划。
+- `reachable_pages` 的有限边预算改为按已发现页面轮转分配，不再由起点页面的高扇出直接边独占；例如主页出口较多时，8 条预算内仍会覆盖班级详情等二级页面出口。
+- 非起点页面的 OCR / 视觉动作在计划阶段按已保存的 `targetText`、anchor 或 visual locator 判断可运行，真正到达来源页面后再做运行时重定位；不再因为预览时尚未位于该页面而误标 `runtime_relocation_required`。
+- 可达页范围不再重复巡检“返回批次起点”以及非起点根 Tab 之间的互跳边，这些导航由批次恢复链路负责，避免占用业务出口预算或生成未真正经过指定来源页的空路径。
+- 起点恢复增加前台组件确认：记录批次起点 Activity / foreground component；子 Activity 页面可受控 Back，直到回到起点组件。同一 Activity 内的页面仍回退到视觉 PageMatcher，避免把“已回到 App 主 Activity”误当成具体页面身份。
+- 顶部头像定位新增 `top_bar_icon:avatar` 视觉策略，使用顶部左侧候选的形态、填充密度、位置和尺寸综合评分，兼容浅色圆形容器和动态头像内容，不依赖 resource-id、accessibility id 或固定点击坐标。
+
+### Verified
+
+- `pnpm vitest run platform/packages/android-driver/src/android-actions.test.ts platform/apps/server/src/semantic-locator.test.ts platform/apps/server/src/asset-patrol.test.ts platform/apps/server/src/asset-driven-execution-session.test.ts platform/apps/dashboard/src/App.test.ts` 通过，共 177 个测试；`pnpm lint` 通过。
+- 真机 `ERLDU20115007395 / YAL-AL10` 完成批次 `asset_execution_51716a0e-1eac-46aa-8505-193374da7f7b`：从主页自动执行班级详情、添加好友、成长、加入班级、课程表、设置、空间、搜索共 8 条出口边，8/8 通过；每条边之间均自动恢复主页后继续，无人工续跑。
+- 其中 `加入班级 -> 主页` 通过多次受控 Back 和 foreground component 确认完成恢复，随后 `主页 -> 课程表` 正确执行；`主页 -> 设置` 通过新的头像视觉定位命中。批次报告接口返回 HTTP 200，并完整展示 7 条起点恢复记录。
+- 真机批次 `asset_execution_61331554-a760-4bfe-b8f6-8cac63d9d7f2` 验证可达页面预算轮转：7 条可执行边全部通过，其中包含 `主页 -> 班级聊天（经班级详情）` 和 `主页 -> 学习方案（经班级详情）` 两条二级页面路径；第 8 条 `班级详情 -> 发布活动类型选择页` 因未允许危险动作而按规则跳过。
+
+## 2026-07-11
+
+### Changed
+
+- 资产驱动巡检从当前页 v1 扩展为 `current_page` + `reachable_pages` v1：可达页范围从当前已匹配 PageModel 出发，仅沿 active PageTransition 覆盖已确认页面资产，仍不执行未确认 OCR / UI 候选。
+- Dashboard 资产驱动巡检计划展示改为按“页面 / 能力 / 连接边 / 任务”分组，减少内部 step 流水账对使用者的干扰。
+- 资产测试批次将 `skipped` 计入失败，不再把“只完成 1/8、其余因无法恢复起点而跳过”的批次误报为通过。
+- 批次起点恢复改为受控 Back：优先使用实时页面匹配；上一条边已成功时，可把其目标 PageModel 作为一次性恢复提示，确保页面滚动 / 折叠状态导致刷新匹配不确定时仍能安全返回一次。返回后提示立即失效，后续恢复继续以真实页面匹配为准。
+- 根导航页判定不再根据任意 bottom screenshot region / PageElement 猜测；只有明确根页名称或 `bottom-tab` 意图标签才禁止 Back，班级详情的“目录 / 聊天 / 待办 / 公告”等局部 tabs 不再被误认为 App 根导航。
+- 资产测试批次改为 fail-collect：单条边失败会记录失败并尝试恢复起点，恢复成功后继续执行其余独立边；仅设备丢失、用户停止或无法恢复起点时中断。
+
+### Verified
+
+- `pnpm vitest run platform/apps/server/src/asset-patrol.test.ts platform/apps/server/src/asset-driven-execution-session.test.ts platform/apps/dashboard/src/App.test.ts` 通过，共 108 个测试。
+- `pnpm lint` 通过。
+- 真机批次 `asset_execution_62a3fc4f-1cce-4e24-8117-9112d8748e3d` 完整执行 8 条主页出口边：7 条通过，`主页 -> 设置` 因头像视觉定位失败被记录为失败；后续 `主页 -> 空间`、`主页 -> 搜索` 仍继续执行并通过，验证自动恢复与 fail-collect 生效。
 
 ## 2026-07-10
 

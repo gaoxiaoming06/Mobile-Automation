@@ -2,14 +2,56 @@ import { describe, expect, it } from "vitest";
 import type { TestRun } from "@mobile-automation/shared";
 import {
   createAssetDrivenExecutionSession,
+  shouldAttemptNextAssetDrivenTarget,
   markAssetDrivenExecutionItemStarted,
   recordAssetDrivenExecutionRepairAttempt,
+  recordAssetDrivenExecutionRecovery,
+  renderAssetDrivenExecutionReportHtml,
+  skipPendingAssetDrivenExecutionItems,
   stopAssetDrivenExecutionSession,
   updateAssetDrivenExecutionItemFromRun
 } from "./asset-driven-execution-session.js";
 import type { AssetDrivenReadyExecutionTarget } from "./asset-patrol.js";
 
 describe("asset-driven execution session", () => {
+  it("continues collecting independent edge results after one edge fails", () => {
+    expect(shouldAttemptNextAssetDrivenTarget("passed")).toBe(true);
+    expect(shouldAttemptNextAssetDrivenTarget("failed")).toBe(true);
+    expect(shouldAttemptNextAssetDrivenTarget("device_lost")).toBe(false);
+    expect(shouldAttemptNextAssetDrivenTarget(undefined)).toBe(false);
+  });
+
+  it("renders batch recovery and fail-collect evidence in the HTML report", () => {
+    const session = createAssetDrivenExecutionSession({
+      id: "asset-session-report",
+      deviceSerial: "device-1",
+      packageName: "cn.eeo.classin",
+      startNodeId: "node-home",
+      startNodeName: "主页",
+      targets: [
+        target({ transitionName: "主页 -> 班级详情", targetNodeId: "node-detail", targetNodeName: "班级详情" }),
+        target({ transitionName: "主页 -> 搜索", targetNodeId: "node-search", targetNodeName: "搜索" })
+      ],
+      now: "2026-07-12T00:00:00.000Z"
+    });
+    recordAssetDrivenExecutionRecovery(session, {
+      afterItemOrder: 1,
+      fromPage: "班级详情",
+      toPage: "主页",
+      status: "passed",
+      strategy: "verified_target_back",
+      durationMs: 1280,
+      message: "使用上一条成功边的目标页提示返回起点。"
+    }, "2026-07-12T00:00:02.000Z");
+
+    const html = renderAssetDrivenExecutionReportHtml(session);
+
+    expect(html).toContain("资产测试批次报告");
+    expect(html).toContain("班级详情 → 主页");
+    expect(html).toContain("verified_target_back");
+    expect(html).toContain("失败后继续");
+  });
+
   it("keeps the batch running after the first edge passes and the next edge starts", () => {
     const session = createAssetDrivenExecutionSession({
       id: "asset-session-1",
@@ -114,6 +156,38 @@ describe("asset-driven execution session", () => {
     expect(session.needsRepair).toBe(1);
     expect(session.status).toBe("running");
   });
+
+  it("marks the batch failed when pending edges are skipped because execution cannot continue", () => {
+    const session = createAssetDrivenExecutionSession({
+      id: "asset-session-1",
+      deviceSerial: "device-1",
+      packageName: "cn.eeo.classin",
+      graphVersionId: "graph-1",
+      startNodeId: "node-home",
+      startNodeName: "主页",
+      targets: [
+        target({ transitionName: "主页 -> 班级详情", targetNodeId: "node-detail", targetNodeName: "班级详情" }),
+        target({ transitionName: "主页 -> 添加好友", targetNodeId: "node-add-friend", targetNodeName: "添加好友" }),
+        target({ transitionName: "主页 -> 搜索", targetNodeId: "node-search", targetNodeName: "搜索" })
+      ],
+      now: "2026-07-07T10:00:00.000Z"
+    });
+
+    markAssetDrivenExecutionItemStarted(session, 0, run({ id: "run-detail", status: "running", caseName: "班级详情" }), "2026-07-07T10:00:01.000Z");
+    updateAssetDrivenExecutionItemFromRun(session, run({ id: "run-detail", status: "passed", caseName: "班级详情" }), "2026-07-07T10:00:02.000Z");
+    skipPendingAssetDrivenExecutionItems(session, "未能恢复到本轮资产测试的起始页面。", "2026-07-07T10:00:03.000Z");
+
+    expect(session.status).toBe("failed");
+    expect(session.completedEdges).toBe(1);
+    expect(session.pendingEdges).toBe(0);
+    expect(session.failedEdges).toBe(2);
+    expect(session.items.map((item) => [item.label, item.status, item.errorMessage])).toEqual([
+      ["主页 -> 班级详情", "passed", undefined],
+      ["主页 -> 添加好友", "skipped", "未能恢复到本轮资产测试的起始页面。"],
+      ["主页 -> 搜索", "skipped", "未能恢复到本轮资产测试的起始页面。"]
+    ]);
+  });
+
 });
 
 function target(patch: Partial<AssetDrivenReadyExecutionTarget>): AssetDrivenReadyExecutionTarget {

@@ -15,6 +15,18 @@ export type AssetDrivenExecutionRepairAttempt = {
   createdAt: string;
 };
 
+export type AssetDrivenExecutionRecovery = {
+  id: string;
+  afterItemOrder: number;
+  fromPage: string;
+  toPage: string;
+  status: "passed" | "failed";
+  strategy: string;
+  durationMs: number;
+  message: string;
+  createdAt: string;
+};
+
 export type AssetDrivenExecutionItem = {
   id: string;
   order: number;
@@ -49,6 +61,7 @@ export type AssetDrivenExecutionSession = {
   needsRepair: number;
   runningItem?: AssetDrivenExecutionItem;
   items: AssetDrivenExecutionItem[];
+  recoveries: AssetDrivenExecutionRecovery[];
   startedAt: string;
   updatedAt: string;
   endedAt?: string;
@@ -80,6 +93,7 @@ export function createAssetDrivenExecutionSession(input: {
     pendingEdges: input.targets.length,
     failedEdges: 0,
     needsRepair: 0,
+    recoveries: [],
     items: input.targets.map((target, index) => ({
       id: `${sessionId}_item_${index + 1}`,
       order: index + 1,
@@ -157,6 +171,19 @@ export function recordAssetDrivenExecutionRepairAttempt(
   return recomputeAssetDrivenExecutionSession(session, timestamp);
 }
 
+export function recordAssetDrivenExecutionRecovery(
+  session: AssetDrivenExecutionSession,
+  recovery: Omit<AssetDrivenExecutionRecovery, "id" | "createdAt">,
+  timestamp = nowIso()
+): AssetDrivenExecutionSession {
+  session.recoveries.push({
+    id: createId("asset_recovery"),
+    ...recovery,
+    createdAt: timestamp
+  });
+  return recomputeAssetDrivenExecutionSession(session, timestamp);
+}
+
 export function skipPendingAssetDrivenExecutionItems(
   session: AssetDrivenExecutionSession,
   reason: string,
@@ -187,6 +214,67 @@ export function stopAssetDrivenExecutionSession(
   return recomputeAssetDrivenExecutionSession(session, timestamp);
 }
 
+export function shouldAttemptNextAssetDrivenTarget(status: RunStatus | undefined): boolean {
+  return status === "passed" || status === "failed";
+}
+
+export function renderAssetDrivenExecutionReportHtml(session: AssetDrivenExecutionSession): string {
+  const itemRows = session.items.map((item) => `
+    <tr>
+      <td>${item.order}</td>
+      <td>${escapeHtml(item.label)}</td>
+      <td><span class="status ${item.status}">${escapeHtml(item.status)}</span></td>
+      <td>${escapeHtml(item.runId ?? "-")}</td>
+      <td>${escapeHtml(item.errorMessage ?? "-")}</td>
+    </tr>`).join("");
+  const recoveryRows = session.recoveries.length
+    ? session.recoveries.map((recovery) => `
+      <tr>
+        <td>${recovery.afterItemOrder}</td>
+        <td>${escapeHtml(recovery.fromPage)} → ${escapeHtml(recovery.toPage)}</td>
+        <td>${escapeHtml(recovery.strategy)}</td>
+        <td><span class="status ${recovery.status}">${escapeHtml(recovery.status)}</span></td>
+        <td>${recovery.durationMs} ms</td>
+        <td>${escapeHtml(recovery.message)}</td>
+      </tr>`).join("")
+    : '<tr><td colspan="6">本批次没有边间恢复记录。</td></tr>';
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>资产测试批次报告</title>
+  <style>
+    body{font-family:system-ui,-apple-system,sans-serif;margin:32px;color:#171717;background:#f7f7f7}main{max-width:1180px;margin:auto;background:#fff;padding:28px;border:1px solid #ddd}h1,h2{margin:0 0 18px}h2{margin-top:30px;font-size:18px}.summary{display:grid;grid-template-columns:repeat(5,minmax(110px,1fr));gap:10px}.summary div{padding:12px;border:1px solid #ddd}.summary strong{display:block;font-size:22px}table{width:100%;border-collapse:collapse}th,td{padding:10px;border:1px solid #ddd;text-align:left;vertical-align:top}.status{font-weight:700}.passed{color:#16794b}.failed,.skipped,.stopped{color:#b42318}.running{color:#175cd3}small{color:#666}
+  </style>
+</head>
+<body><main>
+  <h1>资产测试批次报告</h1>
+  <small>${escapeHtml(session.id)} · ${escapeHtml(session.packageName)} · ${escapeHtml(session.deviceSerial)}</small>
+  <div class="summary">
+    <div><span>起点</span><strong>${escapeHtml(session.startNodeName)}</strong></div>
+    <div><span>总边数</span><strong>${session.totalEdges}</strong></div>
+    <div><span>通过</span><strong>${session.completedEdges}</strong></div>
+    <div><span>失败</span><strong>${session.failedEdges}</strong></div>
+    <div><span>状态</span><strong>${escapeHtml(session.status)}</strong></div>
+  </div>
+  <h2>边执行结果</h2>
+  <p>单边失败会记录后继续执行其余独立边；仅无法恢复起点、设备丢失或用户停止时中断。失败后继续。</p>
+  <table><thead><tr><th>#</th><th>连接边</th><th>状态</th><th>Run</th><th>错误</th></tr></thead><tbody>${itemRows}</tbody></table>
+  <h2>起点恢复记录</h2>
+  <table><thead><tr><th>前序边</th><th>恢复路径</th><th>策略</th><th>状态</th><th>耗时</th><th>说明</th></tr></thead><tbody>${recoveryRows}</tbody></table>
+</main></body></html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 export function recomputeAssetDrivenExecutionSession(
   session: AssetDrivenExecutionSession,
   timestamp = nowIso()
@@ -195,7 +283,7 @@ export function recomputeAssetDrivenExecutionSession(
   session.completedEdges = session.items.filter((item) => item.status === "passed").length;
   session.runningEdges = session.items.filter((item) => item.status === "running").length;
   session.pendingEdges = session.items.filter((item) => item.status === "pending").length;
-  session.failedEdges = session.items.filter((item) => item.status === "failed" || item.status === "stopped").length;
+  session.failedEdges = session.items.filter((item) => item.status === "failed" || item.status === "stopped" || item.status === "skipped").length;
   session.needsRepair = session.items.filter((item) => item.status === "failed").length;
   session.runningItem = session.items.find((item) => item.status === "running");
   if (session.runningEdges > 0 || session.pendingEdges > 0) {

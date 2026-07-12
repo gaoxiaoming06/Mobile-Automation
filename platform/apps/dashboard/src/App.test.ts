@@ -18,6 +18,7 @@ import {
   actionStrategyForWorkspace,
   assetConnectionEdgeMessage,
   assetPatrolPanelDisplayMode,
+  assetPatrolPlanGroups,
   assetPatrolPageScopeOptions,
   assetPatrolPlanRequiresBusinessSubmit,
   assetPatrolRequestBody,
@@ -376,13 +377,26 @@ describe("App shell", () => {
     expect(assetPatrolRuntimeParamPlaceholder(definitions[2])).toBe("请输入密码");
   });
 
-  it("keeps unsupported asset patrol scopes disabled until cross-page patrol is implemented", () => {
+  it("enables current and reachable asset patrol scopes while keeping future scopes disabled", () => {
     expect(assetPatrolPageScopeOptions()).toEqual([
       { value: "current_page", label: "当前页", disabled: false },
-      { value: "reachable_pages", label: "可达页面（后续接入）", disabled: true },
+      { value: "reachable_pages", label: "可达页面", disabled: false },
       { value: "tagged_pages", label: "标记页面（后续接入）", disabled: true },
       { value: "all_active_pages", label: "全部已激活页面（后续接入）", disabled: true }
     ]);
+    expect(
+      assetPatrolRequestBody({
+        selectedSerial: "device-1",
+        packageName: "cn.eeo.classin",
+        startMode: "current_state",
+        pageScope: "reachable_pages",
+        maxDurationMinutes: 2,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: false,
+        dangerousTextPatternsText: "删除"
+      }).pageScope
+    ).toBe("reachable_pages");
     expect(
       assetPatrolRequestBody({
         selectedSerial: "device-1",
@@ -396,6 +410,37 @@ describe("App shell", () => {
         dangerousTextPatternsText: "删除"
       }).pageScope
     ).toBe("current_page");
+  });
+
+  it("groups asset patrol plans by page, ability, transition, and task", () => {
+    const groups = assetPatrolPlanGroups({
+      status: "ready",
+      startPage: { id: "node-home", name: "主页", score: 0.96 },
+      issues: [],
+      summary: {
+        pageChecks: 2,
+        elementChecks: 1,
+        transitionChecks: 1,
+        taskChecks: 1,
+        skipped: 0,
+        needsRepair: 0
+      },
+      steps: [
+        { id: "step-page-home", order: 1, kind: "page_match", label: "页面匹配：主页", status: "ready", pageModelName: "主页" },
+        { id: "step-page-detail", order: 2, kind: "page_match", label: "可达页面：班级详情", status: "ready", pageModelName: "班级详情" },
+        { id: "step-element", order: 3, kind: "element_relocation", label: "元素可重定位：班级列表", status: "ready", pageModelName: "主页" },
+        { id: "step-transition", order: 4, kind: "transition_validation", label: "边巡检：主页 -> 班级详情", status: "ready", pageModelName: "主页" },
+        { id: "step-task", order: 5, kind: "task_dry_run", label: "任务编排体检：填写课堂信息", status: "skipped", pageModelName: "新建课堂", skipReason: "business_submit_disabled" }
+      ]
+    });
+
+    expect(groups.map((group) => [group.title, group.items.map((item) => item.label)])).toEqual([
+      ["页面", ["页面匹配：主页", "可达页面：班级详情"]],
+      ["能力", ["元素可重定位：班级列表"]],
+      ["连接边", ["边巡检：主页 -> 班级详情"]],
+      ["任务", ["任务编排体检：填写课堂信息"]]
+    ]);
+    expect(groups[3]?.items[0]?.detail).toBe("新建课堂 · skipped · business_submit_disabled");
   });
 
   it("defaults asset patrol to the ClassIn Android package", () => {
@@ -705,6 +750,70 @@ describe("App shell", () => {
 
     expect(markup).toContain("asset-session-refresh");
     expect(markup).toContain("停止");
+  });
+
+  it("keeps failed asset batches automatic without exposing a manual resume action", () => {
+    const noop = () => undefined;
+    const execution: NonNullable<Parameters<typeof assetDrivenExecutionProgressSummary>[0]> = {
+      id: "asset-session-failed",
+      deviceSerial: "device-1",
+      packageName: "cn.eeo.classin",
+      graphVersionId: "graph-1",
+      startNodeId: "node-home",
+      startNodeName: "主页",
+      status: "failed",
+      totalEdges: 2,
+      completedEdges: 1,
+      runningEdges: 0,
+      pendingEdges: 0,
+      failedEdges: 1,
+      needsRepair: 0,
+      startedAt: "2026-07-07T10:00:00.000Z",
+      updatedAt: "2026-07-07T10:00:03.000Z",
+      endedAt: "2026-07-07T10:00:03.000Z",
+      items: [
+        { id: "item-1", order: 1, label: "主页 -> 班级详情", fromPage: "主页", toPage: "班级详情", status: "passed" },
+        { id: "item-2", order: 2, label: "主页 -> 添加好友", fromPage: "主页", toPage: "添加好友", status: "skipped" }
+      ]
+    };
+
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetPatrolPanel, {
+        devices: [],
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        packageName: "cn.eeo.classin",
+        packageOptions: ["cn.eeo.classin"],
+        startMode: "current_state",
+        pageScope: "reachable_pages",
+        maxDurationMinutes: 2,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: false,
+        dangerousTextPatternsText: "删除\n退出登录",
+        runtimeParamsText: "",
+        runtimeParamDefinitions: [],
+        assetDrivenExecution: execution,
+        busy: false,
+        onSelectDevice: noop,
+        onPackageNameChange: noop,
+        onStartModeChange: noop,
+        onPageScopeChange: noop,
+        onMaxDurationMinutesChange: noop,
+        onMaxTransitionsChange: noop,
+        onAllowRiskyActionsChange: noop,
+        onAllowBusinessSubmitChange: noop,
+        onDangerousTextPatternsChange: noop,
+        onRuntimeParamsChange: noop,
+        onSyncRuntimeParams: noop,
+        onExecute: noop,
+        onStop: noop,
+        onOpenRun: noop
+      })
+    );
+
+    expect(markup).not.toContain("继续未完成");
+    expect(markup).toContain("打开批次报告");
   });
 
   it("disables starting another asset-driven execution while the batch is running", () => {

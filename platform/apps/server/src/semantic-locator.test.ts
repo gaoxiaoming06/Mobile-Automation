@@ -228,6 +228,89 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("relocates a leading avatar by its current light circular container", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(topBarLayout()),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: topBarAvatarScreenshot(1200, 2000, { centerX: 80, centerY: 172, radius: 42 })
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-avatar",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "top-bar-icon:avatar",
+        locatorKind: "top_bar_icon_locator",
+        role: "avatar",
+        slot: "leading",
+        anchorText: "主页",
+        semanticArea: "top",
+        visualLocator: {
+          candidates: [
+            { role: "avatar", label: "头像", score: 0.93, semanticArea: "top", region: { x: 4.2, y: 6.1, width: 5, height: 5 } }
+          ]
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 80, y: 172 }]);
+    expect(outcome?.metadata).toEqual(
+      expect.objectContaining({
+        role: "avatar",
+        relocatedBy: "top_bar_current_visual",
+        currentVisual: expect.objectContaining({ strategy: "avatar_container" })
+      })
+    );
+  });
+
+  it("keeps a large current avatar when the recorded candidate was smaller and shifted", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const shiftedTitleLayout = topBarLayout();
+    shiftedTitleLayout.boxes = shiftedTitleLayout.boxes.map((box) => box.text === "主页" ? { ...box, x: 220 } : box);
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(shiftedTitleLayout),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: topBarAvatarScreenshot(1200, 2000, { centerX: 116, centerY: 230, radius: 50 })
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-avatar-shifted",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "top-bar-icon:avatar",
+        locatorKind: "top_bar_icon_locator",
+        role: "avatar",
+        slot: "leading",
+        anchorText: "主页",
+        semanticArea: "top",
+        visualLocator: {
+          candidates: [
+            { role: "avatar", label: "头像", score: 0.93, semanticArea: "top", region: { x: 4.1, y: 6, width: 5.2, height: 3.2 } }
+          ]
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 116, y: 230 }]);
+    expect(outcome?.metadata).toEqual(expect.objectContaining({ relocatedBy: "top_bar_current_visual" }));
+  });
+
   it("resolves top bar trailing icons from current screenshot visuals instead of candidate centers", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -3263,6 +3346,25 @@ function topBarIconScreenshot(
     } else {
       drawCircle(pixels, width, height, icon.centerX - 3, icon.centerY - 3, 18, 5, 20);
       drawLine(pixels, width, height, icon.centerX + 9, icon.centerY + 9, icon.centerX + 24, icon.centerY + 24, 5, 20);
+    }
+  }
+  return pgm(width, height, pixels);
+}
+
+function topBarAvatarScreenshot(
+  width: number,
+  height: number,
+  avatar: { centerX: number; centerY: number; radius: number }
+): Buffer {
+  const pixels = Array.from({ length: width * height }, () => 255);
+  for (let y = avatar.centerY - avatar.radius; y <= avatar.centerY + avatar.radius; y += 1) {
+    for (let x = avatar.centerX - avatar.radius; x <= avatar.centerX + avatar.radius; x += 1) {
+      if (x < 0 || x >= width || y < 0 || y >= height) {
+        continue;
+      }
+      if (Math.hypot(x - avatar.centerX, y - avatar.centerY) <= avatar.radius) {
+        pixels[y * width + x] = 232;
+      }
     }
   }
   return pgm(width, height, pixels);
