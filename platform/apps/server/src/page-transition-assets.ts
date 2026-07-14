@@ -72,6 +72,7 @@ export type ManualPageTransitionStorage = {
 export type PersistManualPageTransitionInput = {
   graphVersionId: string;
   storage: ManualPageTransitionStorage;
+  elementId?: string;
   sourceNodeId: string;
   targetNodeId: string;
   actionKind: ManualPageTransitionActionKind;
@@ -283,6 +284,7 @@ export function persistManualPageElementAsset(input: PersistManualPageElementInp
       persistManualPageTransitionAsset({
         graphVersionId: input.graphVersionId,
         storage: input.storage,
+        elementId: input.elementId,
         sourceNodeId: input.sourceNodeId,
         targetNodeId: input.targetNodeId,
         actionKind: input.actionKind,

@@ -3930,6 +3930,65 @@ MCP / REST 工具：
 - `create_defect_candidate(payload)`：从 AI 诊断创建缺陷候选。
 - `continue_exploration(runId, strategy)`：在策略允许时重启 App、回到起点或继续下一分支。
 
+### DES-046：资产衍生组合测试设计
+
+目标：让用户基于已确认 PageStateFlow 资产组合测试，而不是再次录制点击脚本。组合层只保存资产引用、参数绑定和执行策略；每次运行前都基于当前 active 图版本重新编译，页面能力或定位规则更新后无需重录组合用例。
+
+核心模型：
+
+```ts
+type ParameterProfile = {
+  id: string;
+  appId: string;
+  name: string;
+  values: Record<string, string | number | boolean | { template: string }>;
+  version: number;
+};
+
+type MetaFunctionStep =
+  | { kind: "reach_page"; targetPageModelId: string }
+  | { kind: "invoke_capability"; sourcePageModelId: string; pageElementId: string; pageTransitionId: string }
+  | { kind: "run_page_task"; targetPageModelId: string; pageTaskId: string }
+  | { kind: "verify_page"; targetPageModelId: string };
+
+type MetaFunction = {
+  id: string;
+  appId: string;
+  name: string;
+  requiredParameters: string[];
+  steps: MetaFunctionStep[];
+  version: number;
+};
+
+type AssetCompositeCase = {
+  id: string;
+  appId: string;
+  name: string;
+  parameterProfileId?: string;
+  steps: Array<{ metaFunctionId: string; parameterOverrides?: Record<string, unknown> }>;
+  runMode: "once" | "repeat_n" | "loop_until_stop";
+  repeatCount: number;
+  stopOnFailure: boolean;
+  version: number;
+};
+```
+
+编译规则：
+
+- 合并顺序为 Parameter Profile、执行期覆盖、组合步骤覆盖；后者优先。
+- `invoke_capability` 必须同时解析到 active PageElement 和 active PageTransition，并校验来源页、目标页、App 和平台归属。
+- `run_page_task` 必须解析到目标页当前 active PageTask；缺少必需参数时预检失败。
+- 编译产物是一次性的 `AssetCompositeExecutionPlan`，不回写 locator、坐标或底层 ActionStep 到组合资产。
+
+执行规则：
+
+- 每个编译步骤复用 GraphRunService：到页、执行指定能力、执行 PageTask、验证页面。
+- 每一步完成后以实际 PageMatcher 结果为下一步事实，不假设上一步一定成功。
+- 执行会话支持停止、重复次数、循环直到停止、失败停止，并按“组合用例 -> 元功能 -> 资产步骤 -> Graph Run”生成分层报告。循环模式会在每轮完成后动态追加下一轮，不预创建无限步骤；停止时当前 Graph Run 和当前资产步骤都保持 stopped，不得被完成回调覆盖为 passed。
+- 表单输入控件必须使用 runtime locator。动态已有值可以用稳定 OCR 锚点的结构关系定位，例如课堂标题通过“开始时间上方最近文本输入行”重定位；不得把动态课堂名或历史截图框当成正式定位依据。
+
+Dashboard 提供“资产用例”入口，包含参数集、元功能、组合用例三个视图；所有页面、元素、连接边和 PageTask 选项都来自当前 App 的 active 资产目录。
+
 策略边界：
 
 - RuleClassifier 优先识别 crash / ANR / app exit / black screen / fatal log，这类高置信运行异常不进入自动资产修复。

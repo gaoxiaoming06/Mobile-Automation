@@ -43,6 +43,7 @@ export type AssetPatrolSkipReason =
 export type AssetPatrolConfigInput = {
   packageName: string;
   graphVersionId?: string;
+  parameterProfileId?: string;
   startMode?: AssetPatrolStartMode;
   pageScope?: AssetPatrolPageScope;
   maxDurationMs?: number;
@@ -53,8 +54,9 @@ export type AssetPatrolConfigInput = {
   runtimeParams?: Record<string, string>;
 };
 
-export type AssetPatrolConfig = Required<Omit<AssetPatrolConfigInput, "dangerousTextPatterns" | "graphVersionId" | "runtimeParams">> & {
+export type AssetPatrolConfig = Required<Omit<AssetPatrolConfigInput, "dangerousTextPatterns" | "graphVersionId" | "parameterProfileId" | "runtimeParams">> & {
   graphVersionId?: string;
+  parameterProfileId?: string;
   dangerousTextPatterns: string[];
   runtimeParams: Record<string, string>;
 };
@@ -640,6 +642,7 @@ export function normalizeAssetPatrolConfig(input: AssetPatrolConfigInput): Asset
   return {
     packageName,
     graphVersionId: input.graphVersionId?.trim() || undefined,
+    parameterProfileId: input.parameterProfileId?.trim() || undefined,
     startMode: normalizeStartMode(input.startMode),
     pageScope: normalizePageScope(input.pageScope),
     maxDurationMs: clampInteger(input.maxDurationMs, 120_000, 10_000, 30 * 60_000),

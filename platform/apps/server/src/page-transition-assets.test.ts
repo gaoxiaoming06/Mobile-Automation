@@ -448,6 +448,7 @@ describe("persistManualPageTransitionAsset", () => {
     const result = persistManualPageElementAsset({
       graphVersionId: "version-1",
       storage,
+      elementId: "home-create-public-course",
       sourceNodeId: source.id,
       targetNodeId: target.id,
       actionKind: "tap",
@@ -473,6 +474,7 @@ describe("persistManualPageTransitionAsset", () => {
     );
     expect(storage.nodes.find((node) => node.id === source.id)?.metadata?.assetRecordingManualElements).toEqual([
       expect.objectContaining({
+        id: "home-create-public-course",
         label: "创建公开课",
         locator: "image-region:53.85,15.84,38.63,7.33",
         actionKind: "tap",

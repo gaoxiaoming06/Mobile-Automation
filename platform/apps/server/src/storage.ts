@@ -19,8 +19,14 @@ import {
   nowIso,
   type ActionStep,
   type ArtifactRef,
+  type AssetCompositeCase,
+  type AssetCompositeCaseStep,
   type DeviceEvent,
+  type MetaFunction,
+  type MetaFunctionStep,
   type MetricSample,
+  type ParameterDataRecord,
+  type ParameterProfile,
   type StepResult,
   type StructuredFlow,
   type StructuredFlowStep,
@@ -86,6 +92,24 @@ type CreateStructuredFlowInput = Omit<StructuredFlow, "id" | "version" | "create
   tags?: string[];
   status?: StructuredFlow["status"];
   steps: StructuredFlowStep[];
+};
+
+export type CreateParameterProfileInput = Omit<ParameterProfile, "id" | "version" | "createdAt" | "updatedAt" | "status"> & {
+  status?: ParameterProfile["status"];
+};
+
+export type CreateParameterDataRecordInput = Omit<ParameterDataRecord, "id" | "version" | "createdAt" | "updatedAt" | "status"> & {
+  status?: ParameterDataRecord["status"];
+};
+
+export type CreateMetaFunctionInput = Omit<MetaFunction, "id" | "version" | "createdAt" | "updatedAt" | "status" | "steps"> & {
+  status?: MetaFunction["status"];
+  steps: MetaFunctionStep[];
+};
+
+export type CreateAssetCompositeCaseInput = Omit<AssetCompositeCase, "id" | "version" | "createdAt" | "updatedAt" | "status" | "steps"> & {
+  status?: AssetCompositeCase["status"];
+  steps: AssetCompositeCaseStep[];
 };
 
 type RuntimeInterceptorRuleFilter = {
@@ -420,6 +444,318 @@ export class Storage {
   deleteStructuredFlow(id: string): boolean {
     const result = this.db.prepare("DELETE FROM structured_flows WHERE id = ?").run(id);
     return result.changes > 0;
+  }
+
+  createParameterProfile(input: CreateParameterProfileInput): ParameterProfile {
+    const now = nowIso();
+    const profile: ParameterProfile = {
+      id: createId("parameter_profile"),
+      appId: input.appId,
+      platform: input.platform,
+      name: input.name,
+      description: input.description,
+      environment: input.environment,
+      bindings: input.bindings ?? [],
+      values: input.values,
+      status: input.status ?? "active",
+      version: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.db.prepare(
+      `INSERT INTO asset_parameter_profiles
+        (id, app_id, platform, name, description, environment, bindings_json, values_json, status, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      profile.id,
+      profile.appId,
+      profile.platform,
+      profile.name,
+      profile.description ?? null,
+      profile.environment ?? null,
+      JSON.stringify(profile.bindings),
+      JSON.stringify(profile.values),
+      profile.status,
+      profile.version,
+      profile.createdAt,
+      profile.updatedAt
+    );
+    return profile;
+  }
+
+  listParameterProfiles(filter: { appId?: string; platform?: ParameterProfile["platform"] } = {}): ParameterProfile[] {
+    const clauses: string[] = [];
+    const values: string[] = [];
+    if (filter.appId) {
+      clauses.push("app_id = ?");
+      values.push(filter.appId);
+    }
+    if (filter.platform) {
+      clauses.push("platform = ?");
+      values.push(filter.platform);
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db.prepare(`SELECT * FROM asset_parameter_profiles${where} ORDER BY updated_at DESC`).all(...values) as Row[];
+    return rows.map(rowToParameterProfile);
+  }
+
+  getParameterProfile(id: string): ParameterProfile | undefined {
+    const row = this.db.prepare("SELECT * FROM asset_parameter_profiles WHERE id = ?").get(id) as Row | undefined;
+    return row ? rowToParameterProfile(row) : undefined;
+  }
+
+  updateParameterProfile(id: string, input: CreateParameterProfileInput): ParameterProfile {
+    const existing = this.getParameterProfile(id);
+    if (!existing) {
+      throw new Error(`Parameter profile not found: ${id}`);
+    }
+    const next: ParameterProfile = {
+      ...existing,
+      appId: input.appId,
+      platform: input.platform,
+      name: input.name,
+      description: input.description,
+      environment: input.environment,
+      bindings: input.bindings ?? [],
+      values: input.values,
+      status: input.status ?? existing.status,
+      version: existing.version + 1,
+      updatedAt: nowIso()
+    };
+    this.db.prepare(
+      `UPDATE asset_parameter_profiles
+       SET app_id = ?, platform = ?, name = ?, description = ?, environment = ?, bindings_json = ?, values_json = ?, status = ?, version = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(next.appId, next.platform, next.name, next.description ?? null, next.environment ?? null, JSON.stringify(next.bindings), JSON.stringify(next.values), next.status, next.version, next.updatedAt, id);
+    return next;
+  }
+
+  deleteParameterProfile(id: string): boolean {
+    return this.db.prepare("DELETE FROM asset_parameter_profiles WHERE id = ?").run(id).changes > 0;
+  }
+
+  createParameterDataRecord(input: CreateParameterDataRecordInput): ParameterDataRecord {
+    const now = nowIso();
+    const record: ParameterDataRecord = {
+      id: createId("parameter_data_record"),
+      appId: input.appId,
+      platform: input.platform,
+      domainKey: input.domainKey,
+      name: input.name,
+      description: input.description,
+      environment: input.environment,
+      values: input.values,
+      status: input.status ?? "active",
+      version: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.db.prepare(
+      `INSERT INTO asset_parameter_data_records
+        (id, app_id, platform, domain_key, name, description, environment, values_json, status, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      record.id,
+      record.appId,
+      record.platform,
+      record.domainKey,
+      record.name,
+      record.description ?? null,
+      record.environment ?? null,
+      JSON.stringify(record.values),
+      record.status,
+      record.version,
+      record.createdAt,
+      record.updatedAt
+    );
+    return record;
+  }
+
+  listParameterDataRecords(filter: { appId?: string; platform?: ParameterDataRecord["platform"]; domainKey?: string } = {}): ParameterDataRecord[] {
+    const clauses: string[] = [];
+    const values: string[] = [];
+    if (filter.appId) {
+      clauses.push("app_id = ?");
+      values.push(filter.appId);
+    }
+    if (filter.platform) {
+      clauses.push("platform = ?");
+      values.push(filter.platform);
+    }
+    if (filter.domainKey) {
+      clauses.push("domain_key = ?");
+      values.push(filter.domainKey);
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db.prepare(`SELECT * FROM asset_parameter_data_records${where} ORDER BY domain_key ASC, updated_at DESC`).all(...values) as Row[];
+    return rows.map(rowToParameterDataRecord);
+  }
+
+  getParameterDataRecord(id: string): ParameterDataRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM asset_parameter_data_records WHERE id = ?").get(id) as Row | undefined;
+    return row ? rowToParameterDataRecord(row) : undefined;
+  }
+
+  updateParameterDataRecord(id: string, input: CreateParameterDataRecordInput): ParameterDataRecord {
+    const existing = this.getParameterDataRecord(id);
+    if (!existing) {
+      throw new Error(`Parameter data record not found: ${id}`);
+    }
+    const next: ParameterDataRecord = {
+      ...existing,
+      appId: input.appId,
+      platform: input.platform,
+      domainKey: input.domainKey,
+      name: input.name,
+      description: input.description,
+      environment: input.environment,
+      values: input.values,
+      status: input.status ?? existing.status,
+      version: existing.version + 1,
+      updatedAt: nowIso()
+    };
+    this.db.prepare(
+      `UPDATE asset_parameter_data_records
+       SET app_id = ?, platform = ?, domain_key = ?, name = ?, description = ?, environment = ?, values_json = ?, status = ?, version = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(next.appId, next.platform, next.domainKey, next.name, next.description ?? null, next.environment ?? null, JSON.stringify(next.values), next.status, next.version, next.updatedAt, id);
+    return next;
+  }
+
+  deleteParameterDataRecord(id: string): boolean {
+    return this.db.prepare("DELETE FROM asset_parameter_data_records WHERE id = ?").run(id).changes > 0;
+  }
+
+  createMetaFunction(input: CreateMetaFunctionInput): MetaFunction {
+    const now = nowIso();
+    const metaFunction: MetaFunction = {
+      id: createId("meta_function"),
+      appId: input.appId,
+      platform: input.platform,
+      name: input.name,
+      description: input.description,
+      parameters: input.parameters,
+      steps: normalizeOrderedSteps(input.steps),
+      status: input.status ?? "draft",
+      version: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.db.prepare(
+      `INSERT INTO asset_meta_functions
+        (id, app_id, platform, name, description, parameters_json, steps_json, status, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(metaFunction.id, metaFunction.appId, metaFunction.platform, metaFunction.name, metaFunction.description ?? null, JSON.stringify(metaFunction.parameters), JSON.stringify(metaFunction.steps), metaFunction.status, metaFunction.version, metaFunction.createdAt, metaFunction.updatedAt);
+    return metaFunction;
+  }
+
+  listMetaFunctions(filter: { appId?: string; platform?: MetaFunction["platform"] } = {}): MetaFunction[] {
+    const { where, values } = appPlatformWhere(filter);
+    const rows = this.db.prepare(`SELECT * FROM asset_meta_functions${where} ORDER BY updated_at DESC`).all(...values) as Row[];
+    return rows.map(rowToMetaFunction);
+  }
+
+  getMetaFunction(id: string): MetaFunction | undefined {
+    const row = this.db.prepare("SELECT * FROM asset_meta_functions WHERE id = ?").get(id) as Row | undefined;
+    return row ? rowToMetaFunction(row) : undefined;
+  }
+
+  updateMetaFunction(id: string, input: CreateMetaFunctionInput): MetaFunction {
+    const existing = this.getMetaFunction(id);
+    if (!existing) {
+      throw new Error(`Meta function not found: ${id}`);
+    }
+    const next: MetaFunction = {
+      ...existing,
+      appId: input.appId,
+      platform: input.platform,
+      name: input.name,
+      description: input.description,
+      parameters: input.parameters,
+      steps: normalizeOrderedSteps(input.steps),
+      status: input.status ?? existing.status,
+      version: existing.version + 1,
+      updatedAt: nowIso()
+    };
+    this.db.prepare(
+      `UPDATE asset_meta_functions
+       SET app_id = ?, platform = ?, name = ?, description = ?, parameters_json = ?, steps_json = ?, status = ?, version = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(next.appId, next.platform, next.name, next.description ?? null, JSON.stringify(next.parameters), JSON.stringify(next.steps), next.status, next.version, next.updatedAt, id);
+    return next;
+  }
+
+  deleteMetaFunction(id: string): boolean {
+    return this.db.prepare("DELETE FROM asset_meta_functions WHERE id = ?").run(id).changes > 0;
+  }
+
+  createAssetCompositeCase(input: CreateAssetCompositeCaseInput): AssetCompositeCase {
+    const now = nowIso();
+    const compositeCase: AssetCompositeCase = {
+      id: createId("asset_composite_case"),
+      appId: input.appId,
+      platform: input.platform,
+      name: input.name,
+      description: input.description,
+      parameterProfileId: input.parameterProfileId,
+      runMode: input.runMode,
+      repeatCount: input.repeatCount,
+      stopOnFailure: input.stopOnFailure,
+      steps: normalizeOrderedSteps(input.steps),
+      status: input.status ?? "draft",
+      version: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.db.prepare(
+      `INSERT INTO asset_composite_cases
+        (id, app_id, platform, name, description, parameter_profile_id, run_mode, repeat_count, stop_on_failure, steps_json, status, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(compositeCase.id, compositeCase.appId, compositeCase.platform, compositeCase.name, compositeCase.description ?? null, compositeCase.parameterProfileId ?? null, compositeCase.runMode, compositeCase.repeatCount, compositeCase.stopOnFailure ? 1 : 0, JSON.stringify(compositeCase.steps), compositeCase.status, compositeCase.version, compositeCase.createdAt, compositeCase.updatedAt);
+    return compositeCase;
+  }
+
+  listAssetCompositeCases(filter: { appId?: string; platform?: AssetCompositeCase["platform"] } = {}): AssetCompositeCase[] {
+    const { where, values } = appPlatformWhere(filter);
+    const rows = this.db.prepare(`SELECT * FROM asset_composite_cases${where} ORDER BY updated_at DESC`).all(...values) as Row[];
+    return rows.map(rowToAssetCompositeCase);
+  }
+
+  getAssetCompositeCase(id: string): AssetCompositeCase | undefined {
+    const row = this.db.prepare("SELECT * FROM asset_composite_cases WHERE id = ?").get(id) as Row | undefined;
+    return row ? rowToAssetCompositeCase(row) : undefined;
+  }
+
+  updateAssetCompositeCase(id: string, input: CreateAssetCompositeCaseInput): AssetCompositeCase {
+    const existing = this.getAssetCompositeCase(id);
+    if (!existing) {
+      throw new Error(`Asset composite case not found: ${id}`);
+    }
+    const next: AssetCompositeCase = {
+      ...existing,
+      appId: input.appId,
+      platform: input.platform,
+      name: input.name,
+      description: input.description,
+      parameterProfileId: input.parameterProfileId,
+      runMode: input.runMode,
+      repeatCount: input.repeatCount,
+      stopOnFailure: input.stopOnFailure,
+      steps: normalizeOrderedSteps(input.steps),
+      status: input.status ?? existing.status,
+      version: existing.version + 1,
+      updatedAt: nowIso()
+    };
+    this.db.prepare(
+      `UPDATE asset_composite_cases
+       SET app_id = ?, platform = ?, name = ?, description = ?, parameter_profile_id = ?, run_mode = ?, repeat_count = ?, stop_on_failure = ?, steps_json = ?, status = ?, version = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(next.appId, next.platform, next.name, next.description ?? null, next.parameterProfileId ?? null, next.runMode, next.repeatCount, next.stopOnFailure ? 1 : 0, JSON.stringify(next.steps), next.status, next.version, next.updatedAt, id);
+    return next;
+  }
+
+  deleteAssetCompositeCase(id: string): boolean {
+    return this.db.prepare("DELETE FROM asset_composite_cases WHERE id = ?").run(id).changes > 0;
   }
 
   createRuntimeInterceptorRule(input: Omit<RuntimeInterceptorRule, "id" | "createdAt" | "updatedAt"> & { id?: string }): RuntimeInterceptorRule {
@@ -1495,6 +1831,67 @@ export class Storage {
         UNIQUE(flow_id, step_order)
       );
 
+      CREATE TABLE IF NOT EXISTS asset_parameter_profiles (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        environment TEXT,
+        bindings_json TEXT NOT NULL DEFAULT '[]',
+        values_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'active',
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS asset_parameter_data_records (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        domain_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        environment TEXT,
+        values_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'active',
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS asset_meta_functions (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        parameters_json TEXT NOT NULL DEFAULT '[]',
+        steps_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'draft',
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS asset_composite_cases (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        parameter_profile_id TEXT REFERENCES asset_parameter_profiles(id) ON DELETE SET NULL,
+        run_mode TEXT NOT NULL DEFAULT 'once',
+        repeat_count INTEGER NOT NULL DEFAULT 1,
+        stop_on_failure INTEGER NOT NULL DEFAULT 1,
+        steps_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'draft',
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
         case_id TEXT REFERENCES test_cases(id) ON DELETE SET NULL,
@@ -1593,6 +1990,10 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_steps_case_order ON steps(case_id, step_order);
       CREATE INDEX IF NOT EXISTS idx_structured_flows_app ON structured_flows(app_id, platform, updated_at);
       CREATE INDEX IF NOT EXISTS idx_structured_flow_steps_flow_order ON structured_flow_steps(flow_id, step_order);
+      CREATE INDEX IF NOT EXISTS idx_asset_parameter_profiles_app ON asset_parameter_profiles(app_id, platform, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_asset_parameter_data_records_app_domain ON asset_parameter_data_records(app_id, platform, domain_key, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_asset_meta_functions_app ON asset_meta_functions(app_id, platform, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_asset_composite_cases_app ON asset_composite_cases(app_id, platform, updated_at);
       CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
       CREATE INDEX IF NOT EXISTS idx_step_results_run ON step_results(run_id, iteration_index, step_order);
       CREATE INDEX IF NOT EXISTS idx_artifacts_run_type ON artifacts(run_id, type);
@@ -1733,10 +2134,15 @@ export class Storage {
     this.migrateStepExpectationColumnsIfNeeded();
     this.migrateBusinessGraphColumnsIfNeeded();
     this.migrateStateMatcherColumnsIfNeeded();
+    this.migrateParameterProfileColumnsIfNeeded();
   }
 
   private migrateBusinessGraphColumnsIfNeeded(): void {
     this.addColumnIfMissing("business_graphs", "target_app_json", "TEXT NOT NULL DEFAULT '{}'");
+  }
+
+  private migrateParameterProfileColumnsIfNeeded(): void {
+    this.addColumnIfMissing("asset_parameter_profiles", "bindings_json", "TEXT NOT NULL DEFAULT '[]'");
   }
 
   private migrateStateMatcherColumnsIfNeeded(): void {
@@ -1870,6 +2276,98 @@ function parseJsonObject(value: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function normalizeOrderedSteps<T extends { order: number }>(steps: T[]): T[] {
+  return [...steps]
+    .sort((left, right) => left.order - right.order)
+    .map((step, index) => ({ ...step, order: index + 1 }));
+}
+
+function appPlatformWhere(filter: { appId?: string; platform?: string }): { where: string; values: string[] } {
+  const clauses: string[] = [];
+  const values: string[] = [];
+  if (filter.appId) {
+    clauses.push("app_id = ?");
+    values.push(filter.appId);
+  }
+  if (filter.platform) {
+    clauses.push("platform = ?");
+    values.push(filter.platform);
+  }
+  return {
+    where: clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "",
+    values
+  };
+}
+
+function rowToParameterProfile(row: Row): ParameterProfile {
+  return {
+    id: String(row.id),
+    appId: String(row.app_id),
+    platform: String(row.platform) as ParameterProfile["platform"],
+    name: String(row.name),
+    description: row.description ? String(row.description) : undefined,
+    environment: row.environment ? String(row.environment) : undefined,
+    bindings: JSON.parse(String(row.bindings_json ?? "[]")) as ParameterProfile["bindings"],
+    values: JSON.parse(String(row.values_json ?? "{}")) as ParameterProfile["values"],
+    status: String(row.status) as ParameterProfile["status"],
+    version: Number(row.version),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function rowToParameterDataRecord(row: Row): ParameterDataRecord {
+  return {
+    id: String(row.id),
+    appId: String(row.app_id),
+    platform: String(row.platform) as ParameterDataRecord["platform"],
+    domainKey: String(row.domain_key),
+    name: String(row.name),
+    description: row.description ? String(row.description) : undefined,
+    environment: row.environment ? String(row.environment) : undefined,
+    values: JSON.parse(String(row.values_json ?? "{}")) as ParameterDataRecord["values"],
+    status: String(row.status) as ParameterDataRecord["status"],
+    version: Number(row.version),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function rowToMetaFunction(row: Row): MetaFunction {
+  return {
+    id: String(row.id),
+    appId: String(row.app_id),
+    platform: String(row.platform) as MetaFunction["platform"],
+    name: String(row.name),
+    description: row.description ? String(row.description) : undefined,
+    parameters: JSON.parse(String(row.parameters_json ?? "[]")) as MetaFunction["parameters"],
+    steps: JSON.parse(String(row.steps_json ?? "[]")) as MetaFunction["steps"],
+    status: String(row.status) as MetaFunction["status"],
+    version: Number(row.version),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function rowToAssetCompositeCase(row: Row): AssetCompositeCase {
+  return {
+    id: String(row.id),
+    appId: String(row.app_id),
+    platform: String(row.platform) as AssetCompositeCase["platform"],
+    name: String(row.name),
+    description: row.description ? String(row.description) : undefined,
+    parameterProfileId: row.parameter_profile_id ? String(row.parameter_profile_id) : undefined,
+    runMode: String(row.run_mode) as AssetCompositeCase["runMode"],
+    repeatCount: Number(row.repeat_count),
+    stopOnFailure: Number(row.stop_on_failure) === 1,
+    steps: JSON.parse(String(row.steps_json ?? "[]")) as AssetCompositeCase["steps"],
+    status: String(row.status) as AssetCompositeCase["status"],
+    version: Number(row.version),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
 }
 
 function nonEmptyString(value: unknown): string | undefined {

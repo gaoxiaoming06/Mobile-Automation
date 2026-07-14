@@ -77,7 +77,7 @@ describe("PageAssetsPanel", () => {
     expect(markup).toContain("目标页面");
     expect(markup).toContain("目标动作");
     expect(markup).toContain("目标验证");
-    expect(markup).toContain("目标参数");
+    expect(markup).toContain("执行组合（按需）");
     expect(markup).toContain("页面到达后不执行动作");
     expect(markup).toContain("仅验证已到达目标页面");
     expect(markup).not.toContain("PageStateFlow");
@@ -453,6 +453,25 @@ describe("PageAssetsPanel", () => {
     });
   });
 
+  it("passes the selected parameter profile to the server instead of embedding values in the browser request", () => {
+    expect(
+      buildTargetPageGraphRunRequest({
+        selectedSerial: "device-1",
+        graphVersionId: "version-asset",
+        targetNodeId: "node-create",
+        parameterProfileId: "profile-teacher-test"
+      })
+    ).toEqual(expect.objectContaining({ parameterProfileId: "profile-teacher-test" }));
+    expect(
+      buildTargetPageGraphRunRequest({
+        selectedSerial: "device-1",
+        graphVersionId: "version-asset",
+        targetNodeId: "node-create",
+        parameterProfileId: "profile-teacher-test"
+      })
+    ).not.toHaveProperty("runtimeParams");
+  });
+
   it("builds runtime overlay for target text verification without saving it to page assets", () => {
     expect(
       buildTargetPageRuntimeOverlay({
@@ -516,7 +535,7 @@ describe("PageAssetsPanel", () => {
     });
   });
 
-  it("renders selected page task parameters as dedicated runtime inputs", () => {
+  it("guides page task execution to use a parameter-center profile instead of inline runtime inputs", () => {
     const markup = renderToStaticMarkup(
       React.createElement(PageAssetsPanel, {
         selectedSerial: "device-1",
@@ -566,13 +585,11 @@ describe("PageAssetsPanel", () => {
       })
     );
 
-    expect(markup).toContain("运行参数（可选）");
-    expect(markup).toContain("name=\"runtime-param-lessonName\"");
-    expect(markup).toContain("name=\"runtime-param-duration\"");
-    expect(markup).toContain("name=\"runtime-param-recordClassroom\"");
-    expect(markup).toContain("name=\"runtime-param-recordLive\"");
-    expect(markup).toContain("例如：自动化课堂测试");
-    expect(markup).toContain("例如：45分钟");
+    expect(markup).toContain("执行组合（按需）");
+    expect(markup).toContain("页面任务需要：lessonName、duration、recordClassroom、recordLive");
+    expect(markup).toContain("测试数据");
+    expect(markup).toContain("执行组合");
+    expect(markup).not.toContain("name=\"runtime-param-lessonName\"");
     expect(markup).not.toContain("目标项 / 班级名");
   });
 

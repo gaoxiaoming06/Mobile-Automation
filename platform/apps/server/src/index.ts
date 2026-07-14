@@ -10,9 +10,14 @@ import {
   nowIso,
   type ActionStep,
   type ArtifactRef,
+  type AssetCompositeCase,
+  type AssetParameterValue,
+  type ParameterProfileBinding,
   type DeviceActionRequest,
   type FlowStartStrategy,
   type Platform,
+  type MetaFunctionParameter,
+  type MetaFunctionStep,
   type RunMode,
   type StepExpectation,
   type StepExpectationResult,
@@ -83,7 +88,13 @@ import {
   type PageTaskFieldType
 } from "./page-task-assets.js";
 import { ScrcpyStreamBridge } from "./scrcpy-stream.js";
-import { Storage } from "./storage.js";
+import {
+  Storage,
+  type CreateAssetCompositeCaseInput,
+  type CreateParameterDataRecordInput,
+  type CreateMetaFunctionInput,
+  type CreateParameterProfileInput
+} from "./storage.js";
 import { StructuredFlowRunner, type StartStructuredFlowRunInput } from "./structured-flow-runner.js";
 import { orderedRunStopTargets, type RunStopTarget } from "./run-stop-routing.js";
 import {
@@ -104,6 +115,10 @@ import {
   type AssetPatrolStartInput,
   type AssetPatrolStartMode
 } from "./asset-patrol.js";
+import {
+  buildAssetParameterManifest,
+  resolveParameterProfileRuntimeSnapshot
+} from "./asset-parameter-center.js";
 import {
   createAssetDrivenExecutionSession,
   markAssetDrivenExecutionItemStarted,
@@ -149,6 +164,8 @@ import { persistRecordingStepGraphAsset } from "./recording-graph-assets.js";
 import { resolveReachableStartNode } from "./start-node-recovery.js";
 import { listSourceScanDirectories, listSourceScanRoots, pickSourceScanDirectory } from "./source-scan-roots.js";
 import { findNearestTextCandidate } from "./semantic-locator.js";
+import { assetCompositionCatalog, compileAssetCompositeCase } from "./asset-composition.js";
+import { AssetCompositeExecutionManager, renderAssetCompositeExecutionReportHtml } from "./asset-composite-execution.js";
 import {
   findElementAtPointFromCandidates,
   hasStableLocator,
@@ -173,6 +190,15 @@ const flowRunner = new StructuredFlowRunner(storage, driver, ocr);
 const graphRunner = new GraphRunService(storage, driver, ocr);
 const stabilityExplorer = new StabilityExplorer(storage, driver, ocr);
 const assetPatrol = new AssetPatrol(storage, driver, ocr, readPageAssetBaselineArtifact);
+const assetCompositeExecutionManager = new AssetCompositeExecutionManager({
+  startGraphRun: async (request) => {
+    const started = await graphRunner.start(request);
+    return { runId: started.run.id };
+  },
+  waitForRun: (runId) => graphRunner.waitForRun(runId),
+  getRun: (runId) => storage.getRun(runId),
+  stopRun: (runId) => graphRunner.stop(runId)
+});
 const observationService = new ObservationService(driver, ocr);
 const scrcpyStreamBridge = new ScrcpyStreamBridge();
 const artifactCleanupScheduler = new ArtifactCleanupScheduler(storage);
@@ -203,6 +229,207 @@ app.get("/api/health", (_req, res) => {
     service: "mobile-automation-server",
     artifactRoot
   });
+});
+
+app.get("/api/asset-composition/parameter-profiles", (req, res) => {
+  res.json({ profiles: storage.listParameterProfiles(assetCompositionFilter(req.query)) });
+});
+
+app.get("/api/parameter-center/data-records", (req, res) => {
+  res.json({ records: storage.listParameterDataRecords(parameterDataRecordFilter(req.query)) });
+});
+
+app.get("/api/parameter-center/manifest", (req, res) => {
+  try {
+    const appId = typeof req.query.appId === "string" ? req.query.appId.trim() : "";
+    const platform = req.query.platform === "ios" ? "ios" : "android";
+    if (!appId) {
+      res.status(400).json({ error: "appId is required" });
+      return;
+    }
+    const graphVersion = findAssetPatrolGraphVersion(appId);
+    if (!graphVersion) {
+      res.status(404).json({ error: `没有找到 ${appId} 的 active 页面资产。` });
+      return;
+    }
+    res.json({ manifest: buildAssetParameterManifest({ appId, platform, graphVersion }) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.get("/api/asset-composition/catalog", (req, res) => {
+  const appId = typeof req.query.appId === "string" ? req.query.appId.trim() : "";
+  if (!appId) {
+    res.status(400).json({ error: "appId is required" });
+    return;
+  }
+  const graphVersion = findAssetPatrolGraphVersion(appId);
+  if (!graphVersion) {
+    res.status(404).json({ error: `没有找到 ${appId} 的 active 页面资产。` });
+    return;
+  }
+  res.json({ catalog: assetCompositionCatalog(graphVersion) });
+});
+
+app.post("/api/asset-composition/parameter-profiles", (req, res) => {
+  try {
+    res.status(201).json({ profile: storage.createParameterProfile(parameterProfileInput(req.body)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.put("/api/asset-composition/parameter-profiles/:id", (req, res) => {
+  try {
+    res.json({ profile: storage.updateParameterProfile(req.params.id, parameterProfileInput(req.body)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.delete("/api/asset-composition/parameter-profiles/:id", (req, res) => {
+  res.json({ deleted: storage.deleteParameterProfile(req.params.id) });
+});
+
+app.post("/api/parameter-center/data-records", (req, res) => {
+  try {
+    res.status(201).json({ record: storage.createParameterDataRecord(parameterDataRecordInput(req.body)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.put("/api/parameter-center/data-records/:id", (req, res) => {
+  try {
+    res.json({ record: storage.updateParameterDataRecord(req.params.id, parameterDataRecordInput(req.body)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.delete("/api/parameter-center/data-records/:id", (req, res) => {
+  res.json({ deleted: storage.deleteParameterDataRecord(req.params.id) });
+});
+
+app.get("/api/asset-composition/meta-functions", (req, res) => {
+  res.json({ metaFunctions: storage.listMetaFunctions(assetCompositionFilter(req.query)) });
+});
+
+app.post("/api/asset-composition/meta-functions", (req, res) => {
+  try {
+    res.status(201).json({ metaFunction: storage.createMetaFunction(metaFunctionInput(req.body)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.put("/api/asset-composition/meta-functions/:id", (req, res) => {
+  try {
+    res.json({ metaFunction: storage.updateMetaFunction(req.params.id, metaFunctionInput(req.body)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.delete("/api/asset-composition/meta-functions/:id", (req, res) => {
+  const referencedBy = storage.listAssetCompositeCases().filter((item) => item.steps.some((step) => step.metaFunctionId === req.params.id));
+  if (referencedBy.length) {
+    res.status(409).json({ error: `元功能仍被 ${referencedBy.length} 个组合用例引用，不能删除。` });
+    return;
+  }
+  res.json({ deleted: storage.deleteMetaFunction(req.params.id) });
+});
+
+app.get("/api/asset-composition/cases", (req, res) => {
+  res.json({ cases: storage.listAssetCompositeCases(assetCompositionFilter(req.query)) });
+});
+
+app.post("/api/asset-composition/cases", (req, res) => {
+  try {
+    res.status(201).json({ compositeCase: storage.createAssetCompositeCase(assetCompositeCaseInput(req.body)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.put("/api/asset-composition/cases/:id", (req, res) => {
+  try {
+    res.json({ compositeCase: storage.updateAssetCompositeCase(req.params.id, assetCompositeCaseInput(req.body)) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.delete("/api/asset-composition/cases/:id", (req, res) => {
+  res.json({ deleted: storage.deleteAssetCompositeCase(req.params.id) });
+});
+
+app.post("/api/asset-composition/cases/:id/preview", (req, res) => {
+  try {
+    const plan = assetCompositePlanForRequest(req.params.id, req.body);
+    res.json({ plan });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post("/api/asset-composition/cases/:id/execute", (req, res) => {
+  try {
+    const body = recordBody(req.body);
+    const deviceSerial = requiredString(body.deviceSerial, "deviceSerial");
+    const compositeCase = storage.getAssetCompositeCase(req.params.id);
+    if (!compositeCase) {
+      res.status(404).json({ error: "组合用例不存在。" });
+      return;
+    }
+    const plan = assetCompositePlanForRequest(req.params.id, body);
+    if (plan.status !== "ready") {
+      res.status(409).json({ error: plan.issues[0]?.message ?? "组合用例预检未通过。", plan });
+      return;
+    }
+    const execution = assetCompositeExecutionManager.start({
+      deviceSerial,
+      compositeCaseId: compositeCase.id,
+      compositeCaseName: compositeCase.name,
+      stopOnFailure: compositeCase.stopOnFailure,
+      runMode: compositeCase.runMode,
+      repeatCount: compositeCase.runMode === "once" ? 1 : compositeCase.repeatCount,
+      plan
+    });
+    res.status(202).json({ execution, plan });
+  } catch (error) {
+    if (sendKnownError(res, error)) {
+      return;
+    }
+    sendError(res, error);
+  }
+});
+
+app.get("/api/asset-composition/executions", (_req, res) => {
+  res.json({ executions: assetCompositeExecutionManager.listExecutions() });
+});
+
+app.get("/api/asset-composition/executions/:id", (req, res) => {
+  const execution = assetCompositeExecutionManager.getExecution(req.params.id);
+  if (!execution) {
+    res.status(404).json({ error: "组合执行不存在。" });
+    return;
+  }
+  res.json({ execution });
+});
+
+app.post("/api/asset-composition/executions/:id/stop", async (req, res) => {
+  res.json({ stopped: await assetCompositeExecutionManager.stop(req.params.id) });
+});
+
+app.get("/api/asset-composition/executions/:id/report", (req, res) => {
+  const execution = assetCompositeExecutionManager.getExecution(req.params.id);
+  if (!execution) {
+    res.status(404).send("组合执行不存在。");
+    return;
+  }
+  res.type("html").send(renderAssetCompositeExecutionReportHtml(execution));
 });
 
 app.get("/api/settings/ai-diagnosis", (_req, res) => {
@@ -1353,7 +1580,7 @@ app.post("/api/graphs/:versionId/assets/auto-promote", (req, res) => {
 
 app.post("/api/graph-runs", async (req, res) => {
   try {
-    const body = readGraphRunRequest(req.body);
+    const body = resolveGraphRunParameterProfileRequest(readGraphRunRequest(req.body));
     const activeLegacyRun = runner.getActiveRunForDevice(body.deviceSerial);
     if (activeLegacyRun) {
       throw new DeviceBusyError(body.deviceSerial, activeLegacyRun.runId);
@@ -1763,7 +1990,7 @@ app.post("/api/stability-explorations", (req, res) => {
 
 app.post("/api/asset-patrols/preview", async (req, res) => {
   try {
-    const body = readAssetPatrolRequest(req.body);
+    const body = resolveAssetPatrolParameterProfileRequest(readAssetPatrolRequest(req.body));
     if (!body.deviceSerial) {
       res.status(400).json({ error: "deviceSerial is required" });
       return;
@@ -1808,7 +2035,7 @@ app.get("/api/asset-patrols/runtime-params", (req, res) => {
 
 app.post("/api/asset-patrols", (req, res) => {
   try {
-    const body = readAssetPatrolRequest(req.body);
+    const body = resolveAssetPatrolParameterProfileRequest(readAssetPatrolRequest(req.body));
     if (!body.deviceSerial) {
       res.status(400).json({ error: "deviceSerial is required" });
       return;
@@ -1907,7 +2134,7 @@ app.post("/api/asset-patrols/executions/:executionId/stop", async (req, res) => 
 
 app.post("/api/asset-patrols/execute", async (req, res) => {
   try {
-    const body = readAssetPatrolRequest(req.body);
+    const body = resolveAssetPatrolParameterProfileRequest(readAssetPatrolRequest(req.body));
     if (!body.deviceSerial) {
       res.status(400).json({ error: "deviceSerial is required" });
       return;
@@ -2390,6 +2617,7 @@ function readAssetPatrolRequest(body: unknown): AssetPatrolStartInput {
     deviceSerial?: string;
     packageName?: string;
     graphVersionId?: string;
+    parameterProfileId?: string;
     startMode?: string;
     pageScope?: string;
     maxDurationMs?: unknown;
@@ -2403,6 +2631,7 @@ function readAssetPatrolRequest(body: unknown): AssetPatrolStartInput {
     deviceSerial: input.deviceSerial?.trim() ?? "",
     packageName: input.packageName?.trim() ?? "",
     graphVersionId: input.graphVersionId?.trim() || undefined,
+    parameterProfileId: input.parameterProfileId?.trim() || undefined,
     startMode: readAssetPatrolStartMode(input.startMode),
     pageScope: readAssetPatrolPageScope(input.pageScope),
     maxDurationMs: typeof input.maxDurationMs === "number" || typeof input.maxDurationMs === "string" ? Number(input.maxDurationMs) : undefined,
@@ -2411,6 +2640,28 @@ function readAssetPatrolRequest(body: unknown): AssetPatrolStartInput {
     allowBusinessSubmit: readOptionalBoolean(input.allowBusinessSubmit),
     dangerousTextPatterns: readRawStringArray(input.dangerousTextPatterns),
     runtimeParams: readAssetPatrolRuntimeParams(input.runtimeParams)
+  };
+}
+
+function resolveAssetPatrolParameterProfileRequest(body: AssetPatrolStartInput): AssetPatrolStartInput {
+  if (!body.parameterProfileId) {
+    return body;
+  }
+  const profile = storage.getParameterProfile(body.parameterProfileId);
+  if (!profile) {
+    throw new Error(`参数集不存在：${body.parameterProfileId}`);
+  }
+  const snapshot = resolveParameterProfileRuntimeSnapshot({
+    profile,
+    appId: body.packageName,
+    platform: "android",
+    records: storage.listParameterDataRecords({ appId: body.packageName, platform: "android" }),
+    overrides: body.runtimeParams
+  });
+  return {
+    ...body,
+    parameterProfileId: snapshot.profile.id,
+    runtimeParams: snapshot.runtimeParams
   };
 }
 
@@ -4449,6 +4700,7 @@ function readGraphRunRequest(body: unknown): {
   deviceSerial: string;
   graphId?: string;
   graphVersionId?: string;
+  parameterProfileId?: string;
   targetNodeId?: string;
   target?: TargetNodeQuery;
   startNodeId?: string;
@@ -4465,6 +4717,7 @@ function readGraphRunRequest(body: unknown): {
     deviceSerial?: string;
     graphId?: string;
     graphVersionId?: string;
+    parameterProfileId?: string;
     targetNodeId?: string;
     target?: TargetNodeQuery;
     startNodeId?: string;
@@ -4491,6 +4744,7 @@ function readGraphRunRequest(body: unknown): {
     deviceSerial: input.deviceSerial.trim(),
     graphId: input.graphId?.trim() || undefined,
     graphVersionId: input.graphVersionId?.trim() || undefined,
+    parameterProfileId: input.parameterProfileId?.trim() || undefined,
     targetNodeId: input.targetNodeId?.trim() || undefined,
     target,
     startNodeId: input.startNodeId?.trim() || undefined,
@@ -4502,6 +4756,43 @@ function readGraphRunRequest(body: unknown): {
     overlay: readRuntimeOverlay(input.overlay),
     executionProfile: readExecutionProfile(input.executionProfile),
     startAppScope: readStartAppScope(input.startAppScope)
+  };
+}
+
+function resolveGraphRunParameterProfileRequest(body: ReturnType<typeof readGraphRunRequest>): ReturnType<typeof readGraphRunRequest> {
+  if (!body.parameterProfileId) {
+    return body;
+  }
+  const profile = storage.getParameterProfile(body.parameterProfileId);
+  if (!profile) {
+    throw new Error(`参数集不存在：${body.parameterProfileId}`);
+  }
+  const graphVersion = body.graphVersionId ? storage.getBusinessGraphVersion(body.graphVersionId) : undefined;
+  const graph = body.graphId
+    ? storage.getBusinessGraph(body.graphId)
+    : graphVersion
+      ? storage.getBusinessGraph(graphVersion.graphId)
+      : undefined;
+  if (!graph) {
+    throw new Error("无法确认目标图谱，不能使用参数集。");
+  }
+  const platform = body.platform ?? (graph.platformScope === "ios" ? "ios" : "android");
+  const snapshot = resolveParameterProfileRuntimeSnapshot({
+    profile,
+    appId: graph.appId,
+    platform,
+    records: storage.listParameterDataRecords({ appId: graph.appId, platform }),
+    overrides: body.overlay?.runtimeParams
+  });
+  return {
+    ...body,
+    parameterProfileId: snapshot.profile.id,
+    overlay: {
+      ...body.overlay,
+      id: body.overlay?.id ?? `parameter-profile:${snapshot.profile.id}`,
+      note: body.overlay?.note ?? `参数集：${snapshot.profile.name} v${snapshot.profile.version}`,
+      runtimeParams: snapshot.runtimeParams
+    }
   };
 }
 
@@ -4659,6 +4950,254 @@ function readStructuredFlowInput(value: unknown): Omit<StructuredFlow, "id" | "v
     status: readStructuredFlowStatus(input.status),
     steps: input.steps
   };
+}
+
+function assetCompositePlanForRequest(caseId: string, value: unknown) {
+  const compositeCase = storage.getAssetCompositeCase(caseId);
+  if (!compositeCase) {
+    throw new Error("组合用例不存在。");
+  }
+  const body = recordBody(value);
+  const profileId = stringOrUndefined(body.parameterProfileId) ?? compositeCase.parameterProfileId;
+  const parameterProfile = profileId ? storage.getParameterProfile(profileId) : undefined;
+  if (profileId && !parameterProfile) {
+    throw new Error(`参数集不存在：${profileId}`);
+  }
+  const graphVersion = findAssetPatrolGraphVersion(compositeCase.appId);
+  if (!graphVersion) {
+    throw new Error(`没有找到 ${compositeCase.appId} 的 active 页面资产。`);
+  }
+  const runtimeParams = parameterProfile
+    ? resolveParameterProfileRuntimeSnapshot({
+      profile: parameterProfile,
+      appId: compositeCase.appId,
+      platform: compositeCase.platform,
+      records: storage.listParameterDataRecords({ appId: compositeCase.appId, platform: compositeCase.platform })
+    }).runtimeParams
+    : undefined;
+  return compileAssetCompositeCase({
+    compositeCase,
+    metaFunctions: storage.listMetaFunctions({ appId: compositeCase.appId, platform: compositeCase.platform }),
+    parameterProfile,
+    runtimeParams,
+    graphVersion,
+    runtimeOverrides: primitiveRecord(body.runtimeOverrides)
+  });
+}
+
+function assetCompositionFilter(value: unknown): { appId?: string; platform?: Platform } {
+  const input = recordBody(value);
+  return {
+    appId: stringOrUndefined(input.appId),
+    platform: input.platform === "android" || input.platform === "ios" ? input.platform : undefined
+  };
+}
+
+function parameterDataRecordFilter(value: unknown): { appId?: string; platform?: Platform; domainKey?: string } {
+  const input = recordBody(value);
+  return {
+    ...assetCompositionFilter(input),
+    domainKey: stringOrUndefined(input.domainKey)
+  };
+}
+
+function parameterProfileInput(value: unknown): CreateParameterProfileInput {
+  const input = recordBody(value);
+  const bindings = parameterProfileBindingsInput(input.bindings);
+  return {
+    appId: requiredString(input.appId, "appId"),
+    platform: requiredPlatform(input.platform),
+    name: requiredString(input.name, "name"),
+    description: stringOrUndefined(input.description),
+    environment: stringOrUndefined(input.environment),
+    bindings,
+    values: parameterValuesInput(input.values),
+    status: input.status === "deprecated" ? "deprecated" as const : "active" as const
+  };
+}
+
+function parameterDataRecordInput(value: unknown): CreateParameterDataRecordInput {
+  const input = recordBody(value);
+  return {
+    appId: requiredString(input.appId, "appId"),
+    platform: requiredPlatform(input.platform),
+    domainKey: requiredString(input.domainKey, "domainKey"),
+    name: requiredString(input.name, "name"),
+    description: stringOrUndefined(input.description),
+    environment: stringOrUndefined(input.environment),
+    values: parameterValuesInput(input.values),
+    status: input.status === "deprecated" ? "deprecated" as const : "active" as const
+  };
+}
+
+function parameterValuesInput(value: unknown): Record<string, AssetParameterValue> {
+  const valuesInput = recordBody(value);
+  const values: Record<string, AssetParameterValue> = {};
+  for (const [key, rawEntry] of Object.entries(valuesInput)) {
+    const entry = recordBody(rawEntry);
+    if (entry.type !== "string" && entry.type !== "number" && entry.type !== "boolean" && entry.type !== "template") {
+      throw new Error(`参数 ${key} 的类型无效。`);
+    }
+    if (typeof entry.value !== "string" && typeof entry.value !== "number" && typeof entry.value !== "boolean") {
+      throw new Error(`参数 ${key} 的值无效。`);
+    }
+    values[key] = { type: entry.type, value: entry.value, sensitive: entry.sensitive === true || undefined };
+  }
+  return values;
+}
+
+function parameterProfileBindingsInput(value: unknown): ParameterProfileBinding[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("参数集 bindings 必须是数组。");
+  }
+  const domainKeys = new Set<string>();
+  return value.map((rawBinding, index) => {
+    const binding = recordBody(rawBinding);
+    const domainKey = requiredString(binding.domainKey, `bindings[${index}].domainKey`);
+    if (domainKeys.has(domainKey)) {
+      throw new Error(`参数集不能为数据域“${domainKey}”选择多条记录。`);
+    }
+    domainKeys.add(domainKey);
+    return {
+      domainKey,
+      recordId: requiredString(binding.recordId, `bindings[${index}].recordId`)
+    };
+  });
+}
+
+function metaFunctionInput(value: unknown): CreateMetaFunctionInput {
+  const input = recordBody(value);
+  if (!Array.isArray(input.steps) || input.steps.length === 0) {
+    throw new Error("元功能至少需要一个步骤。");
+  }
+  return {
+    appId: requiredString(input.appId, "appId"),
+    platform: requiredPlatform(input.platform),
+    name: requiredString(input.name, "name"),
+    description: stringOrUndefined(input.description),
+    parameters: readMetaFunctionParameters(input.parameters),
+    steps: input.steps.map((item, index) => readMetaFunctionStep(item, index)),
+    status: input.status === "active" || input.status === "deprecated" ? input.status : "draft" as const
+  };
+}
+
+function assetCompositeCaseInput(value: unknown): CreateAssetCompositeCaseInput {
+  const input = recordBody(value);
+  if (!Array.isArray(input.steps) || input.steps.length === 0) {
+    throw new Error("组合用例至少需要一个元功能步骤。");
+  }
+  return {
+    appId: requiredString(input.appId, "appId"),
+    platform: requiredPlatform(input.platform),
+    name: requiredString(input.name, "name"),
+    description: stringOrUndefined(input.description),
+    parameterProfileId: stringOrUndefined(input.parameterProfileId),
+    runMode: input.runMode === "repeat_n" || input.runMode === "loop_until_stop" ? input.runMode : "once",
+    repeatCount: typeof input.repeatCount === "number" && Number.isFinite(input.repeatCount) ? Math.max(1, Math.floor(input.repeatCount)) : 1,
+    stopOnFailure: input.stopOnFailure !== false,
+    steps: input.steps.map((item, index) => {
+      const step = recordBody(item);
+      return {
+        id: stringOrUndefined(step.id) ?? createId("asset_case_step"),
+        order: typeof step.order === "number" ? step.order : index + 1,
+        metaFunctionId: requiredString(step.metaFunctionId, `steps[${index}].metaFunctionId`),
+        enabled: step.enabled !== false,
+        name: stringOrUndefined(step.name),
+        parameterOverrides: primitiveRecord(step.parameterOverrides)
+      };
+    }),
+    status: input.status === "active" || input.status === "deprecated" ? input.status : "draft" as const
+  };
+}
+
+function readMetaFunctionParameters(value: unknown): MetaFunctionParameter[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("parameters 必须是数组。");
+  }
+  return value.map((item, index) => {
+    const input = recordBody(item);
+    const type = input.type;
+    if (type !== "string" && type !== "number" && type !== "boolean" && type !== "template") {
+      throw new Error(`parameters[${index}].type 无效。`);
+    }
+    const defaultValue = typeof input.defaultValue === "string" || typeof input.defaultValue === "number" || typeof input.defaultValue === "boolean"
+      ? input.defaultValue
+      : undefined;
+    return {
+      key: requiredString(input.key, `parameters[${index}].key`),
+      type,
+      label: stringOrUndefined(input.label),
+      required: input.required === true,
+      defaultValue
+    };
+  });
+}
+
+function readMetaFunctionStep(value: unknown, index: number): MetaFunctionStep {
+  const input = recordBody(value);
+  const base = {
+    id: stringOrUndefined(input.id) ?? createId("meta_function_step"),
+    order: typeof input.order === "number" ? input.order : index + 1,
+    enabled: input.enabled !== false,
+    name: stringOrUndefined(input.name)
+  };
+  if (input.kind === "reach_page") {
+    return { ...base, kind: "reach_page", targetPageModelId: requiredString(input.targetPageModelId, `steps[${index}].targetPageModelId`) };
+  }
+  if (input.kind === "invoke_capability") {
+    return {
+      ...base,
+      kind: "invoke_capability",
+      sourcePageModelId: requiredString(input.sourcePageModelId, `steps[${index}].sourcePageModelId`),
+      pageElementId: requiredString(input.pageElementId, `steps[${index}].pageElementId`),
+      targetPageModelId: stringOrUndefined(input.targetPageModelId)
+    };
+  }
+  if (input.kind === "run_page_task") {
+    return {
+      ...base,
+      kind: "run_page_task",
+      pageModelId: requiredString(input.pageModelId, `steps[${index}].pageModelId`),
+      pageTaskId: requiredString(input.pageTaskId, `steps[${index}].pageTaskId`)
+    };
+  }
+  if (input.kind === "verify_page") {
+    return { ...base, kind: "verify_page", pageModelId: requiredString(input.pageModelId, `steps[${index}].pageModelId`) };
+  }
+  throw new Error(`steps[${index}].kind 无效。`);
+}
+
+function recordBody(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function primitiveRecord(value: unknown): Record<string, string | number | boolean> {
+  const input = recordBody(value);
+  return Object.fromEntries(Object.entries(input).filter((entry): entry is [string, string | number | boolean] => {
+    const item = entry[1];
+    return typeof item === "string" || typeof item === "number" || typeof item === "boolean";
+  }));
+}
+
+function requiredString(value: unknown, field: string): string {
+  const result = stringOrUndefined(value);
+  if (!result) {
+    throw new Error(`${field} is required`);
+  }
+  return result;
+}
+
+function requiredPlatform(value: unknown): Platform {
+  if (value !== "android" && value !== "ios") {
+    throw new Error("platform must be android or ios");
+  }
+  return value;
 }
 
 function readStructuredFlowStatus(value: unknown): StructuredFlow["status"] | undefined {

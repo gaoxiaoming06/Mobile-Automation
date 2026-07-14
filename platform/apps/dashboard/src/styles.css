@@ -233,6 +233,486 @@ button:disabled {
   overflow: hidden;
 }
 
+.asset-composition-module {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.asset-composition-header,
+.asset-composition-app-picker,
+.asset-composition-summary,
+.asset-composition-tabs,
+.panel-head,
+.editor-actions,
+.composition-run-actions,
+.composition-step-toolbar,
+.step-icon-actions {
+  display: flex;
+  align-items: center;
+}
+
+.asset-composition-header {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.asset-composition-header h2 {
+  margin: 0;
+}
+
+.asset-composition-app-picker {
+  gap: 8px;
+  min-width: min(420px, 45vw);
+}
+
+.asset-composition-app-picker input {
+  min-width: 0;
+  flex: 1;
+}
+
+.asset-composition-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.asset-composition-summary > div {
+  min-width: 0;
+  border: 1px solid #d8e0ea;
+  background: #fff;
+  padding: 12px;
+}
+
+.asset-composition-summary span,
+.asset-composition-summary small,
+.asset-composition-summary strong {
+  display: block;
+}
+
+.asset-composition-summary strong {
+  margin: 4px 0;
+  font-size: 24px;
+}
+
+.asset-composition-summary small {
+  overflow: hidden;
+  color: #64748b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-composition-tabs {
+  align-self: flex-start;
+  gap: 2px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #f1f5f9;
+  padding: 2px;
+}
+
+.asset-composition-tabs button {
+  min-height: 32px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #475569;
+  padding: 0 14px;
+  font-weight: 600;
+}
+
+.asset-composition-tabs button:hover:not(:disabled) {
+  background: #e2e8f0;
+}
+
+.asset-composition-tabs button.active {
+  background: #fff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 12%);
+}
+
+.asset-composition-editor {
+  min-height: 540px;
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  border: 1px solid #d8e0ea;
+  background: #fff;
+}
+
+.asset-composition-editor > aside {
+  min-width: 0;
+  border-right: 1px solid #d8e0ea;
+  padding: 14px;
+}
+
+.asset-composition-editor .panel-head {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.asset-composition-editor h3 {
+  margin: 0;
+}
+
+.composition-asset-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.composition-asset-list > button {
+  min-width: 0;
+  border: 1px solid transparent;
+  background: #f6f8fb;
+  padding: 10px;
+  text-align: left;
+}
+
+.composition-asset-list > button.selected {
+  border-color: #2f6fec;
+  background: #eef4ff;
+}
+
+.composition-asset-list strong,
+.composition-asset-list span {
+  display: block;
+}
+
+.composition-asset-list span {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.composition-editor-form {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.parameter-center-fields {
+  display: grid;
+  gap: 16px;
+}
+
+.parameter-center-intro {
+  display: grid;
+  gap: 4px;
+  border-left: 3px solid #2f6fec;
+  background: #f6f9ff;
+  padding: 10px 12px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.parameter-center-intro strong {
+  color: #1f2937;
+}
+
+.parameter-domain-card {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #d8e0ea;
+  background: #f8fafc;
+  padding: 10px 12px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.parameter-domain-card strong {
+  color: #1f2937;
+}
+
+.parameter-profile-bindings {
+  display: grid;
+  gap: 10px;
+}
+
+.parameter-profile-binding {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(0, 1.3fr);
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #d8e0ea;
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+
+.parameter-profile-binding strong,
+.parameter-profile-binding small {
+  display: block;
+}
+
+.parameter-profile-binding small {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.parameter-profile-overrides {
+  border-top: 1px dashed #cbd5e1;
+  padding-top: 12px;
+}
+
+.parameter-profile-overrides summary {
+  cursor: pointer;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.parameter-profile-overrides .parameter-center-fields {
+  margin-top: 12px;
+}
+
+.parameter-center-group {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #d8e0ea;
+  padding-top: 14px;
+}
+
+.parameter-center-group > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.parameter-center-group > header span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.parameter-center-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.parameter-center-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.parameter-center-field-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #1f2937;
+  font-weight: 700;
+}
+
+.parameter-center-field-title em {
+  color: #b42318;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.parameter-center-field small,
+.parameter-center-field code {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.parameter-center-field code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parameter-center-legacy {
+  border-top: 1px dashed #cbd5e1;
+  padding-top: 12px;
+  color: #64748b;
+}
+
+.parameter-center-legacy summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.parameter-center-legacy .parameter-center-field-grid {
+  margin-top: 10px;
+}
+
+.composition-editor-form label {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-size: 13px;
+}
+
+.composition-editor-form input,
+.composition-editor-form select,
+.composition-editor-form textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.composition-editor-form .checkbox-field {
+  display: flex;
+  align-items: center;
+  align-self: end;
+  min-height: 40px;
+}
+
+.composition-editor-form .checkbox-field input {
+  width: auto;
+}
+
+.composition-step-toolbar {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.composition-step-toolbar span {
+  margin-right: auto;
+  font-weight: 700;
+}
+
+.composition-step-toolbar button,
+.step-icon-actions button {
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.composition-step-toolbar button,
+.composition-editor-form .primary-button,
+.composition-editor-form .secondary-button,
+.composition-editor-form .danger-button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 5px;
+  padding: 0 12px;
+  font-weight: 600;
+}
+
+.composition-editor-form .primary-button {
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.composition-editor-form .secondary-button {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+}
+
+.composition-editor-form .danger-button {
+  border: 1px solid #fecaca;
+  background: #fff;
+  color: #b42318;
+}
+
+.composition-editor-form button:hover:not(:disabled) {
+  filter: brightness(.97);
+}
+
+.composition-step-list,
+.composition-execution-list {
+  display: grid;
+  gap: 8px;
+}
+
+.composition-step-row {
+  display: grid;
+  grid-template-columns: 28px minmax(130px, .8fr) minmax(150px, 1fr) minmax(150px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #d8e0ea;
+  padding: 8px;
+}
+
+.step-order {
+  font-weight: 700;
+  text-align: center;
+}
+
+.step-detail {
+  color: #64748b;
+}
+
+.step-icon-actions {
+  gap: 4px;
+}
+
+.step-icon-actions button {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.editor-actions,
+.composition-run-actions {
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.composition-run-actions {
+  justify-content: flex-end;
+  margin-top: 0;
+}
+
+.composition-plan,
+.composition-execution {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #d8e0ea;
+  padding: 12px;
+}
+
+.composition-plan.blocked {
+  border-color: #ef9a9a;
+  background: #fff7f7;
+}
+
+.composition-plan span {
+  display: block;
+  color: #b42318;
+}
+
+.composition-execution .panel-head {
+  justify-content: space-between;
+}
+
+.composition-execution-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-left: 3px solid #94a3b8;
+  background: #f8fafc;
+  padding: 8px 10px;
+}
+
+.composition-execution-list > div.passed { border-left-color: #168455; }
+.composition-execution-list > div.failed { border-left-color: #c73434; }
+.composition-execution-list > div.running { border-left-color: #2f6fec; }
+
+@media (max-width: 980px) {
+  .asset-composition-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .asset-composition-editor { grid-template-columns: 1fr; }
+  .asset-composition-editor > aside { border-right: 0; border-bottom: 1px solid #d8e0ea; }
+  .composition-step-row { grid-template-columns: 28px minmax(0, 1fr); }
+  .step-icon-actions { grid-column: 2; }
+  .parameter-profile-binding { grid-template-columns: 1fr; }
+}
+
 .device-module {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
@@ -6982,5 +7462,311 @@ button:disabled {
 
   .expectation-editor {
     grid-column: 1 / -1;
+  }
+}
+
+/* Asset composition keeps product concepts visible instead of exposing raw storage fields. */
+.asset-composition-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.asset-composition-title p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.asset-composition-summary > div,
+.asset-composition-editor,
+.composition-asset-list > button {
+  border-radius: 6px;
+}
+
+.asset-composition-summary > div {
+  background: #f8fafc;
+}
+
+.asset-composition-editor {
+  overflow: hidden;
+}
+
+.data-record-domain-chooser {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-height: 360px;
+  max-width: 900px;
+  padding: 8px 0;
+}
+
+.data-record-domain-chooser h4,
+.data-record-domain-chooser p {
+  margin: 0;
+}
+
+.data-record-domain-chooser h4 {
+  color: #1f2937;
+  font-size: 18px;
+}
+
+.data-record-domain-chooser p {
+  margin-top: 4px;
+  color: #64748b;
+}
+
+.data-domain-option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.data-domain-option {
+  display: grid;
+  align-content: start;
+  min-height: 110px;
+  gap: 7px;
+  padding: 14px;
+  color: #1f2937;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #d8e0ea;
+  border-radius: 6px;
+}
+
+.data-domain-option:hover {
+  background: #f6f9ff;
+  border-color: #2f6fec;
+}
+
+.data-domain-option strong,
+.data-domain-option span,
+.data-domain-option small {
+  display: block;
+}
+
+.data-domain-option span,
+.data-domain-option small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.data-record-editor-header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #d8e0ea;
+}
+
+.data-record-editor-header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.data-record-editor-header span,
+.data-record-editor-header small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.data-record-editor-header strong {
+  color: #1f2937;
+  font-size: 18px;
+}
+
+.data-record-editor-header label {
+  min-width: min(260px, 100%);
+}
+
+.parameter-page-sections {
+  display: grid;
+  gap: 14px;
+}
+
+.parameter-page-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.parameter-page-section > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.parameter-page-section > header strong {
+  color: #334155;
+}
+
+.parameter-page-section > header span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.meta-parameter-editor {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid #d8e0ea;
+}
+
+.meta-parameter-editor > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meta-parameter-editor > header h4,
+.meta-parameter-editor > header p {
+  margin: 0;
+}
+
+.meta-parameter-editor > header p {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.meta-parameter-list {
+  display: grid;
+  gap: 8px;
+}
+
+.meta-parameter-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 130px auto 30px;
+  align-items: end;
+  gap: 8px;
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid #d8e0ea;
+  border-radius: 6px;
+}
+
+.meta-parameter-row .checkbox-field {
+  align-self: end;
+}
+
+.meta-parameter-row .icon-button {
+  width: 30px;
+  height: 34px;
+  padding: 0;
+}
+
+.composition-step-toolbar {
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.composition-step-toolbar > div:first-child {
+  display: grid;
+  gap: 3px;
+  margin-right: auto;
+}
+
+.composition-step-toolbar > div:first-child strong {
+  color: #1f2937;
+}
+
+.composition-step-toolbar > div:first-child span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.step-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.composition-step-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #d8e0ea;
+  border-radius: 6px;
+}
+
+.composition-step-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.composition-step-heading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+}
+
+.composition-step-heading .step-order {
+  flex: 0 0 28px;
+  color: #1d4ed8;
+  line-height: 28px;
+  text-align: center;
+  background: #eef4ff;
+  border-radius: 4px;
+}
+
+.composition-step-heading strong,
+.composition-step-heading small {
+  display: block;
+}
+
+.composition-step-heading small {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.step-card-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.step-card-fields > label {
+  min-width: 0;
+}
+
+.case-step-summary {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .asset-composition-header,
+  .data-record-editor-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .asset-composition-app-picker {
+    min-width: 0;
+  }
+
+  .meta-parameter-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+
+  .meta-parameter-row .icon-button {
+    grid-column: 3;
+  }
+
+  .composition-step-card > header {
+    align-items: flex-start;
   }
 }

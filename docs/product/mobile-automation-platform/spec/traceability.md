@@ -62,6 +62,9 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | REQ-043 自动缺陷提报与 TAPD 集成 | DES-043、DES-016、DES-029、DES-033 | T-091 | 从测试失败报告生成缺陷候选，去重后按 manual_review / auto_create 策略提交 TAPD，并在报告和外部 API 返回缺陷状态 | AC-045 |
 | REQ-044 资产驱动巡检 | DES-044、DES-042、DES-016、DES-030 | T-092 | 基于 active PageStateFlow 资产验证页面健康、元素重定位、连接边稳定性、PageTask 可执行性和性能异常；保留自动探索 / 稳定性探索为独立发现入口 | AC-046 |
 | REQ-045 探索异常 AI 诊断与受控资产修复 | DES-045、DES-044、DES-043、DES-042、DES-030 | T-093 | 执行异常先固化证据并脱敏，再由规则和 AI 诊断分类；业务异常生成报告 / 缺陷候选并按策略重启继续，资产问题默认生成受控 patch，高置信低风险且验证通过时可自动应用为新的 active 资产版本并继续 | AC-047 |
+| REQ-ADT-004 参数中心与参数集 | DES-046、DES-042、DES-017 | T-094 | App 级类型化 Parameter Profile、版本化 CRUD、编译期参数合并和必需参数校验 | AC-048 |
+| REQ-ADT-006 元功能库 | DES-046、DES-042、DES-039 | T-094 | 通过 reach_page / invoke_capability / run_page_task / verify_page 引用 active 页面资产组成可复用业务能力 | AC-048 |
+| REQ-ADT-007 组合用例 | DES-046、DES-016、DES-039 | T-094 | 多元功能编排、预检、重复执行、停止和分层报告；运行时重新编译当前 active 资产 | AC-048 |
 
 ## 设计到任务
 
@@ -112,6 +115,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | DES-043 缺陷候选与 TAPD 提报集成设计 | T-091 | DefectCandidate、DefectFingerprint、TAPD payload、人工审核、自动提报、去重、防刷、报告和 Dashboard 缺陷队列 |
 | DES-044 资产驱动巡检设计 | T-092 | AssetPatrolPlan、页面健康检查、区域滚动检查、元素重定位检查、连接边验证、PageTask dry-run、巡检报告和候选修复闭环 |
 | DES-045 探索异常 AI 诊断与受控资产修复设计 | T-093 | EvidencePackBuilder、RuleFailureClassifier、AiDiagnosisService、DiagnosisPolicyEngine、AssetPatchCandidate、MCP / REST 工具和报告诊断区 |
+| DES-046 资产衍生组合测试设计 | T-094 | Parameter Profile、Meta Function、Asset Composite Case、active 资产编译、组合执行会话、Dashboard 和分层报告 |
 
 ## 开放问题追踪
 

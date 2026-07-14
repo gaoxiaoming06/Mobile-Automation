@@ -290,6 +290,141 @@ export type StructuredFlow = {
   updatedAt: string;
 };
 
+export type AssetParameterValueType = "string" | "number" | "boolean" | "template";
+
+export type AssetParameterValue = {
+  type: AssetParameterValueType;
+  value: string | number | boolean;
+  sensitive?: boolean;
+};
+
+export type ParameterProfileStatus = "active" | "deprecated";
+
+/**
+ * One reusable business-data record, such as an account or a classroom draft.
+ * Records belong to a data domain rather than the page that happens to collect
+ * the data during a flow.
+ */
+export type ParameterDataRecord = {
+  id: string;
+  appId: string;
+  platform: Platform;
+  domainKey: string;
+  name: string;
+  description?: string;
+  environment?: string;
+  values: Record<string, AssetParameterValue>;
+  status: ParameterProfileStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ParameterProfileBinding = {
+  domainKey: string;
+  recordId: string;
+};
+
+export type ParameterProfile = {
+  id: string;
+  appId: string;
+  platform: Platform;
+  name: string;
+  description?: string;
+  environment?: string;
+  /** Selects at most one reusable record from each business data domain. */
+  bindings?: ParameterProfileBinding[];
+  /**
+   * Legacy flat values and explicit profile-level overrides. These win over
+   * values coming from bound records to keep existing profiles compatible.
+   */
+  values: Record<string, AssetParameterValue>;
+  status: ParameterProfileStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MetaFunctionStatus = "draft" | "active" | "deprecated";
+
+export type MetaFunctionParameter = {
+  key: string;
+  type: AssetParameterValueType;
+  label?: string;
+  required?: boolean;
+  defaultValue?: string | number | boolean;
+};
+
+type MetaFunctionStepBase = {
+  id: string;
+  order: number;
+  enabled: boolean;
+  name?: string;
+};
+
+export type MetaFunctionStep =
+  | (MetaFunctionStepBase & {
+      kind: "reach_page";
+      targetPageModelId: string;
+    })
+  | (MetaFunctionStepBase & {
+      kind: "invoke_capability";
+      sourcePageModelId: string;
+      pageElementId: string;
+      targetPageModelId?: string;
+    })
+  | (MetaFunctionStepBase & {
+      kind: "run_page_task";
+      pageModelId: string;
+      pageTaskId: string;
+    })
+  | (MetaFunctionStepBase & {
+      kind: "verify_page";
+      pageModelId: string;
+    });
+
+export type MetaFunction = {
+  id: string;
+  appId: string;
+  platform: Platform;
+  name: string;
+  description?: string;
+  parameters: MetaFunctionParameter[];
+  steps: MetaFunctionStep[];
+  status: MetaFunctionStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AssetCompositeCaseStatus = "draft" | "active" | "deprecated";
+
+export type AssetCompositeCaseStep = {
+  id: string;
+  order: number;
+  metaFunctionId: string;
+  enabled: boolean;
+  name?: string;
+  parameterOverrides?: Record<string, string | number | boolean>;
+};
+
+export type AssetCompositeCase = {
+  id: string;
+  appId: string;
+  platform: Platform;
+  name: string;
+  description?: string;
+  parameterProfileId?: string;
+  runMode: RunMode;
+  repeatCount: number;
+  stopOnFailure: boolean;
+  steps: AssetCompositeCaseStep[];
+  status: AssetCompositeCaseStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type RunConfig = {
   caseId?: string;
   deviceSerial: string;

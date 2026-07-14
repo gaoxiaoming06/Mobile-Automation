@@ -4,7 +4,7 @@ doc_type: requirements
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-07-10
-updated_at: 2026-07-10
+updated_at: 2026-07-12
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -118,6 +118,8 @@ PageStateFlow 当前已经具备页面资产录入、页面匹配、页面能力
 - 执行资产巡检、目标流程和组合用例时可以选择参数集。
 - 缺少必需参数时，执行前给出明确提示。
 
+实现状态：v1 已落地。Dashboard 已提供 App 级参数集管理，Server 已提供 SQLite CRUD、类型化参数值、版本递增和执行期覆盖合并；组合用例预检会校验必需参数。
+
 ### REQ-ADT-005：资产驱动巡检
 
 平台必须支持基于页面资产执行巡检。巡检不是盲目探索，而是先匹配当前页，再按该页已录入资产验证页面健康、元素定位、连接边可达性、PageTask 可执行性、性能和异常。
@@ -149,6 +151,8 @@ PageStateFlow 当前已经具备页面资产录入、页面匹配、页面能力
 - 元功能保存时校验路径可达、参数齐全、目标页可验证。
 - 元功能执行报告显示每个原子能力的实际结果。
 
+实现状态：v1 已落地。元功能支持 `reach_page`、`invoke_capability`、`run_page_task`、`verify_page` 四类步骤，并在保存和执行预检时解析当前 active PageModel、PageElement、PageTransition 和 PageTask。
+
 ### REQ-ADT-007：组合用例
 
 平台必须支持把多个元功能组合成完整测试用例。组合用例用于表达端到端业务测试，而不是重复录制每个点击。
@@ -165,6 +169,8 @@ PageStateFlow 当前已经具备页面资产录入、页面匹配、页面能力
 - 用例可以选择参数集。
 - 支持单次、N 次、循环和定时执行策略。
 - 用例报告能展示元功能级、原子能力级和页面级结果。
+
+实现状态：v1 已落地。组合用例支持引用多个元功能、选择参数集、单次或重复执行、失败停止、预检、停止和分层 HTML 报告；运行时只保存资产引用并重新编译当前 active 资产，不复制低层动作和 locator。
 
 ### REQ-ADT-008：临时执行与保存执行计划
 
@@ -231,15 +237,15 @@ PageStateFlow 当前已经具备页面资产录入、页面匹配、页面能力
 
 ### P2：参数中心
 
-- 建立 App 级 Parameter Profile。
-- 资产巡检、目标执行、元功能和组合用例统一选择参数集。
-- 参数引用关系可追踪。
+- [done] 建立 App 级 Parameter Profile。
+- [partial] 组合用例已统一选择参数集；资产巡检和目标执行继续接入同一参数集选择器。
+- [partial] 编译期已校验元功能和 PageTask 的参数引用；跨资产反向引用展示待补。
 
 ### P3：元功能与组合用例
 
-- 支持从执行路径保存元功能。
-- 支持手工编排元功能。
-- 支持组合用例单次、N 次和循环执行。
+- [planned] 支持从执行路径一键保存元功能草稿。
+- [done] 支持手工编排现有页面、页面能力、连接边和 PageTask 为元功能。
+- [done] 支持组合用例单次、N 次和循环直到停止；定时执行交给调度层。
 
 ### P4：全 App 资产巡检
 
@@ -269,4 +275,3 @@ PageStateFlow 当前已经具备页面资产录入、页面匹配、页面能力
 | Q-ADT-003 | AI 自动应用资产 patch 的默认风险阈值是多少？ | 影响自动修复安全策略 |
 | Q-ADT-004 | 全 App 巡检的停止条件和恢复策略如何配置？ | 影响长时间巡检稳定性 |
 | Q-ADT-005 | 跨 Android / iOS 的同一逻辑页面资产如何复用和差异化展示？ | 影响 App 工作区和资产包设计 |
-

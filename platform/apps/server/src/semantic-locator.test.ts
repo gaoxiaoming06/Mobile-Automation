@@ -931,6 +931,174 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("resolves a dynamic input value from the nearest text above a stable OCR anchor", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "新建课堂 班级四十二号-主课程-52 开始时间 当前时间",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "新建课堂", confidence: 0.99, x: 145, y: 150, width: 180, height: 50 },
+            { text: "班级四十二号-主课程-52", confidence: 0.98, x: 90, y: 330, width: 390, height: 52 },
+            { text: "开始时间", confidence: 0.99, x: 90, y: 510, width: 160, height: 52 },
+            { text: "当前时间", confidence: 0.99, x: 680, y: 510, width: 160, height: 52 }
+          ]
+        },
+        {
+          text: "新建课堂 自动化组合课堂 开始时间 当前时间",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "新建课堂", confidence: 0.99, x: 145, y: 150, width: 180, height: 50 },
+            { text: "自动化组合课堂", confidence: 0.99, x: 90, y: 330, width: 280, height: 52 },
+            { text: "开始时间", confidence: 0.99, x: 90, y: 510, width: 160, height: 52 },
+            { text: "当前时间", confidence: 0.99, x: 680, y: 510, width: 160, height: 52 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "自动化组合课堂",
+        clearFirst: true,
+        focusDelayMs: 1,
+        inputVerificationDelayMs: 1,
+        locator: "runtime-locator:lesson_title_input",
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        structuralLocator: {
+          strategy: "ocr_relative_input",
+          anchorText: "开始时间",
+          relation: "nearest_text_above",
+          role: "text_input",
+          fallbackPolicy: "no_region_center_fallback"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 285, y: 356 },
+      { type: "clear_text" },
+      { type: "input_text", text: "自动化组合课堂" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          resolvedBy: "runtime_structural_locator",
+          focusResolvedBy: "ocr_relative_structure",
+          inputVerified: true,
+          verificationRegionSource: "runtime_focus_candidate"
+        })
+      })
+    );
+  });
+
+  it("restores the content area to the top before resolving a hidden runtime input", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "课堂信息 录制ClassIn教室 AI授课分析",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "课堂信息", confidence: 0.99, x: 90, y: 360, width: 160, height: 52 },
+            { text: "录制ClassIn教室", confidence: 0.99, x: 90, y: 650, width: 260, height: 52 }
+          ]
+        },
+        {
+          text: "新建课堂 请输入课堂名称（90字以内） 开始时间",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "新建课堂", confidence: 0.99, x: 145, y: 150, width: 180, height: 50 },
+            { text: "请输入课堂名称（90字以内）", confidence: 0.99, x: 90, y: 330, width: 420, height: 52 },
+            { text: "开始时间", confidence: 0.99, x: 90, y: 510, width: 160, height: 52 }
+          ]
+        },
+        {
+          text: "新建课堂 滚动恢复课堂 开始时间",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "滚动恢复课堂", confidence: 0.99, x: 90, y: 330, width: 240, height: 52 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "滚动恢复课堂",
+        clearFirst: true,
+        focusDelayMs: 1,
+        inputVerificationDelayMs: 1,
+        locator: "runtime-locator:lesson_title_input",
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        structuralLocator: {
+          strategy: "ocr_relative_input",
+          anchorText: "开始时间",
+          relation: "nearest_text_above",
+          revealStrategy: "scroll_to_top",
+          revealMaxSwipes: 3,
+          fallbackPolicy: "no_region_center_fallback"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "swipe", startX: 500, startY: 500, endX: 500, endY: 1500, durationMs: 450 },
+      { type: "tap", x: 300, y: 356 },
+      { type: "clear_text" },
+      { type: "input_text", text: "滚动恢复课堂" }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        focusResolvedBy: "ocr_relative_structure",
+        reveal: expect.objectContaining({ strategy: "scroll_to_top", swipes: 1 })
+      })
+    }));
+  });
+
   it("resolves input_text_to_element from UI EditText structure when OCR has no field text", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -1799,6 +1967,59 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("restores content to the top before tapping a hidden runtime structural row", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "AI内容总结 AI转写",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "AI转写", confidence: 0.99, x: 90, y: 1000, width: 160, height: 52 }]
+        },
+        {
+          text: "课堂信息 修改",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "课堂信息", confidence: 0.99, x: 90, y: 640, width: 180, height: 52 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1", stepResultId: "step-result-1", serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:lesson_classroom_info_row",
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        targetText: "课堂信息",
+        structuralLocator: {
+          strategy: "ocr_text_row",
+          anchorText: "课堂信息",
+          revealStrategy: "scroll_to_top",
+          revealMaxSwipes: 3
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "swipe", startX: 500, startY: 500, endX: 500, endY: 1500, durationMs: 450 },
+      { type: "tap", x: 180, y: 666 }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        relocatedBy: "runtime_ocr_text_after_reveal",
+        reveal: { strategy: "scroll_to_top", swipes: 1 }
+      })
+    }));
+  });
+
   it("fails leading checkbox taps when the checkbox region does not visually change", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -2321,6 +2542,668 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("selects hours and minutes independently in a multi-column duration picker", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "0小时 1小时 2小时 45分钟 50分钟 55分钟",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "0小时", confidence: 0.99, x: 120, y: 1500, width: 150, height: 60 },
+            { text: "1小时", confidence: 0.9, x: 120, y: 1600, width: 150, height: 60 },
+            { text: "2小时", confidence: 0.85, x: 120, y: 1700, width: 150, height: 60 },
+            { text: "45分钟", confidence: 0.9, x: 680, y: 1400, width: 170, height: 60 },
+            { text: "50分钟", confidence: 0.99, x: 680, y: 1500, width: 170, height: 60 },
+            { text: "55分钟", confidence: 0.9, x: 680, y: 1600, width: 170, height: 60 }
+          ]
+        },
+        {
+          text: "确定 8小时 9小时 10 小时 45分钟 50分钟 55分钟",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "8小时", confidence: 0.9, x: 120, y: 1400, width: 150, height: 60 },
+            { text: "9小时", confidence: 0.95, x: 120, y: 1500, width: 150, height: 60 },
+            { text: "确定", confidence: 0.99, x: 820, y: 1500, width: 100, height: 55 },
+            { text: "10", confidence: 0.99, x: 120, y: 1770, width: 70, height: 60 },
+            { text: "小时", confidence: 0.99, x: 198, y: 1770, width: 90, height: 60 },
+            { text: "50分钟", confidence: 0.99, x: 680, y: 1500, width: 170, height: 60 }
+          ]
+        },
+        {
+          text: "确定 10小时 25分钟 30 分钟 35分钟",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "确定", confidence: 0.99, x: 820, y: 1500, width: 100, height: 55 },
+            { text: "10小时", confidence: 0.99, x: 120, y: 1770, width: 170, height: 60 },
+            { text: "25分钟", confidence: 0.9, x: 680, y: 1400, width: 170, height: 60 },
+            { text: "30", confidence: 0.99, x: 680, y: 1770, width: 70, height: 60 },
+            { text: "分钟", confidence: 0.99, x: 758, y: 1770, width: 90, height: 60 },
+            { text: "35分钟", confidence: 0.9, x: 680, y: 1600, width: 170, height: 60 }
+          ]
+        },
+        {
+          text: "确定",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "确定", confidence: 0.99, x: 820, y: 1120, width: 100, height: 55 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 8, y: 38, width: 84, height: 7 },
+        fieldType: "picker_select",
+        selectedValue: "10小时30分钟",
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        structuralLocator: {
+          pickerMode: "duration_hours_minutes"
+        }
+      })
+    });
+
+    expect(actions[0]).toEqual({ type: "tap", x: 500, y: 830 });
+    expect(actions[1]).toEqual(expect.objectContaining({ type: "swipe", startX: 250, endX: 250 }));
+    expect(actions[2]).toEqual({ type: "tap", x: 870, y: 1148 });
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        action: "picker_select",
+        selectedValue: "10小时30分钟",
+        pickerMode: "duration_hours_minutes",
+        selectedParts: ["10小时", "30分钟"]
+      })
+    }));
+  });
+
+  it("relocates a runtime picker row after scrolling before selecting duration columns", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "AI授课分析 AI内容总结",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "AI授课分析", confidence: 0.99, x: 90, y: 800, width: 200, height: 52 }]
+        },
+        {
+          text: "AI授课分析 AI内容总结",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "AI授课分析", confidence: 0.99, x: 90, y: 800, width: 200, height: 52 }]
+        },
+        {
+          text: "课堂时长 50分钟",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "课堂时长", confidence: 0.99, x: 90, y: 600, width: 180, height: 52 }]
+        },
+        {
+          text: "0小时 50分钟",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "0小时", confidence: 0.99, x: 120, y: 1500, width: 150, height: 60 },
+            { text: "50分钟", confidence: 0.99, x: 680, y: 1500, width: 170, height: 60 }
+          ]
+        },
+        {
+          text: "0小时 30分钟",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "0小时", confidence: 0.99, x: 120, y: 1500, width: 150, height: 60 },
+            { text: "30分钟", confidence: 0.99, x: 680, y: 1500, width: 170, height: 60 }
+          ]
+        },
+        {
+          text: "确定",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "确定", confidence: 0.99, x: 820, y: 1120, width: 100, height: 55 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1", stepResultId: "step-result-1", serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:lesson_duration_row",
+        locatorKind: "structural_locator",
+        targetText: "课堂时长",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "picker_select",
+        selectedValue: "30分钟",
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        pickerScrollIntervalMs: 1,
+        structuralLocator: {
+          strategy: "ocr_text_row",
+          anchorText: "课堂时长",
+          revealStrategy: "scroll_to_top",
+          revealMaxSwipes: 3,
+          pickerMode: "duration_hours_minutes"
+        }
+      })
+    });
+
+    expect(actions[0]).toEqual({ type: "swipe", startX: 500, startY: 500, endX: 500, endY: 1500, durationMs: 450 });
+    expect(actions[1]).toEqual({ type: "tap", x: 180, y: 626 });
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        pickerMode: "duration_hours_minutes",
+        selectedValue: "30分钟",
+        openerRelocatedBy: "runtime_ocr_text_after_reveal"
+      })
+    }));
+  });
+
+  it("selects the current time shortcut in a date-time picker", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "开始时间 当前时间",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "开始时间", confidence: 0.99, x: 90, y: 520, width: 180, height: 52 }]
+        },
+        {
+          text: "开始时间 2026-07-13 周一 10 40 选择当前时间",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "2026-07-13 周一", confidence: 0.99, x: 80, y: 1450, width: 440, height: 60 },
+            { text: "10", confidence: 0.99, x: 650, y: 1450, width: 80, height: 60 },
+            { text: "40", confidence: 0.99, x: 850, y: 1450, width: 80, height: 60 },
+            { text: "选择当前时间", confidence: 0.99, x: 340, y: 1800, width: 320, height: 70 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1", stepResultId: "step-result-1", serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:lesson_start_time_row",
+        locatorKind: "structural_locator",
+        targetText: "开始时间",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "picker_select",
+        selectedValue: "current",
+        pickerOpenDelayMs: 1,
+        structuralLocator: {
+          strategy: "ocr_text_row",
+          anchorText: "开始时间",
+          revealStrategy: "scroll_to_top",
+          pickerMode: "date_time"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 180, y: 546 },
+      { type: "tap", x: 500, y: 1835 }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        pickerMode: "date_time",
+        selectedValue: "current",
+        selectedBy: "current_time_shortcut"
+      })
+    }));
+  });
+
+  it("selects date hour and minute independently in a date-time picker", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "开始时间 当前时间",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "开始时间", confidence: 0.99, x: 90, y: 520, width: 180, height: 52 }]
+        },
+        {
+          text: "2026-07-13 周一 10 40",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "2026-07-13 周一", confidence: 0.99, x: 80, y: 1450, width: 440, height: 60 },
+            { text: "10", confidence: 0.99, x: 650, y: 1450, width: 80, height: 60 },
+            { text: "40", confidence: 0.99, x: 850, y: 1450, width: 80, height: 60 }
+          ]
+        },
+        {
+          text: "2026-07-14 周二 10 40",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "2026-07-14 周二", confidence: 0.99, x: 80, y: 1450, width: 440, height: 60 },
+            { text: "10", confidence: 0.99, x: 650, y: 1450, width: 80, height: 60 },
+            { text: "40", confidence: 0.99, x: 850, y: 1450, width: 80, height: 60 }
+          ]
+        },
+        {
+          text: "2026-07-14 周二 14 40",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "2026-07-14 周二", confidence: 0.99, x: 80, y: 1450, width: 440, height: 60 },
+            { text: "14", confidence: 0.99, x: 650, y: 1450, width: 80, height: 60 },
+            { text: "40", confidence: 0.99, x: 850, y: 1450, width: 80, height: 60 }
+          ]
+        },
+        {
+          text: "2026-07-14 周二 14 30",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "2026-07-14 周二", confidence: 0.99, x: 80, y: 1450, width: 440, height: 60 },
+            { text: "14", confidence: 0.99, x: 650, y: 1450, width: 80, height: 60 },
+            { text: "30", confidence: 0.99, x: 850, y: 1450, width: 80, height: 60 }
+          ]
+        },
+        {
+          text: "确定",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "确定", confidence: 0.99, x: 820, y: 1120, width: 100, height: 55 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1", stepResultId: "step-result-1", serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:lesson_start_time_row",
+        locatorKind: "structural_locator",
+        targetText: "开始时间",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "picker_select",
+        selectedValue: "2026-07-14 14:30",
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        pickerScrollIntervalMs: 0,
+        structuralLocator: {
+          strategy: "ocr_text_row",
+          anchorText: "开始时间",
+          revealStrategy: "scroll_to_top",
+          pickerMode: "date_time"
+        }
+      })
+    });
+
+    expect(actions[0]).toEqual({ type: "tap", x: 180, y: 546 });
+    expect(actions).toContainEqual(expect.objectContaining({ type: "swipe", startX: 270, endX: 270 }));
+    expect(actions.at(-1)).toEqual({ type: "tap", x: 870, y: 1148 });
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        pickerMode: "date_time",
+        selectedValue: "2026-07-14 14:30",
+        selectedParts: ["2026-07-14", "14", "30"]
+      })
+    }));
+  });
+
+  it("allows an explicitly marked structural form row in the bottom viewport", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "编辑课堂信息",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "编辑课堂信息", confidence: 0.99, x: 150, y: 150, width: 260, height: 52 }]
+        },
+        {
+          text: "编辑课堂信息 台上人数 1V8",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "台上人数", confidence: 0.99, x: 90, y: 1820, width: 180, height: 52 }]
+        },
+        {
+          text: "1V7 1V8 1V9",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "1V7", confidence: 0.9, x: 420, y: 1350, width: 160, height: 60 },
+            { text: "1V8", confidence: 0.99, x: 420, y: 1470, width: 160, height: 60 },
+            { text: "1V9", confidence: 0.9, x: 420, y: 1590, width: 160, height: 60 }
+          ]
+        },
+        {
+          text: "确定",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "确定", confidence: 0.99, x: 820, y: 1120, width: 100, height: 55 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1", stepResultId: "step-result-1", serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:classroom_stage_count_row",
+        locatorKind: "structural_locator",
+        targetText: "台上人数",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "picker_select",
+        selectedValue: "1V8",
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        structuralLocator: {
+          strategy: "ocr_text_row",
+          anchorText: "台上人数",
+          pickerMode: "single_wheel",
+          allowBottomContent: true
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 180, y: 1846 },
+      { type: "tap", x: 870, y: 1148 }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        pickerMode: "single_wheel",
+        selectedValue: "1V8",
+        selectedBy: "wheel_center",
+        confirmedBy: "确定",
+        openerRelocatedBy: "runtime_ocr_text_bottom_content"
+      })
+    }));
+  });
+
+  it("does not use a bottom-viewport OCR candidate without structural permission", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "编辑课堂信息 台上人数 1V8",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "台上人数", confidence: 0.99, x: 90, y: 1820, width: 180, height: 52 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1", stepResultId: "step-result-1", serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:classroom_stage_count_row",
+        locatorKind: "structural_locator",
+        targetText: "台上人数",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "picker_select",
+        selectedValue: "1V8",
+        structuralLocator: {
+          strategy: "ocr_text_row",
+          anchorText: "台上人数",
+          pickerMode: "single_wheel",
+          locatorReadAttempts: 1
+        }
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: false,
+      message: 'Runtime picker row "台上人数" was not found.'
+    }));
+  });
+
+  it("retries a transient empty OCR frame before selecting a single-wheel value", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "编辑课堂信息 台上人数 1V8",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "台上人数", confidence: 0.99, x: 90, y: 1200, width: 180, height: 52 }]
+        },
+        { text: "", engine: "fake-layout", lang: "test", width: 1000, height: 2000, boxes: [] },
+        {
+          text: "1V7 1V8 1V9",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "1V7", confidence: 0.9, x: 420, y: 1350, width: 160, height: 60 },
+            { text: "1V8", confidence: 0.99, x: 420, y: 1470, width: 160, height: 60 },
+            { text: "1V9", confidence: 0.9, x: 420, y: 1590, width: 160, height: 60 }
+          ]
+        },
+        {
+          text: "确定",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "确定", confidence: 0.99, x: 820, y: 1120, width: 100, height: 55 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1", stepResultId: "step-result-1", serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:classroom_stage_count_row",
+        locatorKind: "structural_locator",
+        targetText: "台上人数",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "picker_select",
+        selectedValue: "1V8",
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        pickerReadAttempts: 2,
+        structuralLocator: {
+          strategy: "ocr_text_row",
+          anchorText: "台上人数",
+          pickerMode: "single_wheel"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 180, y: 1226 },
+      { type: "tap", x: 870, y: 1148 }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        pickerMode: "single_wheel",
+        selectedValue: "1V8",
+        pickerReadRetries: 1
+      })
+    }));
+  });
+
+  it("selects a runtime option from a temporary form overlay and confirms it", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "编辑课堂信息 选择课程 主课程",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "选择课程", confidence: 0.99, x: 90, y: 700, width: 220, height: 60 }]
+        },
+        {
+          text: "选择课程 新建课程 主课程 课节 确定",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "选择课程", confidence: 0.99, x: 70, y: 280, width: 220, height: 60 },
+            { text: "主课程", confidence: 0.99, x: 70, y: 560, width: 180, height: 60 },
+            { text: "课节", confidence: 0.99, x: 70, y: 700, width: 120, height: 60 }
+          ]
+        },
+        {
+          text: "选择课程 主课程 确定",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "确定", confidence: 0.99, x: 100, y: 1820, width: 800, height: 90 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1", stepResultId: "step-result-1", serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:classroom_course_row",
+        locatorKind: "structural_locator",
+        targetText: "选择课程",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "subpage_edit",
+        selectedValue: "主课程",
+        overlayOpenDelayMs: 1,
+        optionSelectDelayMs: 1,
+        structuralLocator: {
+          strategy: "ocr_text_row",
+          anchorText: "选择课程",
+          selectionMode: "ocr_option_confirm",
+          confirmText: "确定"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 200, y: 730 },
+      { type: "tap", x: 160, y: 590 },
+      { type: "tap", x: 500, y: 1865 }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        action: "subpage_edit",
+        selectedValue: "主课程",
+        selectedBy: "ocr_option",
+        confirmedBy: "确定"
+      })
+    }));
+  });
+
+  it("keeps an already selected checkbox option checked before confirming", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const screenshots = [Buffer.from("screen"), checkboxScreenshot(true), Buffer.from("screen")];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "编辑课堂信息 学生",
+          engine: "fake-layout", lang: "test", width: 1080, height: 2400,
+          boxes: [{ text: "学生", confidence: 0.99, x: 90, y: 700, width: 120, height: 60 }]
+        },
+        {
+          text: "选择学生 学生昵称02",
+          engine: "fake-layout", lang: "test", width: 1080, height: 2400,
+          boxes: [{ text: "学生昵称02", confidence: 0.99, x: 240, y: 975, width: 260, height: 60 }]
+        },
+        {
+          text: "确定",
+          engine: "fake-layout", lang: "test", width: 1080, height: 2400,
+          boxes: [{ text: "确定", confidence: 0.99, x: 780, y: 2200, width: 200, height: 100 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        artifact: artifact(`artifact-${attempt}`),
+        png: screenshots.shift() ?? Buffer.from("screen")
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1", stepResultId: "step-result-1", serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:classroom_students_row",
+        locatorKind: "structural_locator",
+        targetText: "学生",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "subpage_edit",
+        selectedValue: "学生昵称02",
+        overlayOpenDelayMs: 1,
+        optionSelectDelayMs: 1,
+        structuralLocator: {
+          strategy: "ocr_text_row",
+          anchorText: "学生",
+          selectionMode: "ocr_option_confirm",
+          optionRole: "checkbox",
+          optionCheckboxXPercent: 8,
+          confirmText: "确定"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 150, y: 730 },
+      { type: "tap", x: 880, y: 2250 }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        selectedValue: "学生昵称02",
+        optionState: "already_checked",
+        confirmedBy: "确定"
+      })
+    }));
+  });
+
   it("does not tap a manually marked switch when it already matches the desired off state", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -2359,6 +3242,171 @@ describe("SemanticStepResolver", () => {
         })
       })
     );
+  });
+
+  it("relocates a trailing switch by its row label and verifies the desired state visually", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const screenshots = [trailingSwitchScreenshot(false), trailingSwitchScreenshot(true)];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "AI内容总结",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: [
+          { text: "AI内容总结", confidence: 0.99, x: 90, y: 1200, width: 240, height: 60 }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        artifact: artifact(`artifact-${attempt}`),
+        png: screenshots.shift() ?? trailingSwitchScreenshot(true)
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:ai_content_summary_switch",
+        locatorKind: "structural_locator",
+        targetText: "AI内容总结",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "toggle_set",
+        desiredState: "on",
+        toggleVerifyDelayMs: 1,
+        structuralLocator: {
+          strategy: "ocr_trailing_switch",
+          anchorText: "AI内容总结",
+          controlCenterXPercent: 84,
+          controlWidthPercent: 16,
+          controlHeightPercent: 6
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 840, y: 1230 }]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        action: "toggle_set",
+        currentState: "off",
+        desiredState: "on",
+        verifiedState: "on",
+        relocatedBy: "ocr_trailing_switch"
+      })
+    }));
+  });
+
+  it("searches the full content area for an offscreen trailing switch", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const screenshots = [
+      trailingSwitchScreenshot(false),
+      trailingSwitchScreenshot(false),
+      trailingSwitchScreenshot(false),
+      trailingSwitchScreenshot(false),
+      trailingSwitchScreenshot(true)
+    ];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "课堂信息 录制ClassIn教室",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [{ text: "课堂信息", confidence: 0.99, x: 90, y: 420, width: 160, height: 52 }]
+        },
+        {
+          text: "新建课堂 开始时间 课堂时长",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [{ text: "开始时间", confidence: 0.99, x: 90, y: 420, width: 160, height: 52 }]
+        },
+        {
+          text: "新建课堂 开始时间 课堂时长",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [{ text: "开始时间", confidence: 0.99, x: 90, y: 420, width: 160, height: 52 }]
+        },
+        {
+          text: "AI内容总结 AI转写",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [{ text: "AI转写", confidence: 0.99, x: 90, y: 1200, width: 160, height: 52 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        artifact: artifact(`artifact-${attempt}`),
+        png: screenshots.shift() ?? trailingSwitchScreenshot(true)
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:ai_transcription_switch",
+        locatorKind: "structural_locator",
+        targetText: "AI转写",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "toggle_set",
+        desiredState: "on",
+        toggleVerifyDelayMs: 1,
+        structuralLocator: {
+          strategy: "ocr_trailing_switch",
+          anchorText: "AI转写",
+          revealStrategy: "search_content",
+          restoreMaxSwipes: 3,
+          searchMaxSwipes: 6,
+          revealIntervalMs: 0,
+          controlCenterXPercent: 84,
+          controlWidthPercent: 16,
+          controlHeightPercent: 6
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "swipe", startX: 500, startY: 500, endX: 500, endY: 1500, durationMs: 450 },
+      { type: "swipe", startX: 500, startY: 500, endX: 500, endY: 1500, durationMs: 450 },
+      { type: "swipe", startX: 500, startY: 1500, endX: 500, endY: 500, durationMs: 450 },
+      { type: "tap", x: 840, y: 1226 }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        action: "toggle_set",
+        relocatedBy: "ocr_trailing_switch_after_content_search",
+        reveal: {
+          strategy: "search_content",
+          restoreSwipes: 2,
+          searchSwipes: 1
+        },
+        desiredState: "on",
+        verifiedState: "on"
+      })
+    }));
   });
 
   it("skips an off switch request when current state is unknown to avoid turning it on", async () => {
@@ -3326,6 +4374,31 @@ function checkboxScreenshot(checked: boolean): Buffer {
       }
       if (checked && distance <= 11) {
         pixels[y * width + x] = 60;
+      }
+    }
+  }
+  return pgm(width, height, pixels);
+}
+
+function trailingSwitchScreenshot(on: boolean): Buffer {
+  const width = 1000;
+  const height = 2000;
+  const pixels = Array.from({ length: width * height }, () => 255);
+  const left = 760;
+  const right = 920;
+  const top = 1195;
+  const bottom = 1265;
+  for (let y = top; y <= bottom; y += 1) {
+    for (let x = left; x <= right; x += 1) {
+      pixels[y * width + x] = on ? 125 : 190;
+    }
+  }
+  const knobX = on ? 882 : 798;
+  const knobY = 1230;
+  for (let y = knobY - 30; y <= knobY + 30; y += 1) {
+    for (let x = knobX - 30; x <= knobX + 30; x += 1) {
+      if (Math.hypot(x - knobX, y - knobY) <= 30) {
+        pixels[y * width + x] = 255;
       }
     }
   }

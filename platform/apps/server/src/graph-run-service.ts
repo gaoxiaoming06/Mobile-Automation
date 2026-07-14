@@ -2999,6 +2999,9 @@ function pageTaskActionParams(taskStep: StoredPageTaskStep, runtimeParams: Recor
   if (taskStep.fieldType === "picker_select" && selectedValue) {
     params.selectedValue = selectedValue;
   }
+  if (taskStep.fieldType === "subpage_edit" && selectedValue) {
+    params.selectedValue = selectedValue;
+  }
   const desiredState = runtimeParamValue(runtimeParams, taskStep.desiredStateParamKey) ?? taskStep.text;
   if (taskStep.fieldType === "toggle_set" && desiredState) {
     params.desiredState = desiredState;

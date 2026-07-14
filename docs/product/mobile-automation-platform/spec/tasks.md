@@ -1736,3 +1736,22 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
   11. Report Core 新增 AI 诊断区：展示分类、置信度、推荐动作、证据引用、缺陷候选、资产 patch、验证结果和继续执行策略。
   12. Dashboard 失败修复 UI 新增“AI 诊断 / 资产修复”区域，支持查看证据、查看自动应用记录、接受 / 拒绝 patch、触发验证、回滚、继续执行或转缺陷。
 - 验证方式：先写失败测试覆盖证据脱敏、规则分类、模型 JSON 校验、模型失败 fallback、crash 不走资产修复、页面未匹配生成 asset patch、非法 patch 被拒绝、patch 验证通过后按策略自动应用并继续、低置信进入人工复核、自动应用预算、回滚、MCP 工具权限和报告展示；再实现服务端和 UI；最后用真机模拟页面未匹配、元素重定位失败和 crash 三类场景手动验证。
+
+## Phase 17：资产衍生组合测试
+
+### T-094：参数集、元功能和组合用例闭环
+
+- 状态：done
+- 关联需求：REQ-ADT-004、REQ-ADT-006、REQ-ADT-007、REQ-042
+- 关联设计：DES-046、DES-042、DES-039、DES-016
+- 目标平台：shared + server + Dashboard + report + Android real device
+- 修改边界：组合资产 schema、SQLite storage、资产编译器、组合执行会话、REST API、Dashboard 资产用例面板、HTML 报告
+- 已完成：
+  1. 新增 Parameter Profile、Meta Function、Asset Composite Case shared model 和 SQLite CRUD，保存版本号、App / 平台归属、参数类型、步骤顺序和执行策略。
+  2. 新增资产目录与编译器，解析当前 active PageModel、PageElement、PageTransition、PageTask，合并参数并在执行前校验资产引用和必需参数。
+  3. 新增组合执行管理器，按顺序复用 GraphRunService 执行到页、页面能力、PageTask 和页面验证，支持单次、N 次、循环直到停止、失败停止、主动停止和运行态查询。
+  4. 新增 REST API，覆盖参数集 / 元功能 / 组合用例 CRUD、资产目录、预检、执行、停止、状态和 HTML 报告。
+  5. Dashboard 新增“资产用例”入口和参数集 / 元功能 / 组合用例三视图，支持资产选择、步骤排序、预检、执行和报告入口。
+  6. 新增 OCR 相对结构输入定位，允许通过稳定锚点找到动态已有值输入行；“新建课堂”标题输入资产已从固定截图区域迁移为 runtime structural locator。
+  7. 真机完成 `进入指定班级 -> 创建课堂但不发布`：参数 `className=班级四十二号`、`lessonName=自动化组合课堂`、`duration=30`，5/5 资产步骤通过，最终停留在发布前页面。
+- 后续：参数反向引用展示、从成功执行一键保存元功能草稿、定时调度和资产包迁移由独立任务承接，不阻塞 v1 使用。

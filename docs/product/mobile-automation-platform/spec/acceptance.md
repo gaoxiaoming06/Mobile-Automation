@@ -1099,3 +1099,28 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 - THEN 平台必须回退到规则诊断并保留原始失败，不得把 Run 标记为通过。
 - 验证方式：server diagnosis 单元测试 + mock OpenAI-compatible client 测试 + MCP adapter contract 测试 + report-core 测试 + Dashboard 失败修复 UI 测试 + Android 真机三类失败手动验证。
 - 回归范围：StabilityExplorer、AssetPatrolRunner、GraphRunService、RunArtifact、DefectCandidate、PageState asset storage、MCP adapter、Report、Dashboard repair UI。
+
+### AC-048：资产衍生组合测试
+
+- 关联需求：REQ-ADT-004、REQ-ADT-006、REQ-ADT-007、REQ-042
+- 目标平台：Backend + Web Dashboard + Report + Android first
+- GIVEN 用户维护一个 App 级 Parameter Profile。
+- WHEN 保存字符串、数字、布尔值或模板值。
+- THEN Server 必须持久化参数类型和版本，并允许组合执行期覆盖；缺少元功能必需参数时预检必须失败。
+- GIVEN 用户创建元功能。
+- WHEN 编排到达页面、执行页面能力、运行 PageTask 和验证页面步骤。
+- THEN 元功能只能引用当前 active PageStateFlow 资产，不得复制底层 locator、固定坐标或 ActionStep。
+- GIVEN 用户把多个元功能加入组合用例。
+- WHEN 点击预检。
+- THEN 编译器必须解析当前 active 图版本、校验 App / 平台 / 来源页 / 目标页 / PageElement / PageTransition / PageTask，并输出有序执行计划和参数合并结果。
+- GIVEN 组合用例预检通过且设备在线。
+- WHEN 用户执行单次或 N 次组合测试。
+- THEN 执行器必须按顺序复用 GraphRunService，实时展示当前元功能和资产步骤，支持失败停止和主动停止。
+- GIVEN PageTask 输入框当前包含动态业务值。
+- WHEN 该输入框定义了 OCR 相对结构 locator。
+- THEN Runner 必须按稳定锚点和结构关系在当前截图重定位输入行，不能点击历史区域中心，也不能把动态业务值保存为正式定位依据。
+- GIVEN 组合执行结束。
+- THEN HTML 报告必须按组合用例、轮次、元功能和资产步骤展示状态、关联 PageElement / PageTask、Graph Run ID 和错误。
+- 验证方式：storage / compiler / execution 单元测试 + Dashboard 组件测试 + SemanticLocator / GraphRunService 回归 + Android 真机组合用例。
+- 真机验收：`asset_composite_execution_1533c860-64b5-4a81-a999-720dc1e6a95b` 5/5 passed；最终页面显示 `自动化组合课堂`、`30分钟`，未点击发布。
+- 回归范围：PageStateFlow assets、GraphRunService、PageTask、SemanticLocator、Dashboard navigation、SQLite migrations、HTML report。

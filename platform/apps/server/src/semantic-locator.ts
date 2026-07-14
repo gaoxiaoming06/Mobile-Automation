@@ -118,6 +118,15 @@ export class SemanticStepResolver {
     if (isOcrAnchorOffsetLocator(input.step.params)) {
       return this.resolveOcrAnchorOffsetTap(input);
     }
+    if (input.step.params.fieldType === "toggle_set" && isTrailingSwitchLocator(input.step.params)) {
+      return this.resolveTrailingSwitchSet(input);
+    }
+    if (input.step.params.fieldType === "picker_select" && isRuntimeTapStructuralLocator(input.step.params)) {
+      return this.resolveRuntimeStructuralPicker(input);
+    }
+    if (input.step.params.fieldType === "subpage_edit" && isRuntimeOptionSelectionLocator(input.step.params)) {
+      return this.resolveRuntimeOptionSelection(input);
+    }
     const region = readPercentRegion(input.step.params.region) ?? readGridCandidateSearchHintRegion(input.step.params);
     if (!region && isRuntimeTapStructuralLocator(input.step.params)) {
       return this.resolveRuntimeStructuralTap(input);
@@ -850,6 +859,183 @@ export class SemanticStepResolver {
     };
   }
 
+  private async resolveRuntimeOptionSelection(input: {
+    runId: string;
+    stepResultId: string;
+    step: ActionStep;
+    serial: string;
+    deviceSize?: { width: number; height: number };
+  }): Promise<SemanticResolutionOutcome> {
+    const structuralLocator = readRecord(input.step.params.structuralLocator);
+    const targetText = runtimeStructuralTargetText(input.step.params);
+    const selectedValue = textParam(input.step.params.selectedValue ?? input.step.params.text).trim();
+    const confirmText = textParam(structuralLocator?.confirmText ?? input.step.params.confirmText).trim();
+    const semanticArea = readSemanticArea(input.step.params.semanticArea) ?? "content";
+    if (!targetText || !selectedValue || !this.deps.ocr.locateText || !input.deviceSize) {
+      return {
+        supported: true,
+        resolved: false,
+        message: "Runtime option selection requires opener text, selected value, OCR, and device size.",
+        artifacts: [],
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          reason: "invalid_runtime_option_selection",
+          targetText,
+          selectedValue,
+          ...pageTaskSemanticMetadata(input.step.params)
+        }
+      };
+    }
+    const artifacts: ArtifactRef[] = [];
+    const openerScreenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, 1);
+    artifacts.push(openerScreenshot.artifact);
+    const openerLayout = await this.deps.ocr.locateText({ image: openerScreenshot.png, mode: "contains" });
+    const opener = findTextCandidate(openerLayout, targetText, {
+      mode: "contains",
+      semanticArea,
+      deviceSize: input.deviceSize
+    });
+    if (!opener) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Runtime option opener "${targetText}" was not found.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          reason: "runtime_target_text_not_found",
+          targetText,
+          selectedValue,
+          actual: normalizeOcrText(openerLayout.text) || "(empty OCR result)",
+          ...pageTaskSemanticMetadata(input.step.params)
+        }
+      };
+    }
+    const openerAction = {
+      type: "tap",
+      x: scaleCoordinate(opener.centerX, openerLayout.width, input.deviceSize.width),
+      y: scaleCoordinate(opener.centerY, openerLayout.height, input.deviceSize.height)
+    } satisfies DeviceActionRequest;
+    let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, openerAction));
+    await sleep(nonNegativeNumberParam(input.step.params.overlayOpenDelayMs, 350));
+
+    const optionScreenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, 2);
+    artifacts.push(optionScreenshot.artifact);
+    const optionLayout = await this.deps.ocr.locateText({ image: optionScreenshot.png, mode: "contains" });
+    const option = findTextCandidate(optionLayout, selectedValue, {
+      mode: textParam(structuralLocator?.optionMatchMode).trim() === "contains" ? "contains" : "equals",
+      deviceSize: input.deviceSize
+    });
+    if (!option) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Runtime option "${selectedValue}" was not found.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          reason: "runtime_option_not_found",
+          targetText,
+          selectedValue,
+          actual: normalizeOcrText(optionLayout.text) || "(empty OCR result)",
+          ...pageTaskSemanticMetadata(input.step.params)
+        }
+      };
+    }
+    const optionRole = textParam(structuralLocator?.optionRole).trim();
+    let optionState = "selected";
+    let optionAction = {
+      type: "tap",
+      x: scaleCoordinate(option.centerX, optionLayout.width, input.deviceSize.width),
+      y: scaleCoordinate(option.centerY, optionLayout.height, input.deviceSize.height)
+    } satisfies DeviceActionRequest;
+    let shouldTapOption = true;
+    if (optionRole === "checkbox") {
+      optionAction = {
+        type: "tap",
+        x: Math.round(input.deviceSize.width * (percentNumber(structuralLocator?.optionCheckboxXPercent) ?? 8) / 100),
+        y: scaleCoordinate(option.centerY, optionLayout.height, input.deviceSize.height)
+      };
+      const checkboxRegion = checkboxPercentRegion(optionAction, input.deviceSize);
+      const checkboxTemplate = checkboxRegion
+        ? await createVisualLocatorTemplate({
+            screenshot: optionScreenshot.png,
+            percentRegion: checkboxRegion,
+            resolution: input.deviceSize,
+            sampleSize: 16
+          })
+        : undefined;
+      const checkboxState = checkboxTemplate ? checkboxVisualStateFromTemplate(checkboxTemplate.pixels) : undefined;
+      shouldTapOption = checkboxState?.checked !== true;
+      optionState = shouldTapOption ? "checked" : "already_checked";
+    }
+    if (shouldTapOption) {
+      actionResult = normalizeActionResult(await this.deps.performAction(input.serial, optionAction)) ?? actionResult;
+    }
+    await sleep(nonNegativeNumberParam(input.step.params.optionSelectDelayMs, 200));
+
+    let confirmCandidate: TextLocatorCandidate | undefined;
+    let confirmAction: DeviceActionRequest | undefined;
+    if (confirmText) {
+      const confirmScreenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, 3);
+      artifacts.push(confirmScreenshot.artifact);
+      const confirmLayout = await this.deps.ocr.locateText({ image: confirmScreenshot.png, mode: "contains" });
+      confirmCandidate = findTextCandidate(confirmLayout, confirmText, {
+        mode: "equals",
+        deviceSize: input.deviceSize
+      });
+      if (!confirmCandidate) {
+        return {
+          supported: true,
+          resolved: false,
+          message: `Runtime option confirmation "${confirmText}" was not found.`,
+          artifacts,
+          metadata: {
+            type: "image_region",
+            action: "fail",
+            reason: "runtime_option_confirm_not_found",
+            targetText,
+            selectedValue,
+            confirmText,
+            ...pageTaskSemanticMetadata(input.step.params)
+          }
+        };
+      }
+      confirmAction = {
+        type: "tap",
+        x: scaleCoordinate(confirmCandidate.centerX, confirmLayout.width, input.deviceSize.width),
+        y: scaleCoordinate(confirmCandidate.centerY, confirmLayout.height, input.deviceSize.height)
+      } satisfies DeviceActionRequest;
+      actionResult = normalizeActionResult(await this.deps.performAction(input.serial, confirmAction)) ?? actionResult;
+    }
+    return {
+      supported: true,
+      resolved: true,
+      action: confirmAction ?? optionAction,
+      actionResult,
+      message: `Selected runtime option "${option.text}"${confirmText ? " and confirmed it" : ""}.`,
+      artifacts,
+      metadata: {
+        type: "image_region",
+        action: "subpage_edit",
+        ...pageTaskSemanticMetadata(input.step.params),
+        targetText,
+        selectedValue,
+        selectedBy: "ocr_option",
+        optionState,
+        selectedLocator: option,
+        ...(confirmCandidate ? { confirmedBy: confirmCandidate.text, confirmCenter: confirmAction } : {}),
+        semanticArea,
+        structuralLocator,
+        opener: openerAction,
+        driverChannel: actionResult?.driverChannel
+      }
+    };
+  }
+
   private async resolveRuntimeStructuralTap(input: {
     runId: string;
     stepResultId: string;
@@ -909,37 +1095,51 @@ export class SemanticStepResolver {
       };
     }
     const mode = tapTextMatchMode(input.step.params.mode);
-    const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, 1);
-    const layout = await this.deps.ocr.locateText({
-      image: screenshot.png,
-      mode
-    });
-    const candidate = findTextCandidate(layout, targetText, {
-      mode,
-      semanticArea,
-      deviceSize: input.deviceSize
-    });
+    const artifacts: ArtifactRef[] = [];
+    const revealSettings = runtimeInputRevealSettings(input.step.params, semanticArea);
+    let layout: OcrLayoutResult | undefined;
+    let candidate: TextLocatorCandidate | undefined;
+    let revealSwipes = 0;
+    for (let attempt = 1; attempt <= (revealSettings?.maxSwipes ?? 0) + 1; attempt += 1) {
+      const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
+      artifacts.push(screenshot.artifact);
+      layout = await this.deps.ocr.locateText({ image: screenshot.png, mode });
+      candidate = findTextCandidate(layout, targetText, {
+        mode,
+        semanticArea,
+        deviceSize: input.deviceSize
+      });
+      if (candidate || !revealSettings || revealSwipes >= revealSettings.maxSwipes) {
+        break;
+      }
+      await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+      revealSwipes += 1;
+      if (revealSettings.intervalMs > 0) {
+        await sleep(revealSettings.intervalMs);
+      }
+    }
     if (!candidate) {
       return {
         supported: true,
         resolved: false,
         message: `Runtime structural tap target "${targetText}" was not found.`,
-        artifacts: [screenshot.artifact],
+        artifacts,
         metadata: {
           type: "image_region",
           action: "fail",
           reason: "runtime_target_text_not_found",
           targetText,
-          actual: normalizeOcrText(layout.text) || "(empty OCR result)",
+          actual: normalizeOcrText(layout?.text ?? "") || "(empty OCR result)",
           semanticArea,
+          ...(revealSettings ? { revealAttempted: { strategy: "scroll_to_top", swipes: revealSwipes } } : {}),
           ...pageTaskSemanticMetadata(input.step.params)
         }
       };
     }
     const action = {
       type: "tap",
-      x: scaleCoordinate(candidate.centerX, layout.width, input.deviceSize?.width),
-      y: scaleCoordinate(candidate.centerY, layout.height, input.deviceSize?.height)
+      x: scaleCoordinate(candidate.centerX, layout!.width, input.deviceSize?.width),
+      y: scaleCoordinate(candidate.centerY, layout!.height, input.deviceSize?.height)
     } satisfies DeviceActionRequest;
     const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
     return {
@@ -948,17 +1148,18 @@ export class SemanticStepResolver {
       action,
       actionResult,
       message: `Relocated runtime structural target by OCR text "${candidate.text}".`,
-      artifacts: [screenshot.artifact],
+      artifacts,
       metadata: {
         type: "image_region",
         action: "tap",
         ...pageTaskSemanticMetadata(input.step.params),
         targetText,
         actual: candidate.text,
-        relocatedBy: "runtime_ocr_text",
+        relocatedBy: revealSwipes ? "runtime_ocr_text_after_reveal" : "runtime_ocr_text",
         semanticArea,
         structuralLocator: readRecord(input.step.params.structuralLocator),
         center: action,
+        ...(revealSettings ? { reveal: { strategy: "scroll_to_top", swipes: revealSwipes } } : {}),
         driverChannel: actionResult?.driverChannel
       }
     };
@@ -1009,6 +1210,356 @@ export class SemanticStepResolver {
         : undefined,
       diagnostic: result.diagnostic,
       artifacts: [screenshot.artifact]
+    };
+  }
+
+  private async resolveTrailingSwitchSet(input: {
+    runId: string;
+    stepResultId: string;
+    step: ActionStep;
+    serial: string;
+    deviceSize?: { width: number; height: number };
+  }): Promise<SemanticResolutionOutcome> {
+    const locator = readTrailingSwitchLocator(input.step.params);
+    const desiredState = normalizeToggleState(input.step.params.desiredState);
+    const locateText = this.deps.ocr.locateText?.bind(this.deps.ocr);
+    if (!locator || !desiredState || !locateText || !input.deviceSize) {
+      return {
+        supported: true,
+        resolved: false,
+        message: "Trailing switch requires OCR, device size, anchor text, and desired state.",
+        artifacts: [],
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "invalid_trailing_switch_locator"
+        }
+      };
+    }
+
+    const artifacts: ArtifactRef[] = [];
+    let captureAttempt = 0;
+    const captureLayout = async (): Promise<{ screenshot: ScreenshotCapture; layout: OcrLayoutResult }> => {
+      captureAttempt += 1;
+      const screenshot = await this.deps.captureLocatorScreenshot(
+        input.runId,
+        input.stepResultId,
+        input.serial,
+        input.step.id,
+        captureAttempt
+      );
+      artifacts.push(screenshot.artifact);
+      const layout = await locateText({ image: screenshot.png, mode: "contains" });
+      return { screenshot, layout };
+    };
+    const findAnchor = (layout: OcrLayoutResult): TextLocatorCandidate | undefined => findTextCandidate(layout, locator.anchorText, {
+      mode: "contains",
+      semanticArea: readSemanticArea(input.step.params.semanticArea) ?? "content",
+      deviceSize: input.deviceSize
+    });
+    let current = await captureLayout();
+    let anchor = findAnchor(current.layout);
+    let restoreSwipes = 0;
+    let searchSwipes = 0;
+    if (!anchor && locator.revealStrategy === "search_content") {
+      let previousSignature = ocrLayoutViewportSignature(current.layout);
+      for (let index = 0; index < locator.restoreMaxSwipes && !anchor; index += 1) {
+        await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+        restoreSwipes += 1;
+        if (locator.revealIntervalMs > 0) {
+          await sleep(locator.revealIntervalMs);
+        }
+        current = await captureLayout();
+        anchor = findAnchor(current.layout);
+        const signature = ocrLayoutViewportSignature(current.layout);
+        if (anchor || signature === previousSignature) {
+          break;
+        }
+        previousSignature = signature;
+      }
+      previousSignature = ocrLayoutViewportSignature(current.layout);
+      for (let index = 0; index < locator.searchMaxSwipes && !anchor; index += 1) {
+        await this.deps.performAction(input.serial, scrollSwipeAction("down", input.deviceSize));
+        searchSwipes += 1;
+        if (locator.revealIntervalMs > 0) {
+          await sleep(locator.revealIntervalMs);
+        }
+        current = await captureLayout();
+        anchor = findAnchor(current.layout);
+        const signature = ocrLayoutViewportSignature(current.layout);
+        if (anchor || signature === previousSignature) {
+          break;
+        }
+        previousSignature = signature;
+      }
+    }
+    if (!anchor) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Trailing switch anchor "${locator.anchorText}" was not found.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "switch_anchor_not_found",
+          structuralLocator: locator,
+          actual: normalizeOcrText(current.layout.text) || "(empty OCR result)",
+          ...(locator.revealStrategy === "search_content"
+            ? { reveal: { strategy: "search_content", restoreSwipes, searchSwipes } }
+            : {})
+        }
+      };
+    }
+
+    const anchorPoint = textCandidateDevicePoint(anchor, current.layout, input.deviceSize);
+    const action = {
+      type: "tap",
+      x: Math.round(input.deviceSize.width * locator.controlCenterXPercent / 100),
+      y: anchorPoint.y
+    } satisfies DeviceActionRequest;
+    const controlRegion = {
+      x: Math.max(0, locator.controlCenterXPercent - locator.controlWidthPercent / 2),
+      y: Math.max(0, (action.y / input.deviceSize.height) * 100 - locator.controlHeightPercent / 2),
+      width: locator.controlWidthPercent,
+      height: locator.controlHeightPercent
+    };
+    const beforeTemplate = await createVisualLocatorTemplate({
+      screenshot: current.screenshot.png,
+      percentRegion: controlRegion,
+      resolution: input.deviceSize,
+      sampleSize: 20
+    });
+    const currentState = beforeTemplate ? trailingSwitchStateFromTemplate(beforeTemplate) : "unknown";
+    if (currentState === desiredState) {
+      return {
+        supported: true,
+        resolved: true,
+        message: `Switch near "${locator.anchorText}" is already ${desiredState}.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "toggle_set",
+          ...pageTaskSemanticMetadata(input.step.params),
+          relocatedBy: restoreSwipes || searchSwipes ? "ocr_trailing_switch_after_content_search" : "ocr_trailing_switch",
+          structuralLocator: locator,
+          anchor,
+          center: action,
+          controlRegion,
+          currentState,
+          desiredState,
+          verifiedState: currentState,
+          changed: false,
+          ...(locator.revealStrategy === "search_content"
+            ? { reveal: { strategy: "search_content", restoreSwipes, searchSwipes } }
+            : {})
+        }
+      };
+    }
+    if (currentState === "unknown" && desiredState === "off") {
+      return {
+        supported: true,
+        resolved: true,
+        message: "Switch state is unknown; skipped off request to avoid enabling it.",
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "toggle_set",
+          ...pageTaskSemanticMetadata(input.step.params),
+          relocatedBy: restoreSwipes || searchSwipes ? "ocr_trailing_switch_after_content_search" : "ocr_trailing_switch",
+          structuralLocator: locator,
+          anchor,
+          center: action,
+          controlRegion,
+          currentState,
+          desiredState,
+          verifiedState: "unknown",
+          changed: false,
+          reason: "safe_skip_unknown_state",
+          ...(locator.revealStrategy === "search_content"
+            ? { reveal: { strategy: "search_content", restoreSwipes, searchSwipes } }
+            : {})
+        }
+      };
+    }
+
+    const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+    await sleep(nonNegativeNumberParam(input.step.params.toggleVerifyDelayMs, 250));
+    captureAttempt += 1;
+    const after = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, captureAttempt);
+    artifacts.push(after.artifact);
+    const afterTemplate = await createVisualLocatorTemplate({
+      screenshot: after.png,
+      percentRegion: controlRegion,
+      resolution: input.deviceSize,
+      sampleSize: 20
+    });
+    const verifiedState = afterTemplate ? trailingSwitchStateFromTemplate(afterTemplate) : "unknown";
+    if (verifiedState !== desiredState) {
+      return {
+        supported: true,
+        resolved: false,
+        action,
+        actionResult,
+        message: `Switch near "${locator.anchorText}" did not reach ${desiredState}.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "toggle_state_not_verified",
+          relocatedBy: restoreSwipes || searchSwipes ? "ocr_trailing_switch_after_content_search" : "ocr_trailing_switch",
+          structuralLocator: locator,
+          anchor,
+          center: action,
+          controlRegion,
+          currentState,
+          desiredState,
+          verifiedState,
+          driverChannel: actionResult?.driverChannel,
+          ...(locator.revealStrategy === "search_content"
+            ? { reveal: { strategy: "search_content", restoreSwipes, searchSwipes } }
+            : {})
+        }
+      };
+    }
+    return {
+      supported: true,
+      resolved: true,
+      action,
+      actionResult,
+      message: `Set switch near "${locator.anchorText}" to ${desiredState}.`,
+      artifacts,
+      metadata: {
+        type: "image_region",
+        action: "toggle_set",
+        ...pageTaskSemanticMetadata(input.step.params),
+        relocatedBy: restoreSwipes || searchSwipes ? "ocr_trailing_switch_after_content_search" : "ocr_trailing_switch",
+        structuralLocator: locator,
+        anchor,
+        center: action,
+        controlRegion,
+        currentState,
+        desiredState,
+        verifiedState,
+        changed: true,
+        driverChannel: actionResult?.driverChannel,
+        ...(locator.revealStrategy === "search_content"
+          ? { reveal: { strategy: "search_content", restoreSwipes, searchSwipes } }
+          : {})
+      }
+    };
+  }
+
+  private async resolveRuntimeStructuralPicker(input: {
+    runId: string;
+    stepResultId: string;
+    step: ActionStep;
+    serial: string;
+    deviceSize?: { width: number; height: number };
+  }): Promise<SemanticResolutionOutcome> {
+    const structuralLocator = readRecord(input.step.params.structuralLocator);
+    const targetText = runtimeStructuralTargetText(input.step.params);
+    const semanticArea = readSemanticArea(input.step.params.semanticArea) ?? "content";
+    const selectedValue = textParam(input.step.params.selectedValue ?? input.step.params.text).trim();
+    const locateText = this.deps.ocr.locateText?.bind(this.deps.ocr);
+    if (!targetText || !selectedValue || !locateText || !input.deviceSize) {
+      return {
+        supported: true,
+        resolved: false,
+        message: "Runtime structural picker requires OCR target text, selected value, and device size.",
+        artifacts: [],
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "invalid_runtime_picker_locator"
+        }
+      };
+    }
+    const artifacts: ArtifactRef[] = [];
+    const revealSettings = runtimeInputRevealSettings(input.step.params, semanticArea);
+    let opener: { x: number; y: number } | undefined;
+    let openerRelocatedBy = "runtime_ocr_text";
+    let revealSwipes = 0;
+    let captureAttempt = 0;
+    const locateOpener = async (): Promise<boolean> => {
+      captureAttempt += 1;
+      const attempt = captureAttempt;
+      const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
+      artifacts.push(screenshot.artifact);
+      const layout = await locateText({ image: screenshot.png, mode: "contains" });
+      let candidate = findTextCandidate(layout, targetText, {
+        mode: "contains",
+        semanticArea,
+        deviceSize: input.deviceSize
+      });
+      const allowsBottomContent = structuralLocator?.allowBottomContent === true && semanticArea === "content";
+      if (!candidate && allowsBottomContent) {
+        candidate = findTextCandidate(layout, targetText, {
+          mode: "contains",
+          semanticArea: "bottom",
+          deviceSize: input.deviceSize
+        });
+      }
+      if (candidate) {
+        opener = textCandidateDevicePoint(candidate, layout, input.deviceSize);
+        openerRelocatedBy = allowsBottomContent && textCandidateSemanticArea(candidate, layout, input.deviceSize) === "bottom"
+          ? (revealSwipes ? "runtime_ocr_text_bottom_content_after_reveal" : "runtime_ocr_text_bottom_content")
+          : (revealSwipes ? "runtime_ocr_text_after_reveal" : "runtime_ocr_text");
+        return true;
+      }
+      return false;
+    };
+    const currentViewAttempts = Math.max(1, Math.floor(positiveNumberParam(structuralLocator?.locatorReadAttempts, 2)));
+    for (let attempt = 0; attempt < currentViewAttempts; attempt += 1) {
+      if (await locateOpener()) {
+        break;
+      }
+    }
+    while (!opener && revealSettings && revealSwipes < revealSettings.maxSwipes) {
+      await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+      revealSwipes += 1;
+      if (revealSettings.intervalMs > 0) {
+        await sleep(revealSettings.intervalMs);
+      }
+      await locateOpener();
+    }
+    if (!opener) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Runtime picker row "${targetText}" was not found.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "runtime_target_text_not_found",
+          targetText,
+          revealSwipes,
+          structuralLocator
+        }
+      };
+    }
+    const pickerMode = textParam(structuralLocator?.pickerMode).trim();
+    const outcome = pickerMode === "duration_hours_minutes"
+      ? await this.resolveDurationHoursMinutesPicker(input, defaultRuntimeSearchRegion(semanticArea), semanticArea, opener, selectedValue)
+      : pickerMode === "date_time"
+        ? await this.resolveDateTimePicker(input, defaultRuntimeSearchRegion(semanticArea), semanticArea, opener, selectedValue)
+        : await this.resolvePickerSelectFromImageRegion(input, defaultRuntimeSearchRegion(semanticArea), semanticArea, opener);
+    return {
+      ...outcome,
+      artifacts: [...artifacts, ...outcome.artifacts],
+      metadata: {
+        ...outcome.metadata,
+        openerRelocatedBy,
+        targetText,
+        revealSwipes,
+        structuralLocator
+      }
     };
   }
 
@@ -1136,6 +1687,14 @@ export class SemanticStepResolver {
       };
     }
 
+    const structuralLocator = readRecord(input.step.params.structuralLocator);
+    if (textParam(structuralLocator?.pickerMode).trim() === "duration_hours_minutes") {
+      return this.resolveDurationHoursMinutesPicker(input, region, semanticArea, opener, selectedValue);
+    }
+    if (textParam(structuralLocator?.pickerMode).trim() === "single_wheel") {
+      return this.resolveSingleWheelPicker(input, region, semanticArea, opener, selectedValue);
+    }
+
     const artifacts: ArtifactRef[] = [];
     let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "tap", x: opener.x, y: opener.y }));
     await sleep(positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
@@ -1245,6 +1804,530 @@ export class SemanticStepResolver {
         swipes,
         ...(confirmText ? { confirmText } : {}),
         ...(confirmCandidate ? { confirmedBy: confirmCandidate.text, confirmCenter: confirmAction } : {}),
+        driverChannel: actionResult?.driverChannel
+      }
+    };
+  }
+
+  private async resolveSingleWheelPicker(
+    input: {
+      runId: string;
+      stepResultId: string;
+      step: ActionStep;
+      serial: string;
+      deviceSize?: { width: number; height: number };
+    },
+    region: { x: number; y: number; width: number; height: number },
+    semanticArea: VisualSemanticArea,
+    opener: { x: number; y: number },
+    selectedValue: string
+  ): Promise<SemanticResolutionOutcome> {
+    const artifacts: ArtifactRef[] = [];
+    let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "tap", x: opener.x, y: opener.y }));
+    await sleep(positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
+    const maxSwipes = Math.max(1, Math.floor(positiveNumberParam(input.step.params.pickerMaxSwipes, 16)));
+    const intervalMs = nonNegativeNumberParam(input.step.params.pickerScrollIntervalMs, 250);
+    const maxReadAttempts = Math.max(1, Math.floor(positiveNumberParam(input.step.params.pickerReadAttempts, 2)));
+    let attempt = 0;
+    let swipes = 0;
+    let pickerReadRetries = 0;
+    let selectedCandidate: TextLocatorCandidate | undefined;
+    for (let index = 0; index <= maxSwipes; index += 1) {
+      let layout: OcrLayoutResult | undefined;
+      let candidates: TextLocatorCandidate[] = [];
+      for (let readAttempt = 0; readAttempt < maxReadAttempts; readAttempt += 1) {
+        attempt += 1;
+        const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
+        artifacts.push(screenshot.artifact);
+        const capturedLayout = await this.deps.ocr.locateText!({ image: screenshot.png, mode: "contains" });
+        layout = capturedLayout;
+        candidates = capturedLayout.boxes
+          .map((box) => toCandidate(box))
+          .filter((candidate) => candidate.centerY >= capturedLayout.height * 0.55);
+        if (candidates.length || readAttempt + 1 >= maxReadAttempts) {
+          break;
+        }
+        pickerReadRetries += 1;
+        if (intervalMs > 0) {
+          await sleep(intervalMs);
+        }
+      }
+      if (!layout) {
+        continue;
+      }
+      const selectedCenterY = pickerSelectedCenterY(layout);
+      const target = candidates
+        .filter((candidate) => compactPickerText(candidate.text) === compactPickerText(selectedValue))
+        .sort((left, right) => Math.abs(left.centerY - selectedCenterY) - Math.abs(right.centerY - selectedCenterY))[0];
+      if (target && Math.abs(target.centerY - selectedCenterY) <= layout.height * 0.12) {
+        selectedCandidate = target;
+        break;
+      }
+      if (index >= maxSwipes || !candidates.length) {
+        break;
+      }
+      const current = candidates
+        .slice()
+        .sort((left, right) => Math.abs(left.centerY - selectedCenterY) - Math.abs(right.centerY - selectedCenterY))[0]!;
+      const targetNumber = pickerComparableNumber(selectedValue);
+      const currentNumber = pickerComparableNumber(current.text);
+      const direction = target
+        ? target.centerY > selectedCenterY ? "increase" : "decrease"
+        : targetNumber !== undefined && currentNumber !== undefined && targetNumber < currentNumber
+          ? "decrease"
+          : "increase";
+      actionResult = normalizeActionResult(await this.deps.performAction(
+        input.serial,
+        pickerColumnSwipeAction(50, direction, input.deviceSize)
+      )) ?? actionResult;
+      swipes += 1;
+      if (intervalMs > 0) {
+        await sleep(intervalMs);
+      }
+    }
+    if (!selectedCandidate) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Single-wheel picker value "${selectedValue}" was not found on the selection line.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "picker_value_not_found",
+          pickerMode: "single_wheel",
+          selectedValue,
+          swipes,
+          pickerReadRetries,
+          region
+        }
+      };
+    }
+    attempt += 1;
+    const confirmScreenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
+    artifacts.push(confirmScreenshot.artifact);
+    const confirmLayout = await this.deps.ocr.locateText!({ image: confirmScreenshot.png, mode: "contains" });
+    const confirmText = textParam(input.step.params.confirmText).trim() || "确定";
+    const confirmCandidate = findTextCandidate(confirmLayout, confirmText, { mode: "contains", deviceSize: input.deviceSize });
+    if (!confirmCandidate) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Picker confirmation "${confirmText}" was not found.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "picker_confirm_not_found",
+          pickerMode: "single_wheel",
+          selectedValue
+        }
+      };
+    }
+    const confirmAction = {
+      type: "tap",
+      x: scaleCoordinate(confirmCandidate.centerX, confirmLayout.width, input.deviceSize?.width),
+      y: scaleCoordinate(confirmCandidate.centerY, confirmLayout.height, input.deviceSize?.height)
+    } satisfies DeviceActionRequest;
+    actionResult = normalizeActionResult(await this.deps.performAction(input.serial, confirmAction)) ?? actionResult;
+    await sleep(positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
+    return {
+      supported: true,
+      resolved: true,
+      action: confirmAction,
+      actionResult,
+      message: `Selected single-wheel picker value "${selectedValue}".`,
+      artifacts,
+      metadata: {
+        type: "image_region",
+        action: "picker_select",
+        ...pageTaskSemanticMetadata(input.step.params),
+        pickerMode: "single_wheel",
+        selectedValue,
+        selectedBy: "wheel_center",
+        selectedLocator: selectedCandidate,
+        confirmedBy: confirmCandidate.text,
+        swipes,
+        pickerReadRetries,
+        region,
+        semanticArea,
+        opener,
+        driverChannel: actionResult?.driverChannel
+      }
+    };
+  }
+
+  private async resolveDateTimePicker(
+    input: {
+      runId: string;
+      stepResultId: string;
+      step: ActionStep;
+      serial: string;
+      deviceSize?: { width: number; height: number };
+    },
+    region: { x: number; y: number; width: number; height: number },
+    semanticArea: VisualSemanticArea,
+    opener: { x: number; y: number },
+    selectedValue: string
+  ): Promise<SemanticResolutionOutcome> {
+    const dateTime = parseDateTimePickerValue(selectedValue);
+    if (!dateTime) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Date-time picker value "${selectedValue}" is invalid.`,
+        artifacts: [],
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "invalid_date_time_picker_value",
+          pickerMode: "date_time",
+          selectedValue,
+          acceptedFormats: ["current", "YYYY-MM-DD HH:mm"]
+        }
+      };
+    }
+
+    const artifacts: ArtifactRef[] = [];
+    let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "tap", x: opener.x, y: opener.y }));
+    await sleep(positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
+    let attempt = 0;
+    const captureLayout = async (): Promise<OcrLayoutResult> => {
+      attempt += 1;
+      const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
+      artifacts.push(screenshot.artifact);
+      return this.deps.ocr.locateText!({ image: screenshot.png, mode: "contains" });
+    };
+
+    if (dateTime === "current") {
+      const layout = await captureLayout();
+      const shortcut = findTextCandidate(layout, "选择当前时间", {
+        mode: "contains",
+        deviceSize: input.deviceSize
+      });
+      if (!shortcut) {
+        return {
+          supported: true,
+          resolved: false,
+          message: "Current-time shortcut was not found in the date-time picker.",
+          artifacts,
+          metadata: {
+            type: "image_region",
+            action: "fail",
+            ...pageTaskSemanticMetadata(input.step.params),
+            reason: "current_time_shortcut_not_found",
+            pickerMode: "date_time",
+            selectedValue,
+            actual: normalizeOcrText(layout.text) || "(empty OCR result)"
+          }
+        };
+      }
+      const shortcutAction = {
+        type: "tap",
+        x: scaleCoordinate(shortcut.centerX, layout.width, input.deviceSize?.width),
+        y: scaleCoordinate(shortcut.centerY, layout.height, input.deviceSize?.height)
+      } satisfies DeviceActionRequest;
+      actionResult = normalizeActionResult(await this.deps.performAction(input.serial, shortcutAction)) ?? actionResult;
+      return {
+        supported: true,
+        resolved: true,
+        action: shortcutAction,
+        actionResult,
+        message: "Selected the current time shortcut.",
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "picker_select",
+          ...pageTaskSemanticMetadata(input.step.params),
+          pickerMode: "date_time",
+          selectedValue,
+          selectedBy: "current_time_shortcut",
+          selectedLocator: shortcut,
+          semanticArea,
+          region,
+          opener,
+          driverChannel: actionResult?.driverChannel
+        }
+      };
+    }
+
+    const maxSwipes = Math.max(1, Math.floor(positiveNumberParam(input.step.params.pickerMaxSwipes, 24)));
+    const intervalMs = nonNegativeNumberParam(input.step.params.pickerScrollIntervalMs, 250);
+    let totalSwipes = 0;
+    const selectedParts: string[] = [];
+    const selectColumn = async (
+      column: "date" | "hours" | "minutes",
+      target: string | number,
+      centerXPercent: number
+    ): Promise<boolean> => {
+      for (let swipes = 0; swipes <= maxSwipes; swipes += 1) {
+        const layout = await captureLayout();
+        const candidates = column === "date"
+          ? pickerDateCandidates(layout, centerXPercent)
+          : pickerPlainNumberCandidates(layout, centerXPercent);
+        const selectedCenterY = pickerSelectedCenterY(layout);
+        const match = candidates
+          .filter((candidate) => candidate.value === target)
+          .sort((left, right) => Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY))[0];
+        if (match && Math.abs(match.candidate.centerY - selectedCenterY) <= layout.height * 0.12) {
+          selectedParts.push(String(target));
+          return true;
+        }
+        if (swipes >= maxSwipes || !candidates.length) {
+          return false;
+        }
+        const current = candidates
+          .slice()
+          .sort((left, right) => Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY))[0]!;
+        const direction = column === "date"
+          ? String(target) > String(current.value) ? "increase" : "decrease"
+          : Number(target) > Number(current.value) ? "increase" : "decrease";
+        actionResult = normalizeActionResult(await this.deps.performAction(
+          input.serial,
+          pickerColumnSwipeAction(centerXPercent, direction, input.deviceSize)
+        )) ?? actionResult;
+        totalSwipes += 1;
+        if (intervalMs > 0) {
+          await sleep(intervalMs);
+        }
+      }
+      return false;
+    };
+
+    const dateSelected = await selectColumn("date", dateTime.date, 27);
+    const hoursSelected = dateSelected && await selectColumn("hours", dateTime.hours, 69);
+    const minutesSelected = hoursSelected && await selectColumn("minutes", dateTime.minutes, 89);
+    if (!dateSelected || !hoursSelected || !minutesSelected) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Date-time picker value "${selectedValue}" was not found.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "picker_value_not_found",
+          pickerMode: "date_time",
+          selectedValue,
+          selectedParts,
+          attempts: attempt,
+          swipes: totalSwipes,
+          region
+        }
+      };
+    }
+
+    const confirmText = textParam(input.step.params.confirmText).trim() || "确定";
+    const confirmLayout = await captureLayout();
+    const confirmCandidate = findTextCandidate(confirmLayout, confirmText, {
+      mode: "contains",
+      deviceSize: input.deviceSize
+    });
+    if (!confirmCandidate) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Picker confirmation "${confirmText}" was not found.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "picker_confirm_not_found",
+          pickerMode: "date_time",
+          selectedValue,
+          selectedParts
+        }
+      };
+    }
+    const confirmAction = {
+      type: "tap",
+      x: scaleCoordinate(confirmCandidate.centerX, confirmLayout.width, input.deviceSize?.width),
+      y: scaleCoordinate(confirmCandidate.centerY, confirmLayout.height, input.deviceSize?.height)
+    } satisfies DeviceActionRequest;
+    actionResult = normalizeActionResult(await this.deps.performAction(input.serial, confirmAction)) ?? actionResult;
+    await sleep(positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
+    return {
+      supported: true,
+      resolved: true,
+      action: confirmAction,
+      actionResult,
+      message: `Selected date and time "${selectedValue}".`,
+      artifacts,
+      metadata: {
+        type: "image_region",
+        action: "picker_select",
+        ...pageTaskSemanticMetadata(input.step.params),
+        pickerMode: "date_time",
+        selectedValue,
+        selectedParts,
+        swipes: totalSwipes,
+        confirmedBy: confirmCandidate.text,
+        semanticArea,
+        region,
+        opener,
+        driverChannel: actionResult?.driverChannel
+      }
+    };
+  }
+
+  private async resolveDurationHoursMinutesPicker(
+    input: {
+      runId: string;
+      stepResultId: string;
+      step: ActionStep;
+      serial: string;
+      deviceSize?: { width: number; height: number };
+    },
+    region: { x: number; y: number; width: number; height: number },
+    semanticArea: VisualSemanticArea,
+    opener: { x: number; y: number },
+    selectedValue: string
+  ): Promise<SemanticResolutionOutcome> {
+    const duration = parseDurationPickerValue(selectedValue);
+    if (!duration) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Duration picker value "${selectedValue}" is invalid.`,
+        artifacts: [],
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "invalid_duration_picker_value",
+          selectedValue,
+          region
+        }
+      };
+    }
+
+    const artifacts: ArtifactRef[] = [];
+    let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "tap", x: opener.x, y: opener.y }));
+    await sleep(positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
+    const maxSwipes = Math.max(1, Math.floor(positiveNumberParam(input.step.params.pickerMaxSwipes, 16)));
+    const intervalMs = nonNegativeNumberParam(input.step.params.pickerScrollIntervalMs, 250);
+    let attempt = 0;
+    let totalSwipes = 0;
+    const selectedParts: string[] = [];
+
+    const selectColumn = async (column: "hours" | "minutes", target: number): Promise<boolean> => {
+      const unit = column === "hours" ? "小时" : "分钟";
+      const centerXPercent = column === "hours" ? 25 : 75;
+      for (let swipes = 0; swipes <= maxSwipes; swipes += 1) {
+        attempt += 1;
+        const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
+        artifacts.push(screenshot.artifact);
+        const layout = await this.deps.ocr.locateText!({ image: screenshot.png, mode: "contains" });
+        const candidates = pickerColumnNumberCandidates(layout, unit, centerXPercent);
+        const selectedCenterY = pickerSelectedCenterY(layout);
+        const targetCandidate = candidates
+          .filter((candidate) => candidate.value === target)
+          .sort((left, right) => Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY))[0];
+        if (targetCandidate && Math.abs(targetCandidate.candidate.centerY - selectedCenterY) <= layout.height * 0.12) {
+          selectedParts.push(`${target}${unit}`);
+          return true;
+        }
+        if (swipes >= maxSwipes || !candidates.length) {
+          return false;
+        }
+        const current = candidates
+          .slice()
+          .sort((left, right) => Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY))[0]!;
+        const direction = target > current.value ? "increase" : "decrease";
+        const action = pickerColumnSwipeAction(centerXPercent, direction, input.deviceSize);
+        actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action)) ?? actionResult;
+        totalSwipes += 1;
+        if (intervalMs > 0) {
+          await sleep(intervalMs);
+        }
+      }
+      return false;
+    };
+
+    const hoursSelected = await selectColumn("hours", duration.hours);
+    const minutesSelected = hoursSelected && await selectColumn("minutes", duration.minutes);
+    if (!hoursSelected || !minutesSelected) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Duration picker value "${selectedValue}" was not found.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "picker_value_not_found",
+          pickerMode: "duration_hours_minutes",
+          selectedValue,
+          selectedParts,
+          attempts: attempt,
+          swipes: totalSwipes,
+          region
+        }
+      };
+    }
+
+    const confirmText = textParam(input.step.params.confirmText).trim() || "确定";
+    attempt += 1;
+    const confirmScreenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
+    artifacts.push(confirmScreenshot.artifact);
+    const confirmLayout = await this.deps.ocr.locateText!({ image: confirmScreenshot.png, mode: "contains" });
+    const confirmCandidate = findTextCandidate(confirmLayout, confirmText, {
+      mode: "contains",
+      deviceSize: input.deviceSize
+    });
+    if (!confirmCandidate) {
+      return {
+        supported: true,
+        resolved: false,
+        message: `Picker confirmation "${confirmText}" was not found.`,
+        artifacts,
+        metadata: {
+          type: "image_region",
+          action: "fail",
+          ...pageTaskSemanticMetadata(input.step.params),
+          reason: "picker_confirm_not_found",
+          pickerMode: "duration_hours_minutes",
+          selectedValue,
+          selectedParts,
+          region
+        }
+      };
+    }
+    const confirmAction = {
+      type: "tap",
+      x: scaleCoordinate(confirmCandidate.centerX, confirmLayout.width, input.deviceSize?.width),
+      y: scaleCoordinate(confirmCandidate.centerY, confirmLayout.height, input.deviceSize?.height)
+    } satisfies DeviceActionRequest;
+    actionResult = normalizeActionResult(await this.deps.performAction(input.serial, confirmAction)) ?? actionResult;
+    await sleep(positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
+
+    return {
+      supported: true,
+      resolved: true,
+      action: confirmAction,
+      actionResult,
+      message: `Selected duration picker value "${selectedValue}".`,
+      artifacts,
+      metadata: {
+        type: "image_region",
+        action: "picker_select",
+        ...pageTaskSemanticMetadata(input.step.params),
+        pickerMode: "duration_hours_minutes",
+        region,
+        semanticArea,
+        opener,
+        selectedValue,
+        selectedParts,
+        attempts: attempt,
+        swipes: totalSwipes,
+        confirmedBy: confirmCandidate.text,
+        confirmCenter: confirmAction,
         driverChannel: actionResult?.driverChannel
       }
     };
@@ -1935,7 +3018,22 @@ export class SemanticStepResolver {
   ): Promise<SemanticResolutionOutcome> {
     const semanticArea = readSemanticArea(input.step.params.semanticArea) ?? "content";
     const searchRegion = defaultRuntimeSearchRegion(semanticArea);
-    const focus = await this.resolveInputRegionFocusPoint(input, searchRegion);
+    let focus = await this.resolveInputRegionFocusPoint(input, searchRegion);
+    let reveal: { strategy: "scroll_to_top"; swipes: number } | undefined;
+    const revealSettings = runtimeInputRevealSettings(input.step.params, semanticArea);
+    if (!focus.point && revealSettings) {
+      for (let swipes = 1; swipes <= revealSettings.maxSwipes; swipes += 1) {
+        await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+        if (revealSettings.intervalMs > 0) {
+          await sleep(revealSettings.intervalMs);
+        }
+        focus = await this.resolveInputRegionFocusPoint(input, searchRegion);
+        if (focus.point) {
+          reveal = { strategy: "scroll_to_top", swipes };
+          break;
+        }
+      }
+    }
     if (!focus.point) {
       return {
         supported: true,
@@ -1952,6 +3050,7 @@ export class SemanticStepResolver {
           ...(focus.recordedCenter ? { recordedCenter: focus.recordedCenter } : {}),
           focusResolvedBy: focus.resolvedBy,
           semanticArea,
+          ...(revealSettings ? { revealAttempted: { strategy: "scroll_to_top", swipes: revealSettings.maxSwipes } } : {}),
           ...pageTaskSemanticMetadata(input.step.params)
         }
       };
@@ -2006,6 +3105,7 @@ export class SemanticStepResolver {
           ...(focus.uiCandidate ? { focusUiCandidate: focus.uiCandidate } : {}),
           ...(focus.artifacts.length ? { focusEvidenceArtifactIds: focus.artifacts.map((artifact) => artifact.id) } : {}),
           semanticArea,
+          ...(reveal ? { reveal } : {}),
           ...pageTaskSemanticMetadata(input.step.params),
           clearFirst: input.step.params.clearFirst !== false,
           sensitiveInput: isSensitiveInput(input.step.params),
@@ -2036,6 +3136,7 @@ export class SemanticStepResolver {
         ...(focus.uiCandidate ? { focusUiCandidate: focus.uiCandidate } : {}),
         ...(focus.artifacts.length ? { focusEvidenceArtifactIds: focus.artifacts.map((artifact) => artifact.id) } : {}),
         semanticArea,
+        ...(reveal ? { reveal } : {}),
         ...pageTaskSemanticMetadata(input.step.params),
         clearFirst: input.step.params.clearFirst !== false,
         inputVerified: verification.verified,
@@ -2227,7 +3328,7 @@ export class SemanticStepResolver {
   ): Promise<{
     point?: { x: number; y: number };
     recordedCenter?: { x: number; y: number };
-    resolvedBy: "ocr_text_semantic" | "ui_edit_text_structural" | "tap_point_percent" | "region_center" | "region_center_disabled";
+    resolvedBy: "ocr_text_semantic" | "ocr_relative_structure" | "ui_edit_text_structural" | "tap_point_percent" | "region_center" | "region_center_disabled";
     candidate?: TextLocatorCandidate;
     uiCandidate?: UiElementCandidate;
     artifacts: ArtifactRef[];
@@ -2246,7 +3347,7 @@ export class SemanticStepResolver {
         const point = textCandidateDevicePoint(candidate, layout, input.deviceSize);
         return {
           point,
-          resolvedBy: "ocr_text_semantic",
+          resolvedBy: isRelativeInputStructure(input.step.params) ? "ocr_relative_structure" : "ocr_text_semantic",
           candidate,
           artifacts: [screenshot.artifact]
         };
@@ -2676,6 +3777,168 @@ function findPickerValueCandidate(
   return compactMatch ?? findSplitPickerValueCandidate(layout, expected, options);
 }
 
+function parseDurationPickerValue(value: string): { hours: number; minutes: number } | undefined {
+  const compact = compactPickerText(value);
+  if (/^\d+$/.test(compact)) {
+    const totalMinutes = Number(compact);
+    return Number.isFinite(totalMinutes) && totalMinutes >= 0
+      ? { hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 }
+      : undefined;
+  }
+  const match = compact.match(/^(?:(\d+)小时)?(?:(\d+)分钟)?$/);
+  if (!match || (!match[1] && !match[2])) {
+    return undefined;
+  }
+  const hours = Number(match[1] ?? 0);
+  const minutes = Number(match[2] ?? 0);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || minutes < 0 || minutes >= 60) {
+    return undefined;
+  }
+  return { hours, minutes };
+}
+
+function parseDateTimePickerValue(value: string): "current" | { date: string; hours: number; minutes: number } | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "current" || normalized === "now" || normalized === "当前时间") {
+    return "current";
+  }
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})[ t](\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return undefined;
+  }
+  const [, year, month, day, rawHours, rawMinutes] = match;
+  const hours = Number(rawHours);
+  const minutes = Number(rawMinutes);
+  const timestamp = Date.UTC(Number(year), Number(month) - 1, Number(day), hours, minutes);
+  const date = new Date(timestamp);
+  if (
+    !Number.isInteger(hours) || hours < 0 || hours > 23 ||
+    !Number.isInteger(minutes) || minutes < 0 || minutes > 59 || minutes % 5 !== 0 ||
+    date.getUTCFullYear() !== Number(year) ||
+    date.getUTCMonth() + 1 !== Number(month) ||
+    date.getUTCDate() !== Number(day)
+  ) {
+    return undefined;
+  }
+  return { date: `${year}-${month}-${day}`, hours, minutes };
+}
+
+function pickerDateCandidates(
+  layout: OcrLayoutResult,
+  centerXPercent: number
+): Array<{ value: string; candidate: TextLocatorCandidate }> {
+  const centerX = layout.width * centerXPercent / 100;
+  const maxDistance = layout.width * 0.32;
+  return layout.boxes
+    .map((box) => toCandidate(box))
+    .map((candidate) => {
+      const compact = normalizeOcrText(candidate.text).replace(/\s+/g, "");
+      const match = compact.match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?/);
+      return {
+        candidate,
+        value: match
+          ? `${match[1]}-${String(Number(match[2])).padStart(2, "0")}-${String(Number(match[3])).padStart(2, "0")}`
+          : ""
+      };
+    })
+    .filter((entry) => Boolean(entry.value) && Math.abs(entry.candidate.centerX - centerX) <= maxDistance);
+}
+
+function pickerPlainNumberCandidates(
+  layout: OcrLayoutResult,
+  centerXPercent: number
+): Array<{ value: number; candidate: TextLocatorCandidate }> {
+  const centerX = layout.width * centerXPercent / 100;
+  const maxDistance = layout.width * 0.13;
+  return layout.boxes
+    .map((box) => toCandidate(box))
+    .map((candidate) => ({ candidate, text: normalizeOcrText(candidate.text).replace(/\s+/g, "") }))
+    .filter((entry) => /^\d{1,2}$/.test(entry.text) && Math.abs(entry.candidate.centerX - centerX) <= maxDistance)
+    .map((entry) => ({ value: Number(entry.text), candidate: entry.candidate }));
+}
+
+function pickerSelectedCenterY(layout: OcrLayoutResult): number {
+  const headerBottom = layout.boxes
+    .filter((box) => {
+      const text = compactPickerText(box.text);
+      return text === "确定" || text === "取消";
+    })
+    .map((box) => box.y + box.height)
+    .filter((bottom) => bottom >= layout.height * 0.5 && bottom <= layout.height * 0.9)
+    .sort((left, right) => right - left)[0];
+  if (headerBottom !== undefined) {
+    return headerBottom + (layout.height - headerBottom) / 2;
+  }
+  return layout.height * 0.75;
+}
+
+function pickerComparableNumber(value: string): number | undefined {
+  const matches = compactPickerText(value).match(/\d+/g);
+  const number = matches?.length ? Number(matches.at(-1)) : Number.NaN;
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function pickerColumnNumberCandidates(
+  layout: OcrLayoutResult,
+  unit: "小时" | "分钟",
+  centerXPercent: number
+): Array<{ value: number; candidate: TextLocatorCandidate }> {
+  const centerX = layout.width * centerXPercent / 100;
+  const maxDistance = layout.width * 0.28;
+  const candidates = layout.boxes.map((box) => toCandidate(box));
+  const direct = candidates
+    .map((candidate) => ({ candidate, parsed: parsePickerNumberUnit(candidate.text) }))
+    .filter((entry) => entry.parsed?.unit === unit && Math.abs(entry.candidate.centerX - centerX) <= maxDistance)
+    .map((entry) => ({ value: Number(entry.parsed!.number), candidate: entry.candidate }))
+    .filter((entry) => Number.isFinite(entry.value));
+  const unitCandidates = candidates.filter((candidate) => compactPickerText(candidate.text) === unit);
+  const split = candidates
+    .map((candidate) => ({ candidate, compact: compactPickerText(candidate.text) }))
+    .filter((entry) => /^\d+(?:\.\d+)?$/.test(entry.compact) && Math.abs(entry.candidate.centerX - centerX) <= maxDistance)
+    .flatMap((entry) => {
+      const unitCandidate = unitCandidates
+        .filter((candidate) => samePickerRow(entry.candidate, candidate))
+        .sort((left, right) => Math.abs(left.centerX - entry.candidate.centerX) - Math.abs(right.centerX - entry.candidate.centerX))[0];
+      if (!unitCandidate) {
+        return [];
+      }
+      const x1 = Math.min(entry.candidate.x, unitCandidate.x);
+      const y1 = Math.min(entry.candidate.y, unitCandidate.y);
+      const x2 = Math.max(entry.candidate.x + entry.candidate.width, unitCandidate.x + unitCandidate.width);
+      const y2 = Math.max(entry.candidate.y + entry.candidate.height, unitCandidate.y + unitCandidate.height);
+      return [{
+        value: Number(entry.compact),
+        candidate: {
+          text: `${entry.candidate.text} ${unitCandidate.text}`,
+          confidence: Math.min(entry.candidate.confidence ?? 0.5, unitCandidate.confidence ?? 0.5),
+          x: x1,
+          y: y1,
+          width: x2 - x1,
+          height: y2 - y1,
+          centerX: Math.round((entry.candidate.centerX + unitCandidate.centerX) / 2),
+          centerY: Math.round((entry.candidate.centerY + unitCandidate.centerY) / 2)
+        }
+      }];
+    })
+    .filter((entry) => Number.isFinite(entry.value));
+  return [...new Map([...direct, ...split].map((entry) => [`${entry.value}:${Math.round(entry.candidate.centerY / 8)}`, entry])).values()];
+}
+
+function pickerColumnSwipeAction(
+  centerXPercent: number,
+  direction: "increase" | "decrease",
+  deviceSize?: { width: number; height: number }
+): Extract<DeviceActionRequest, { type: "swipe" }> {
+  const width = deviceSize?.width ?? 1080;
+  const height = deviceSize?.height ?? 2400;
+  const x = Math.round(width * centerXPercent / 100);
+  const lowerY = Math.round(height * 0.9);
+  const upperY = Math.round(height * 0.72);
+  return direction === "increase"
+    ? { type: "swipe", startX: x, startY: lowerY, endX: x, endY: upperY, durationMs: 350 }
+    : { type: "swipe", startX: x, startY: upperY, endX: x, endY: lowerY, durationMs: 350 };
+}
+
 function findSplitPickerValueCandidate(
   layout: OcrLayoutResult,
   expected: string,
@@ -2761,19 +4024,69 @@ function findInputFocusCandidate(
   params: Record<string, unknown>
 ): TextLocatorCandidate | undefined {
   const targets = inputFocusTextTargets(params);
-  if (!targets.length) {
-    return undefined;
-  }
   const candidates = layout.boxes
     .map((box) => toCandidate(box))
     .filter((candidate) => candidate.text);
   if (!candidates.length) {
     return undefined;
   }
-  const targeted = candidates.filter((candidate) => targets.some((target) => textMatchesLoosely(candidate.text, target)));
-  return targeted
-    .slice()
-    .sort((left, right) => inputFocusCandidateScore(right, params) - inputFocusCandidateScore(left, params))[0];
+  if (targets.length) {
+    const targeted = candidates.filter((candidate) => targets.some((target) => textMatchesLoosely(candidate.text, target)));
+    const directCandidate = targeted
+      .slice()
+      .sort((left, right) => inputFocusCandidateScore(right, params) - inputFocusCandidateScore(left, params))[0];
+    if (directCandidate) {
+      return directCandidate;
+    }
+  }
+  return findRelativeInputFocusCandidate(layout, candidates, params);
+}
+
+function findRelativeInputFocusCandidate(
+  layout: OcrLayoutResult,
+  candidates: TextLocatorCandidate[],
+  params: Record<string, unknown>
+): TextLocatorCandidate | undefined {
+  const structuralLocator = readRecord(params.structuralLocator);
+  if (textParam(structuralLocator?.strategy).trim() !== "ocr_relative_input") {
+    return undefined;
+  }
+  const relation = textParam(structuralLocator?.relation).trim();
+  if (relation !== "nearest_text_above") {
+    return undefined;
+  }
+  const anchorText = textParam(structuralLocator?.anchorText ?? params.anchorText).trim();
+  if (!anchorText) {
+    return undefined;
+  }
+  const anchors = candidates
+    .filter((candidate) => textMatchesLoosely(candidate.text, anchorText))
+    .sort((left, right) => candidateScore(right) - candidateScore(left));
+  const anchor = anchors[0];
+  if (!anchor) {
+    return undefined;
+  }
+  const maxGapPercent = positiveNumberParam(structuralLocator?.maxVerticalGapPercent, 18);
+  const maxGap = Math.max(80, layout.height * maxGapPercent / 100);
+  return candidates
+    .filter((candidate) => candidate !== anchor)
+    .filter((candidate) => candidate.centerY < anchor.centerY)
+    .map((candidate) => ({
+      candidate,
+      gap: anchor.y - (candidate.y + candidate.height),
+      horizontalDistance: Math.abs(candidate.centerX - anchor.centerX)
+    }))
+    .filter((entry) => entry.gap >= 0 && entry.gap <= maxGap)
+    .sort((left, right) =>
+      left.gap - right.gap ||
+      left.horizontalDistance - right.horizontalDistance ||
+      candidateScore(right.candidate) - candidateScore(left.candidate)
+    )[0]?.candidate;
+}
+
+function isRelativeInputStructure(params: Record<string, unknown>): boolean {
+  const structuralLocator = readRecord(params.structuralLocator);
+  return textParam(structuralLocator?.strategy).trim() === "ocr_relative_input";
 }
 
 function inputFocusTextTargets(params: Record<string, unknown>): string[] {
@@ -3692,10 +5005,110 @@ function isRuntimeInputStructuralLocator(params: Record<string, unknown>): boole
     textParam(structuralLocator?.strategy).trim() === "ocr_or_edittext_in_region";
 }
 
+function runtimeInputRevealSettings(
+  params: Record<string, unknown>,
+  semanticArea: VisualSemanticArea
+): { maxSwipes: number; intervalMs: number } | undefined {
+  if (semanticArea !== "content") {
+    return undefined;
+  }
+  const structuralLocator = readRecord(params.structuralLocator);
+  const strategy = textParam(structuralLocator?.revealStrategy ?? params.revealStrategy).trim();
+  if (strategy !== "scroll_to_top") {
+    return undefined;
+  }
+  return {
+    maxSwipes: Math.max(1, Math.floor(positiveNumberParam(structuralLocator?.revealMaxSwipes ?? params.revealMaxSwipes, 3))),
+    intervalMs: nonNegativeNumberParam(structuralLocator?.revealIntervalMs ?? params.revealIntervalMs, 250)
+  };
+}
+
 function isRuntimeTapStructuralLocator(params: Record<string, unknown>): boolean {
   const locatorKind = textParam(params.locatorKind).trim();
   const locator = textParam(params.locator).trim();
   return locatorKind === "structural_locator" || locator.startsWith("runtime-locator:");
+}
+
+function isRuntimeOptionSelectionLocator(params: Record<string, unknown>): boolean {
+  const structuralLocator = readRecord(params.structuralLocator);
+  return textParam(structuralLocator?.selectionMode).trim() === "ocr_option_confirm";
+}
+
+function isTrailingSwitchLocator(params: Record<string, unknown>): boolean {
+  const structuralLocator = readRecord(params.structuralLocator);
+  return textParam(structuralLocator?.strategy).trim() === "ocr_trailing_switch";
+}
+
+function readTrailingSwitchLocator(params: Record<string, unknown>): {
+  strategy: "ocr_trailing_switch";
+  anchorText: string;
+  revealStrategy?: "search_content";
+  restoreMaxSwipes: number;
+  searchMaxSwipes: number;
+  revealIntervalMs: number;
+  controlCenterXPercent: number;
+  controlWidthPercent: number;
+  controlHeightPercent: number;
+} | undefined {
+  const structuralLocator = readRecord(params.structuralLocator);
+  if (textParam(structuralLocator?.strategy).trim() !== "ocr_trailing_switch") {
+    return undefined;
+  }
+  const anchorText = textParam(structuralLocator?.anchorText ?? params.targetText).trim();
+  if (!anchorText) {
+    return undefined;
+  }
+  return {
+    strategy: "ocr_trailing_switch",
+    anchorText,
+    ...(textParam(structuralLocator?.revealStrategy).trim() === "search_content"
+      ? { revealStrategy: "search_content" as const }
+      : {}),
+    restoreMaxSwipes: Math.max(1, Math.floor(positiveNumberParam(structuralLocator?.restoreMaxSwipes, 4))),
+    searchMaxSwipes: Math.max(1, Math.floor(positiveNumberParam(structuralLocator?.searchMaxSwipes, 8))),
+    revealIntervalMs: nonNegativeNumberParam(structuralLocator?.revealIntervalMs, 250),
+    controlCenterXPercent: percentNumber(structuralLocator?.controlCenterXPercent) ?? 84,
+    controlWidthPercent: Math.max(8, percentNumber(structuralLocator?.controlWidthPercent) ?? 16),
+    controlHeightPercent: Math.max(4, percentNumber(structuralLocator?.controlHeightPercent) ?? 6)
+  };
+}
+
+function ocrLayoutViewportSignature(layout: OcrLayoutResult): string {
+  const boxes = layout.boxes
+    .map((box) => [
+      normalizeOcrText(box.text),
+      Math.round(box.x / 20),
+      Math.round(box.y / 20),
+      Math.round(box.width / 20),
+      Math.round(box.height / 20)
+    ].join(":"))
+    .sort();
+  return `${normalizeOcrText(layout.text)}|${boxes.join("|")}`;
+}
+
+function trailingSwitchStateFromTemplate(template: { width: number; height: number; pixels: number[] }): "on" | "off" | "unknown" {
+  const leftStart = 0;
+  const leftEnd = Math.max(1, Math.floor(template.width * 0.45));
+  const rightStart = Math.min(template.width - 1, Math.ceil(template.width * 0.55));
+  const rightEnd = template.width;
+  const halfMean = (start: number, end: number): number => {
+    let total = 0;
+    let count = 0;
+    for (let y = 0; y < template.height; y += 1) {
+      for (let x = start; x < end; x += 1) {
+        total += template.pixels[y * template.width + x] ?? 255;
+        count += 1;
+      }
+    }
+    return count ? total / count : 255;
+  };
+  const leftMean = halfMean(leftStart, leftEnd);
+  const rightMean = halfMean(rightStart, rightEnd);
+  const difference = leftMean - rightMean;
+  if (Math.abs(difference) < 4) {
+    return "unknown";
+  }
+  return difference > 0 ? "off" : "on";
 }
 
 function runtimeStructuralTargetText(params: Record<string, unknown>): string {

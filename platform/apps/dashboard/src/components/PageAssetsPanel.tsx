@@ -1,6 +1,6 @@
 import { DatabaseZap, Info, PlayCircle, RefreshCw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { TestRun } from "@mobile-automation/shared";
+import type { ParameterProfile, TestRun } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api";
 
 type BusinessGraph = {
@@ -106,6 +106,10 @@ type GraphRunResponse = {
   targetNodeId: string;
 };
 
+type ParameterProfileResponse = {
+  profiles: ParameterProfile[];
+};
+
 type RoutePlanIssue = {
   code?: string;
   severity?: string;
@@ -164,6 +168,7 @@ type PageAssetsPanelProps = {
   initialTab?: PageAssetsTab;
   initialTargetText?: string;
   initialTargetTaskId?: string;
+  /** @deprecated Runtime values are selected from Parameter Center. */
   initialRuntimeParams?: Record<string, string>;
   graphs?: BusinessGraph[];
   assetsByVersionId?: Record<string, GraphAssetGovernanceSummary>;
@@ -181,7 +186,6 @@ export function PageAssetsPanel({
   initialTab = "targetTest",
   initialTargetText = "",
   initialTargetTaskId = "",
-  initialRuntimeParams,
   graphs: initialGraphs,
   assetsByVersionId: initialAssetsByVersionId,
   onOpenAssetRecording,
@@ -196,8 +200,8 @@ export function PageAssetsPanel({
   const [selectedTargetTaskId, setSelectedTargetTaskId] = useState(initialTargetTaskId);
   const [targetVerificationMode, setTargetVerificationMode] = useState<TargetVerificationMode>("arrived");
   const [targetVerificationText, setTargetVerificationText] = useState("");
-  const [targetRuntimeParams, setTargetRuntimeParams] = useState<Record<string, string>>(initialRuntimeParams ?? {});
-  const [targetRuntimeParamsText, setTargetRuntimeParamsText] = useState("");
+  const [parameterProfiles, setParameterProfiles] = useState<ParameterProfile[]>([]);
+  const [targetParameterProfileId, setTargetParameterProfileId] = useState("");
   const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
@@ -226,17 +230,47 @@ export function PageAssetsPanel({
   const selectedTargetAsset = useMemo(() => selectPageAssetTarget(filteredAssets, targetText), [filteredAssets, targetText]);
   const selectedTargetTasks = useMemo(() => (selectedTargetAsset?.tasks ?? []).filter((task) => task.status !== "deprecated"), [selectedTargetAsset]);
   const selectedTargetTask = useMemo(() => selectedTargetTasks.find((task) => task.id === selectedTargetTaskId), [selectedTargetTaskId, selectedTargetTasks]);
-  const selectedTargetTaskRuntimeParams = useMemo(
-    () => selectedTargetTask ? normalizeRuntimeParamValues(selectedTargetTask.parameterKeys, targetRuntimeParams) : undefined,
-    [selectedTargetTask, targetRuntimeParams]
-  );
   const selectedLibraryAsset = useMemo(() => pageAssets.find((asset) => asset.id === selectedAssetId), [pageAssets, selectedAssetId]);
+  const targetAppId = selectedTargetAsset?.appId ?? graphs[0]?.appId;
+  const selectedParameterProfile = useMemo(
+    () => parameterProfiles.find((profile) => profile.id === targetParameterProfileId),
+    [parameterProfiles, targetParameterProfileId]
+  );
 
   useEffect(() => {
     if (!initialGraphs && !initialAssetsByVersionId) {
       void refreshPageAssets();
     }
   }, [initialAssetsByVersionId, initialGraphs]);
+
+  useEffect(() => {
+    if (!targetAppId) {
+      setParameterProfiles([]);
+      setTargetParameterProfileId("");
+      return;
+    }
+    let cancelled = false;
+    void apiFetchJson<ParameterProfileResponse>(
+      `/api/asset-composition/parameter-profiles?appId=${encodeURIComponent(targetAppId)}&platform=android`
+    )
+      .then((response) => {
+        if (cancelled) return;
+        const activeProfiles = response.profiles.filter((profile) => profile.status === "active");
+        setParameterProfiles(activeProfiles);
+        setTargetParameterProfileId((current) =>
+          activeProfiles.some((profile) => profile.id === current) ? current : (activeProfiles[0]?.id ?? "")
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setParameterProfiles([]);
+          setTargetParameterProfileId("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [targetAppId]);
 
   useEffect(() => {
     if (initialGraphs || initialAssetsByVersionId) {
@@ -344,15 +378,14 @@ export function PageAssetsPanel({
             graphVersionId: selectedTargetAsset.graphVersionId,
             targetNodeId: selectedTargetAsset.id,
             startNodeId: routePreview.startDetection?.startNodeId,
+            parameterProfileId: targetParameterProfileId || undefined,
             overlay: buildTargetPageRuntimeOverlay({
               targetNodeId: selectedTargetAsset.id,
               targetName: selectedTargetAsset.name,
               actionMode: targetActionMode,
               targetTaskId: targetActionMode === "page_task" ? selectedTargetTask?.id : undefined,
               verificationMode: targetVerificationMode,
-              verificationText: targetVerificationText,
-              runtimeParams: targetActionMode === "page_task" ? selectedTargetTaskRuntimeParams : undefined,
-              runtimeParamsText: targetActionMode === "page_task" ? undefined : targetRuntimeParamsText
+              verificationText: targetVerificationText
             })
           })
         )
@@ -435,31 +468,24 @@ export function PageAssetsPanel({
                 <input value={targetVerificationText} onChange={(event) => setTargetVerificationText(event.target.value)} placeholder="例如：发布成功 / 新建公开课 / 课堂信息" />
               </label>
             ) : null}
-            {targetActionMode === "page_task" && selectedTargetTask ? (
-              <div className="target-runtime-params">
-                <span className="target-runtime-params-title">运行参数（可选）</span>
-                {selectedTargetTask.parameterKeys.length ? (
-                  selectedTargetTask.parameterKeys.map((key) => (
-                    <label key={key}>
-                      <span>{runtimeParamLabel(key)}</span>
-                      <input
-                        name={`runtime-param-${key}`}
-                        value={targetRuntimeParams[key] ?? ""}
-                        onChange={(event) => setTargetRuntimeParams((current) => ({ ...current, [key]: event.target.value }))}
-                        placeholder={runtimeParamPlaceholder(key)}
-                      />
-                    </label>
-                  ))
-                ) : (
-                  <small>这个页面任务不需要运行参数。</small>
-                )}
-              </div>
-            ) : (
-              <label>
-                <span>目标参数</span>
-                <input value={targetRuntimeParamsText} onChange={(event) => setTargetRuntimeParamsText(event.target.value)} placeholder="例如：班级四十二号，也支持 className=班级四十二号" />
-              </label>
-            )}
+            <label className="target-parameter-profile">
+              <span>执行组合（按需）</span>
+              <select value={targetParameterProfileId} onChange={(event) => setTargetParameterProfileId(event.target.value)}>
+                <option value="">不注入运行参数</option>
+                {parameterProfiles.map((profile) => (
+                  <option value={profile.id} key={profile.id}>
+                    {profile.name}{profile.environment ? ` · ${profile.environment}` : ""}
+                  </option>
+                ))}
+              </select>
+              {selectedTargetTask?.parameterKeys.length ? (
+              <small>页面任务需要：{selectedTargetTask.parameterKeys.join("、")}。请在{"测试数据 > 执行组合"}中维护这些值。</small>
+              ) : selectedParameterProfile ? (
+                <small>本次会冻结“{selectedParameterProfile.name}”的当前值；执行中修改测试数据不会影响本轮任务。</small>
+              ) : (
+                <small>当前页面不需要参数时可以不选；涉及登录、列表或表单时请选择“测试数据 &gt; 执行组合”中的数据。</small>
+              )}
+            </label>
             <button className="icon-button primary" type="button" onClick={() => void runTargetPage()} disabled={!selectedSerial || selectedDeviceBusy || !selectedTargetAsset || busy}>
               <PlayCircle size={16} />
               规划并执行
@@ -859,6 +885,7 @@ export function buildTargetPageGraphRunRequest(input: {
   graphVersionId: string;
   targetNodeId: string;
   startNodeId?: string;
+  parameterProfileId?: string;
   overlay?: RuntimeOverlay;
 }): {
   deviceSerial: string;
@@ -868,6 +895,7 @@ export function buildTargetPageGraphRunRequest(input: {
   startNodeId?: string;
   executionProfile: "fast_visual";
   startAppScope: "current_device";
+  parameterProfileId?: string;
   overlay?: RuntimeOverlay;
 } {
   return {
@@ -878,6 +906,7 @@ export function buildTargetPageGraphRunRequest(input: {
     startNodeId: input.startNodeId,
     executionProfile: "fast_visual",
     startAppScope: "current_device",
+    ...(input.parameterProfileId ? { parameterProfileId: input.parameterProfileId } : {}),
     overlay: input.overlay
   };
 }
@@ -953,14 +982,6 @@ export function buildTargetPageRuntimeOverlay(input: {
   return overlay;
 }
 
-function normalizeRuntimeParamValues(keys: string[], runtimeParams: Record<string, string>): Record<string, string> | undefined {
-  if (!keys.length) {
-    return undefined;
-  }
-  const entries = keys.map((key) => [key, runtimeParams[key]?.trim() ?? ""] as const);
-  return Object.fromEntries(entries);
-}
-
 function nonEmptyRuntimeParams(runtimeParams: Record<string, string> | undefined): Record<string, string> | undefined {
   if (!runtimeParams) {
     return undefined;
@@ -969,28 +990,6 @@ function nonEmptyRuntimeParams(runtimeParams: Record<string, string> | undefined
     .map(([key, value]) => [key.trim(), value.trim()] as const)
     .filter(([key, value]) => key && value);
   return entries.length ? Object.fromEntries(entries) : undefined;
-}
-
-function runtimeParamLabel(key: string): string {
-  const labels: Record<string, string> = {
-    className: "班级名",
-    lessonName: "课堂标题",
-    duration: "课堂时长",
-    recordClassroom: "录制ClassIn教室",
-    recordLive: "录制现场"
-  };
-  return labels[key] ?? key;
-}
-
-function runtimeParamPlaceholder(key: string): string {
-  const placeholders: Record<string, string> = {
-    className: "例如：班级四十二号",
-    lessonName: "例如：自动化课堂测试",
-    duration: "例如：45分钟",
-    recordClassroom: "on / off",
-    recordLive: "on / off"
-  };
-  return placeholders[key] ?? `请输入 ${key}`;
 }
 
 export function parseRuntimeParams(value: string | undefined): Record<string, string> | undefined {

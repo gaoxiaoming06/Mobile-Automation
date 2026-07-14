@@ -17,6 +17,10 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 
 ### Added
 
+- 新增“资产用例”产品入口：Parameter Profile、Meta Function、Asset Composite Case 已具备 shared model、SQLite CRUD、REST API、Dashboard 编排、预检、执行、停止和分层 HTML 报告。
+- 新增资产组合编译器：组合资产只保存 PageModel / PageElement / PageTransition / PageTask 引用，执行前基于当前 active 图版本重新解析并合并参数，不复制底层动作和 locator。
+- 组合执行器支持 `once`、`repeat_n` 和真实 `loop_until_stop`；循环模式按轮动态追加步骤，用户停止时当前 Graph Run 和资产步骤保持 stopped。
+- SemanticLocator 新增 `ocr_relative_input` 结构定位，可按稳定 OCR 锚点寻找其上方最近的动态输入行；新建课堂标题输入资产已迁移为 `runtime-locator:lesson_title_input`。
 - 资产测试批次新增独立 HTML 汇总报告，按出口边展示执行结果、错误、起点恢复策略、恢复耗时和 fail-collect 行为；Dashboard 可从巡检运行态直接打开批次报告。
 - Driver 新增 `hide_keyboard` 通用动作：Android 使用 `KEYCODE_ESCAPE`，iOS 通过 WDA dismiss keyboard，为表单页离开和批次起点恢复提供统一键盘收起能力。
 
@@ -31,6 +35,8 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 
 ### Verified
 
+- 组合模块 storage / compiler / execution / Dashboard 测试通过；SemanticLocator 57 个测试通过。
+- 真机 `ERLDU20115007395 / YAL-AL10` 完成组合执行 `asset_composite_execution_1533c860-64b5-4a81-a999-720dc1e6a95b`：`进入指定班级 -> 创建课堂但不发布` 共 5/5 步通过，正确进入 `班级四十二号`，填写 `自动化组合课堂`，保持 `30分钟`，最终停留在发布前页面；组合 HTML 报告接口返回 HTTP 200。
 - `pnpm vitest run platform/packages/android-driver/src/android-actions.test.ts platform/apps/server/src/semantic-locator.test.ts platform/apps/server/src/asset-patrol.test.ts platform/apps/server/src/asset-driven-execution-session.test.ts platform/apps/dashboard/src/App.test.ts` 通过，共 177 个测试；`pnpm lint` 通过。
 - 真机 `ERLDU20115007395 / YAL-AL10` 完成批次 `asset_execution_51716a0e-1eac-46aa-8505-193374da7f7b`：从主页自动执行班级详情、添加好友、成长、加入班级、课程表、设置、空间、搜索共 8 条出口边，8/8 通过；每条边之间均自动恢复主页后继续，无人工续跑。
 - 其中 `加入班级 -> 主页` 通过多次受控 Back 和 foreground component 确认完成恢复，随后 `主页 -> 课程表` 正确执行；`主页 -> 设置` 通过新的头像视觉定位命中。批次报告接口返回 HTTP 200，并完整展示 7 条起点恢复记录。

@@ -49,6 +49,17 @@ describe("AssetPatrol", () => {
     );
   });
 
+  it("retains the selected parameter profile identity with its frozen runtime values", () => {
+    expect(normalizeAssetPatrolConfig({
+      packageName: " com.demo ",
+      parameterProfileId: " profile-teacher ",
+      runtimeParams: { className: "班级四十二号" }
+    })).toEqual(expect.objectContaining({
+      parameterProfileId: "profile-teacher",
+      runtimeParams: { className: "班级四十二号" }
+    }));
+  });
+
   it("diagnoses an unmatched current page and creates no executable checks", () => {
     const plan = buildAssetPatrolPlan({
       observation: observation({ ocrTexts: [{ text: "未知页面", region: { x: 100, y: 100, width: 200, height: 80 } }] }),

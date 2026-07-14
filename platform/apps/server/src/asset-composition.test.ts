@@ -1,0 +1,261 @@
+import { describe, expect, it } from "vitest";
+import type { BusinessGraphVersion, BusinessNode } from "@mobile-automation/graph-core";
+import { nowIso, type AssetCompositeCase, type MetaFunction, type ParameterProfile } from "@mobile-automation/shared";
+import { assetCompositionCatalog, compileAssetCompositeCase } from "./asset-composition.js";
+
+describe("compileAssetCompositeCase", () => {
+  it("builds an editor catalog from confirmed page assets", () => {
+    const catalog = assetCompositionCatalog(graphVersion());
+
+    expect(catalog.pages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "page-home",
+        name: "主页",
+        elements: [expect.objectContaining({ id: "class-grid", label: "班级列表" })],
+        transitions: [expect.objectContaining({ id: "transition-home-detail", elementId: "class-grid", targetPageModelId: "page-detail" })]
+      }),
+      expect.objectContaining({
+        id: "page-create",
+        tasks: [expect.objectContaining({ id: "task-fill-lesson", name: "填写课堂信息" })]
+      })
+    ]));
+  });
+
+  it("compiles capabilities from current manual page elements and active graph edges", () => {
+    const version = graphVersion();
+    const home = version.nodes.find((node) => node.id === "page-home")!;
+    home.metadata = {
+      assetRecordingConfirmed: true,
+      assetRecordingManualElements: [
+        {
+          id: "class-grid",
+          label: "班级列表",
+          locator: "runtime-locator:class_grid",
+          actionKind: "tap",
+          outcomeType: "navigate",
+          targetNodeId: "page-detail"
+        }
+      ]
+    };
+    version.edges = [
+      {
+        id: "edge-home-detail",
+        graphVersionId: version.id,
+        fromNodeId: "page-home",
+        toNodeId: "page-detail",
+        key: "home.detail",
+        name: "主页 -> 班级详情",
+        intent: "打开班级详情",
+        status: "active",
+        source: "manual_edit",
+        preconditions: [],
+        actionPolicies: [],
+        expectations: [],
+        failurePolicy: { retryCount: 1, recoverTo: "replan" },
+        platformScope: "android",
+        reliabilityScore: 0.9
+      }
+    ];
+
+    const result = compileAssetCompositeCase({
+      compositeCase: compositeCase(["meta-enter"]),
+      metaFunctions: [enterClassMetaFunction()],
+      parameterProfile: parameterProfile(),
+      graphVersion: version
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.steps[1]).toEqual(expect.objectContaining({
+      pageElementId: "class-grid",
+      pageTransitionId: "edge-home-detail",
+      targetPageModelId: "page-detail"
+    }));
+    expect(assetCompositionCatalog(version).pages.find((page) => page.id === "page-home")).toEqual(
+      expect.objectContaining({
+        elements: [expect.objectContaining({ id: "class-grid", label: "班级列表" })],
+        transitions: [expect.objectContaining({ id: "edge-home-detail", elementId: "class-grid", targetPageModelId: "page-detail" })]
+      })
+    );
+  });
+
+  it("compiles meta functions into current active asset references and runtime parameters", () => {
+    const result = compileAssetCompositeCase({
+      compositeCase: compositeCase(["meta-enter", "meta-create"]),
+      metaFunctions: [enterClassMetaFunction(), createLessonMetaFunction()],
+      parameterProfile: parameterProfile(),
+      graphVersion: graphVersion()
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.runtimeParams).toEqual({
+      className: "班级四十二号",
+      lessonName: "自动化课堂",
+      duration: "30"
+    });
+    expect(result.steps.map((step) => [step.metaFunctionName, step.kind, step.targetPageModelId, step.pageTaskId])).toEqual([
+      ["进入指定班级", "reach_page", "page-home", undefined],
+      ["进入指定班级", "invoke_capability", "page-detail", undefined],
+      ["创建课堂但不发布", "reach_page", "page-create", undefined],
+      ["创建课堂但不发布", "run_page_task", "page-create", "task-fill-lesson"],
+      ["创建课堂但不发布", "verify_page", "page-create", undefined]
+    ]);
+    expect(result.steps[1]).toEqual(expect.objectContaining({ pageElementId: "class-grid", pageTransitionId: "transition-home-detail" }));
+  });
+
+  it("reports broken asset references and missing required parameters before execution", () => {
+    const brokenMeta: MetaFunction = {
+      ...enterClassMetaFunction(),
+      parameters: [{ key: "missingParam", type: "string", required: true }],
+      steps: [
+        { id: "broken-capability", order: 1, kind: "invoke_capability", sourcePageModelId: "page-home", pageElementId: "missing-element", targetPageModelId: "page-missing", enabled: true },
+        { id: "broken-task", order: 2, kind: "run_page_task", pageModelId: "page-detail", pageTaskId: "missing-task", enabled: true }
+      ]
+    };
+    const result = compileAssetCompositeCase({
+      compositeCase: compositeCase([brokenMeta.id]),
+      metaFunctions: [brokenMeta],
+      parameterProfile: { ...parameterProfile(), values: {} },
+      graphVersion: graphVersion()
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
+      "MISSING_REQUIRED_PARAMETER",
+      "PAGE_ELEMENT_NOT_FOUND",
+      "TARGET_PAGE_NOT_FOUND",
+      "PAGE_TASK_NOT_FOUND"
+    ]));
+  });
+
+  it("applies case-step parameter overrides without mutating the profile", () => {
+    const sourceProfile = parameterProfile();
+    const testCase = compositeCase(["meta-enter"]);
+    testCase.steps[0]!.parameterOverrides = { className: "班级四十一号" };
+
+    const result = compileAssetCompositeCase({
+      compositeCase: testCase,
+      metaFunctions: [enterClassMetaFunction()],
+      parameterProfile: sourceProfile,
+      graphVersion: graphVersion()
+    });
+
+    expect(result.runtimeParams.className).toBe("班级四十一号");
+    expect(sourceProfile.values.className?.value).toBe("班级四十二号");
+  });
+});
+
+function graphVersion(): BusinessGraphVersion {
+  return {
+    id: "graph-version",
+    graphId: "graph",
+    version: 1,
+    status: "active",
+    sourceSummary: [],
+    createdAt: nowIso(),
+    nodes: [
+      pageNode("page-home", "主页", {
+        assetRecordingPageElements: [{ id: "class-grid", label: "班级列表" }],
+        assetRecordingPageTransitions: [{ id: "transition-home-detail", elementId: "class-grid", targetNodeId: "page-detail", outcomeType: "navigate" }]
+      }),
+      pageNode("page-detail", "班级详情", {
+        assetRecordingPageTransitions: [{ id: "transition-detail-create", elementId: "create-lesson", targetNodeId: "page-create", outcomeType: "navigate" }]
+      }),
+      pageNode("page-create", "新建课堂", {
+        assetRecordingPageTasks: [{ id: "task-fill-lesson", name: "填写课堂信息", status: "active", steps: [] }]
+      })
+    ],
+    edges: []
+  };
+}
+
+function pageNode(id: string, name: string, metadata: Record<string, unknown>): BusinessNode {
+  return {
+    id,
+    graphVersionId: "graph-version",
+    key: id,
+    name,
+    nodeType: "page",
+    tags: ["page-asset"],
+    status: "active",
+    matchers: [],
+    defaultExpectations: [],
+    platformScope: "android",
+    metadata: { assetRecordingConfirmed: true, ...metadata }
+  };
+}
+
+function parameterProfile(): ParameterProfile {
+  return {
+    id: "profile-teacher",
+    appId: "cn.eeo.classin",
+    platform: "android",
+    name: "教师账号",
+    values: {
+      className: { type: "string", value: "班级四十二号" },
+      lessonName: { type: "string", value: "自动化课堂" },
+      duration: { type: "number", value: 30 }
+    },
+    status: "active",
+    version: 1,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+}
+
+function enterClassMetaFunction(): MetaFunction {
+  return {
+    id: "meta-enter",
+    appId: "cn.eeo.classin",
+    platform: "android",
+    name: "进入指定班级",
+    parameters: [{ key: "className", type: "string", required: true }],
+    steps: [
+      { id: "reach-home", order: 1, kind: "reach_page", targetPageModelId: "page-home", enabled: true },
+      { id: "open-class", order: 2, kind: "invoke_capability", sourcePageModelId: "page-home", pageElementId: "class-grid", targetPageModelId: "page-detail", enabled: true }
+    ],
+    status: "active",
+    version: 1,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+}
+
+function createLessonMetaFunction(): MetaFunction {
+  return {
+    id: "meta-create",
+    appId: "cn.eeo.classin",
+    platform: "android",
+    name: "创建课堂但不发布",
+    parameters: [
+      { key: "lessonName", type: "string" },
+      { key: "duration", type: "number" }
+    ],
+    steps: [
+      { id: "reach-create", order: 1, kind: "reach_page", targetPageModelId: "page-create", enabled: true },
+      { id: "fill-form", order: 2, kind: "run_page_task", pageModelId: "page-create", pageTaskId: "task-fill-lesson", enabled: true },
+      { id: "verify-create", order: 3, kind: "verify_page", pageModelId: "page-create", enabled: true }
+    ],
+    status: "active",
+    version: 1,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+}
+
+function compositeCase(metaFunctionIds: string[]): AssetCompositeCase {
+  return {
+    id: "case-create-lesson",
+    appId: "cn.eeo.classin",
+    platform: "android",
+    name: "指定班级创建课堂",
+    parameterProfileId: "profile-teacher",
+    runMode: "once",
+    repeatCount: 1,
+    stopOnFailure: true,
+    steps: metaFunctionIds.map((metaFunctionId, index) => ({ id: `case-step-${index + 1}`, order: index + 1, metaFunctionId, enabled: true })),
+    status: "active",
+    version: 1,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+}

@@ -11,6 +11,7 @@ import {
   viewportPointToDevicePoint,
   type DeviceActionRequest,
   type DeviceInfo,
+  type ParameterProfile,
   type StructuredFlow,
   type TestCase,
   type TestRun,
@@ -34,6 +35,7 @@ import { CaseLibraryPanel, type FlowExpectationOverride } from "./components/Cas
 import { PreviewPanel } from "./components/PreviewPanel";
 import { GraphCandidatesPanel } from "./components/GraphCandidatesPanel";
 import { PageAssetsPanel, parseRuntimeParams } from "./components/PageAssetsPanel";
+import { AssetCompositionPanel } from "./components/AssetCompositionPanel";
 import { RuntimeInterceptorPanel, type RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
 import { StepsPanel } from "./components/StepsPanel";
 import { ToolStatusBar } from "./components/StepsPanelParts";
@@ -631,6 +633,7 @@ export function assetPatrolRequestBody(input: {
   allowRiskyActions: boolean;
   allowBusinessSubmit: boolean;
   dangerousTextPatternsText: string;
+  parameterProfileId?: string;
   runtimeParamsText?: string;
 }) {
   const runtimeParams = parseRuntimeParams(input.runtimeParamsText);
@@ -644,6 +647,7 @@ export function assetPatrolRequestBody(input: {
     allowRiskyActions: input.allowRiskyActions,
     allowBusinessSubmit: input.allowBusinessSubmit,
     dangerousTextPatterns: dangerousTextPatternsFromText(input.dangerousTextPatternsText),
+    ...(input.parameterProfileId?.trim() ? { parameterProfileId: input.parameterProfileId.trim() } : {}),
     ...(runtimeParams ? { runtimeParams } : {})
   };
 }
@@ -1146,8 +1150,8 @@ export function App() {
   const [assetPatrolAllowRiskyActions, setAssetPatrolAllowRiskyActions] = useState(false);
   const [assetPatrolAllowBusinessSubmit, setAssetPatrolAllowBusinessSubmit] = useState(false);
   const [assetPatrolDangerousText, setAssetPatrolDangerousText] = useState(DEFAULT_STABILITY_DANGEROUS_TEXT);
-  const [assetPatrolRuntimeParamsText, setAssetPatrolRuntimeParamsText] = useState("");
-  const [assetPatrolRuntimeParamDefinitions, setAssetPatrolRuntimeParamDefinitions] = useState<AssetRuntimeParamDefinition[]>([]);
+  const [assetPatrolParameterProfiles, setAssetPatrolParameterProfiles] = useState<ParameterProfile[]>([]);
+  const [assetPatrolParameterProfileId, setAssetPatrolParameterProfileId] = useState("");
   const [assetPatrolPlan, setAssetPatrolPlan] = useState<AssetPatrolPlan>();
   const [assetDrivenPanelRunId, setAssetDrivenPanelRunId] = useState("");
   const [assetDrivenExecutionId, setAssetDrivenExecutionId] = useState("");
@@ -1165,7 +1169,6 @@ export function App() {
   const elementSnapshotInFlightRef = useRef(false);
   const textSnapshotInFlightRef = useRef(false);
   const assetRecordingIdentificationInFlightRef = useRef(0);
-  const assetPatrolRuntimeParamSyncPackageRef = useRef("");
   const aiDiagnosisSettingsLoadedRef = useRef(false);
 
   const {
@@ -1358,15 +1361,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!shouldAutoSyncAssetPatrolRuntimeParams({
-      activeNavItem,
-      packageName: assetPatrolPackageName,
-      lastSyncedPackageName: assetPatrolRuntimeParamSyncPackageRef.current
-    })) {
+    if (activeNavItem !== "assetPatrol" || !assetPatrolPackageName.trim()) {
       return;
     }
     const timer = window.setTimeout(() => {
-      void syncAssetPatrolRuntimeParams({ silent: true });
+      void syncAssetPatrolParameterProfiles({ silent: true });
     }, 250);
     return () => window.clearTimeout(timer);
   }, [activeNavItem, assetPatrolPackageName]);
@@ -2085,6 +2084,14 @@ export function App() {
     setActiveNavItem("assetPatrol");
   }
 
+  function openAssetComposition() {
+    setActiveNavItem("assetComposition");
+  }
+
+  function openParameterCenter() {
+    setActiveNavItem("parameterCenter");
+  }
+
   function openStability() {
     setActiveNavItem("stability");
   }
@@ -2615,8 +2622,8 @@ export function App() {
     setAssetPatrolPlan(undefined);
     setAssetDrivenExecutionId("");
     setAssetDrivenExecution(undefined);
-    setAssetPatrolRuntimeParamDefinitions([]);
-    assetPatrolRuntimeParamSyncPackageRef.current = "";
+    setAssetPatrolParameterProfiles([]);
+    setAssetPatrolParameterProfileId("");
   }
 
   function assetPatrolRequestPayload() {
@@ -2630,11 +2637,11 @@ export function App() {
       allowRiskyActions: assetPatrolAllowRiskyActions,
       allowBusinessSubmit: assetPatrolAllowBusinessSubmit,
       dangerousTextPatternsText: assetPatrolDangerousText,
-      runtimeParamsText: assetPatrolRuntimeParamsText
+      parameterProfileId: assetPatrolParameterProfileId
     });
   }
 
-  async function syncAssetPatrolRuntimeParams(options: { silent?: boolean } = {}) {
+  async function syncAssetPatrolParameterProfiles(options: { silent?: boolean } = {}) {
     const packageName = assetPatrolPackageName.trim();
     if (!packageName) {
       if (!options.silent) {
@@ -2646,18 +2653,13 @@ export function App() {
       if (!options.silent) {
         setBusy(true);
       }
-      const url = `/api/asset-patrols/runtime-params?packageName=${encodeURIComponent(packageName)}`;
-      const response = await fetch(url);
-      const json = (await response.json().catch(() => ({}))) as { parameters?: AssetRuntimeParamDefinition[]; templateText?: string; error?: string };
-      if (!response.ok) {
-        throw new Error(json.error ?? "提取运行参数失败");
-      }
-      const parameters = json.parameters ?? [];
-      setAssetPatrolRuntimeParamDefinitions(parameters);
-      setAssetPatrolRuntimeParamsText((current) => mergeAssetPatrolRuntimeParamsText(current, parameters));
-      assetPatrolRuntimeParamSyncPackageRef.current = packageName;
+      const query = new URLSearchParams({ appId: packageName, platform: "android" });
+      const json = await apiFetchJson<{ profiles?: ParameterProfile[] }>(`/api/asset-composition/parameter-profiles?${query.toString()}`);
+      const profiles = (json.profiles ?? []).filter((profile) => profile.status === "active");
+      setAssetPatrolParameterProfiles(profiles);
+      setAssetPatrolParameterProfileId((current) => profiles.some((profile) => profile.id === current) ? current : profiles[0]?.id ?? "");
       if (!options.silent) {
-        setMessage(parameters.length ? `已提取运行参数：${parameters.map((item) => item.key).join("、")}` : "当前资产没有动态运行参数");
+        setMessage(profiles.length ? `已加载 ${profiles.length} 个执行组合` : "当前应用还没有可用执行组合");
       }
     } catch (error) {
       if (!options.silent) {
@@ -2959,6 +2961,8 @@ export function App() {
           openCaseLibrary={openCaseLibrary}
           openAssetRecording={openAssetRecording}
           openPageAssets={openPageAssets}
+          openAssetComposition={openAssetComposition}
+          openParameterCenter={openParameterCenter}
           openAssetPatrol={openAssetPatrol}
           openStability={openStability}
           openRuns={openRuns}
@@ -3118,6 +3122,25 @@ export function App() {
           />
         )}
 
+        {activeNavItem === "assetComposition" && (
+          <AssetCompositionPanel
+            selectedSerial={selectedSerial}
+            selectedDeviceBusy={selectedDeviceBusy}
+            defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
+            setMessage={setMessage}
+          />
+        )}
+
+        {activeNavItem === "parameterCenter" && (
+          <AssetCompositionPanel
+            mode="parameters"
+            selectedSerial={selectedSerial}
+            selectedDeviceBusy={selectedDeviceBusy}
+            defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
+            setMessage={setMessage}
+          />
+        )}
+
         {activeNavItem === "assetPatrol" && (
           <AssetPatrolPanel
             devices={devices}
@@ -3133,8 +3156,8 @@ export function App() {
             allowRiskyActions={assetPatrolAllowRiskyActions}
             allowBusinessSubmit={assetPatrolAllowBusinessSubmit}
             dangerousTextPatternsText={assetPatrolDangerousText}
-            runtimeParamsText={assetPatrolRuntimeParamsText}
-            runtimeParamDefinitions={assetPatrolRuntimeParamDefinitions}
+            parameterProfiles={assetPatrolParameterProfiles}
+            parameterProfileId={assetPatrolParameterProfileId}
             plan={assetPatrolPlan}
             assetDrivenExecution={assetDrivenExecution}
             currentRun={currentAssetPatrolRun}
@@ -3157,8 +3180,7 @@ export function App() {
               setAssetPatrolDangerousText(value);
               saveStabilityDangerousTextForPackage(assetPatrolPackageName, value);
             }}
-            onRuntimeParamsChange={setAssetPatrolRuntimeParamsText}
-            onSyncRuntimeParams={() => void syncAssetPatrolRuntimeParams()}
+            onParameterProfileIdChange={setAssetPatrolParameterProfileId}
             onExecute={() => void startAssetDrivenTest()}
             onStop={(runId) => void stopAssetPatrol(runId)}
             onOpenRun={(runId) => {
@@ -3369,8 +3391,12 @@ type AssetPatrolPanelProps = {
   allowRiskyActions: boolean;
   allowBusinessSubmit: boolean;
   dangerousTextPatternsText: string;
-  runtimeParamsText: string;
-  runtimeParamDefinitions: AssetRuntimeParamDefinition[];
+  parameterProfiles?: ParameterProfile[];
+  parameterProfileId?: string;
+  /** @deprecated Test-only compatibility for callers not yet migrated to parameter profiles. */
+  runtimeParamsText?: string;
+  /** @deprecated Test-only compatibility for callers not yet migrated to parameter profiles. */
+  runtimeParamDefinitions?: AssetRuntimeParamDefinition[];
   plan?: AssetPatrolPlan;
   assetDrivenExecution?: AssetDrivenExecutionSession;
   currentRun?: TestRun;
@@ -3385,8 +3411,11 @@ type AssetPatrolPanelProps = {
   onAllowRiskyActionsChange: (value: boolean) => void;
   onAllowBusinessSubmitChange: (value: boolean) => void;
   onDangerousTextPatternsChange: (value: string) => void;
-  onRuntimeParamsChange: (value: string) => void;
-  onSyncRuntimeParams: () => void;
+  onParameterProfileIdChange?: (value: string) => void;
+  /** @deprecated Test-only compatibility for callers not yet migrated to parameter profiles. */
+  onRuntimeParamsChange?: (value: string) => void;
+  /** @deprecated Test-only compatibility for callers not yet migrated to parameter profiles. */
+  onSyncRuntimeParams?: () => void;
   onExecute: () => void;
   onStop: (runId: string) => void;
   onOpenRun: (runId: string) => void;
@@ -3406,8 +3435,8 @@ export function AssetPatrolPanel({
   allowRiskyActions,
   allowBusinessSubmit,
   dangerousTextPatternsText,
-  runtimeParamsText,
-  runtimeParamDefinitions,
+  parameterProfiles = [],
+  parameterProfileId = "",
   plan,
   assetDrivenExecution,
   currentRun,
@@ -3422,8 +3451,7 @@ export function AssetPatrolPanel({
   onAllowRiskyActionsChange,
   onAllowBusinessSubmitChange,
   onDangerousTextPatternsChange,
-  onRuntimeParamsChange,
-  onSyncRuntimeParams,
+  onParameterProfileIdChange = () => undefined,
   onExecute,
   onStop,
   onOpenRun
@@ -3438,8 +3466,7 @@ export function AssetPatrolPanel({
     running
   });
   const displayMode = assetPatrolPanelDisplayMode({ plan, currentRun, assetDrivenExecution });
-  const runtimeParamValues = assetPatrolRuntimeParamValuesFromText(runtimeParamsText);
-  const displayRuntimeParamDefinitions = assetPatrolRuntimeParamDefinitionsForDisplay(runtimeParamDefinitions, plan?.startPage?.name ?? assetDrivenExecution?.startNodeName ?? summary?.pageName);
+  const selectedParameterProfile = parameterProfiles.find((profile) => profile.id === parameterProfileId);
   const assetDrivenTestNeedsBusinessSubmit = !allowBusinessSubmit && assetPatrolPlanRequiresBusinessSubmit(plan);
   const panelSummary = summary ?? assetDrivenExecutionProgressSummary(assetDrivenExecution) ?? assetDrivenRunProgressSummary(currentRun, packageName);
   const planGroups = assetPatrolPlanGroups(plan);
@@ -3539,44 +3566,23 @@ export function AssetPatrolPanel({
 
           <div className="stability-danger-list">
             <div className="runtime-param-header">
-              <span>运行参数</span>
-              <button className="inline-action-button" type="button" disabled={busy || !packageName.trim()} onClick={onSyncRuntimeParams}>
-                刷新参数项
-              </button>
+              <span>执行组合</span>
             </div>
-            {displayRuntimeParamDefinitions.length ? (
-              <>
-                <div className="runtime-param-editor">
-                  {displayRuntimeParamDefinitions.map((parameter) => (
-                    <label key={parameter.key} className="runtime-param-field">
-                      <span>
-                        <strong>{parameter.key}</strong>
-                        <small>{assetPatrolRuntimeParamUsageSummary(parameter)}</small>
-                      </span>
-                      <input
-                        value={runtimeParamValues[parameter.key] ?? ""}
-                        onChange={(event) => onRuntimeParamsChange(setAssetPatrolRuntimeParamValue(runtimeParamsText, parameter.key, event.target.value))}
-                        placeholder={assetPatrolRuntimeParamPlaceholder(parameter)}
-                      />
-                    </label>
-                  ))}
-                </div>
-                <details className="runtime-param-raw">
-                  <summary>高级 key=value</summary>
-                  <textarea value={runtimeParamsText} onChange={(event) => onRuntimeParamsChange(event.target.value)} rows={4} />
-                </details>
-              </>
-            ) : (
-              <>
-                <textarea
-                  value={runtimeParamsText}
-                  onChange={(event) => onRuntimeParamsChange(event.target.value)}
-                  rows={4}
-                  placeholder={"phone=18743085313\npassword=secret"}
-                />
-                <span className="runtime-param-hint">暂无参数项</span>
-              </>
-            )}
+            <label className="parameter-profile-picker">
+              <select value={parameterProfileId} onChange={(event) => onParameterProfileIdChange(event.target.value)}>
+                <option value="">不使用执行组合</option>
+                {parameterProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}{profile.environment ? ` · ${profile.environment}` : ""} · v{profile.version}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="runtime-param-hint">
+              {selectedParameterProfile
+                ? `本次执行使用「${selectedParameterProfile.name}」的冻结快照（已绑定 ${selectedParameterProfile.bindings?.length ?? 0} 个业务领域${Object.keys(selectedParameterProfile.values).length ? `，含 ${Object.keys(selectedParameterProfile.values).length} 项高级覆盖` : ""}）。在“测试数据 > 执行组合”中统一维护。`
+                : "请在“测试数据 > 执行组合”维护并选择一套运行数据；缺少动态参数的能力会被跳过或进入诊断。"}
+            </span>
           </div>
 
           <div className="action-row">
