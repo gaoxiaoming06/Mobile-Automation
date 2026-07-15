@@ -54,6 +54,7 @@ import {
   type TextSnapshot
 } from "./semantic-snapshot";
 import { apiFetchJson } from "./api";
+import { mergeAiPageDraftIntoPage, type AiPageDraftApiResponse } from "./ai-page-draft-merge";
 
 type PointerStart = {
   x: number;
@@ -1126,6 +1127,7 @@ export function App() {
   const [assetRecordingPage, setAssetRecordingPage] = useState<AssetRecordingCurrentPage>({ status: "idle" });
   const [assetAutoExploreReport, setAssetAutoExploreReport] = useState<AssetRecordingAutoExploreReport>();
   const [assetRecordingIdentifying, setAssetRecordingIdentifying] = useState(false);
+  const [assetRecordingAiIdentifying, setAssetRecordingAiIdentifying] = useState(false);
   const [stabilityPackageName, setStabilityPackageName] = useState("");
   const [stabilityMaxDurationMinutes, setStabilityMaxDurationMinutes] = useState(3);
   const [stabilityMaxActions, setStabilityMaxActions] = useState(100);
@@ -2300,6 +2302,33 @@ export function App() {
     }
   }
 
+  async function requestAiPageDraft() {
+    const graphVersionId = assetRecordingPage.graphVersionId;
+    const observation = assetRecordingPage.observation;
+    if (!graphVersionId || !observation) {
+      setMessage("请先执行“识别当前页”，再使用 AI 识别本页");
+      return;
+    }
+    setAssetRecordingAiIdentifying(true);
+    try {
+      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/ai-page-draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ observation })
+      });
+      const json = (await response.json().catch(() => ({}))) as AiPageDraftApiResponse & { error?: string };
+      if (!response.ok || !json.suggestion) {
+        throw new Error(json.error ?? "AI 识别失败");
+      }
+      setAssetRecordingPage((page) => mergeAiPageDraftIntoPage(page, json));
+      setMessage(`AI 草稿已生成（${json.visionUsed ? "视觉" : "文本"}模式），请确认后保存`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAssetRecordingAiIdentifying(false);
+    }
+  }
+
   async function saveCurrentPageAsset(mode: "create" | "update", overrides: Partial<AssetRecordingCurrentPage> = {}) {
     if (assetRecordingPage.status === "idle") {
       return;
@@ -3063,6 +3092,8 @@ export function App() {
             currentPage={assetRecordingPage}
             onPageDraftChange={(patch) => setAssetRecordingPage((page) => ({ ...page, ...patch }))}
             onIdentifyCurrentPage={identifyCurrentPageAsset}
+            onAiIdentify={requestAiPageDraft}
+            aiIdentifying={assetRecordingAiIdentifying}
             onSaveCurrentPageAsset={saveCurrentPageAsset}
             onSavePageElement={saveAssetPageElement}
             onDeletePageElement={deleteAssetPageElement}

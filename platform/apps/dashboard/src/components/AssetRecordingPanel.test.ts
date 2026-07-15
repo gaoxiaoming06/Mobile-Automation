@@ -2248,3 +2248,48 @@ describe("AssetRecordingPanel", () => {
     });
   });
 });
+
+describe("AI 元素建议", () => {
+  it("renders ai suggestions, warnings and save button", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "serial",
+        busy: false,
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: () => undefined,
+        onAiIdentify: () => undefined,
+        initialDetailTab: "actions",
+        currentPage: {
+          status: "draft_created",
+          nodeId: "node-1",
+          observation: {},
+          aiWarnings: ["状态栏文案已剔除"],
+          aiElementSuggestions: [
+            { elementLabel: "搜索入口", abilityType: "fixed_tap", actionKind: "tap", locator: "image-region:4,18,92,6", confidence: 0.8, riskNotes: ["图标可能随主题变化"] }
+          ]
+        }
+      })
+    );
+    expect(html).toContain("AI 识别本页");
+    expect(html).toContain("搜索入口");
+    expect(html).toContain("保存该元素");
+    expect(html).toContain("状态栏文案已剔除");
+    expect(html).toContain("置信度 80%");
+    expect(html).toContain("图标可能随主题变化");
+  });
+
+  it("hides ai identify button when handler is absent", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "serial",
+        busy: false,
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: () => undefined,
+        currentPage: { status: "draft_created", nodeId: "node-1", observation: {} }
+      })
+    );
+    expect(html).not.toContain("AI 识别本页");
+  });
+});

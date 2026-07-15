@@ -1,6 +1,7 @@
 import { DatabaseZap, Save } from "lucide-react";
 import { useRef, useState } from "react";
 import type { FormEvent, PointerEvent, ReactNode } from "react";
+import { aiElementSuggestionToDraft, type AiElementSuggestion } from "../ai-page-draft-merge";
 
 export type AssetRecordingPageElement = {
   id?: string;
@@ -329,6 +330,8 @@ export type AssetRecordingCurrentPage = {
   aiDescription?: string;
   savedAssets?: AssetRecordingSavedAsset[];
   message?: string;
+  aiElementSuggestions?: AiElementSuggestion[];
+  aiWarnings?: string[];
 };
 
 export type AssetRecordingPanelProps = {
@@ -341,6 +344,8 @@ export type AssetRecordingPanelProps = {
   previewSlot?: ReactNode;
   onPageDraftChange: (patch: Partial<AssetRecordingCurrentPage>) => void;
   onIdentifyCurrentPage: () => void | Promise<void>;
+  onAiIdentify?: () => void | Promise<void>;
+  aiIdentifying?: boolean;
   onSaveCurrentPageAsset: (mode: "create" | "update") => void | Promise<void>;
   onSavePageElement?: (draft: AssetRecordingPageElementDraft) => boolean | void | Promise<boolean | void>;
   onDeletePageElement?: (element: AssetRecordingPageElement) => void | Promise<void>;
@@ -420,6 +425,8 @@ export function AssetRecordingPanel({
   previewSlot,
   onPageDraftChange,
   onIdentifyCurrentPage,
+  onAiIdentify,
+  aiIdentifying = false,
   onSaveCurrentPageAsset,
   onSavePageElement,
   onDeletePageElement,
@@ -1062,6 +1069,23 @@ export function AssetRecordingPanel({
               ) : null}
               {identifying ? <div className="asset-identifying-banner">识别中：正在识别当前页面，完成后可继续操作。</div> : null}
               {page.status === "error" && page.message ? <div className="asset-identifying-banner asset-warning-banner">{page.message}</div> : null}
+              {onAiIdentify ? (
+                <div className="asset-ai-identify">
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy || identifying || aiIdentifying || !page.observation}
+                    onClick={() => void onAiIdentify()}
+                    title="将当前页面证据交给 AI 生成资产草稿建议（预计 20-60 秒）"
+                  >
+                    {aiIdentifying ? "AI 识别中…" : "AI 识别本页"}
+                  </button>
+                  {aiIdentifying ? <span className="asset-ai-identify-hint">AI 正在分析页面证据，预计 20-60 秒…</span> : null}
+                </div>
+              ) : null}
+              {page.aiWarnings?.length ? (
+                <div className="asset-identifying-banner asset-warning-banner">AI 提示：{page.aiWarnings.join("；")}</div>
+              ) : null}
             </>
           )}
 
@@ -1229,6 +1253,37 @@ export function AssetRecordingPanel({
 
                 {activeDetailTab === "actions" ? (
                   <div className="asset-detail-section asset-elements-card">
+                    {page.aiElementSuggestions?.length ? (
+                      <section className="asset-ai-suggestions">
+                        <div className="asset-action-summary">
+                          <strong>AI 元素建议</strong>
+                          <span>{page.aiElementSuggestions.length} 项，确认后保存为正式元素</span>
+                        </div>
+                        <div className="asset-element-list">
+                          {page.aiElementSuggestions.map((suggestion, index) => (
+                            <div className="asset-saved-action-item" key={`ai-suggestion-${index}`}>
+                              <div className="asset-element-row">
+                                <div className="asset-element-summary">
+                                  <strong>{suggestion.elementLabel}</strong>
+                                  <span>
+                                    {suggestion.abilityType} · {suggestion.locator}
+                                    {typeof suggestion.confidence === "number" ? ` · 置信度 ${Math.round(suggestion.confidence * 100)}%` : ""}
+                                  </span>
+                                  {suggestion.riskNotes.length ? <span className="asset-warning-text">{suggestion.riskNotes.join("；")}</span> : null}
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={busy || !onSavePageElement || !page.nodeId}
+                                  onClick={() => void onSavePageElement?.(aiElementSuggestionToDraft(suggestion, page.nodeId))}
+                                >
+                                  保存该元素
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    ) : null}
                     <section className="asset-saved-actions">
                       <div className="asset-action-summary">
                         <strong>已录入可操作元素</strong>
