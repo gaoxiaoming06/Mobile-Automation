@@ -23,9 +23,18 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
   - 新增共享 LLM 客户端 `ai-client.ts`：codex app-server 与 OpenAI 兼容端点双通道，支持附带截图的视觉请求，通道不支持图片时自动降级为结构化证据模式（`visionUsed` 标记）；`ai-diagnosis.ts` 重构为复用该客户端，行为不变。
   - 输出消毒规则：身份文案必须逐字命中 OCR 证据（防幻觉）、动态内容（时间/网速/纯数字）剔除、区域夹取到合法百分比、元素 locator 仅允许 `image-region:x,y,w,h`；被剔除项以 warnings 回传并在面板展示。
 
+- AI 页面草稿语义定位策略输出 v2（设计见 `docs/superpowers/specs/2026-07-15-ai-semantic-locator-draft-design.md`）：
+  - AI 元素建议从单一 `image-region` 升级为六类 `locatorKind` 结构化资产（text_locator / top_bar_icon_locator / collection_item_locator / structural_locator / ocr_anchor_offset / visual_locator），字段与 `semantic-locator.ts` 运行时读取逻辑严格对齐；LLM 只输出语义意图，规范 locator 与 structuralLocator/visualLocator 由服务端消毒层确定性生成。
+  - 按策略消毒：text/anchor/structural 的文字必须逐字命中 OCR 证据；top_bar 图标由参考区域确定性生成 `visualLocator.candidates`（运行时重定位必需）；collection 只保存容器区域 + `{{itemText}}` 参数化 targetQuery，禁止 candidateIndex/固定格子；structural 策略白名单（ocr_trailing_switch / near_text_checkbox）。
+  - 降级从严：结构化证据不足且有可靠参考区域时才降级 `visual_locator`（标 `degradedFrom`）；无可靠区域则标 `needsManualCompletion` 保留草稿、前端禁用一键保存，不凭空制造圈选资产，也不恢复任何固定坐标点击兜底。
+  - 质量门补齐 `top_bar_icon_locator`（结构 role + visual candidates 完整性，缺失为 error）与 `ocr_anchor_offset`（anchorText 必填、缺 anchorOffsetPercent 提示复核）；validate 路由把 locatorKind/structuralLocator/visualLocator/dynamicMasks 传入校验（同时修复手动链路收不到 locatorKind 的存量缺口）。
+  - `anchorOffsetPercent` 打通元素资产 → step params 贯通链（保存 API、持久化、能力边生成），与运行时 `resolveOcrAnchorOffsetTap` 读取名一致。
+  - 录制面板 AI 建议卡片显示策略 chip、降级来源与"待人工补充"原因。
+
 ### Verified
 
 - 全仓 `pnpm -r typecheck` 通过；`pnpm vitest run` 87 文件 / 911 用例通过（新增 ai-client 6、ai-page-draft 17、dashboard merge/panel 5）。
+- 语义定位 v2 后回归：`pnpm vitest run` 87 文件 / 931 用例通过；离线真机截图验收（鲸放健康首页，codex 视觉通道 61.8s）：15 个元素建议中 10 个 text_locator、1 个 top_bar_icon_locator（含 candidates）、1 个 collection_item_locator（容器 + `{{itemText}}`）、1 个 visual_locator（含 dynamicMasks），四类代表元素全部通过 `/assets/page-elements/validate` 质量门（pass）。
 
 ## 2026-07-12
 

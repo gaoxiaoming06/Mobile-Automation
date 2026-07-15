@@ -95,7 +95,7 @@ PageStateFlow 当前已经具备页面资产录入、页面匹配、页面能力
 - 保存前可做当前截图定位预览。
 - 质量校验能说明通过、建议复核或失败的原因。
 
-实现状态：AI 辅助录入 v1 已落地（手动触发）。资产录制页支持"AI 识别本页"：LLM 按 page-asset-rules 生成页面身份与元素草稿并预填面板，消毒后仅作建议，落库仍走人工确认与既有校验门禁（设计见 `docs/superpowers/specs/2026-07-15-ai-page-draft-design.md`）。
+实现状态：AI 辅助录入 v1 已落地（手动触发）。资产录制页支持"AI 识别本页"：LLM 按 page-asset-rules 生成页面身份与元素草稿并预填面板，消毒后仅作建议，落库仍走人工确认与既有校验门禁（设计见 `docs/superpowers/specs/2026-07-15-ai-page-draft-design.md`）。v2 已升级为语义定位策略输出：AI 元素建议覆盖上述六类定位策略，字段与运行时读取逻辑严格对齐（top_bar 图标含视觉候选、列表只存容器 + 参数化 targetQuery、锚点偏移用 anchorOffsetPercent）；证据不足时降级 visual_locator 或标记待人工补充，不产生固定坐标点击资产（设计见 `docs/superpowers/specs/2026-07-15-ai-semantic-locator-draft-design.md`）。
 
 ### REQ-ADT-003：页面能力和连接边一致性
 
