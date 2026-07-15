@@ -2266,7 +2266,10 @@ describe("AI 元素建议", () => {
           observation: {},
           aiWarnings: ["状态栏文案已剔除"],
           aiElementSuggestions: [
-            { elementLabel: "搜索入口", abilityType: "fixed_tap", actionKind: "tap", locator: "image-region:4,18,92,6", confidence: 0.8, riskNotes: ["图标可能随主题变化"] }
+            { elementLabel: "搜索入口", abilityType: "fixed_tap", actionKind: "tap", locatorKind: "visual_locator", locator: "image-region:4,18,92,6", coordinateSpace: "screen", confidence: 0.8, riskNotes: ["图标可能随主题变化"] },
+            { elementLabel: "免费咨询", abilityType: "fixed_tap", actionKind: "tap", locatorKind: "text_locator", locator: "text:免费咨询", coordinateSpace: "runtime", targetText: "免费咨询", riskNotes: [] },
+            { elementLabel: "缺证据图标", abilityType: "fixed_tap", actionKind: "tap", locatorKind: "top_bar_icon_locator", locator: "", coordinateSpace: "runtime", riskNotes: [], needsManualCompletion: true, completionReason: "缺少参考区域" },
+            { elementLabel: "臆造入口", abilityType: "fixed_tap", actionKind: "tap", locatorKind: "visual_locator", locator: "image-region:10,40,60,8", coordinateSpace: "screen", degradedFrom: "text_locator", riskNotes: [] }
           ]
         }
       })
@@ -2277,6 +2280,12 @@ describe("AI 元素建议", () => {
     expect(html).toContain("状态栏文案已剔除");
     expect(html).toContain("置信度 80%");
     expect(html).toContain("图标可能随主题变化");
+    expect(html).toContain("视觉定位");
+    expect(html).toContain("文字定位");
+    expect(html).toContain("顶部栏图标");
+    expect(html).toContain("待人工补充");
+    expect(html).toContain("缺少参考区域");
+    expect(html).toContain("由文字定位降级");
   });
 
   it("hides ai identify button when handler is absent", () => {

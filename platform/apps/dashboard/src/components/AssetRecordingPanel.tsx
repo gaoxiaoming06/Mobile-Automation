@@ -1,7 +1,7 @@
 import { DatabaseZap, Save } from "lucide-react";
 import { useRef, useState } from "react";
 import type { FormEvent, PointerEvent, ReactNode } from "react";
-import { aiElementSuggestionToDraft, type AiElementSuggestion } from "../ai-page-draft-merge";
+import { AI_LOCATOR_KIND_LABELS, aiElementSuggestionToDraft, type AiElementSuggestion } from "../ai-page-draft-merge";
 
 export type AssetRecordingPageElement = {
   id?: string;
@@ -251,6 +251,10 @@ export type AssetRecordingPageElementDraft = {
   targetNodeId?: string;
   targetLabel?: string;
   tapPointPercent?: {
+    x: number;
+    y: number;
+  };
+  anchorOffsetPercent?: {
     x: number;
     y: number;
   };
@@ -1264,19 +1268,34 @@ export function AssetRecordingPanel({
                             <div className="asset-saved-action-item" key={`ai-suggestion-${index}`}>
                               <div className="asset-element-row">
                                 <div className="asset-element-summary">
-                                  <strong>{suggestion.elementLabel}</strong>
+                                  <strong>
+                                    {suggestion.elementLabel}
+                                    <span className={`asset-locator-kind-chip asset-locator-kind-${suggestion.locatorKind}`}>
+                                      {AI_LOCATOR_KIND_LABELS[suggestion.locatorKind] ?? suggestion.locatorKind}
+                                    </span>
+                                    {suggestion.degradedFrom ? (
+                                      <span className="asset-locator-kind-chip asset-locator-kind-degraded">
+                                        由{AI_LOCATOR_KIND_LABELS[suggestion.degradedFrom] ?? suggestion.degradedFrom}降级
+                                      </span>
+                                    ) : null}
+                                  </strong>
                                   <span>
-                                    {suggestion.abilityType} · {suggestion.locator}
+                                    {suggestion.abilityType}
+                                    {suggestion.locator ? ` · ${suggestion.locator}` : ""}
                                     {typeof suggestion.confidence === "number" ? ` · 置信度 ${Math.round(suggestion.confidence * 100)}%` : ""}
                                   </span>
+                                  {suggestion.needsManualCompletion ? (
+                                    <span className="asset-warning-text">证据不足，需人工补充：{suggestion.completionReason ?? "请人工完成录制"}</span>
+                                  ) : null}
                                   {suggestion.riskNotes.length ? <span className="asset-warning-text">{suggestion.riskNotes.join("；")}</span> : null}
                                 </div>
                                 <button
                                   type="button"
-                                  disabled={busy || !onSavePageElement || !page.nodeId}
+                                  disabled={busy || !onSavePageElement || !page.nodeId || Boolean(suggestion.needsManualCompletion)}
+                                  title={suggestion.needsManualCompletion ? suggestion.completionReason : undefined}
                                   onClick={() => void onSavePageElement?.(aiElementSuggestionToDraft(suggestion, page.nodeId))}
                                 >
-                                  保存该元素
+                                  {suggestion.needsManualCompletion ? "待人工补充" : "保存该元素"}
                                 </button>
                               </div>
                             </div>

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { aiElementSuggestionToDraft, mergeAiPageDraftIntoPage, type AiPageDraftApiResponse } from "./ai-page-draft-merge.js";
+import { aiElementSuggestionToDraft, mergeAiPageDraftIntoPage, type AiElementSuggestion, type AiPageDraftApiResponse } from "./ai-page-draft-merge.js";
 
 const response: AiPageDraftApiResponse = {
   suggestion: {
     page: { name: "肿瘤百科", key: "encyclopedia", assetKind: "page", riskNotes: [] },
     identityOcrTexts: [{ text: "鲸放肿瘤百科" }],
     identityRegions: [{ id: "title", label: "标题区", x: 5, y: 10, width: 88, height: 6, semanticArea: "top" }],
-    elements: [{ elementLabel: "搜索入口", abilityType: "fixed_tap", actionKind: "tap", locator: "image-region:4,18,92,6", semanticArea: "top", riskNotes: [] }]
+    elements: [
+      { elementLabel: "搜索入口", abilityType: "fixed_tap", actionKind: "tap", locatorKind: "visual_locator", locator: "image-region:4,18,92,6", coordinateSpace: "screen", semanticArea: "top", riskNotes: [] }
+    ]
   },
   warnings: ["状态栏文案已剔除"],
   channel: "codex",
@@ -43,7 +45,7 @@ describe("mergeAiPageDraftIntoPage", () => {
 });
 
 describe("aiElementSuggestionToDraft", () => {
-  it("maps suggestion to element draft with defaults", () => {
+  it("maps a visual suggestion to element draft with defaults", () => {
     expect(aiElementSuggestionToDraft(response.suggestion.elements[0]!, "node-1")).toEqual({
       sourceNodeId: "node-1",
       abilityType: "fixed_tap",
@@ -53,7 +55,77 @@ describe("aiElementSuggestionToDraft", () => {
       semanticArea: "top",
       coordinateSpace: "screen",
       elementLabel: "搜索入口",
-      targetText: undefined
+      targetText: undefined,
+      locatorKind: "visual_locator"
+    });
+  });
+
+  it("keeps every structured locator field when mapping to a draft", () => {
+    const suggestion: AiElementSuggestion = {
+      elementLabel: "医生列表",
+      abilityType: "grid_candidate",
+      actionKind: "tap",
+      locatorKind: "collection_item_locator",
+      locator: "image-region:2,30,96,55",
+      coordinateSpace: "screen",
+      region: { x: 2, y: 30, width: 96, height: 55 },
+      semanticArea: "content",
+      riskNotes: [],
+      scrollProfile: { containerKind: "list", direction: "vertical", targetKind: "ocr_text", targetQuery: "{{itemText}}", afterFoundAction: "tap_item" },
+      dynamicRegion: { id: "dynamic_region_ai_x", kind: "grid" },
+      itemTemplate: { id: "item_template_ai_x" },
+      transitionKind: "parameterized",
+      parameterMapping: { itemText: "dynamicRegion.item.titleText" },
+      dynamicMasks: [{ kind: "avatar", region: { x: 4, y: 32, width: 8, height: 5 }, reason: "医生头像" }]
+    };
+    expect(aiElementSuggestionToDraft(suggestion, "node-1")).toMatchObject({
+      locatorKind: "collection_item_locator",
+      scrollProfile: expect.objectContaining({ targetQuery: "{{itemText}}" }),
+      dynamicRegion: { id: "dynamic_region_ai_x", kind: "grid" },
+      itemTemplate: { id: "item_template_ai_x" },
+      transitionKind: "parameterized",
+      parameterMapping: { itemText: "dynamicRegion.item.titleText" },
+      dynamicMasks: [expect.objectContaining({ kind: "avatar" })]
+    });
+  });
+
+  it("maps top bar and anchor offset suggestions with runtime payloads", () => {
+    const topBar: AiElementSuggestion = {
+      elementLabel: "搜索图标",
+      abilityType: "fixed_tap",
+      actionKind: "tap",
+      locatorKind: "top_bar_icon_locator",
+      locator: "top-bar-icon:search",
+      coordinateSpace: "runtime",
+      semanticArea: "top",
+      riskNotes: [],
+      structuralLocator: { kind: "top_bar_icon", role: "search", slot: "trailing" },
+      visualLocator: { strategy: "top_bar_icon_shape", candidates: [{ role: "search", label: "搜索", score: 0.8, region: { x: 86, y: 4.5, width: 8, height: 4 }, semanticArea: "top" }] }
+    };
+    expect(aiElementSuggestionToDraft(topBar, "node-1")).toMatchObject({
+      locator: "top-bar-icon:search",
+      coordinateSpace: "runtime",
+      structuralLocator: expect.objectContaining({ kind: "top_bar_icon" }),
+      visualLocator: expect.objectContaining({ candidates: [expect.objectContaining({ role: "search" })] })
+    });
+
+    const anchor: AiElementSuggestion = {
+      elementLabel: "会员中心右侧箭头",
+      abilityType: "fixed_tap",
+      actionKind: "tap",
+      locatorKind: "ocr_anchor_offset",
+      locator: "image-region:88,20,8,5",
+      coordinateSpace: "screen",
+      targetText: "会员中心",
+      anchorText: "会员中心",
+      anchorOffsetPercent: { x: 38, y: 0 },
+      riskNotes: [],
+      structuralLocator: { kind: "ocr_anchor_offset", anchorText: "会员中心", anchorOffsetPercent: { x: 38, y: 0 } }
+    };
+    expect(aiElementSuggestionToDraft(anchor, "node-1")).toMatchObject({
+      locatorKind: "ocr_anchor_offset",
+      targetText: "会员中心",
+      anchorOffsetPercent: { x: 38, y: 0 }
     });
   });
 });

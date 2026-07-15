@@ -1642,6 +1642,25 @@ button:disabled {
   color: #9a3412;
 }
 
+.asset-locator-kind-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.asset-locator-kind-degraded {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
 .asset-page-title .asset-title-status {
   flex: 0 0 auto;
   min-width: max-content;

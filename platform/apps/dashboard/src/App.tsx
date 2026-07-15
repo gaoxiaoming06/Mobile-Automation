@@ -527,6 +527,7 @@ export function assetPageElementRequestBody(
     targetNodeId: draft.targetNodeId,
     targetLabel: draft.targetLabel,
     ...(draft.tapPointPercent ? { tapPointPercent: draft.tapPointPercent } : {}),
+    ...(draft.anchorOffsetPercent ? { anchorOffsetPercent: draft.anchorOffsetPercent } : {}),
     ...(draft.compoundSteps?.length ? { compoundSteps: draft.compoundSteps } : {}),
     ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {}),
     ...(draft.quality ? { quality: draft.quality } : {}),
