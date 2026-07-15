@@ -91,6 +91,219 @@ export function buildPageDraftPrompt(evidence: AiPageDraftEvidence): string {
   ].join("\n");
 }
 
+export type AiPageDraftRegionSuggestion = {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  semanticArea: "top" | "content" | "bottom" | "unknown";
+  confidence?: number;
+  reason?: string;
+};
+
+export type AiPageDraftElementSuggestion = {
+  elementLabel: string;
+  targetText?: string;
+  abilityType: "fixed_tap" | "scroll_candidate" | "grid_candidate" | "conditional_tap";
+  actionKind: "tap" | "scroll" | "long_press" | "input";
+  locator: string;
+  semanticArea?: "top" | "content" | "bottom" | "unknown";
+  confidence?: number;
+  riskNotes: string[];
+};
+
+export type AiPageDraftSuggestion = {
+  page: {
+    name: string;
+    key: string;
+    assetKind: "page" | "overlay";
+    confidence?: number;
+    riskNotes: string[];
+  };
+  identityOcrTexts: Array<{ text: string; confidence?: number; reason?: string }>;
+  identityRegions: AiPageDraftRegionSuggestion[];
+  elements: AiPageDraftElementSuggestion[];
+};
+
+const DYNAMIC_TEXT_PATTERN = /^(\d{1,2}:\d{2}(:\d{2})?|[\d.,]+\s*(KB|MB|GB)\/s|[\d.,]+%?|\d+)$/i;
+const IMAGE_REGION_LOCATOR_PATTERN = /^image-region:\d+(\.\d+)?,\d+(\.\d+)?,\d+(\.\d+)?,\d+(\.\d+)?$/;
+const ABILITY_TYPES = new Set(["fixed_tap", "scroll_candidate", "grid_candidate", "conditional_tap"]);
+const ACTION_KINDS = new Set(["tap", "scroll", "long_press", "input"]);
+const SEMANTIC_AREAS = new Set(["top", "content", "bottom", "unknown"]);
+
+export function parseAiPageDraftResponse(raw: string, observation: Observation): { suggestion: AiPageDraftSuggestion; warnings: string[] } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(extractJsonObject(raw));
+  } catch {
+    throw new Error("AI 页面草稿输出不是合法 JSON");
+  }
+  const root = asRecord(parsed);
+  const warnings: string[] = [];
+
+  const pageRecord = asRecord(root.page);
+  const name = readNonEmptyString(pageRecord.name);
+  const rawKey = readNonEmptyString(pageRecord.key);
+  if (!name || !rawKey) {
+    throw new Error("AI 页面草稿缺少 page.name 或 page.key");
+  }
+  let assetKind: "page" | "overlay";
+  if (pageRecord.assetKind === "page" || pageRecord.assetKind === "overlay") {
+    assetKind = pageRecord.assetKind;
+  } else {
+    assetKind = "page";
+    warnings.push(`assetKind "${String(pageRecord.assetKind)}" 不合法，已回退为 page`);
+  }
+  const page = {
+    name,
+    key: rawKey.toLowerCase().replace(/\s+/g, "-"),
+    assetKind,
+    confidence: readNumber(pageRecord.confidence),
+    riskNotes: readStringArray(pageRecord.riskNotes)
+  };
+
+  const evidenceTexts = new Set(observation.ocrTexts.map((item) => item.text.trim()).filter(Boolean));
+  const identityOcrTexts: AiPageDraftSuggestion["identityOcrTexts"] = [];
+  for (const item of readArray(root.identityOcrTexts)) {
+    const record = asRecord(item);
+    const text = readNonEmptyString(record.text);
+    if (!text) {
+      continue;
+    }
+    if (!evidenceTexts.has(text)) {
+      warnings.push(`AI 建议的身份文案在 OCR 证据中不存在：${text}`);
+      continue;
+    }
+    if (DYNAMIC_TEXT_PATTERN.test(text)) {
+      warnings.push(`身份文案疑似动态内容（时间/数字/网速），已剔除：${text}`);
+      continue;
+    }
+    identityOcrTexts.push({ text, confidence: readNumber(record.confidence), reason: readNonEmptyString(record.reason) });
+  }
+
+  const identityRegions: AiPageDraftRegionSuggestion[] = [];
+  for (const [index, item] of readArray(root.identityRegions).entries()) {
+    const record = asRecord(item);
+    const label = readNonEmptyString(record.label) ?? `AI 区域 ${index + 1}`;
+    const x = clamp(readNumber(record.x) ?? Number.NaN, 0, 100);
+    const y = clamp(readNumber(record.y) ?? Number.NaN, 0, 100);
+    const width = clamp(readNumber(record.width) ?? Number.NaN, 0, 100 - (Number.isNaN(x) ? 0 : x));
+    const height = clamp(readNumber(record.height) ?? Number.NaN, 0, 100 - (Number.isNaN(y) ? 0 : y));
+    if ([x, y, width, height].some(Number.isNaN) || width < 1 || height < 1) {
+      warnings.push(`身份区域不合法或面积过小，已剔除：${label}`);
+      continue;
+    }
+    const semanticArea = SEMANTIC_AREAS.has(String(record.semanticArea)) ? record.semanticArea as AiPageDraftRegionSuggestion["semanticArea"] : "unknown";
+    identityRegions.push({
+      id: readNonEmptyString(record.id) ?? `region-${index + 1}`,
+      label,
+      x,
+      y,
+      width,
+      height,
+      semanticArea,
+      confidence: readNumber(record.confidence),
+      reason: readNonEmptyString(record.reason)
+    });
+  }
+
+  const elements: AiPageDraftElementSuggestion[] = [];
+  for (const item of readArray(root.elements)) {
+    const record = asRecord(item);
+    const elementLabel = readNonEmptyString(record.elementLabel);
+    if (!elementLabel) {
+      continue;
+    }
+    const locator = readNonEmptyString(record.locator) ?? "";
+    if (!IMAGE_REGION_LOCATOR_PATTERN.test(locator)) {
+      warnings.push(`元素定位格式不合法（需 image-region:x,y,w,h 百分比），已剔除：${elementLabel}`);
+      continue;
+    }
+    if (!ABILITY_TYPES.has(String(record.abilityType)) || !ACTION_KINDS.has(String(record.actionKind))) {
+      warnings.push(`元素能力类型或动作不合法，已剔除：${elementLabel}`);
+      continue;
+    }
+    elements.push({
+      elementLabel,
+      targetText: readNonEmptyString(record.targetText),
+      abilityType: record.abilityType as AiPageDraftElementSuggestion["abilityType"],
+      actionKind: record.actionKind as AiPageDraftElementSuggestion["actionKind"],
+      locator,
+      semanticArea: SEMANTIC_AREAS.has(String(record.semanticArea)) ? record.semanticArea as AiPageDraftElementSuggestion["semanticArea"] : undefined,
+      confidence: readNumber(record.confidence),
+      riskNotes: readStringArray(record.riskNotes)
+    });
+  }
+
+  return { suggestion: { page, identityOcrTexts, identityRegions, elements }, warnings };
+}
+
+function extractJsonObject(raw: string): string {
+  const start = raw.indexOf("{");
+  if (start < 0) {
+    throw new Error("输出中不包含 JSON 对象");
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) {
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return raw.slice(start, index + 1);
+      }
+    }
+  }
+  throw new Error("输出中的 JSON 对象不完整");
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (Number.isNaN(value)) {
+    return Number.NaN;
+  }
+  return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
 function toPercentRect(
   rect: { x: number; y: number; width: number; height: number } | undefined,
   resolution: { width: number; height: number } | undefined
