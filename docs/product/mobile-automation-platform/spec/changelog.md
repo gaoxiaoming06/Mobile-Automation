@@ -4,7 +4,7 @@ doc_type: changelog
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-12
+updated_at: 2026-07-15
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -12,6 +12,20 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 ---
 
 # 自动化测试平台 Spec 变更记录
+
+## 2026-07-15
+
+### Added
+
+- AI 页面资产草稿生成 MVP（AI 录入流水线第一阶段，设计见 `docs/superpowers/specs/2026-07-15-ai-page-draft-design.md`）：
+  - 资产录制页新增"AI 识别本页"：把当前 Observation（截图 + OCR 带框全文 + UI dump）交给 LLM，生成页面身份（名称/key/OCR 文案/截图区域）与 PageElement 建议清单，预填录制面板；落库仍走人工确认与既有 promote / page-elements 校验门禁，AI 不直接写库。
+  - 新增 `POST /api/graphs/:versionId/ai-page-draft`：未配置 AI 返回 409，LLM 输出不可解析返回 422，超时 504；复用"设置-AI 诊断"同一份模型配置。
+  - 新增共享 LLM 客户端 `ai-client.ts`：codex app-server 与 OpenAI 兼容端点双通道，支持附带截图的视觉请求，通道不支持图片时自动降级为结构化证据模式（`visionUsed` 标记）；`ai-diagnosis.ts` 重构为复用该客户端，行为不变。
+  - 输出消毒规则：身份文案必须逐字命中 OCR 证据（防幻觉）、动态内容（时间/网速/纯数字）剔除、区域夹取到合法百分比、元素 locator 仅允许 `image-region:x,y,w,h`；被剔除项以 warnings 回传并在面板展示。
+
+### Verified
+
+- 全仓 `pnpm -r typecheck` 通过；`pnpm vitest run` 87 文件 / 911 用例通过（新增 ai-client 6、ai-page-draft 17、dashboard merge/panel 5）。
 
 ## 2026-07-12
 
