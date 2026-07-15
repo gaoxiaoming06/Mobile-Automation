@@ -315,6 +315,137 @@ describe("validatePageElementAssetQuality", () => {
     ]);
     expect(result.warnings.map((item) => item.code)).not.toContain("target_outside_marked_region");
   });
+
+  it("passes a top bar icon locator without a marked region when structural role and visual candidates exist", () => {
+    const result = validatePageElementAssetQuality({
+      element: {
+        locator: "top-bar-icon:search",
+        actionKind: "tap",
+        elementLabel: "搜索",
+        semanticArea: "top",
+        locatorKind: "top_bar_icon_locator",
+        structuralLocator: {
+          kind: "top_bar_icon",
+          role: "search",
+          slot: "right",
+          regionConstraint: { semanticArea: "top", region: { x: 84, y: 4, width: 12, height: 5 } }
+        },
+        visualLocator: {
+          strategy: "top_bar_icon_shape",
+          role: "search",
+          slot: "right",
+          searchRegion: { x: 84, y: 4, width: 12, height: 5 },
+          candidates: [
+            { source: "ai_draft", label: "搜索", role: "search", score: 0.85, region: { x: 84, y: 4, width: 12, height: 5 }, semanticArea: "top" }
+          ]
+        }
+      },
+      observation: observation({ ocrTexts: [] })
+    });
+
+    expect(result.status).toBe("pass");
+    expect(result.warnings.map((item) => item.code)).not.toContain("region_missing");
+    expect(result.evidence.locatorKind).toBe("top_bar_icon_locator");
+  });
+
+  it("fails a top bar icon locator that lacks structural role or visual candidates", () => {
+    const missingCandidates = validatePageElementAssetQuality({
+      element: {
+        locator: "top-bar-icon:search",
+        actionKind: "tap",
+        elementLabel: "搜索",
+        semanticArea: "top",
+        locatorKind: "top_bar_icon_locator",
+        structuralLocator: { kind: "top_bar_icon", role: "search", slot: "right" },
+        visualLocator: { strategy: "top_bar_icon_shape", role: "search", slot: "right" }
+      },
+      observation: observation({ ocrTexts: [] })
+    });
+    expect(missingCandidates.status).toBe("fail");
+    expect(missingCandidates.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "top_bar_icon_candidates_missing", severity: "error" })
+      ])
+    );
+
+    const missingRole = validatePageElementAssetQuality({
+      element: {
+        locator: "top-bar-icon:",
+        actionKind: "tap",
+        elementLabel: "搜索",
+        semanticArea: "top",
+        locatorKind: "top_bar_icon_locator"
+      },
+      observation: observation({ ocrTexts: [] })
+    });
+    expect(missingRole.status).toBe("fail");
+    expect(missingRole.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "top_bar_icon_locator_incomplete", severity: "error" })
+      ])
+    );
+  });
+
+  it("validates an ocr anchor offset locator against the anchor text evidence", () => {
+    const found = validatePageElementAssetQuality({
+      element: {
+        locator: "image-region:60,20,36,6",
+        actionKind: "tap",
+        elementLabel: "会员中心右侧图标",
+        targetText: "会员中心",
+        semanticArea: "content",
+        region: { x: 60, y: 20, width: 36, height: 6 },
+        locatorKind: "ocr_anchor_offset",
+        anchorOffsetPercent: { x: 30, y: 0 }
+      },
+      observation: observation({
+        ocrTexts: [{ text: "会员中心", confidence: 0.97, region: { x: 620, y: 500, width: 180, height: 44 } }]
+      })
+    });
+    expect(found.status).toBe("pass");
+    expect(found.evidence.locatorKind).toBe("ocr_anchor_offset");
+
+    const missingAnchor = validatePageElementAssetQuality({
+      element: {
+        locator: "image-region:60,20,36,6",
+        actionKind: "tap",
+        elementLabel: "会员中心右侧图标",
+        semanticArea: "content",
+        region: { x: 60, y: 20, width: 36, height: 6 },
+        locatorKind: "ocr_anchor_offset"
+      },
+      observation: observation({ ocrTexts: [] })
+    });
+    expect(missingAnchor.status).toBe("fail");
+    expect(missingAnchor.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "anchor_text_missing", severity: "error" })
+      ])
+    );
+  });
+
+  it("warns when an ocr anchor offset locator omits the offset", () => {
+    const result = validatePageElementAssetQuality({
+      element: {
+        locator: "image-region:60,20,36,6",
+        actionKind: "tap",
+        elementLabel: "会员中心右侧图标",
+        targetText: "会员中心",
+        semanticArea: "content",
+        region: { x: 60, y: 20, width: 36, height: 6 },
+        locatorKind: "ocr_anchor_offset"
+      },
+      observation: observation({
+        ocrTexts: [{ text: "会员中心", confidence: 0.97, region: { x: 620, y: 500, width: 180, height: 44 } }]
+      })
+    });
+    expect(result.status).toBe("needs_review");
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "anchor_offset_missing", severity: "warning" })
+      ])
+    );
+  });
 });
 
 function observation(input: {

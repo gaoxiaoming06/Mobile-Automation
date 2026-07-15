@@ -1409,7 +1409,11 @@ app.post("/api/graphs/:versionId/assets/page-elements/validate", async (req, res
         elementLabel: body.elementLabel,
         targetText: body.targetText,
         semanticArea: body.semanticArea,
-        region
+        region,
+        locatorKind: body.locatorKind,
+        structuralLocator: body.structuralLocator,
+        visualLocator: body.visualLocator,
+        dynamicMasks: body.dynamicMasks
       },
       observation,
       existingElements: readManualElementsForQuality(sourceNode?.metadata?.assetRecordingManualElements)

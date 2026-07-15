@@ -13,7 +13,11 @@ export type PageElementQualityWarning = {
     | "ambiguous_target_text"
     | "duplicate_element_locator"
     | "structural_locator_missing"
-    | "dynamic_content_unmasked";
+    | "dynamic_content_unmasked"
+    | "top_bar_icon_locator_incomplete"
+    | "top_bar_icon_candidates_missing"
+    | "anchor_text_missing"
+    | "anchor_offset_missing";
   severity: "info" | "warning" | "error";
   message: string;
 };
@@ -55,9 +59,11 @@ export type PageElementQualityInput = {
     targetText?: string;
     semanticArea?: VisualSemanticArea;
     region?: Rect;
-    locatorKind?: "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator";
+    locatorKind?: "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator" | "top_bar_icon_locator" | "ocr_anchor_offset";
     dynamicMasks?: Array<{ kind?: string; label?: string; region?: Rect }>;
     structuralLocator?: Record<string, unknown>;
+    visualLocator?: Record<string, unknown>;
+    anchorOffsetPercent?: { x: number; y: number };
   };
   observation?: Observation;
   existingElements?: Array<{
@@ -89,6 +95,22 @@ export function validatePageElementAssetQuality(input: PageElementQualityInput):
   }
   if (locatorKind === "structural_locator" && !hasStructuralLocatorEvidence(input.element.structuralLocator)) {
     warnings.push(warning("structural_locator_missing", "warning", "结构型元素缺少稳定结构证据，请补充行结构、箭头、相对顺序或稳定锚点。"));
+  }
+  if (locatorKind === "top_bar_icon_locator") {
+    if (!hasTopBarIconStructuralRole(input.element.structuralLocator, input.element.locator)) {
+      warnings.push(warning("top_bar_icon_locator_incomplete", "error", "顶部栏图标缺少 role/slot 结构信息，无法在运行时定位。"));
+    }
+    if (!hasVisualLocatorCandidates(input.element.visualLocator)) {
+      warnings.push(warning("top_bar_icon_candidates_missing", "error", "顶部栏图标缺少参考视觉候选（visualLocator.candidates），运行时无法重定位，请提供参考区域。"));
+    }
+  }
+  if (locatorKind === "ocr_anchor_offset") {
+    if (!targetText && !anchorTextFromStructuralLocator(input.element.structuralLocator)) {
+      warnings.push(warning("anchor_text_missing", "error", "OCR 锚点定位缺少锚点文字（targetText/anchorText）。"));
+    }
+    if (!input.element.anchorOffsetPercent && !anchorOffsetFromStructuralLocator(input.element.structuralLocator)) {
+      warnings.push(warning("anchor_offset_missing", "warning", "OCR 锚点定位缺少偏移量（anchorOffsetPercent），执行时将点击锚点文字本身。"));
+    }
   }
   if (
     locatorKind === "visual_locator" &&
@@ -146,7 +168,9 @@ function readLocatorKind(value: unknown): PageElementQualityInput["element"]["lo
   return value === "text_locator" ||
     value === "visual_locator" ||
     value === "structural_locator" ||
-    value === "collection_item_locator"
+    value === "collection_item_locator" ||
+    value === "top_bar_icon_locator" ||
+    value === "ocr_anchor_offset"
     ? value
     : undefined;
 }
@@ -155,11 +179,36 @@ function readLocatorKindFromLocator(locator: string | undefined): PageElementQua
   if (locator?.startsWith("text:")) {
     return "text_locator";
   }
+  if (locator?.startsWith("top-bar-icon:")) {
+    return "top_bar_icon_locator";
+  }
   return undefined;
 }
 
 function locatorKindRequiresMarkedRegion(locatorKind: PageElementQualityInput["element"]["locatorKind"] | undefined): boolean {
-  return locatorKind !== "text_locator";
+  return locatorKind !== "text_locator" && locatorKind !== "top_bar_icon_locator";
+}
+
+function hasTopBarIconStructuralRole(structuralLocator: Record<string, unknown> | undefined, locator: string | undefined): boolean {
+  const record = structuralLocator ?? {};
+  if (record.kind === "top_bar_icon" && typeof record.role === "string" && record.role.trim()) {
+    return true;
+  }
+  const locatorRole = locator?.startsWith("top-bar-icon:") ? locator.replace(/^top-bar-icon:\s*/, "").trim() : "";
+  return Boolean(locatorRole);
+}
+
+function hasVisualLocatorCandidates(visualLocator: Record<string, unknown> | undefined): boolean {
+  return Array.isArray(visualLocator?.candidates) && visualLocator.candidates.length > 0;
+}
+
+function anchorTextFromStructuralLocator(structuralLocator: Record<string, unknown> | undefined): string {
+  return typeof structuralLocator?.anchorText === "string" ? structuralLocator.anchorText.trim() : "";
+}
+
+function anchorOffsetFromStructuralLocator(structuralLocator: Record<string, unknown> | undefined): boolean {
+  const offset = structuralLocator?.anchorOffsetPercent;
+  return Boolean(offset && typeof offset === "object" && !Array.isArray(offset));
 }
 
 function hasStructuralLocatorEvidence(value: unknown): boolean {
