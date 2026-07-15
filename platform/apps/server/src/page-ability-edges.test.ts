@@ -398,6 +398,44 @@ describe("page ability route edges", () => {
     );
   });
 
+  it("passes anchorOffsetPercent from ocr anchor offset elements to runtime step params", () => {
+    const home = pageNode("node-home", "classin.home", "主页", {
+      assetRecordingManualElements: [
+        {
+          id: "manual_vip_icon",
+          label: "会员中心右侧图标",
+          locator: "image-region:60,20,36,6",
+          locatorKind: "ocr_anchor_offset",
+          actionKind: "tap",
+          semanticArea: "content",
+          coordinateSpace: "screen",
+          targetText: "会员中心",
+          anchorText: "会员中心",
+          anchorOffsetPercent: { x: 30, y: 0 },
+          outcomeType: "navigate",
+          targetNodeId: "node-vip",
+          targetLabel: "会员中心"
+        }
+      ]
+    });
+    const vip = pageNode("node-vip", "classin.vip", "会员中心");
+    const graphVersion = graph([home, vip]);
+
+    const nextGraphVersion = withPageAbilityEdges(graphVersion, "android");
+    const action = nextGraphVersion.edges[0]?.actionPolicies[0]?.action;
+
+    expect(action).toEqual(
+      expect.objectContaining({
+        type: "tap_on_image",
+        params: expect.objectContaining({
+          locatorKind: "ocr_anchor_offset",
+          anchorText: "会员中心",
+          anchorOffsetPercent: { x: 30, y: 0 }
+        })
+      })
+    );
+  });
+
   it("reports navigable page abilities that cannot become route edges yet", () => {
     const home = pageNode("node-home", "classin.home", "主页", {
       assetRecordingManualElements: [

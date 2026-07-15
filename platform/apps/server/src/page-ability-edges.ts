@@ -40,9 +40,10 @@ type ManualPageAbilityElement = {
     waitTimeoutMs?: number;
     intervalMs?: number;
   }>;
-  locatorKind?: "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator" | "top_bar_icon_locator";
+  locatorKind?: "text_locator" | "visual_locator" | "structural_locator" | "collection_item_locator" | "top_bar_icon_locator" | "ocr_anchor_offset";
   visualLocator?: Record<string, unknown>;
   anchorText?: string;
+  anchorOffsetPercent?: { x: number; y: number };
   role?: string;
   slot?: "leading" | "trailing";
   orderFromRight?: number;
@@ -67,6 +68,7 @@ type PageElementAsset = {
   locatorKind?: ManualPageAbilityElement["locatorKind"];
   visualLocator?: Record<string, unknown>;
   anchorText?: string;
+  anchorOffsetPercent?: { x: number; y: number };
   role?: string;
   slot?: "leading" | "trailing";
   orderFromRight?: number;
@@ -567,6 +569,7 @@ function pageTransitionBackedAbility(element: PageElementAsset, transition: Page
     locatorKind: element.locatorKind,
     visualLocator: element.visualLocator,
     anchorText: element.anchorText,
+    anchorOffsetPercent: element.anchorOffsetPercent,
     role: element.role,
     slot: element.slot,
     orderFromRight: element.orderFromRight,
@@ -787,6 +790,7 @@ function abilityActionParams(element: ManualPageAbilityElement): Record<string, 
     ...(element.locatorKind ? { locatorKind: element.locatorKind } : {}),
     ...(element.visualLocator ? { visualLocator: element.visualLocator } : {}),
     ...(element.anchorText ? { anchorText: element.anchorText } : {}),
+    ...(element.anchorOffsetPercent ? { anchorOffsetPercent: element.anchorOffsetPercent } : {}),
     ...(element.role ? { role: element.role } : {}),
     ...(element.slot ? { slot: element.slot } : {}),
     ...(typeof element.orderFromRight === "number" ? { orderFromRight: element.orderFromRight } : {}),

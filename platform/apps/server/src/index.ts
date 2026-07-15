@@ -1413,7 +1413,8 @@ app.post("/api/graphs/:versionId/assets/page-elements/validate", async (req, res
         locatorKind: body.locatorKind,
         structuralLocator: body.structuralLocator,
         visualLocator: body.visualLocator,
-        dynamicMasks: body.dynamicMasks
+        dynamicMasks: body.dynamicMasks,
+        anchorOffsetPercent: body.anchorOffsetPercent
       },
       observation,
       existingElements: readManualElementsForQuality(sourceNode?.metadata?.assetRecordingManualElements)
@@ -3901,6 +3902,7 @@ function readManualPageElementRequest(body: unknown): {
   abilityType?: ManualPageAbilityType;
   scrollProfile?: ManualPageTransitionScrollProfile;
   tapPointPercent?: { x: number; y: number };
+  anchorOffsetPercent?: { x: number; y: number };
   compoundSteps?: ManualPageTransitionCompoundStep[];
   quality?: PageElementQualityResult;
   visualLocator?: Record<string, unknown>;
@@ -3930,6 +3932,7 @@ function readManualPageElementRequest(body: unknown): {
     abilityType?: string;
     scrollProfile?: unknown;
     tapPointPercent?: unknown;
+    anchorOffsetPercent?: unknown;
     compoundSteps?: unknown;
     quality?: unknown;
     visualLocator?: unknown;
@@ -3968,6 +3971,7 @@ function readManualPageElementRequest(body: unknown): {
     abilityType: readManualAbilityType(input.abilityType),
     scrollProfile: readManualScrollProfile(input.scrollProfile),
     tapPointPercent: readManualTapPointPercent(input.tapPointPercent),
+    anchorOffsetPercent: readManualSignedPercentPoint(input.anchorOffsetPercent),
     compoundSteps: readManualCompoundSteps(input.compoundSteps),
     quality: readPageElementQuality(input.quality),
     visualLocator: readPlainRecord(input.visualLocator),
@@ -4340,6 +4344,19 @@ function readManualTapPointPercent(value: unknown): { x: number; y: number } | u
   const input = value as Record<string, unknown>;
   const x = readManualPercent(input.x);
   const y = readManualPercent(input.y);
+  if (x === undefined || y === undefined) {
+    return undefined;
+  }
+  return { x, y };
+}
+
+function readManualSignedPercentPoint(value: unknown): { x: number; y: number } | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  const x = typeof input.x === "number" && Number.isFinite(input.x) ? Math.max(-100, Math.min(100, input.x)) : undefined;
+  const y = typeof input.y === "number" && Number.isFinite(input.y) ? Math.max(-100, Math.min(100, input.y)) : undefined;
   if (x === undefined || y === undefined) {
     return undefined;
   }

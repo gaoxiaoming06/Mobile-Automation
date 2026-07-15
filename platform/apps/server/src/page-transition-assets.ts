@@ -88,6 +88,7 @@ export type PersistManualPageTransitionInput = {
   abilityType?: ManualPageAbilityType;
   scrollProfile?: ManualPageTransitionScrollProfile;
   tapPointPercent?: { x: number; y: number };
+  anchorOffsetPercent?: { x: number; y: number };
   compoundSteps?: ManualPageTransitionCompoundStep[];
   quality?: PageElementQualityResult;
   visualLocator?: Record<string, unknown>;
@@ -130,6 +131,7 @@ export type PersistManualPageElementInput = {
   abilityType?: ManualPageAbilityType;
   scrollProfile?: ManualPageTransitionScrollProfile;
   tapPointPercent?: { x: number; y: number };
+  anchorOffsetPercent?: { x: number; y: number };
   compoundSteps?: ManualPageTransitionCompoundStep[];
   quality?: PageElementQualityResult;
   visualLocator?: Record<string, unknown>;
@@ -300,6 +302,7 @@ export function persistManualPageElementAsset(input: PersistManualPageElementInp
         abilityType: input.abilityType,
         scrollProfile: input.scrollProfile,
         tapPointPercent: input.tapPointPercent,
+        anchorOffsetPercent: input.anchorOffsetPercent,
         compoundSteps: input.compoundSteps,
         quality: input.quality,
         visualLocator: input.visualLocator,
@@ -505,6 +508,7 @@ function manualPageElement(input: PersistManualPageElementInput, targetNode?: Bu
     availability: input.availability,
     ...(region ? { region } : {}),
     ...(input.tapPointPercent ? { tapPointPercent: input.tapPointPercent } : {}),
+    ...(input.anchorOffsetPercent ? { anchorOffsetPercent: input.anchorOffsetPercent } : {}),
     ...(input.targetNodeId ? { targetNodeId: input.targetNodeId } : targetNode ? { targetNodeId: targetNode.id } : {}),
     ...("targetLabel" in input && input.targetLabel ? { targetLabel: input.targetLabel } : targetNode ? { targetLabel: targetNode.name } : {}),
     ...("outcomeType" in input ? { outcomeType: input.outcomeType } : {}),
@@ -808,8 +812,11 @@ function manualAbilityActionParams(input: PersistManualPageTransitionInput): Rec
   if (input.locator.startsWith("image-region:") && input.tapPointPercent && input.abilityType !== "grid_candidate") {
     base.tapPointPercent = input.tapPointPercent;
   }
-  if (input.locator.startsWith("image-region:") && input.visualLocator) {
+  if ((input.locator.startsWith("image-region:") || input.locator.startsWith("top-bar-icon:")) && input.visualLocator) {
     base.visualLocator = input.visualLocator;
+  }
+  if (input.anchorOffsetPercent) {
+    base.anchorOffsetPercent = input.anchorOffsetPercent;
   }
   return base;
 }
