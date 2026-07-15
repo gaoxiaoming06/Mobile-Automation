@@ -1,4 +1,6 @@
 import type { Observation } from "@mobile-automation/graph-core";
+import { isCodexAppServerProvider, runAiJsonRequest, type AiClientFetch, type AiJsonResult } from "./ai-client.js";
+import type { AiDiagnosisConfig } from "./ai-diagnosis.js";
 
 export const AI_PAGE_DRAFT_MAX_OCR_TEXTS = 120;
 export const AI_PAGE_DRAFT_MAX_UI_ELEMENTS = 80;
@@ -238,6 +240,52 @@ export function parseAiPageDraftResponse(raw: string, observation: Observation):
   }
 
   return { suggestion: { page, identityOcrTexts, identityRegions, elements }, warnings };
+}
+
+export class AiPageDraftError extends Error {
+  constructor(
+    public readonly code: "not_configured" | "invalid_response" | "timeout" | "llm_failed",
+    message: string
+  ) {
+    super(message);
+    this.name = "AiPageDraftError";
+  }
+}
+
+export type AiPageDraftResult = {
+  suggestion: AiPageDraftSuggestion;
+  warnings: string[];
+  channel: "codex" | "openai-compatible";
+  visionUsed: boolean;
+};
+
+export async function generateAiPageDraft(input: { config: AiDiagnosisConfig; observation: Observation; fetchImpl?: AiClientFetch }): Promise<AiPageDraftResult> {
+  if (!input.config.enabled) {
+    throw new AiPageDraftError("not_configured", `AI 未启用（${input.config.reason}），请在 设置-AI 诊断 中配置模型`);
+  }
+  const evidence = buildPageDraftEvidence(input.observation);
+  const prompt = buildPageDraftPrompt(evidence);
+  const rawScreenshot = input.observation.raw?.screenshotBase64;
+  const imagePngBase64 = typeof rawScreenshot === "string" && rawScreenshot ? rawScreenshot : undefined;
+  const channel = isCodexAppServerProvider(input.config.baseURL) ? "codex" as const : "openai-compatible" as const;
+  let result: AiJsonResult;
+  try {
+    result = await runAiJsonRequest(
+      { baseURL: input.config.baseURL, apiKey: input.config.apiKey, model: input.config.model, timeoutMs: input.config.timeoutMs },
+      { developerInstructions: AI_PAGE_DRAFT_DEVELOPER_INSTRUCTIONS, userContent: prompt, imagePngBase64 },
+      input.fetchImpl ?? fetch
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new AiPageDraftError(/abort|timed? ?out/i.test(message) ? "timeout" : "llm_failed", message);
+  }
+  try {
+    const { suggestion, warnings } = parseAiPageDraftResponse(result.content, input.observation);
+    return { suggestion, warnings, channel, visionUsed: result.visionUsed };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new AiPageDraftError("invalid_response", `${message}；原始输出前 200 字：${result.content.slice(0, 200)}`);
+  }
 }
 
 function extractJsonObject(raw: string): string {

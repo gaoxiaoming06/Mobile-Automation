@@ -144,6 +144,7 @@ import {
   type AiDiagnosisResult,
   type AiDiagnosisSettingsUpdateInput
 } from "./ai-diagnosis.js";
+import { AiPageDraftError, generateAiPageDraft } from "./ai-page-draft.js";
 import {
   StabilityExplorer,
   StabilityExplorerDeviceBusyError,
@@ -793,6 +794,40 @@ app.post("/api/graphs/:versionId/current-page", async (req, res) => {
       assets: buildGraphAssetGovernanceSummary(latestGraphVersion, storage.listRuns(120, 0))
     });
   } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post("/api/graphs/:versionId/ai-page-draft", async (req, res) => {
+  try {
+    const graphVersion = storage.getBusinessGraphVersion(req.params.versionId);
+    if (!graphVersion) {
+      res.status(404).json({ error: "Graph version not found" });
+      return;
+    }
+    const body = req.body as { observation?: Observation; deviceSerial?: string };
+    const observation =
+      body.observation ??
+      (body.deviceSerial
+        ? await observationService.collect(body.deviceSerial, {
+            includeOcr: true,
+            includeUiTree: true,
+            includeScreenshot: true
+          })
+        : undefined);
+    if (!observation) {
+      res.status(400).json({ error: "observation or deviceSerial is required" });
+      return;
+    }
+    const config = resolveAiDiagnosisConfig(process.env, storage.getAiDiagnosisSettings());
+    const result = await generateAiPageDraft({ config, observation });
+    res.json(result);
+  } catch (error) {
+    if (error instanceof AiPageDraftError) {
+      const statusByCode = { not_configured: 409, invalid_response: 422, timeout: 504, llm_failed: 502 } as const;
+      res.status(statusByCode[error.code]).json({ error: error.message, code: error.code });
+      return;
+    }
     sendError(res, error);
   }
 });

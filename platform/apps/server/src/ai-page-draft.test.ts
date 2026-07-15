@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Observation } from "@mobile-automation/graph-core";
-import { AI_PAGE_DRAFT_DEVELOPER_INSTRUCTIONS, buildPageDraftEvidence, buildPageDraftPrompt, parseAiPageDraftResponse } from "./ai-page-draft.js";
+import { AI_PAGE_DRAFT_DEVELOPER_INSTRUCTIONS, buildPageDraftEvidence, buildPageDraftPrompt, generateAiPageDraft, parseAiPageDraftResponse } from "./ai-page-draft.js";
 
 function observationFixture(overrides: Partial<Observation> = {}): Observation {
   return {
@@ -127,6 +127,46 @@ describe("parseAiPageDraftResponse", () => {
     const { suggestion, warnings } = parseAiPageDraftResponse(JSON.stringify(payload), parseObservation);
     expect(suggestion.page.assetKind).toBe("page");
     expect(warnings.some((w) => w.includes("assetKind"))).toBe(true);
+  });
+});
+
+const enabledConfig = { enabled: true as const, baseURL: "https://llm.example.com/v1", apiKey: "sk", model: "m", timeoutMs: 5000 };
+
+function llmResponse(content: string): Response {
+  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+}
+
+describe("generateAiPageDraft", () => {
+  it("throws not_configured when AI is disabled", async () => {
+    await expect(
+      generateAiPageDraft({ config: { enabled: false, reason: "disabled" }, observation: parseObservation })
+    ).rejects.toMatchObject({ code: "not_configured" });
+  });
+
+  it("returns sanitized suggestion via openai-compatible channel", async () => {
+    const fetchImpl = async (_url: string, _init?: RequestInit) => llmResponse(JSON.stringify(validPayload));
+    const result = await generateAiPageDraft({ config: enabledConfig, observation: parseObservation, fetchImpl });
+    expect(result.channel).toBe("openai-compatible");
+    expect(result.suggestion.page.key).toBe("encyclopedia");
+    expect(result.visionUsed).toBe(false);
+  });
+
+  it("attaches screenshot from raw evidence as image", async () => {
+    let sawImage = false;
+    const fetchImpl = async (_url: string, init?: RequestInit) => {
+      sawImage = JSON.stringify(JSON.parse(init!.body as string).messages).includes("data:image/png;base64");
+      return llmResponse(JSON.stringify(validPayload));
+    };
+    const observationWithShot = { ...parseObservation, raw: { screenshotBase64: "aGk=" } };
+    const result = await generateAiPageDraft({ config: enabledConfig, observation: observationWithShot, fetchImpl });
+    expect(sawImage).toBe(true);
+    expect(result.visionUsed).toBe(true);
+  });
+
+  it("wraps unparseable llm output as invalid_response", async () => {
+    const fetchImpl = async (_url: string, _init?: RequestInit) => llmResponse("不是 JSON");
+    await expect(generateAiPageDraft({ config: enabledConfig, observation: parseObservation, fetchImpl }))
+      .rejects.toMatchObject({ code: "invalid_response" });
   });
 });
 
