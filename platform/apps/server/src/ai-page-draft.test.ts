@@ -109,7 +109,7 @@ describe("parseAiPageDraftResponse", () => {
     expect(warnings.some((w) => w.includes("零面积"))).toBe(true);
   });
 
-  it("drops elements with illegal locator or abilityType", () => {
+  it("keeps strategy-less elements as manual-completion drafts and drops illegal ability types", () => {
     const payload = {
       ...validPayload,
       elements: [
@@ -118,7 +118,12 @@ describe("parseAiPageDraftResponse", () => {
       ]
     };
     const { suggestion, warnings } = parseAiPageDraftResponse(JSON.stringify(payload), parseObservation);
-    expect(suggestion.elements).toEqual([]);
+    expect(suggestion.elements).toHaveLength(1);
+    expect(suggestion.elements[0]).toMatchObject({
+      elementLabel: "坏定位",
+      locator: "",
+      needsManualCompletion: true
+    });
     expect(warnings).toHaveLength(2);
   });
 
@@ -127,6 +132,192 @@ describe("parseAiPageDraftResponse", () => {
     const { suggestion, warnings } = parseAiPageDraftResponse(JSON.stringify(payload), parseObservation);
     expect(suggestion.page.assetKind).toBe("page");
     expect(warnings.some((w) => w.includes("assetKind"))).toBe(true);
+  });
+});
+
+describe("parseAiPageDraftResponse locator strategies", () => {
+  const strategyObservation = observationFixture({
+    ocrTexts: [
+      { text: "鲸放肿瘤百科" },
+      { text: "免费咨询" },
+      { text: "消息免打扰" },
+      { text: "会员中心" },
+      { text: "确认" },
+      { text: "确认" }
+    ]
+  });
+
+  function parseElements(elements: unknown[]): { elements: ReturnType<typeof parseAiPageDraftResponse>["suggestion"]["elements"]; warnings: string[] } {
+    const payload = { ...validPayload, elements };
+    const { suggestion, warnings } = parseAiPageDraftResponse(JSON.stringify(payload), strategyObservation);
+    return { elements: suggestion.elements, warnings };
+  }
+
+  it("emits a text locator without requiring a marked region", () => {
+    const { elements, warnings } = parseElements([
+      { elementLabel: "免费咨询", locatorKind: "text_locator", targetText: "免费咨询", abilityType: "fixed_tap", actionKind: "tap", semanticArea: "content", riskNotes: [] }
+    ]);
+    expect(warnings).toEqual([]);
+    expect(elements[0]).toMatchObject({
+      locatorKind: "text_locator",
+      locator: "text:免费咨询",
+      coordinateSpace: "runtime",
+      targetText: "免费咨询",
+      structuralLocator: expect.objectContaining({ kind: "ocr_text", text: "免费咨询" })
+    });
+    expect(elements[0]!.region).toBeUndefined();
+  });
+
+  it("flags exact duplicate text candidates as review risk instead of degrading", () => {
+    const { elements } = parseElements([
+      { elementLabel: "确认按钮", locatorKind: "text_locator", targetText: "确认", abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]!.locatorKind).toBe("text_locator");
+    expect(elements[0]!.riskNotes.some((note) => note.includes("2 处完全相同"))).toBe(true);
+  });
+
+  it("degrades a text locator whose target is missing from OCR when a region exists", () => {
+    const { elements, warnings } = parseElements([
+      { elementLabel: "臆造入口", locatorKind: "text_locator", targetText: "不存在的文字", region: { x: 10, y: 40, width: 60, height: 8 }, abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]).toMatchObject({
+      locatorKind: "visual_locator",
+      degradedFrom: "text_locator",
+      locator: "image-region:10,40,60,8"
+    });
+    expect(warnings.some((w) => w.includes("降级"))).toBe(true);
+  });
+
+  it("marks a text locator for manual completion when target is missing and there is no region", () => {
+    const { elements } = parseElements([
+      { elementLabel: "臆造入口", locatorKind: "text_locator", targetText: "不存在的文字", abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]).toMatchObject({ needsManualCompletion: true, locator: "" });
+    expect(elements[0]!.completionReason).toContain("不存在的文字");
+  });
+
+  it("builds runtime-consumable top bar icon assets with visual candidates", () => {
+    const { elements, warnings } = parseElements([
+      { elementLabel: "搜索图标", locatorKind: "top_bar_icon_locator", role: "Search", slot: "right", orderFromRight: 1, region: { x: 86, y: 4.5, width: 8, height: 4 }, abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(warnings).toEqual([]);
+    expect(elements[0]).toMatchObject({
+      locatorKind: "top_bar_icon_locator",
+      locator: "top-bar-icon:search",
+      coordinateSpace: "runtime",
+      semanticArea: "top",
+      structuralLocator: expect.objectContaining({ kind: "top_bar_icon", role: "search", slot: "trailing", orderFromRight: 1 }),
+      visualLocator: expect.objectContaining({
+        strategy: "top_bar_icon_shape",
+        searchRegion: { x: 86, y: 4.5, width: 8, height: 4 },
+        candidates: [
+          expect.objectContaining({ source: "ai_draft", role: "search", semanticArea: "top", region: { x: 86, y: 4.5, width: 8, height: 4 } })
+        ]
+      })
+    });
+  });
+
+  it("requests manual completion for a top bar icon without a reference region", () => {
+    const { elements, warnings } = parseElements([
+      { elementLabel: "搜索图标", locatorKind: "top_bar_icon_locator", role: "search", abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]).toMatchObject({ needsManualCompletion: true, locatorKind: "top_bar_icon_locator", locator: "" });
+    expect(warnings.some((w) => w.includes("参考区域"))).toBe(true);
+  });
+
+  it("degrades a top bar icon whose region is not in the top area", () => {
+    const { elements } = parseElements([
+      { elementLabel: "搜索图标", locatorKind: "top_bar_icon_locator", role: "search", region: { x: 40, y: 50, width: 10, height: 6 }, abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]).toMatchObject({ locatorKind: "visual_locator", degradedFrom: "top_bar_icon_locator" });
+  });
+
+  it("builds collection assets with container region and parameterized target query only", () => {
+    const { elements, warnings } = parseElements([
+      { elementLabel: "医生列表", locatorKind: "collection_item_locator", region: { x: 2, y: 30, width: 96, height: 55 }, scroll: { direction: "vertical", containerKind: "list", candidateIndex: 2 }, candidateIndex: 2, abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]).toMatchObject({
+      locatorKind: "collection_item_locator",
+      abilityType: "grid_candidate",
+      locator: "image-region:2,30,96,55",
+      scrollProfile: {
+        containerKind: "list",
+        direction: "vertical",
+        targetKind: "ocr_text",
+        targetQuery: "{{itemText}}",
+        afterFoundAction: "tap_item"
+      },
+      transitionKind: "parameterized",
+      parameterMapping: { itemText: "dynamicRegion.item.titleText" }
+    });
+    expect(elements[0]!.scrollProfile).not.toHaveProperty("columns");
+    expect(elements[0]).not.toHaveProperty("candidateIndex");
+    expect(elements[0]!.dynamicRegion).toMatchObject({ kind: "grid", region: { x: 2, y: 30, width: 96, height: 55 } });
+    expect(elements[0]!.itemTemplate).toMatchObject({ dynamicFields: [{ name: "itemText", role: "title" }] });
+    expect(warnings.some((w) => w.includes("candidateIndex"))).toBe(true);
+    expect(warnings.some((w) => w.includes("grid_candidate"))).toBe(true);
+  });
+
+  it("builds whitelisted structural locators with verified anchor text", () => {
+    const { elements } = parseElements([
+      { elementLabel: "消息免打扰开关", locatorKind: "structural_locator", structuralStrategy: "ocr_trailing_switch", anchorText: "消息免打扰", region: { x: 4, y: 42, width: 92, height: 6 }, abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] },
+      { elementLabel: "同意协议", locatorKind: "structural_locator", structuralStrategy: "near_text_checkbox", anchorText: "消息免打扰", region: { x: 4, y: 80, width: 92, height: 5 }, abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]).toMatchObject({
+      locatorKind: "structural_locator",
+      targetText: "消息免打扰",
+      structuralLocator: { strategy: "ocr_trailing_switch", anchorText: "消息免打扰" }
+    });
+    expect(elements[1]!.structuralLocator).toEqual({
+      strategy: "near_text",
+      role: "checkbox",
+      clickTarget: "leading_checkbox",
+      anchorText: "消息免打扰"
+    });
+  });
+
+  it("rejects invented structural strategies", () => {
+    const { elements, warnings } = parseElements([
+      { elementLabel: "魔法开关", locatorKind: "structural_locator", structuralStrategy: "magic_switch", anchorText: "消息免打扰", region: { x: 4, y: 42, width: 92, height: 6 }, abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]).toMatchObject({ locatorKind: "visual_locator", degradedFrom: "structural_locator" });
+    expect(warnings.some((w) => w.includes("白名单"))).toBe(true);
+  });
+
+  it("emits ocr anchor offset assets with the runtime field name", () => {
+    const { elements } = parseElements([
+      { elementLabel: "会员中心右侧箭头", locatorKind: "ocr_anchor_offset", anchorText: "会员中心", anchorOffsetPercent: { x: 80, y: -3 }, region: { x: 88, y: 20, width: 8, height: 5 }, abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]).toMatchObject({
+      locatorKind: "ocr_anchor_offset",
+      targetText: "会员中心",
+      anchorText: "会员中心",
+      anchorOffsetPercent: { x: 50, y: -3 },
+      structuralLocator: expect.objectContaining({ kind: "ocr_anchor_offset", anchorText: "会员中心" })
+    });
+    expect(elements[0]).not.toHaveProperty("offsetPercent");
+  });
+
+  it("warns when an anchor offset is omitted but keeps the element", () => {
+    const { elements, warnings } = parseElements([
+      { elementLabel: "会员中心右侧箭头", locatorKind: "ocr_anchor_offset", anchorText: "会员中心", region: { x: 88, y: 20, width: 8, height: 5 }, abilityType: "fixed_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]!.locatorKind).toBe("ocr_anchor_offset");
+    expect(elements[0]!.anchorOffsetPercent).toBeUndefined();
+    expect(warnings.some((w) => w.includes("anchorOffsetPercent"))).toBe(true);
+  });
+
+  it("keeps visual locators with masks and strips unverifiable target text", () => {
+    const { elements, warnings } = parseElements([
+      { elementLabel: "活动横幅", locatorKind: "visual_locator", targetText: "不存在的文字", region: { x: 4, y: 12, width: 92, height: 12 }, dynamicMasks: [{ kind: "image", region: { x: 4, y: 12, width: 30, height: 12 }, reason: "活动图轮换" }], abilityType: "conditional_tap", actionKind: "tap", riskNotes: [] }
+    ]);
+    expect(elements[0]).toMatchObject({
+      locatorKind: "visual_locator",
+      locator: "image-region:4,12,92,12",
+      dynamicMasks: [expect.objectContaining({ kind: "image", reason: "活动图轮换" })]
+    });
+    expect(elements[0]!.targetText).toBeUndefined();
+    expect(warnings.some((w) => w.includes("已移除"))).toBe(true);
   });
 });
 
@@ -175,8 +366,11 @@ describe("buildPageDraftPrompt", () => {
     const prompt = buildPageDraftPrompt(buildPageDraftEvidence(observationFixture({ ocrTexts: [{ text: "肿瘤百科" }] })));
     expect(prompt).toContain("肿瘤百科");
     expect(prompt).toContain("identityOcrTexts");
-    expect(prompt).toContain("image-region:");
+    expect(prompt).toContain("locatorKind");
     expect(AI_PAGE_DRAFT_DEVELOPER_INSTRUCTIONS).toContain("只返回一个 JSON");
     expect(AI_PAGE_DRAFT_DEVELOPER_INSTRUCTIONS).toContain("状态栏");
+    expect(AI_PAGE_DRAFT_DEVELOPER_INSTRUCTIONS).toContain("top_bar_icon_locator");
+    expect(AI_PAGE_DRAFT_DEVELOPER_INSTRUCTIONS).toContain("anchorOffsetPercent");
+    expect(AI_PAGE_DRAFT_DEVELOPER_INSTRUCTIONS).toContain("禁止输出 candidateIndex");
   });
 });
