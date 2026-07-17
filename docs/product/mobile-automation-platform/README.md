@@ -4,7 +4,7 @@ doc_type: README
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-10
+updated_at: 2026-07-17
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -46,6 +46,7 @@ ClassIn 首页底部 Tab（主页、消息、待办、课程表、空间 / 控�
 | [product-plan.md](spec/product-plan.md) | 产品级路线图：包管理、新包冒烟、性能基线、流程验证、触发通知 |
 | [requirements.md](spec/requirements.md) | 产品需求、使用场景、非功能需求、开放问题 |
 | [asset-driven-testing-requirements.md](spec/asset-driven-testing-requirements.md) | 资产驱动测试产品形态：资产录入、参数集、巡检、元功能、组合用例、AI/MCP |
+| [free-composition-requirements.md](spec/free-composition-requirements.md) | 自由组合：用自然语言受约束地编排资产测试、参数、循环、风险确认和 AI 修复 |
 | [design.md](spec/design.md) | 技术设计、模块边界、数据模型、关键流程、风险 |
 | [tasks.md](spec/tasks.md) | 可执行开发任务拆分 |
 | [acceptance.md](spec/acceptance.md) | 验收标准与验证方法 |

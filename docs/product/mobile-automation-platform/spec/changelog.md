@@ -4,7 +4,7 @@ doc_type: changelog
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-15
+updated_at: 2026-07-17
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -12,6 +12,20 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 ---
 
 # 自动化测试平台 Spec 变更记录
+
+## 2026-07-17
+
+- 明确自由组合采用 AI 经 MCP 的候选检索与消歧链路：AI 负责理解和编排，系统仍负责资产真相、候选范围、校验、安全门和执行。
+
+### Added
+
+- 新增“自由组合：对话式资产编排测试”需求：用户可用自然语言描述测试目标，系统受约束地检索并编排现有页面资产、页面能力、连接边、PageTask、元功能和组合用例。
+- 固化参数域/数据记录选择、临时计划预览、循环失败策略、风险发布二次确认、报告沉淀及 AI/MCP 受控修复边界。
+
+### Changed
+
+- 明确自由组合不是另一套坐标执行器；所有计划仍通过 PageStateFlow 资产编译、运行时重定位、质量门和风险门执行。
+- 明确自由组合按可运行 MVP 分阶段交付：先完成“自然语言 -> 受控资产检索 -> 计划校验/确认 -> 真实执行 -> 报告反馈”闭环，再根据候选歧义、缺资产、缺参数、定位/恢复失败等真实证据扩展模型；统一领域模型、跨应用、复杂调度和治理能力不是首版前置条件。
 
 ## 2026-07-15
 
