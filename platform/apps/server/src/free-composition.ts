@@ -5,7 +5,13 @@ import type {
   RunMode
 } from "@mobile-automation/shared";
 
-export type FreeCompositionCandidateKind = "composite_case" | "meta_function" | "page_task" | "page_transition" | "generated_flow";
+export type FreeCompositionCandidateKind =
+  | "composite_case"
+  | "meta_function"
+  | "page_task"
+  | "page_transition"
+  | "system_action"
+  | "generated_flow";
 
 export type FreeCompositionCandidate = {
   id: string;
@@ -29,6 +35,7 @@ export type FreeCompositionCandidate = {
   pageElementId?: string;
   pageElementLabel?: string;
   pageTransitionId?: string;
+  systemAction?: "launch_app";
   composedCandidateIds?: string[];
 };
 
@@ -147,7 +154,9 @@ export function resolveFreeComposition(
       metaFunction.status === "active"
   );
   const metaFunctionsById = new Map(activeMetaFunctions.map((item) => [item.id, item]));
+  const systemActionCandidate = buildSystemActionCandidate(intent.prompt, input);
   const baseCandidates = [
+    ...(systemActionCandidate ? [systemActionCandidate] : []),
     ...input.compositeCases
       .filter(
         (compositeCase) =>
@@ -277,6 +286,28 @@ function buildPageTransitionCandidate(pageTransition: FreeCompositionPageTransit
     pageElementLabel: pageTransition.pageElementLabel,
     pageTransitionId: pageTransition.pageTransitionId
   };
+}
+
+function buildSystemActionCandidate(prompt: string, input: ResolveFreeCompositionInput): FreeCompositionCandidate | undefined {
+  if (!containsAppLaunchIntent(prompt)) {
+    return undefined;
+  }
+  return {
+    id: systemActionCandidateId("launch_app"),
+    kind: "system_action",
+    appId: input.appId,
+    platform: input.platform,
+    name: "启动 App",
+    description: "启动当前 App，不会保存为正式资产。",
+    parameterKeys: [],
+    score: 160,
+    matchedTerms: ["打开 App"],
+    systemAction: "launch_app"
+  };
+}
+
+export function systemActionCandidateId(action: "launch_app"): string {
+  return `system_action:${action}`;
 }
 
 export function pageTransitionCandidateId(sourcePageModelId: string, pageElementId: string, targetPageModelId: string): string {
@@ -550,6 +581,9 @@ function candidateScoreForText(candidate: FreeCompositionCandidate, text: string
       score += 80;
     }
   }
+  if (candidate.kind === "system_action" && candidate.systemAction === "launch_app" && isAppLaunchIntent(text)) {
+    score += 160;
+  }
   for (const intentTerm of INTENT_TERMS) {
     if (!intentTerm.pattern.test(normalizedText)) {
       continue;
@@ -573,19 +607,22 @@ function candidateScoreForText(candidate: FreeCompositionCandidate, text: string
 }
 
 function candidateKindPriority(kind: FreeCompositionCandidateKind): number {
-  if (kind === "page_task") {
+  if (kind === "system_action") {
     return 0;
   }
-  if (kind === "meta_function") {
+  if (kind === "page_task") {
     return 1;
   }
-  if (kind === "composite_case") {
+  if (kind === "meta_function") {
     return 2;
   }
-  if (kind === "page_transition") {
+  if (kind === "composite_case") {
     return 3;
   }
-  return 3;
+  if (kind === "page_transition") {
+    return 4;
+  }
+  return 5;
 }
 
 function missingAssetsMessage(prompt: string, input: ResolveFreeCompositionInput): string {
@@ -632,4 +669,13 @@ function textMatchScore(prompt: string, value: string): number {
     }
   }
   return 0;
+}
+
+function isAppLaunchIntent(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  return /(?:打开|启动|拉起|运行|launch|start)(?:当前)?(?:[a-z0-9_.-]{0,32})?(?:app|应用|客户端|软件|程序)$/.test(normalized);
+}
+
+function containsAppLaunchIntent(prompt: string): boolean {
+  return isAppLaunchIntent(prompt) || orderedPromptSegments(prompt).some((segment) => isAppLaunchIntent(segment));
 }

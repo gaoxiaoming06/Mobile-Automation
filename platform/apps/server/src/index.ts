@@ -206,7 +206,10 @@ const assetCompositeExecutionManager = new AssetCompositeExecutionManager({
   },
   waitForRun: (runId) => graphRunner.waitForRun(runId),
   getRun: (runId) => storage.getRun(runId),
-  stopRun: (runId) => graphRunner.stop(runId)
+  stopRun: (runId) => graphRunner.stop(runId),
+  performAction: async (deviceSerial, action) => {
+    await driver.performAction(deviceSerial, action);
+  }
 });
 const freeCompositionSessions = new FreeCompositionSessionRegistry();
 const observationService = new ObservationService(driver, ocr);
@@ -496,12 +499,16 @@ app.post("/api/free-composition/sessions/:id/selection", (req, res) => {
       res.status(404).json({ error: "AI资产用例会话不存在。" });
       return;
     }
-    const graphVersion = findAssetPatrolGraphVersion(baseSession.appId);
+    const candidate = baseSession.resolution.candidates.find((item) => item.id === candidateId);
+    if (!candidate) {
+      res.status(404).json({ error: "选择的候选不属于当前AI资产用例会话。" });
+      return;
+    }
+    const graphVersion = findAssetPatrolGraphVersion(baseSession.appId) ?? (candidate.kind === "system_action" ? emptyFreeCompositionGraphVersion(baseSession.appId) : undefined);
     if (!graphVersion) {
       res.status(404).json({ error: `没有找到 ${baseSession.appId} 的 active 页面资产。` });
       return;
     }
-    const candidate = baseSession.resolution.candidates.find((item) => item.id === candidateId);
     const parameterProfileId = requestedProfileId ?? candidate?.parameterProfileId;
     const parameterProfile = parameterProfileId ? storage.getParameterProfile(parameterProfileId) : undefined;
     if (parameterProfileId && !parameterProfile) {
@@ -5177,6 +5184,19 @@ function assetCompositePlanForRequest(caseId: string, value: unknown) {
   });
 }
 
+function emptyFreeCompositionGraphVersion(appId: string): BusinessGraphVersion {
+  return {
+    id: `free-composition-system-${appId}`,
+    graphId: "free-composition-system",
+    version: 1,
+    status: "active",
+    sourceSummary: [],
+    createdAt: nowIso(),
+    nodes: [],
+    edges: []
+  };
+}
+
 function enrichFreeCompositionSession(session: FreeCompositionSession): FreeCompositionSession & { execution?: AssetCompositeExecution } {
   if (!session.executionId) {
     return session;
@@ -5442,6 +5462,18 @@ function readMetaFunctionStep(value: unknown, index: number): MetaFunctionStep {
   }
   if (input.kind === "verify_page") {
     return { ...base, kind: "verify_page", pageModelId: requiredString(input.pageModelId, `steps[${index}].pageModelId`) };
+  }
+  if (input.kind === "system_action") {
+    const actionType = input.actionType === "launch_app" ? "launch_app" : undefined;
+    if (!actionType) {
+      throw new Error(`steps[${index}].actionType 无效。`);
+    }
+    return {
+      ...base,
+      kind: "system_action",
+      actionType,
+      packageName: stringOrUndefined(input.packageName)
+    };
   }
   throw new Error(`steps[${index}].kind 无效。`);
 }

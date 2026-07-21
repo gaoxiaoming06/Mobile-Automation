@@ -5,7 +5,7 @@ import { apiFetchJson } from "../api";
 
 type FreeCompositionCandidate = {
   id: string;
-  kind: "composite_case" | "meta_function" | "page_task" | "page_transition" | "generated_flow";
+  kind: "composite_case" | "meta_function" | "page_task" | "page_transition" | "system_action" | "generated_flow";
   appId: string;
   platform: Platform;
   name: string;
@@ -14,6 +14,7 @@ type FreeCompositionCandidate = {
   parameterKeys: string[];
   score: number;
   matchedTerms: string[];
+  systemAction?: "launch_app";
   composedCandidateIds?: string[];
 };
 
@@ -36,7 +37,7 @@ type CompositePlan = {
   status: "ready" | "needs_parameters" | "blocked";
   runtimeParams: Record<string, string>;
   requiredParameters: string[];
-  steps: Array<{ id: string; metaFunctionName: string; kind: string; targetPageModelId: string; pageElementId?: string; pageTaskId?: string }>;
+  steps: Array<{ id: string; metaFunctionName: string; kind: string; targetPageModelId: string; pageElementId?: string; pageTaskId?: string; systemAction?: string; packageName?: string }>;
   issues: Array<{ code: string; message: string; assetId?: string }>;
 };
 
@@ -390,6 +391,9 @@ function candidateKindLabel(kind: FreeCompositionCandidate["kind"]): string {
   }
   if (kind === "page_transition") {
     return "页面连接";
+  }
+  if (kind === "system_action") {
+    return "系统步骤";
   }
   return "元功能";
 }

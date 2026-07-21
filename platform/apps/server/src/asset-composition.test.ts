@@ -193,6 +193,37 @@ describe("compileAssetCompositeCase", () => {
     expect(result.steps[1]).toEqual(expect.objectContaining({ pageElementId: "class-grid", pageTransitionId: "transition-home-detail" }));
   });
 
+  it("compiles launch-app system steps without requiring page assets", () => {
+    const launchMeta: MetaFunction = {
+      id: "meta-launch-app",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      name: "启动 App",
+      parameters: [],
+      steps: [
+        { id: "launch-app", order: 1, kind: "system_action", actionType: "launch_app", enabled: true }
+      ],
+      status: "active",
+      version: 1,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+    const result = compileAssetCompositeCase({
+      compositeCase: compositeCase([launchMeta.id]),
+      metaFunctions: [launchMeta],
+      graphVersion: emptyGraphVersion()
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.issues).toEqual([]);
+    expect(result.steps[0]).toEqual(expect.objectContaining({
+      kind: "system_action",
+      systemAction: "launch_app",
+      packageName: "cn.eeo.classin",
+      targetPageModelId: "cn.eeo.classin"
+    }));
+  });
+
   it("reports broken asset references and missing required parameters before execution", () => {
     const brokenMeta: MetaFunction = {
       ...enterClassMetaFunction(),
@@ -287,6 +318,19 @@ function graphVersion(): BusinessGraphVersion {
         assetRecordingPageTasks: [{ id: "task-fill-lesson", name: "填写课堂信息", status: "active", steps: [] }]
       })
     ],
+    edges: []
+  };
+}
+
+function emptyGraphVersion(): BusinessGraphVersion {
+  return {
+    id: "graph-version-empty",
+    graphId: "graph",
+    version: 1,
+    status: "active",
+    sourceSummary: [],
+    createdAt: nowIso(),
+    nodes: [],
     edges: []
   };
 }

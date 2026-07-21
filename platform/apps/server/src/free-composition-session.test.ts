@@ -380,6 +380,48 @@ describe("free composition sessions", () => {
     ]);
   });
 
+  it("wraps a selected built-in app launch as a temporary system step", () => {
+    const resolution = resolveFreeComposition("打开app", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: []
+    });
+    const session = createFreeCompositionSession({
+      appId: "cn.eeo.classin",
+      platform: "android",
+      prompt: "打开app",
+      resolution,
+      now
+    });
+
+    const selected = selectFreeCompositionCandidate({
+      session,
+      candidateId: "system_action:launch_app",
+      metaFunctions: [],
+      compositeCases: [],
+      now
+    });
+    const preview = previewFreeCompositionSession({
+      session: selected,
+      metaFunctions: [],
+      parameterDataRecords: [],
+      graphVersion: emptyGraphVersion(),
+      now
+    });
+
+    expect(selected.generatedMetaFunctions?.[0]).toMatchObject({
+      name: "启动 App",
+      steps: [
+        { kind: "system_action", actionType: "launch_app" }
+      ]
+    });
+    expect(preview.plan.status).toBe("ready");
+    expect(preview.plan.steps.map((step) => [step.metaFunctionName, step.kind, step.systemAction, step.packageName])).toEqual([
+      ["启动 App", "system_action", "launch_app", "cn.eeo.classin"]
+    ]);
+  });
+
   it("keeps a page-task session waiting for required task parameters instead of blocking it", () => {
     const resolution = resolveFreeComposition("进入登录页面 然后发起登录", {
       appId: "cn.eeo.classin",
@@ -635,6 +677,19 @@ function graphVersion(): BusinessGraphVersion {
     sourceSummary: [],
     createdAt: now,
     nodes: [pageNode("page-home", "主页")],
+    edges: []
+  };
+}
+
+function emptyGraphVersion(): BusinessGraphVersion {
+  return {
+    id: "graph-version-empty",
+    graphId: "graph",
+    version: 1,
+    status: "active",
+    sourceSummary: [],
+    createdAt: now,
+    nodes: [],
     edges: []
   };
 }

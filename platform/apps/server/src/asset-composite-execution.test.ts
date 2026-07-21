@@ -17,7 +17,8 @@ describe("AssetCompositeExecutionManager", () => {
       },
       waitForRun: async () => undefined,
       getRun: (id) => runs.get(id),
-      stopRun: async () => true
+      stopRun: async () => true,
+      performAction: async () => undefined
     });
 
     const execution = manager.start({
@@ -60,7 +61,8 @@ describe("AssetCompositeExecutionManager", () => {
       },
       waitForRun: async () => undefined,
       getRun: (id) => runs.get(id),
-      stopRun: async () => true
+      stopRun: async () => true,
+      performAction: async () => undefined
     });
 
     const execution = manager.start({
@@ -101,7 +103,8 @@ describe("AssetCompositeExecutionManager", () => {
       stopRun: async () => {
         releaseActiveRun?.();
         return true;
-      }
+      },
+      performAction: async () => undefined
     });
 
     const execution = manager.start({
@@ -124,6 +127,43 @@ describe("AssetCompositeExecutionManager", () => {
     expect(completed.items.slice(0, 4).every((item) => item.status === "passed")).toBe(true);
     expect(completed.items[4]).toEqual(expect.objectContaining({ iteration: 2, status: "stopped" }));
   });
+
+  it("executes a launch-app system action without starting a graph run", async () => {
+    const actions: Array<{ serial: string; packageName: string }> = [];
+    const manager = new AssetCompositeExecutionManager({
+      startGraphRun: async () => {
+        throw new Error("system action should not start graph run");
+      },
+      waitForRun: async () => undefined,
+      getRun: () => undefined,
+      stopRun: async () => true,
+      performAction: async (serial, action) => {
+        if (action.type === "launch_app") {
+          actions.push({ serial, packageName: action.packageName });
+        }
+      }
+    });
+
+    const execution = manager.start({
+      deviceSerial: "device-1",
+      compositeCaseId: "case-1",
+      compositeCaseName: "启动 App",
+      stopOnFailure: true,
+      runMode: "once",
+      repeatCount: 1,
+      plan: launchAppPlan()
+    });
+    await manager.waitForExecution(execution.id);
+
+    const completed = manager.getExecution(execution.id)!;
+    expect(completed.status).toBe("passed");
+    expect(completed.items[0]).toEqual(expect.objectContaining({
+      kind: "system_action",
+      status: "passed"
+    }));
+    expect(completed.items[0]).not.toHaveProperty("runId");
+    expect(actions).toEqual([{ serial: "device-1", packageName: "cn.eeo.classin" }]);
+  });
 });
 
 function executionPlan(): AssetCompositeExecutionPlan {
@@ -144,6 +184,33 @@ function executionPlan(): AssetCompositeExecutionPlan {
       { ...common, id: "compiled-2", order: 2, metaFunctionId: "meta-enter", metaFunctionName: "进入指定班级", metaFunctionStepId: "open-class", kind: "invoke_capability", sourcePageModelId: "page-home", targetPageModelId: "page-detail", pageElementId: "class-grid", pageTransitionId: "transition-home-detail" },
       { ...common, id: "compiled-3", order: 3, metaFunctionId: "meta-create", metaFunctionName: "创建课堂但不发布", metaFunctionStepId: "fill-form", kind: "run_page_task", targetPageModelId: "page-create", pageTaskId: "task-fill-lesson" },
       { ...common, id: "compiled-4", order: 4, metaFunctionId: "meta-create", metaFunctionName: "创建课堂但不发布", metaFunctionStepId: "verify", kind: "verify_page", targetPageModelId: "page-create" }
+    ]
+  };
+}
+
+function launchAppPlan(): AssetCompositeExecutionPlan {
+  return {
+    status: "ready",
+    compositeCaseId: "case-1",
+    compositeCaseName: "启动 App",
+    graphVersionId: "graph-version-empty",
+    runtimeParams: {},
+    requiredParameters: [],
+    issues: [],
+    steps: [
+      {
+        id: "compiled-launch",
+        order: 1,
+        caseStepId: "case-step-launch",
+        metaFunctionId: "meta-launch",
+        metaFunctionName: "启动 App",
+        metaFunctionStepId: "launch-app",
+        kind: "system_action",
+        targetPageModelId: "cn.eeo.classin",
+        systemAction: "launch_app",
+        packageName: "cn.eeo.classin",
+        runtimeParams: {}
+      }
     ]
   };
 }

@@ -169,6 +169,55 @@ describe("FreeCompositionPanel", () => {
     expect(markup).not.toContain("暂无自由组合会话");
   });
 
+  it("labels a built-in app launch candidate as a system step", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(FreeCompositionPanel, {
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        defaultAppId: "cn.eeo.classin",
+        setMessage: vi.fn(),
+        initialData: {
+          sessions: [
+            {
+              id: "free_composition_launch_app",
+              appId: "cn.eeo.classin",
+              platform: "android",
+              prompt: "打开app",
+              createdAt: "2026-07-18T00:00:00.000Z",
+              updatedAt: "2026-07-18T00:00:00.000Z",
+              status: "awaiting_selection",
+              resolution: {
+                status: "ready",
+                message: "已找到内置系统候选。",
+                intent: {
+                  prompt: "打开app",
+                  runMode: "once",
+                  repeatCount: 1,
+                  riskTerms: []
+                },
+                candidates: [
+                  {
+                    id: "system_action:launch_app",
+                    kind: "system_action",
+                    appId: "cn.eeo.classin",
+                    platform: "android",
+                    name: "启动 App",
+                    parameterKeys: [],
+                    score: 160,
+                    matchedTerms: ["打开 App"]
+                  }
+                ]
+              }
+            }
+          ],
+          profiles: []
+        }
+      })
+    );
+
+    expect(markup).toContain("系统步骤 · 启动 App");
+  });
+
   it("renders parameter confirmation as a conversation instead of a parameter-source form", () => {
     const markup = renderToStaticMarkup(
       React.createElement(FreeCompositionPanel, {

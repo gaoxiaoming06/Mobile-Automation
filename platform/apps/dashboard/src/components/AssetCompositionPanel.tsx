@@ -574,7 +574,9 @@ function EditorLayout({ title, items, selectedId, onSelect, onAdd, children }: {
 
 function EditorActions({ busy, onSave, onDelete }: { busy: boolean; onSave: () => void; onDelete?: () => void }) { return <div className="editor-actions">{onDelete ? <button className="danger-button" type="button" onClick={onDelete} disabled={busy}><Trash2 size={15} />删除</button> : <span /> }<button className="primary-button" type="button" onClick={onSave} disabled={busy}><Save size={15} />保存</button></div>; }
 
-function StepToolbar({ onAdd }: { onAdd: (kind: MetaFunctionStep["kind"]) => void }) {
+type EditableMetaFunctionStepKind = Exclude<MetaFunctionStep["kind"], "system_action">;
+
+function StepToolbar({ onAdd }: { onAdd: (kind: EditableMetaFunctionStepKind) => void }) {
   return <div className="composition-step-toolbar">
     <div><strong>资产步骤</strong><span>每一步复用已录入的页面资产，按顺序组成一个元功能。</span></div>
     <div className="step-toolbar-actions">
@@ -587,7 +589,13 @@ function StepToolbar({ onAdd }: { onAdd: (kind: MetaFunctionStep["kind"]) => voi
 }
 
 function MetaStepEditor({ step, index, catalog, onChange, onMove, onDelete }: { step: MetaFunctionStep; index: number; catalog: CompositionCatalog; onChange: (step: MetaFunctionStep) => void; onMove: (direction: -1 | 1) => void; onDelete: () => void }) {
-  const pageId = step.kind === "reach_page" ? step.targetPageModelId : step.kind === "invoke_capability" ? step.sourcePageModelId : step.pageModelId;
+  const pageId = step.kind === "reach_page"
+    ? step.targetPageModelId
+    : step.kind === "invoke_capability"
+      ? step.sourcePageModelId
+      : step.kind === "system_action"
+        ? undefined
+        : step.pageModelId;
   const page = catalog.pages.find((item) => item.id === pageId) ?? catalog.pages[0];
   return <article className="composition-step-card">
     <header>
@@ -595,7 +603,7 @@ function MetaStepEditor({ step, index, catalog, onChange, onMove, onDelete }: { 
       <StepButtons index={index} onMove={onMove} onDelete={onDelete} />
     </header>
     <div className="step-card-fields">
-      <label>步骤类型<select aria-label={`第 ${index + 1} 步类型`} value={step.kind} onChange={(event) => onChange(newMetaStep(event.target.value as MetaFunctionStep["kind"], index + 1, catalog))}><option value="reach_page">到达页面</option><option value="invoke_capability">执行页面能力</option><option value="run_page_task">执行页面任务</option><option value="verify_page">验证页面</option></select></label>
+      <label>步骤类型<select aria-label={`第 ${index + 1} 步类型`} value={step.kind} onChange={(event) => onChange(newMetaStep(event.target.value as MetaFunctionStep["kind"], index + 1, catalog))}><option value="reach_page">到达页面</option><option value="invoke_capability">执行页面能力</option><option value="run_page_task">执行页面任务</option><option value="verify_page">验证页面</option>{step.kind === "system_action" ? <option value="system_action">系统步骤</option> : null}</select></label>
       {step.kind === "reach_page" ? <label>目标页面<PageSelect value={step.targetPageModelId} catalog={catalog} onChange={(value) => onChange({ ...step, targetPageModelId: value })} /></label> : null}
       {step.kind === "verify_page" ? <label>要验证的页面<PageSelect value={step.pageModelId} catalog={catalog} onChange={(value) => onChange({ ...step, pageModelId: value })} /></label> : null}
       {step.kind === "invoke_capability" ? <>
@@ -629,6 +637,7 @@ function metaStepKindLabel(kind: MetaFunctionStep["kind"]): string {
   if (kind === "reach_page") return "到达页面";
   if (kind === "invoke_capability") return "执行页面能力";
   if (kind === "run_page_task") return "执行页面任务";
+  if (kind === "system_action") return "系统步骤";
   return "验证页面";
 }
 
@@ -636,6 +645,7 @@ function metaStepKindHint(kind: MetaFunctionStep["kind"]): string {
   if (kind === "reach_page") return "规划路径并进入指定页面。";
   if (kind === "invoke_capability") return "定位页面元素，执行点击、输入或切换。";
   if (kind === "run_page_task") return "执行已录入的页面任务。";
+  if (kind === "system_action") return "执行启动 App 等设备级动作。";
   return "确认当前状态与目标页面资产一致。";
 }
 
@@ -679,7 +689,7 @@ function domainLabel(domainKey: string, manifest?: ParameterManifest): string { 
 function metaDraftFrom(meta: MetaFunction | undefined, appId: string) { return { id: meta?.id ?? "", appId, name: meta?.name ?? "", description: meta?.description ?? "", status: meta?.status ?? "draft" as MetaFunction["status"], parametersText: metaFunctionParametersToText(meta?.parameters ?? []), steps: meta?.steps ?? [] }; }
 function caseDraftFrom(testCase: AssetCompositeCase | undefined, appId: string) { return { id: testCase?.id ?? "", appId, name: testCase?.name ?? "", description: testCase?.description ?? "", parameterProfileId: testCase?.parameterProfileId ?? "", runMode: testCase?.runMode ?? "once" as AssetCompositeCase["runMode"], repeatCount: testCase?.repeatCount ?? 1, stopOnFailure: testCase?.stopOnFailure ?? true, status: testCase?.status ?? "draft" as AssetCompositeCase["status"], steps: testCase?.steps ?? [] }; }
 
-function newMetaStep(kind: MetaFunctionStep["kind"], order: number, catalog: CompositionCatalog): MetaFunctionStep { const page = catalog.pages[0]; const base = { id: `meta-step-${Date.now()}-${order}`, order, enabled: true }; if (kind === "reach_page") return { ...base, kind, targetPageModelId: page?.id ?? "" }; if (kind === "verify_page") return { ...base, kind, pageModelId: page?.id ?? "" }; if (kind === "run_page_task") { const taskPage = catalog.pages.find((item) => item.tasks.length) ?? page; return { ...base, kind, pageModelId: taskPage?.id ?? "", pageTaskId: taskPage?.tasks[0]?.id ?? "" }; } const capabilityPage = catalog.pages.find((item) => item.elements.length) ?? page; const element = capabilityPage?.elements[0]; const transition = capabilityPage?.transitions.find((item) => item.elementId === element?.id); return { ...base, kind, sourcePageModelId: capabilityPage?.id ?? "", pageElementId: element?.id ?? "", targetPageModelId: transition?.targetPageModelId }; }
+function newMetaStep(kind: MetaFunctionStep["kind"], order: number, catalog: CompositionCatalog): MetaFunctionStep { const page = catalog.pages[0]; const base = { id: `meta-step-${Date.now()}-${order}`, order, enabled: true }; if (kind === "system_action") return { ...base, kind, actionType: "launch_app" }; if (kind === "reach_page") return { ...base, kind, targetPageModelId: page?.id ?? "" }; if (kind === "verify_page") return { ...base, kind, pageModelId: page?.id ?? "" }; if (kind === "run_page_task") { const taskPage = catalog.pages.find((item) => item.tasks.length) ?? page; return { ...base, kind, pageModelId: taskPage?.id ?? "", pageTaskId: taskPage?.tasks[0]?.id ?? "" }; } const capabilityPage = catalog.pages.find((item) => item.elements.length) ?? page; const element = capabilityPage?.elements[0]; const transition = capabilityPage?.transitions.find((item) => item.elementId === element?.id); return { ...base, kind, sourcePageModelId: capabilityPage?.id ?? "", pageElementId: element?.id ?? "", targetPageModelId: transition?.targetPageModelId }; }
 function newCaseStep(metaFunctionId: string, order: number): AssetCompositeCaseStep { return { id: `case-step-${Date.now()}-${order}`, order, metaFunctionId, enabled: true }; }
 
 function replaceOrdered<T extends { order: number }>(items: T[], index: number, next: T): T[] { return items.map((item, itemIndex) => ({ ...(itemIndex === index ? next : item), order: itemIndex + 1 })); }

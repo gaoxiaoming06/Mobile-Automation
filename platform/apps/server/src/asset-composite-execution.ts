@@ -1,4 +1,4 @@
-import { createId, nowIso, type RunMode, type TestRun } from "@mobile-automation/shared";
+import { createId, nowIso, type DeviceActionRequest, type RunMode, type TestRun } from "@mobile-automation/shared";
 import { missingRequiredParameterKeysFromIssues, type AssetCompositeExecutionPlan, type CompiledAssetCompositionStep } from "./asset-composition.js";
 
 export type AssetCompositeExecutionItemStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "stopped";
@@ -17,6 +17,8 @@ export type AssetCompositeExecutionItem = {
   pageElementId?: string;
   pageTransitionId?: string;
   pageTaskId?: string;
+  systemAction?: "launch_app";
+  packageName?: string;
   status: AssetCompositeExecutionItemStatus;
   runId?: string;
   error?: string;
@@ -66,6 +68,7 @@ type AssetCompositeExecutionDependencies = {
   waitForRun(runId: string): Promise<void>;
   getRun(runId: string): TestRun | undefined;
   stopRun(runId: string): Promise<boolean>;
+  performAction(deviceSerial: string, action: DeviceActionRequest): Promise<void>;
 };
 
 export class AssetCompositeExecutionManager {
@@ -178,13 +181,18 @@ export class AssetCompositeExecutionManager {
       execution.currentItem = item;
       recomputeExecution(execution);
       try {
-        const started = await this.dependencies.startGraphRun(graphRunRequest(execution, step));
-        state.runId = started.runId;
-        item.runId = started.runId;
-        await this.dependencies.waitForRun(started.runId);
-        const run = this.dependencies.getRun(started.runId);
-        item.status = state.cancelled ? "stopped" : run?.status === "passed" ? "passed" : run?.status === "stopped" ? "stopped" : "failed";
-        item.error = item.status === "failed" ? runFailureMessage(run) : undefined;
+        if (step.kind === "system_action") {
+          await this.dependencies.performAction(execution.deviceSerial, systemActionRequest(step));
+          item.status = state.cancelled ? "stopped" : "passed";
+        } else {
+          const started = await this.dependencies.startGraphRun(graphRunRequest(execution, step));
+          state.runId = started.runId;
+          item.runId = started.runId;
+          await this.dependencies.waitForRun(started.runId);
+          const run = this.dependencies.getRun(started.runId);
+          item.status = state.cancelled ? "stopped" : run?.status === "passed" ? "passed" : run?.status === "stopped" ? "stopped" : "failed";
+          item.error = item.status === "failed" ? runFailureMessage(run) : undefined;
+        }
       } catch (error) {
         item.status = "failed";
         item.error = error instanceof Error ? error.message : String(error);
@@ -230,7 +238,7 @@ export function renderAssetCompositeExecutionReportHtml(execution: AssetComposit
     const [iteration, , name] = key.split(":");
     const rows = items.map((item) => `<tr>
       <td>${item.order}</td><td>${escapeHtml(item.kind)}</td><td>${escapeHtml(item.targetPageModelId)}</td>
-      <td>${escapeHtml(item.pageElementId ?? item.pageTaskId ?? "-")}</td><td class="${item.status}">${escapeHtml(item.status)}</td>
+      <td>${escapeHtml(item.systemAction ?? item.pageElementId ?? item.pageTaskId ?? "-")}</td><td class="${item.status}">${escapeHtml(item.status)}</td>
       <td>${item.runId ? escapeHtml(item.runId) : "-"}</td><td>${escapeHtml(item.error ?? "")}</td>
     </tr>`).join("");
     return `<section><h2>第 ${escapeHtml(iteration ?? "1")} 轮 · ${escapeHtml(name ?? "元功能")}</h2>
@@ -267,8 +275,17 @@ function executionItem(id: string, order: number, iteration: number, step: Compi
     pageElementId: step.pageElementId,
     pageTransitionId: step.pageTransitionId,
     pageTaskId: step.pageTaskId,
+    systemAction: step.systemAction,
+    packageName: step.packageName,
     status: "pending"
   };
+}
+
+function systemActionRequest(step: CompiledAssetCompositionStep): DeviceActionRequest {
+  if (step.systemAction === "launch_app" && step.packageName) {
+    return { type: "launch_app", packageName: step.packageName };
+  }
+  throw new Error(`Unsupported system action: ${step.systemAction ?? step.kind}`);
 }
 
 function graphRunRequest(execution: AssetCompositeExecution, step: CompiledAssetCompositionStep): AssetCompositeGraphRunRequest {

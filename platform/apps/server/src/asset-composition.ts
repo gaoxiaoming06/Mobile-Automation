@@ -42,6 +42,8 @@ export type CompiledAssetCompositionStep = {
   pageElementId?: string;
   pageTransitionId?: string;
   pageTaskId?: string;
+  systemAction?: "launch_app";
+  packageName?: string;
   runtimeParams: Record<string, string>;
 };
 
@@ -228,6 +230,16 @@ function resolveMetaFunctionStep(input: {
     kind: metaStep.kind,
     runtimeParams: { ...input.runtimeParams }
   };
+
+  if (metaStep.kind === "system_action") {
+    const packageName = metaStep.packageName?.trim() || input.metaFunction.appId;
+    return {
+      ...common,
+      targetPageModelId: packageName,
+      systemAction: metaStep.actionType,
+      packageName
+    };
+  }
 
   if (metaStep.kind === "reach_page" || metaStep.kind === "verify_page") {
     const pageModelId = metaStep.kind === "reach_page" ? metaStep.targetPageModelId : metaStep.pageModelId;

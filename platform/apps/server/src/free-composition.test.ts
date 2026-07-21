@@ -94,6 +94,25 @@ describe("resolveFreeComposition", () => {
     expect(result.candidates).toEqual([]);
   });
 
+  it("resolves an app launch prompt as a built-in system action without saved assets", () => {
+    const result = resolveFreeComposition("打开app", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: []
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.candidates[0]).toMatchObject({
+      id: "system_action:launch_app",
+      kind: "system_action",
+      name: "启动 App",
+      appId: "cn.eeo.classin",
+      systemAction: "launch_app",
+      parameterKeys: []
+    });
+  });
+
   it("can resolve a page task directly when no meta function has been created yet", () => {
     const result = resolveFreeComposition("进入登录页面 然后发起登录", {
       appId: "cn.eeo.classin",

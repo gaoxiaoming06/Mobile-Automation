@@ -274,6 +274,17 @@ function temporaryCompositeCaseForCandidate(
         });
         continue;
       }
+      if (composedCandidate.kind === "system_action") {
+        const generatedMetaFunction = temporaryMetaFunctionForSystemAction(session, composedCandidate, now, String(index + 1));
+        generatedMetaFunctions.push(generatedMetaFunction);
+        steps.push({
+          id: `free_composition_step_${session.id}_${index + 1}`,
+          order: steps.length + 1,
+          metaFunctionId: generatedMetaFunction.id,
+          enabled: true
+        });
+        continue;
+      }
       if (composedCandidate.kind === "meta_function") {
         const source = metaFunctions.find((item) => item.id === composedCandidate.id);
         if (!source) {
@@ -404,6 +415,36 @@ function temporaryCompositeCaseForCandidate(
     };
   }
 
+  if (candidate.kind === "system_action") {
+    const generatedMetaFunction = temporaryMetaFunctionForSystemAction(session, candidate, now);
+    return {
+      compositeCase: {
+        id: "free_composition_case_" + session.id,
+        appId: session.appId,
+        platform: session.platform,
+        name: "AI资产用例：" + generatedMetaFunction.name,
+        description: "由自然语言临时组合生成：" + session.prompt,
+        parameterProfileId,
+        runMode: intent.runMode,
+        repeatCount: intent.repeatCount,
+        stopOnFailure: true,
+        steps: [
+          {
+            id: "free_composition_step_" + session.id + "_1",
+            order: 1,
+            metaFunctionId: generatedMetaFunction.id,
+            enabled: true
+          }
+        ],
+        status: "active",
+        version: 1,
+        createdAt: now,
+        updatedAt: now
+      },
+      generatedMetaFunctions: [generatedMetaFunction]
+    };
+  }
+
   const source = metaFunctions.find((item) => item.id === candidate.id);
   if (!source) {
     throw new Error("找不到选中的元功能，请重新分析需求。");
@@ -432,6 +473,39 @@ function temporaryCompositeCaseForCandidate(
     createdAt: now,
     updatedAt: now
   } };
+}
+
+function temporaryMetaFunctionForSystemAction(
+  session: FreeCompositionSession,
+  candidate: FreeCompositionCandidate,
+  now: string,
+  suffix = ""
+): MetaFunction {
+  if (candidate.systemAction !== "launch_app") {
+    throw new Error("系统候选缺少可执行动作，请重新分析需求。");
+  }
+  const idSuffix = suffix ? `_${suffix}` : "";
+  return {
+    id: "free_composition_system_meta_" + session.id + idSuffix,
+    appId: session.appId,
+    platform: session.platform,
+    name: candidate.name,
+    description: "由AI资产用例临时包装的系统步骤，不会保存为正式元功能。",
+    parameters: [],
+    steps: [
+      {
+        id: "free_composition_launch_app_" + session.id + idSuffix,
+        order: 1,
+        enabled: true,
+        kind: "system_action",
+        actionType: "launch_app"
+      }
+    ],
+    status: "active",
+    version: 1,
+    createdAt: now,
+    updatedAt: now
+  };
 }
 
 function temporaryMetaFunctionForPageTransition(

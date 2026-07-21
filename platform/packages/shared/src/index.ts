@@ -381,6 +381,11 @@ export type MetaFunctionStep =
   | (MetaFunctionStepBase & {
       kind: "verify_page";
       pageModelId: string;
+    })
+  | (MetaFunctionStepBase & {
+      kind: "system_action";
+      actionType: "launch_app";
+      packageName?: string;
     });
 
 export type MetaFunction = {
