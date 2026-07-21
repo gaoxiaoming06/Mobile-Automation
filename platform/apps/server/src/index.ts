@@ -165,8 +165,16 @@ import { persistRecordingStepGraphAsset } from "./recording-graph-assets.js";
 import { resolveReachableStartNode } from "./start-node-recovery.js";
 import { listSourceScanDirectories, listSourceScanRoots, pickSourceScanDirectory } from "./source-scan-roots.js";
 import { findNearestTextCandidate } from "./semantic-locator.js";
-import { assetCompositionCatalog, compileAssetCompositeCase } from "./asset-composition.js";
-import { AssetCompositeExecutionManager, renderAssetCompositeExecutionReportHtml } from "./asset-composite-execution.js";
+import { assetCompositionCatalog, compileAssetCompositeCase, missingRequiredParameterKeysFromIssues } from "./asset-composition.js";
+import { AssetCompositeExecutionManager, renderAssetCompositeExecutionReportHtml, type AssetCompositeExecution } from "./asset-composite-execution.js";
+import { FreeCompositionSessionRegistry } from "./free-composition-api.js";
+import type {
+  FreeCompositionPageAbilityAsset,
+  FreeCompositionPageAsset,
+  FreeCompositionPageTaskAsset,
+  FreeCompositionPageTransitionAsset
+} from "./free-composition.js";
+import { assertFreeCompositionExecutionAllowed, type FreeCompositionSession } from "./free-composition-session.js";
 import {
   findElementAtPointFromCandidates,
   hasStableLocator,
@@ -200,6 +208,7 @@ const assetCompositeExecutionManager = new AssetCompositeExecutionManager({
   getRun: (runId) => storage.getRun(runId),
   stopRun: (runId) => graphRunner.stop(runId)
 });
+const freeCompositionSessions = new FreeCompositionSessionRegistry();
 const observationService = new ObservationService(driver, ocr);
 const scrcpyStreamBridge = new ScrcpyStreamBridge();
 const artifactCleanupScheduler = new ArtifactCleanupScheduler(storage);
@@ -386,6 +395,10 @@ app.post("/api/asset-composition/cases/:id/execute", (req, res) => {
     }
     const plan = assetCompositePlanForRequest(req.params.id, body);
     if (plan.status !== "ready") {
+      if (plan.status === "needs_parameters") {
+        res.status(409).json({ error: "请先补充参数：" + missingRequiredParameterKeysFromIssues(plan.issues).join("、"), plan });
+        return;
+      }
       res.status(409).json({ error: plan.issues[0]?.message ?? "组合用例预检未通过。", plan });
       return;
     }
@@ -431,6 +444,129 @@ app.get("/api/asset-composition/executions/:id/report", (req, res) => {
     return;
   }
   res.type("html").send(renderAssetCompositeExecutionReportHtml(execution));
+});
+
+app.get("/api/free-composition/sessions", (req, res) => {
+  res.json({ sessions: freeCompositionSessions.list(assetCompositionFilter(req.query)).map(enrichFreeCompositionSession) });
+});
+
+app.get("/api/free-composition/sessions/:id", (req, res) => {
+  const session = freeCompositionSessions.get(req.params.id);
+  if (!session) {
+    res.status(404).json({ error: "AI资产用例会话不存在。" });
+    return;
+  }
+  res.json({ session: enrichFreeCompositionSession(session) });
+});
+
+app.post("/api/free-composition/sessions", (req, res) => {
+  try {
+    const body = recordBody(req.body);
+    const appId = requiredString(body.appId, "appId");
+    const platform = requiredPlatform(body.platform);
+    const prompt = requiredString(body.prompt, "prompt");
+    const graphVersion = findAssetPatrolGraphVersion(appId);
+    const freeCompositionAssets = graphVersion
+      ? freeCompositionAssetsFromGraph(graphVersion, appId, platform)
+      : { pageTasks: [], pageTransitions: [], pageAssets: [], pageAbilities: [] };
+    const session = freeCompositionSessions.create({
+      appId,
+      platform,
+      prompt,
+      metaFunctions: storage.listMetaFunctions({ appId, platform }),
+      compositeCases: storage.listAssetCompositeCases({ appId, platform }),
+      pageTasks: freeCompositionAssets.pageTasks,
+      pageTransitions: freeCompositionAssets.pageTransitions,
+      pageAssets: freeCompositionAssets.pageAssets,
+      pageAbilities: freeCompositionAssets.pageAbilities
+    });
+    res.status(201).json({ session: enrichFreeCompositionSession(session) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post("/api/free-composition/sessions/:id/selection", (req, res) => {
+  try {
+    const body = recordBody(req.body);
+    const candidateId = requiredString(body.candidateId, "candidateId");
+    const requestedProfileId = stringOrUndefined(body.parameterProfileId);
+    const baseSession = freeCompositionSessions.get(req.params.id);
+    if (!baseSession) {
+      res.status(404).json({ error: "AI资产用例会话不存在。" });
+      return;
+    }
+    const graphVersion = findAssetPatrolGraphVersion(baseSession.appId);
+    if (!graphVersion) {
+      res.status(404).json({ error: `没有找到 ${baseSession.appId} 的 active 页面资产。` });
+      return;
+    }
+    const candidate = baseSession.resolution.candidates.find((item) => item.id === candidateId);
+    const parameterProfileId = requestedProfileId ?? candidate?.parameterProfileId;
+    const parameterProfile = parameterProfileId ? storage.getParameterProfile(parameterProfileId) : undefined;
+    if (parameterProfileId && !parameterProfile) {
+      res.status(404).json({ error: `参数集不存在：${parameterProfileId}` });
+      return;
+    }
+    const preview = freeCompositionSessions.selectAndPreview({
+      sessionId: req.params.id,
+      candidateId,
+      parameterProfileId,
+      metaFunctions: storage.listMetaFunctions({ appId: baseSession.appId, platform: baseSession.platform }),
+      compositeCases: storage.listAssetCompositeCases({ appId: baseSession.appId, platform: baseSession.platform }),
+      parameterProfile,
+      parameterDataRecords: storage.listParameterDataRecords({ appId: baseSession.appId, platform: baseSession.platform }),
+      graphVersion,
+      runtimeOverrides: primitiveRecord(body.runtimeOverrides)
+    });
+    res.json({ session: enrichFreeCompositionSession(preview.session), plan: preview.plan });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post("/api/free-composition/sessions/:id/execute", (req, res) => {
+  try {
+    const body = recordBody(req.body);
+    const deviceSerial = requiredString(body.deviceSerial, "deviceSerial");
+    const session = freeCompositionSessions.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "AI资产用例会话不存在。" });
+      return;
+    }
+    assertFreeCompositionExecutionAllowed(session, {
+      confirmed: body.confirmed === true,
+      riskConfirmed: body.riskConfirmed === true
+    });
+    if (!session.compositeCase || !session.plan) {
+      res.status(409).json({ error: "请先生成AI资产用例计划。" });
+      return;
+    }
+    if (session.plan.status !== "ready") {
+      if (session.plan.status === "needs_parameters") {
+        res.status(409).json({ error: "请先补充参数：" + missingRequiredParameterKeysFromIssues(session.plan.issues).join("、"), plan: session.plan });
+        return;
+      }
+      res.status(409).json({ error: session.plan.issues[0]?.message ?? "AI资产用例计划预检未通过。", plan: session.plan });
+      return;
+    }
+    const execution = assetCompositeExecutionManager.start({
+      deviceSerial,
+      compositeCaseId: session.compositeCase.id,
+      compositeCaseName: session.compositeCase.name,
+      stopOnFailure: session.compositeCase.stopOnFailure,
+      runMode: session.compositeCase.runMode,
+      repeatCount: session.compositeCase.runMode === "once" ? 1 : session.compositeCase.repeatCount,
+      plan: session.plan
+    });
+    const running = freeCompositionSessions.markExecutionStarted(session.id, execution.id, { riskConfirmed: body.riskConfirmed === true });
+    res.status(202).json({ session: enrichFreeCompositionSession(running), execution, plan: session.plan });
+  } catch (error) {
+    if (sendKnownError(res, error)) {
+      return;
+    }
+    sendError(res, error);
+  }
 });
 
 app.get("/api/settings/ai-diagnosis", (_req, res) => {
@@ -5039,6 +5175,87 @@ function assetCompositePlanForRequest(caseId: string, value: unknown) {
     graphVersion,
     runtimeOverrides: primitiveRecord(body.runtimeOverrides)
   });
+}
+
+function enrichFreeCompositionSession(session: FreeCompositionSession): FreeCompositionSession & { execution?: AssetCompositeExecution } {
+  if (!session.executionId) {
+    return session;
+  }
+  const execution = assetCompositeExecutionManager.getExecution(session.executionId);
+  const synced = freeCompositionSessions.syncExecution(session.id, execution);
+  return {
+    ...synced,
+    ...(execution ? { execution } : {})
+  };
+}
+
+function freeCompositionAssetsFromGraph(
+  graphVersion: BusinessGraphVersion,
+  appId: string,
+  platform: Platform
+): {
+  pageTasks: FreeCompositionPageTaskAsset[];
+  pageTransitions: FreeCompositionPageTransitionAsset[];
+  pageAssets: FreeCompositionPageAsset[];
+  pageAbilities: FreeCompositionPageAbilityAsset[];
+} {
+  const catalog = assetCompositionCatalog(graphVersion);
+  return {
+    pageAssets: catalog.pages.map((page) => ({
+      appId,
+      platform,
+      pageModelId: page.id,
+      pageModelName: page.name
+    })),
+    pageAbilities: catalog.pages.flatMap((page) =>
+      page.elements.map((element) => {
+        const transition = page.transitions.find((item) => item.elementId === element.id);
+        return {
+          appId,
+          platform,
+          pageModelId: page.id,
+          pageModelName: page.name,
+          pageElementId: element.id,
+          pageElementLabel: element.label,
+          ...(transition?.targetPageModelId ? { targetPageModelId: transition.targetPageModelId } : {}),
+          ...(transition?.targetPageName ? { targetPageModelName: transition.targetPageName } : {})
+        };
+      })
+    ),
+    pageTransitions: catalog.pages.flatMap((page) =>
+      page.transitions
+        .filter((transition) => transition.elementId && transition.targetPageModelId && transition.targetPageName)
+        .map((transition) => {
+          const element = page.elements.find((item) => item.id === transition.elementId);
+          return {
+            appId,
+            platform,
+            sourcePageModelId: page.id,
+            sourcePageModelName: page.name,
+            targetPageModelId: transition.targetPageModelId!,
+            targetPageModelName: transition.targetPageName!,
+            pageElementId: transition.elementId!,
+            pageElementLabel: element?.label ?? transition.elementId!,
+            pageTransitionId: transition.id,
+            pageTransitionName: `${page.name} -> ${transition.targetPageName}`
+          };
+        })
+    ),
+    pageTasks: catalog.pages.flatMap((page) =>
+      page.tasks
+        .filter((task) => task.status !== "deprecated")
+        .map((task) => ({
+          appId,
+          platform,
+          pageModelId: page.id,
+          pageModelName: page.name,
+          pageTaskId: task.id,
+          pageTaskName: task.name,
+          parameterKeys: task.parameterKeys,
+          status: task.status
+        }))
+    )
+  };
 }
 
 function assetCompositionFilter(value: unknown): { appId?: string; platform?: Platform } {

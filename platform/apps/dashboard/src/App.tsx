@@ -36,10 +36,12 @@ import { PreviewPanel } from "./components/PreviewPanel";
 import { GraphCandidatesPanel } from "./components/GraphCandidatesPanel";
 import { PageAssetsPanel, parseRuntimeParams } from "./components/PageAssetsPanel";
 import { AssetCompositionPanel } from "./components/AssetCompositionPanel";
+import { FreeCompositionPanel } from "./components/FreeCompositionPanel";
 import { RuntimeInterceptorPanel, type RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
 import { StepsPanel } from "./components/StepsPanel";
 import { ToolStatusBar } from "./components/StepsPanelParts";
 import { useDeviceList } from "./hooks/useDeviceList";
+import { controllableDevices, isControllableDevice } from "./device-availability";
 import { useRecorder } from "./hooks/useRecorder";
 import { useRunExecution } from "./hooks/useRunExecution";
 import { useScrcpyStream } from "./hooks/useScrcpyStream";
@@ -1185,6 +1187,7 @@ export function App() {
     refreshDevices,
     selectDevice
   } = useDeviceList({ setMessage });
+  const selectableDevices = controllableDevices(devices);
   const {
     imageRef,
     canvasRef,
@@ -1677,7 +1680,7 @@ export function App() {
       const after = await fetchRecordingObservation(selectedSerial).catch(() => undefined);
       if (!before || !after) {
         await identifyCurrentPageAsset();
-        setMessage("已刷新页面信息，但本次动作缺少前后页面快照，暂未生成 PageTransition candidate");
+        setMessage("已刷新页面信息，但本次动作缺少前后页面快照，暂未生成页面连接候选");
         return;
       }
       const step = deviceActionToAssetRecordingStep(recordable, selectedDeviceSize);
@@ -1694,11 +1697,11 @@ export function App() {
       });
       const json = (await response.json()) as RecordingGraphAssetApiResponse & CurrentPageAssetApiResponse & { error?: string };
       if (!response.ok) {
-        throw new Error(json.error ?? "PageTransition candidate 生成失败");
+        throw new Error(json.error ?? "页面连接候选生成失败");
       }
       await identifyCurrentPageAsset();
       const edge = json.result.edge.edge;
-      const messagePrefix = edge ? `已生成 PageTransition candidate：${edge.name}` : "动作已执行，PageTransition candidate 暂未生成";
+      const messagePrefix = edge ? `已生成页面连接候选：${edge.name}` : "动作已执行，暂未生成页面连接候选";
       setMessage(messagePrefix);
     } catch (error) {
       await identifyCurrentPageAsset();
@@ -2091,6 +2094,10 @@ export function App() {
     setActiveNavItem("assetComposition");
   }
 
+  function openFreeComposition() {
+    setActiveNavItem("freeComposition");
+  }
+
   function openParameterCenter() {
     setActiveNavItem("parameterCenter");
   }
@@ -2307,7 +2314,7 @@ export function App() {
     const graphVersionId = assetRecordingPage.graphVersionId;
     const observation = assetRecordingPage.observation;
     if (!graphVersionId || !observation) {
-      setMessage("请先执行“识别当前页”，再使用 AI 识别本页");
+      setMessage("请先执行“识别当前页”，再使用 AI 辅助识别");
       return;
     }
     setAssetRecordingAiIdentifying(true);
@@ -2623,12 +2630,12 @@ export function App() {
         error?: string;
       };
       if (!response.ok || !json.report) {
-        throw new Error(json.error ?? "自动探索失败");
+        throw new Error(json.error ?? "发现页面连接失败");
       }
       setAssetRecordingGraphVersionId(graphVersionId);
       setAssetAutoExploreReport(json.report);
-      const action = mode === "preview" ? "已生成自动探索候选" : "自动探索执行完成";
-      setMessage(json.report.status === "blocked" ? json.report.message ?? "自动探索已阻断" : `${action}：${json.report.plan.steps.length} 步`);
+      const action = mode === "preview" ? "已生成页面连接候选" : "页面连接发现完成";
+      setMessage(json.report.status === "blocked" ? json.report.message ?? "页面连接发现已阻断" : `${action}：${json.report.plan.steps.length} 步`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -2992,6 +2999,7 @@ export function App() {
           openAssetRecording={openAssetRecording}
           openPageAssets={openPageAssets}
           openAssetComposition={openAssetComposition}
+          openFreeComposition={openFreeComposition}
           openParameterCenter={openParameterCenter}
           openAssetPatrol={openAssetPatrol}
           openStability={openStability}
@@ -3042,7 +3050,7 @@ export function App() {
           <>
             <PreviewPanel
               key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
-              devices={devices}
+              devices={selectableDevices}
               selectedSerial={selectedSerial}
               selectedDevice={selectedDevice}
               previewRef={previewRef}
@@ -3107,7 +3115,7 @@ export function App() {
             previewSlot={
               <PreviewPanel
                 key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
-                devices={devices}
+                devices={selectableDevices}
                 selectedSerial={selectedSerial}
                 selectedDevice={selectedDevice}
                 previewRef={previewRef}
@@ -3163,6 +3171,15 @@ export function App() {
           />
         )}
 
+        {activeNavItem === "freeComposition" && (
+          <FreeCompositionPanel
+            selectedSerial={selectedSerial}
+            selectedDeviceBusy={selectedDeviceBusy}
+            defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
+            setMessage={setMessage}
+          />
+        )}
+
         {activeNavItem === "parameterCenter" && (
           <AssetCompositionPanel
             mode="parameters"
@@ -3175,7 +3192,7 @@ export function App() {
 
         {activeNavItem === "assetPatrol" && (
           <AssetPatrolPanel
-            devices={devices}
+            devices={selectableDevices}
             selectedSerial={selectedSerial}
             selectedDevice={selectedDevice}
             selectedDeviceBusy={selectedDeviceBusy}
@@ -3196,7 +3213,7 @@ export function App() {
             summary={assetPatrolSummary}
             busy={busy}
             onSelectDevice={(serial) => {
-              const device = devices.find((item) => item.serial === serial);
+              const device = selectableDevices.find((item) => item.serial === serial);
               if (device) {
                 selectDeviceAndCloseStream(device);
               }
@@ -3224,7 +3241,7 @@ export function App() {
 
         {activeNavItem === "stability" && (
           <StabilityExplorerPanel
-            devices={devices}
+            devices={selectableDevices}
             selectedSerial={selectedSerial}
             selectedDevice={selectedDevice}
             selectedDeviceBusy={selectedDeviceBusy}
@@ -3244,7 +3261,7 @@ export function App() {
             summary={stabilitySummary}
             busy={busy}
             onSelectDevice={(serial) => {
-              const device = devices.find((item) => item.serial === serial);
+              const device = selectableDevices.find((item) => item.serial === serial);
               if (device) {
                 selectDeviceAndCloseStream(device);
               }
@@ -3612,8 +3629,8 @@ export function AssetPatrolPanel({
             </label>
             <span className="runtime-param-hint">
               {selectedParameterProfile
-                ? `本次执行使用「${selectedParameterProfile.name}」的冻结快照（已绑定 ${selectedParameterProfile.bindings?.length ?? 0} 个业务领域${Object.keys(selectedParameterProfile.values).length ? `，含 ${Object.keys(selectedParameterProfile.values).length} 项高级覆盖` : ""}）。在“测试数据 > 执行组合”中统一维护。`
-                : "请在“测试数据 > 执行组合”维护并选择一套运行数据；缺少动态参数的能力会被跳过或进入诊断。"}
+                ? `本次执行使用「${selectedParameterProfile.name}」的冻结快照（已绑定 ${selectedParameterProfile.bindings?.length ?? 0} 个业务领域${Object.keys(selectedParameterProfile.values).length ? `，含 ${Object.keys(selectedParameterProfile.values).length} 项高级覆盖` : ""}）。在“参数中心 > 执行组合”中统一维护。`
+                : "请在“参数中心 > 执行组合”维护并选择一套运行数据；缺少动态参数的能力会被跳过或进入诊断。"}
             </span>
           </div>
 
@@ -4085,8 +4102,9 @@ function DeviceManagementView({
   onRefreshDevices
 }: DeviceManagementViewProps) {
   const selectedDeviceRuns = selectedSerial ? runs.filter((run) => run.deviceSerial === selectedSerial).slice(0, 5) : [];
+  const selectableDeviceCount = devices.filter(isControllableDevice).length;
   const onlineCount = devices.filter((device) => device.status === "online").length;
-  const controllableCount = devices.filter((device) => device.capabilities.tap || device.capabilities.swipe).length;
+  const unavailableCount = devices.length - selectableDeviceCount;
   const activeRunsCount = runs.filter(isActiveRunStatus).length;
 
   return (
@@ -4114,16 +4132,16 @@ function DeviceManagementView({
           <div className="device-head-actions">
             <div className="module-stat-grid">
               <div>
-                <strong>{devices.length}</strong>
-                <span>发现设备</span>
+                <strong>{selectableDeviceCount}</strong>
+                <span>可用设备</span>
               </div>
               <div>
                 <strong>{onlineCount}</strong>
                 <span>在线</span>
               </div>
               <div>
-                <strong>{controllableCount}</strong>
-                <span>可控制</span>
+                <strong>{unavailableCount}</strong>
+                <span>已隐藏</span>
               </div>
               <div>
                 <strong>{activeRunsCount}</strong>

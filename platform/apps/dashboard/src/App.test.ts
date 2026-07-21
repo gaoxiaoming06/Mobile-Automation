@@ -484,6 +484,8 @@ describe("App shell", () => {
     );
 
     expect(markup).toContain(ASSET_DRIVEN_TEST_ACTION_LABEL);
+    expect(markup).toContain("参数中心 &gt; 执行组合");
+    expect(markup).not.toContain("测试数据");
     expect(markup).not.toContain("预览计划");
     expect(markup).not.toContain("执行资产体检");
   });

@@ -1,4 +1,4 @@
-import { DatabaseZap, Save } from "lucide-react";
+import { DatabaseZap, Save, Sparkles } from "lucide-react";
 import { useRef, useState } from "react";
 import type { FormEvent, PointerEvent, ReactNode } from "react";
 import { AI_LOCATOR_KIND_LABELS, aiElementSuggestionToDraft, type AiElementSuggestion } from "../ai-page-draft-merge";
@@ -424,7 +424,7 @@ export function AssetRecordingPanel({
   selectedDeviceName,
   busy,
   identifying = false,
-  initialDetailTab = "workbench",
+  initialDetailTab = "match",
   currentPage,
   previewSlot,
   onPageDraftChange,
@@ -451,6 +451,7 @@ export function AssetRecordingPanel({
   const [regionStart, setRegionStart] = useState<{ x: number; y: number }>();
   const [draftRegion, setDraftRegion] = useState<AssetRecordingScreenshotRegion>();
   const [activeDetailTab, setActiveDetailTab] = useState<AssetDetailTab>(initialDetailTab);
+  const visibleDetailTab = activeDetailTab === "workbench" ? "match" : activeDetailTab;
   const [isRenamingPage, setIsRenamingPage] = useState(false);
   const [draftPageName, setDraftPageName] = useState("");
   const [editingEvidence, setEditingEvidence] = useState<EditingEvidence>();
@@ -1077,12 +1078,13 @@ export function AssetRecordingPanel({
                 <div className="asset-ai-identify">
                   <button
                     type="button"
-                    className="secondary"
+                    className="asset-ai-identify-button"
                     disabled={busy || identifying || aiIdentifying || !page.observation}
                     onClick={() => void onAiIdentify()}
                     title="将当前页面证据交给 AI 生成资产草稿建议（预计 20-60 秒）"
                   >
-                    {aiIdentifying ? "AI 识别中…" : "AI 识别本页"}
+                    <Sparkles size={15} />
+                    <span>{aiIdentifying ? "AI 辅助识别中…" : "AI 辅助识别"}</span>
                   </button>
                   {aiIdentifying ? <span className="asset-ai-identify-hint">AI 正在分析页面证据，预计 20-60 秒…</span> : null}
                 </div>
@@ -1096,43 +1098,25 @@ export function AssetRecordingPanel({
           {page.status !== "idle" ? (
             <>
               <div className="asset-detail-tabs" role="tablist" aria-label="页面资产详情">
-                <button className={detailTabClass(activeDetailTab, "workbench")} type="button" role="tab" aria-selected={activeDetailTab === "workbench"} onClick={() => setActiveDetailTab("workbench")}>
-                  v2 候选录入
-                </button>
-                <button className={detailTabClass(activeDetailTab, "match")} type="button" role="tab" aria-selected={activeDetailTab === "match"} onClick={() => setActiveDetailTab("match")}>
+                <button className={detailTabClass(visibleDetailTab, "match")} type="button" role="tab" aria-selected={visibleDetailTab === "match"} onClick={() => setActiveDetailTab("match")}>
                   页面匹配
                 </button>
-                <button className={detailTabClass(activeDetailTab, "actions")} type="button" role="tab" aria-selected={activeDetailTab === "actions"} onClick={() => setActiveDetailTab("actions")}>
+                <button className={detailTabClass(visibleDetailTab, "actions")} type="button" role="tab" aria-selected={visibleDetailTab === "actions"} onClick={() => setActiveDetailTab("actions")}>
                   页面能力
                 </button>
-                <button className={detailTabClass(activeDetailTab, "transitions")} type="button" role="tab" aria-selected={activeDetailTab === "transitions"} onClick={() => setActiveDetailTab("transitions")}>
+                <button className={detailTabClass(visibleDetailTab, "transitions")} type="button" role="tab" aria-selected={visibleDetailTab === "transitions"} onClick={() => setActiveDetailTab("transitions")}>
                   连接边
                 </button>
-                <button className={detailTabClass(activeDetailTab, "tasks")} type="button" role="tab" aria-selected={activeDetailTab === "tasks"} onClick={() => setActiveDetailTab("tasks")}>
+                <button className={detailTabClass(visibleDetailTab, "tasks")} type="button" role="tab" aria-selected={visibleDetailTab === "tasks"} onClick={() => setActiveDetailTab("tasks")}>
                   页面任务
                 </button>
-                <button className={detailTabClass(activeDetailTab, "explorer")} type="button" role="tab" aria-selected={activeDetailTab === "explorer"} onClick={() => setActiveDetailTab("explorer")}>
-                  自动探索
+                <button className={detailTabClass(visibleDetailTab, "explorer")} type="button" role="tab" aria-selected={visibleDetailTab === "explorer"} onClick={() => setActiveDetailTab("explorer")}>
+                  发现页面连接
                 </button>
               </div>
 
               <div className="asset-detail-scroll asset-editor-scroll">
-                {activeDetailTab === "workbench" ? (
-                  <V2AssetWorkbench
-                    page={page}
-                    savedManualElements={savedManualElements}
-                    transitions={transitions}
-                    tasks={tasks}
-                    candidateEvidence={candidateEvidence}
-                    confirmedEvidenceCount={confirmedEvidence.length}
-                    candidateEvidenceCount={candidateEvidence.length}
-                    onConfirmEvidence={confirmEvidence}
-                    onStartElementFromEvidence={startPageElementFromEvidence}
-                    onOpenTab={setActiveDetailTab}
-                  />
-                ) : null}
-
-                {activeDetailTab === "match" ? (
+                {visibleDetailTab === "match" ? (
                   <div className="asset-detail-section asset-identity-card">
                     <div className="panel-head">
                       <div>
@@ -1255,7 +1239,7 @@ export function AssetRecordingPanel({
                   </div>
                 ) : null}
 
-                {activeDetailTab === "actions" ? (
+                {visibleDetailTab === "actions" ? (
                   <div className="asset-detail-section asset-elements-card">
                     {page.aiElementSuggestions?.length ? (
                       <section className="asset-ai-suggestions">
@@ -1349,7 +1333,7 @@ export function AssetRecordingPanel({
                   </div>
                 ) : null}
 
-                {activeDetailTab === "transitions" ? (
+                {visibleDetailTab === "transitions" ? (
                   <div className="asset-detail-section asset-transition-connection-card">
                     <section className="asset-saved-actions">
                       <div className="asset-action-summary">
@@ -1380,7 +1364,7 @@ export function AssetRecordingPanel({
                   </div>
                 ) : null}
 
-                {activeDetailTab === "tasks" ? (
+                {visibleDetailTab === "tasks" ? (
                   <div className="asset-detail-section asset-page-task-card">
                     <section className="asset-saved-actions">
                       <div className="asset-action-summary">
@@ -1438,19 +1422,19 @@ export function AssetRecordingPanel({
                   </div>
                 ) : null}
 
-                {activeDetailTab === "explorer" ? (
+                {visibleDetailTab === "explorer" ? (
                   <div className="asset-detail-section asset-auto-explorer-card">
                     <section className="asset-saved-actions">
                       <div className="asset-action-summary">
-                        <strong>自动探索</strong>
+                        <strong>发现页面连接</strong>
                         <span>{autoExploreReport?.status === "ready" ? `${autoExploreReport.candidates.filter((candidate) => candidate.status !== "skipped").length} 个安全候选` : "未生成"}</span>
                       </div>
                       <div className="asset-auto-explorer-controls">
                         <label>
                           深度
                           <select value={autoExploreDepth} onChange={(event) => setAutoExploreDepth(Number(event.target.value))}>
-                            <option value={1}>V1 当前页一跳</option>
-                            <option value={2}>V2 两层探索</option>
+                            <option value={1}>当前页一跳</option>
+                            <option value={2}>两层连接发现</option>
                           </select>
                         </label>
                         <label>
@@ -1464,10 +1448,10 @@ export function AssetRecordingPanel({
                           />
                         </label>
                         <button className="asset-action-button edit" type="button" disabled={busy || !onPreviewAutoExplore} onClick={() => void onPreviewAutoExplore?.(autoExploreOptions)}>
-                          预览候选
+                          预览连接候选
                         </button>
                         <button className="asset-action-button" type="button" disabled={busy || !onRunAutoExplore} onClick={() => void onRunAutoExplore?.(autoExploreOptions)}>
-                          开始探索
+                          开始发现
                         </button>
                       </div>
                     </section>
@@ -1704,17 +1688,17 @@ function V2AssetWorkbench({
 
 function AutoExploreReportView({ report }: { report?: AssetRecordingAutoExploreReport }) {
   if (!report) {
-    return <div className="empty">还没有自动探索报告。</div>;
+    return <div className="empty">还没有页面连接发现报告。</div>;
   }
   if (report.status === "blocked") {
-    return <div className="empty">{report.message || "当前页面暂不能自动探索。"}</div>;
+    return <div className="empty">{report.message || "当前页面暂不能发现页面连接。"}</div>;
   }
   return (
     <div className="asset-auto-explorer-report">
       <section className="asset-saved-actions">
         <div className="asset-action-summary">
-          <strong>候选操作</strong>
-          <span>{report.version.toUpperCase()}</span>
+          <strong>连接候选</strong>
+          <span>{autoExploreVersionLabel(report.version)}</span>
         </div>
         {report.candidates.length ? (
           <div className="asset-auto-explorer-list">
@@ -1735,7 +1719,7 @@ function AutoExploreReportView({ report }: { report?: AssetRecordingAutoExploreR
       </section>
       <section className="asset-saved-actions">
         <div className="asset-action-summary">
-          <strong>探索计划</strong>
+          <strong>发现计划</strong>
           <span>{report.plan.steps.length} 步</span>
         </div>
         {report.plan.steps.length ? (
@@ -3351,6 +3335,10 @@ function candidateSourceLabel(source: AssetRecordingAutoExploreCandidate["source
     return "OCR 候选";
   }
   return "候选";
+}
+
+function autoExploreVersionLabel(version: AssetRecordingAutoExploreReport["version"]): string {
+  return version === "v2" ? "连接策略" : version.toUpperCase();
 }
 
 function exploreResultTypeLabel(type: AssetRecordingAutoExploreResult["resultType"]): string {

@@ -18,6 +18,7 @@ describe("AppNav", () => {
         openAssetRecording: noop,
         openPageAssets: noop,
         openAssetComposition: noop,
+        openFreeComposition: noop,
         openParameterCenter: noop,
         openAssetPatrol: noop,
         openStability: noop,
@@ -33,7 +34,8 @@ describe("AppNav", () => {
     expect(markup).toContain("资产录制");
     expect(markup).toContain("页面资产库");
     expect(markup).toContain("资产用例");
-    expect(markup).toContain("测试数据");
+    expect(markup).toContain("AI资产用例");
+    expect(markup).toContain("参数中心");
     expect(markup).toContain("资产驱动巡检");
     expect(markup).toContain("稳定性探索");
     expect(markup).toContain("执行结果");

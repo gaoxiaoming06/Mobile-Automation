@@ -78,6 +78,97 @@ describe("compileAssetCompositeCase", () => {
     );
   });
 
+  it("uses active operation edges that were not mirrored into page transition metadata", () => {
+    const version = graphVersion();
+    version.nodes = [
+      pageNode("page-home", "主页", {
+        assetRecordingManualElements: [
+          {
+            id: "manual-create-public",
+            label: "创建公开课",
+            locator: "image-region:53.85,15.84,38.63,7.33",
+            actionKind: "tap"
+          }
+        ]
+      }),
+      pageNode("page-public", "新建公开课", {})
+    ];
+    version.edges = [
+      {
+        id: "edge-home-public",
+        graphVersionId: version.id,
+        fromNodeId: "page-home",
+        toNodeId: "page-public",
+        key: "home.public",
+        name: "主页 -> 新建公开课",
+        intent: "点击：创建公开课",
+        status: "active",
+        source: "manual_edit",
+        preconditions: [],
+        actionPolicies: [
+          {
+            id: "policy-create-public",
+            priority: 1,
+            fallback: false,
+            reliabilityHint: "medium",
+            action: {
+              id: "tap-create-public",
+              order: 1,
+              type: "tap_on_image",
+              enabled: true,
+              title: "点击：创建公开课",
+              params: {
+                elementLabel: "创建公开课",
+                targetText: "创建公开课",
+                locator: "image-region:53.85,15.84,38.63,7.33"
+              },
+              createdAt: nowIso()
+            }
+          }
+        ],
+        expectations: [],
+        platformScope: "android"
+      }
+    ];
+    const meta: MetaFunction = {
+      id: "meta-open-public",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      name: "打开新建公开课",
+      parameters: [],
+      steps: [
+        { id: "reach-home", order: 1, kind: "reach_page", targetPageModelId: "page-home", enabled: true },
+        { id: "open-public", order: 2, kind: "invoke_capability", sourcePageModelId: "page-home", pageElementId: "manual-create-public", targetPageModelId: "page-public", enabled: true }
+      ],
+      status: "active",
+      version: 1,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+
+    const catalogHome = assetCompositionCatalog(version).pages.find((page) => page.id === "page-home");
+    expect(catalogHome?.transitions).toEqual([
+      expect.objectContaining({
+        id: "edge-home-public",
+        elementId: "manual-create-public",
+        targetPageModelId: "page-public",
+        targetPageName: "新建公开课"
+      })
+    ]);
+
+    const result = compileAssetCompositeCase({
+      compositeCase: compositeCase([meta.id]),
+      metaFunctions: [meta],
+      graphVersion: version
+    });
+    expect(result.status).toBe("ready");
+    expect(result.steps[1]).toEqual(expect.objectContaining({
+      pageElementId: "manual-create-public",
+      pageTransitionId: "edge-home-public",
+      targetPageModelId: "page-public"
+    }));
+  });
+
   it("compiles meta functions into current active asset references and runtime parameters", () => {
     const result = compileAssetCompositeCase({
       compositeCase: compositeCase(["meta-enter", "meta-create"]),
@@ -125,6 +216,38 @@ describe("compileAssetCompositeCase", () => {
       "TARGET_PAGE_NOT_FOUND",
       "PAGE_TASK_NOT_FOUND"
     ]));
+  });
+
+  it("reports missing parameters declared by page task input steps", () => {
+    const version = graphVersion();
+    const createPage = version.nodes.find((node) => node.id === "page-create")!;
+    createPage.metadata = {
+      ...createPage.metadata,
+      assetRecordingPageTasks: [
+        {
+          id: "task-fill-lesson",
+          name: "填写课堂信息",
+          status: "active",
+          steps: [
+            { id: "task-step-title", order: 1, elementId: "manual-title", fieldType: "text_input", label: "课堂标题", valueParamKey: "lessonName" },
+            { id: "task-step-duration", order: 2, elementId: "manual-duration", fieldType: "picker_select", label: "课堂时长", valueParamKey: "duration" }
+          ]
+        }
+      ]
+    };
+    const result = compileAssetCompositeCase({
+      compositeCase: compositeCase(["meta-create"]),
+      metaFunctions: [{
+        ...createLessonMetaFunction(),
+        parameters: []
+      }],
+      parameterProfile: { ...parameterProfile(), values: {} },
+      graphVersion: version
+    });
+
+    expect(result.status).toBe("needs_parameters");
+    expect(result.requiredParameters).toEqual(["duration", "lessonName"]);
+    expect(result.issues.map((issue) => issue.assetId)).toEqual(expect.arrayContaining(["duration", "lessonName"]));
   });
 
   it("applies case-step parameter overrides without mutating the profile", () => {

@@ -1,4 +1,4 @@
-import type { BusinessGraphVersion, BusinessNode } from "@mobile-automation/graph-core";
+import type { BusinessGraphVersion, BusinessNode, OperationEdge } from "@mobile-automation/graph-core";
 import type {
   AssetCompositeCase,
   AssetCompositeCaseStep,
@@ -46,7 +46,7 @@ export type CompiledAssetCompositionStep = {
 };
 
 export type AssetCompositeExecutionPlan = {
-  status: "ready" | "blocked";
+  status: "ready" | "needs_parameters" | "blocked";
   compositeCaseId: string;
   compositeCaseName: string;
   graphVersionId: string;
@@ -64,7 +64,7 @@ export type AssetCompositionCatalog = {
     name: string;
     elements: Array<{ id: string; label: string }>;
     transitions: Array<{ id: string; elementId?: string; targetPageModelId?: string; targetPageName?: string }>;
-    tasks: Array<{ id: string; name: string; status?: string }>;
+    tasks: Array<{ id: string; name: string; status?: string; parameterKeys: string[] }>;
   }>;
 };
 
@@ -84,7 +84,7 @@ export function assetCompositionCatalog(graphVersion: BusinessGraphVersion): Ass
           targetPageModelId: item.targetNodeId,
           targetPageName: item.targetNodeId ? nodeById.get(item.targetNodeId)?.name : undefined
         })),
-        tasks: pageTasks(node).map((item) => ({ id: item.id, name: item.name ?? item.id, status: item.status }))
+        tasks: pageTasks(node).map((item) => ({ id: item.id, name: item.name ?? item.id, status: item.status, parameterKeys: item.parameterKeys }))
       }))
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"))
   };
@@ -173,6 +173,7 @@ export function compileAssetCompositeCase(input: {
         graphVersion: input.graphVersion,
         nodeById,
         runtimeParams: stepRuntimeParams,
+        requiredParameters,
         order: steps.length + 1,
         issues
       });
@@ -184,7 +185,7 @@ export function compileAssetCompositeCase(input: {
   }
 
   return {
-    status: issues.length ? "blocked" : "ready",
+    status: assetCompositionPlanStatus(issues),
     compositeCaseId: input.compositeCase.id,
     compositeCaseName: input.compositeCase.name,
     graphVersionId: input.graphVersion.id,
@@ -196,6 +197,14 @@ export function compileAssetCompositeCase(input: {
   };
 }
 
+export function missingRequiredParameterKeysFromIssues(issues: AssetCompositionIssue[]): string[] {
+  return [...new Set(issues
+    .filter((issue) => issue.code === "MISSING_REQUIRED_PARAMETER")
+    .map((issue) => issue.assetId?.trim() ?? "")
+    .filter(Boolean))]
+    .sort();
+}
+
 function resolveMetaFunctionStep(input: {
   caseStep: AssetCompositeCaseStep;
   metaFunction: MetaFunction;
@@ -203,6 +212,7 @@ function resolveMetaFunctionStep(input: {
   graphVersion: BusinessGraphVersion;
   nodeById: Map<string, BusinessNode>;
   runtimeParams: Record<string, string>;
+  requiredParameters: Set<string>;
   order: number;
   issues: AssetCompositionIssue[];
 }): CompiledAssetCompositionStep | undefined {
@@ -272,6 +282,19 @@ function resolveMetaFunctionStep(input: {
     input.issues.push(issueForStep("PAGE_TASK_NOT_FOUND", `页面 ${pageNode.name} 找不到任务 ${metaStep.pageTaskId}`, input, metaStep.pageTaskId));
     return undefined;
   }
+  for (const parameterKey of task.parameterKeys) {
+    input.requiredParameters.add(parameterKey);
+    if (!hasRuntimeParam(input.runtimeParams, parameterKey)) {
+      pushMissingRequiredParameterIssue(input.issues, {
+        ...issueForStep(
+          "MISSING_REQUIRED_PARAMETER",
+          `页面任务 ${task.name ?? task.id} 缺少必需参数 ${parameterKey}。`,
+          input,
+          parameterKey
+        )
+      });
+    }
+  }
   return {
     ...common,
     targetPageModelId: metaStep.pageModelId,
@@ -299,7 +322,10 @@ function normalizeEnabledSteps<T extends { order: number; enabled: boolean }>(st
   return [...steps].filter((item) => item.enabled).sort((left, right) => left.order - right.order);
 }
 
-function pageElements(node: BusinessNode): Array<{ id: string; label?: string }> {
+type PageElementSummary = { id: string; label?: string };
+type PageTransitionSummary = { id: string; elementId?: string; targetNodeId?: string };
+
+function pageElements(node: BusinessNode): PageElementSummary[] {
   const values = [node.metadata?.assetRecordingPageElements, node.metadata?.assetRecordingManualElements];
   const byId = new Map<string, { id: string; label?: string }>();
   for (const value of values) {
@@ -318,11 +344,12 @@ function pageElements(node: BusinessNode): Array<{ id: string; label?: string }>
   return [...byId.values()];
 }
 
-function pageTransitions(graphVersion: BusinessGraphVersion, node: BusinessNode): Array<{ id: string; elementId?: string; targetNodeId?: string }> {
+function pageTransitions(graphVersion: BusinessGraphVersion, node: BusinessNode): PageTransitionSummary[] {
   const legacyValue = node.metadata?.assetRecordingPageTransitions;
   const legacy = Array.isArray(legacyValue)
     ? legacyValue.filter(isRecord).filter((item): item is { id: string; elementId?: string; targetNodeId?: string } => typeof item.id === "string")
     : [];
+  const elements = pageElements(node);
   const manualValue = node.metadata?.assetRecordingManualElements;
   const manual = Array.isArray(manualValue)
     ? manualValue.filter(isRecord).flatMap((item) => {
@@ -341,16 +368,68 @@ function pageTransitions(graphVersion: BusinessGraphVersion, node: BusinessNode)
       return edge ? [{ id: edge.id, elementId: item.id, targetNodeId: item.targetNodeId }] : [];
     })
     : [];
-  return [...new Map([...legacy, ...manual].map((item) => [item.id, item])).values()];
+  const graphEdges = graphVersion.edges.flatMap((edge) => {
+    if (edge.status !== "active" || edge.fromNodeId !== node.id || !graphVersion.nodes.some((target) => target.id === edge.toNodeId && target.status === "active")) {
+      return [];
+    }
+    const elementId = operationEdgeElementId(edge, elements);
+    return elementId ? [{ id: edge.id, elementId, targetNodeId: edge.toNodeId }] : [];
+  });
+  return [...new Map([...legacy, ...manual, ...graphEdges].map((item) => [item.id, item])).values()];
 }
 
-function pageTasks(node: BusinessNode): Array<{ id: string; name?: string; status?: string }> {
+function operationEdgeElementId(edge: OperationEdge, elements: PageElementSummary[]): string | undefined {
+  const labelCandidates = edge.actionPolicies
+    .flatMap((policy) => [
+      stringRecordValue(policy.action.params, "elementId"),
+      stringRecordValue(policy.action.params, "pageElementId")
+    ])
+    .filter((value): value is string => Boolean(value));
+  const directId = labelCandidates.find((value) => elements.some((element) => element.id === value));
+  if (directId) {
+    return directId;
+  }
+
+  const textCandidates = edge.actionPolicies
+    .flatMap((policy) => [
+      stringRecordValue(policy.action.params, "elementLabel"),
+      stringRecordValue(policy.action.params, "targetText"),
+      policy.action.title
+    ])
+    .concat([edge.intent, edge.name])
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+  return elements.find((element) => {
+    const label = element.label;
+    return Boolean(label && textCandidates.some((candidate) => candidate === label || candidate.includes(label)));
+  })?.id;
+}
+
+function pageTasks(node: BusinessNode): Array<{ id: string; name?: string; status?: string; parameterKeys: string[] }> {
   const value = node.metadata?.assetRecordingPageTasks;
-  return Array.isArray(value) ? value.filter(isRecord).filter((item): item is { id: string; name?: string; status?: string } => typeof item.id === "string") : [];
+  return Array.isArray(value)
+    ? value
+      .filter(isRecord)
+      .filter((item): item is { id: string; name?: string; status?: string; steps?: unknown } => typeof item.id === "string")
+      .map((item) => ({
+        id: item.id,
+        name: typeof item.name === "string" ? item.name : undefined,
+        status: typeof item.status === "string" ? item.status : undefined,
+        parameterKeys: pageTaskParameterKeys(item.steps)
+      }))
+    : [];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringRecordValue(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const item = value[key];
+  return typeof item === "string" && item.trim() ? item.trim() : undefined;
 }
 
 function parameterProfileRuntimeParams(profile: ParameterProfile | undefined): Record<string, string> {
@@ -376,4 +455,34 @@ function stringifyRuntimeParams(values: Record<string, string | number | boolean
 
 function hasRuntimeParam(values: Record<string, string>, key: string): boolean {
   return typeof values[key] === "string" && values[key]!.trim().length > 0;
+}
+
+function assetCompositionPlanStatus(issues: AssetCompositionIssue[]): AssetCompositeExecutionPlan["status"] {
+  if (!issues.length) {
+    return "ready";
+  }
+  return issues.every((issue) => issue.code === "MISSING_REQUIRED_PARAMETER") ? "needs_parameters" : "blocked";
+}
+
+function pageTaskParameterKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [...new Set(value
+    .filter(isRecord)
+    .flatMap((step) => [step.valueParamKey, step.desiredStateParamKey])
+    .filter((key): key is string => typeof key === "string" && key.trim().length > 0)
+    .map((key) => key.trim()))].sort();
+}
+
+function pushMissingRequiredParameterIssue(issues: AssetCompositionIssue[], issue: AssetCompositionIssue): void {
+  const exists = issues.some((item) =>
+    item.code === "MISSING_REQUIRED_PARAMETER" &&
+    item.caseStepId === issue.caseStepId &&
+    item.metaFunctionId === issue.metaFunctionId &&
+    item.assetId === issue.assetId
+  );
+  if (!exists) {
+    issues.push(issue);
+  }
 }

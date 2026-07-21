@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DeviceInfo, ToolStatus } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api";
+import { controllableDevices, isControllableDevice } from "../device-availability";
 
 type UseDeviceListOptions = {
   setMessage: (message: string) => void;
@@ -11,12 +12,12 @@ type DeviceSelectionStorage = Pick<Storage, "getItem" | "setItem" | "removeItem"
 const selectedDeviceSerialStorageKey = "mobile-automation.selected-device-serial";
 
 export function defaultSelectedDeviceSerial(devices: DeviceInfo[], currentSerial: string): string {
-  if (devices.some((device) => device.serial === currentSerial)) {
+  const selectableDevices = controllableDevices(devices);
+  if (selectableDevices.some((device) => device.serial === currentSerial)) {
     return currentSerial;
   }
-  return devices.find((device) => device.platform === "android" && device.status === "online")?.serial
-    ?? devices.find((device) => device.status === "online")?.serial
-    ?? devices[0]?.serial
+  return selectableDevices.find((device) => device.platform === "android")?.serial
+    ?? selectableDevices[0]?.serial
     ?? "";
 }
 
@@ -66,9 +67,15 @@ export function useDeviceList({ setMessage }: UseDeviceListOptions) {
       return next;
     });
     if (!options.silent) {
-      const androidCount = json.devices.filter((device) => device.platform === "android").length;
-      const iosCount = json.devices.filter((device) => device.platform === "ios").length;
-      setMessage(json.devices.length ? `发现 ${json.devices.length} 台设备（Android ${androidCount} / iOS ${iosCount}）` : "没有发现可管理设备");
+      const selectableCount = json.devices.filter(isControllableDevice).length;
+      const unavailableCount = json.devices.length - selectableCount;
+      setMessage(
+        selectableCount
+          ? `发现 ${selectableCount} 台可控制设备${unavailableCount ? `（已隐藏 ${unavailableCount} 台不可控制设备）` : ""}`
+          : unavailableCount
+            ? `没有发现可控制设备（已隐藏 ${unavailableCount} 台不可控制设备）`
+            : "没有发现可管理设备"
+      );
     }
   }, [setMessage]);
 

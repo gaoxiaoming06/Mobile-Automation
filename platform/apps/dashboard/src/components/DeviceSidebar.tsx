@@ -1,5 +1,6 @@
 import { FolderOpen, Play, Trash2 } from "lucide-react";
 import type { DeviceInfo, TestCase, TestRun } from "@mobile-automation/shared";
+import { controllableDevices } from "../device-availability";
 
 type DeviceSidebarProps = {
   devices: DeviceInfo[];
@@ -26,12 +27,15 @@ export function DeviceSidebar({
   onStartRun,
   onDeleteCase
 }: DeviceSidebarProps) {
+  const selectableDevices = controllableDevices(devices);
+  const hiddenUnavailableCount = devices.length - selectableDevices.length;
+
   return (
     <aside className="sidebar">
       <div className="panel">
         <h2>设备</h2>
         <div className="device-list">
-          {devices.map((device) => {
+          {selectableDevices.map((device) => {
             const activeRun = runs.find((run) => run.deviceSerial === device.serial && isActiveRun(run));
             return (
               <button
@@ -50,7 +54,8 @@ export function DeviceSidebar({
               </button>
             );
           })}
-          {!devices.length && <div className="empty">未发现设备</div>}
+          {!selectableDevices.length && <div className="empty">未发现可控制设备</div>}
+          {hiddenUnavailableCount > 0 && <div className="device-hidden-note">已隐藏 {hiddenUnavailableCount} 台不可控制设备</div>}
         </div>
       </div>
 

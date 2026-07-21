@@ -1,6 +1,5 @@
-import { DatabaseZap, Info, PlayCircle, RefreshCw, Trash2, X } from "lucide-react";
+import { DatabaseZap, Info, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { ParameterProfile, TestRun } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api";
 
 type BusinessGraph = {
@@ -98,18 +97,6 @@ type PageAssetsSnapshot = {
   assetsByVersionId: Record<string, GraphAssetGovernanceSummary>;
 };
 
-type GraphRunResponse = {
-  run: TestRun;
-  routePlanId: string;
-  executionPlanId: string;
-  graphVersionId: string;
-  targetNodeId: string;
-};
-
-type ParameterProfileResponse = {
-  profiles: ParameterProfile[];
-};
-
 type RoutePlanIssue = {
   code?: string;
   severity?: string;
@@ -181,27 +168,13 @@ type PageAssetsTab = "targetTest" | "library";
 type DecoratedPageAsset = PageAssetSummary & { graphName?: string; appId?: string; graphVersion?: number; graphVersionId?: string };
 
 export function PageAssetsPanel({
-  selectedSerial = "",
-  selectedDeviceBusy = false,
-  initialTab = "targetTest",
-  initialTargetText = "",
-  initialTargetTaskId = "",
   graphs: initialGraphs,
   assetsByVersionId: initialAssetsByVersionId,
   onOpenAssetRecording,
-  onRunStarted,
   setMessage
 }: PageAssetsPanelProps) {
-  const [activeTab, setActiveTab] = useState<PageAssetsTab>(initialTab);
   const [graphs, setGraphs] = useState<BusinessGraph[]>(initialGraphs ?? []);
   const [assetsByVersionId, setAssetsByVersionId] = useState<Record<string, GraphAssetGovernanceSummary>>(initialAssetsByVersionId ?? {});
-  const [targetText, setTargetText] = useState(initialTargetText);
-  const [targetActionMode, setTargetActionMode] = useState<TargetActionMode>(initialTargetTaskId ? "page_task" : "none");
-  const [selectedTargetTaskId, setSelectedTargetTaskId] = useState(initialTargetTaskId);
-  const [targetVerificationMode, setTargetVerificationMode] = useState<TargetVerificationMode>("arrived");
-  const [targetVerificationText, setTargetVerificationText] = useState("");
-  const [parameterProfiles, setParameterProfiles] = useState<ParameterProfile[]>([]);
-  const [targetParameterProfileId, setTargetParameterProfileId] = useState("");
   const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
@@ -220,57 +193,14 @@ export function PageAssetsPanel({
       ),
     [assetsByVersionId, graphs]
   );
-  const filteredAssets = useMemo(() => {
-    const query = targetText.trim().toLowerCase();
-    if (!query) {
-      return pageAssets;
-    }
-    return pageAssets.filter((asset) => searchableAssetTexts(asset).some((value) => value.toLowerCase().includes(query)));
-  }, [pageAssets, targetText]);
-  const selectedTargetAsset = useMemo(() => selectPageAssetTarget(filteredAssets, targetText), [filteredAssets, targetText]);
-  const selectedTargetTasks = useMemo(() => (selectedTargetAsset?.tasks ?? []).filter((task) => task.status !== "deprecated"), [selectedTargetAsset]);
-  const selectedTargetTask = useMemo(() => selectedTargetTasks.find((task) => task.id === selectedTargetTaskId), [selectedTargetTaskId, selectedTargetTasks]);
-  const selectedLibraryAsset = useMemo(() => pageAssets.find((asset) => asset.id === selectedAssetId), [pageAssets, selectedAssetId]);
-  const targetAppId = selectedTargetAsset?.appId ?? graphs[0]?.appId;
-  const selectedParameterProfile = useMemo(
-    () => parameterProfiles.find((profile) => profile.id === targetParameterProfileId),
-    [parameterProfiles, targetParameterProfileId]
-  );
+  const selectedLibraryAsset = useMemo(() => pageAssets.find((asset) => asset.id === selectedAssetId) ?? pageAssets[0], [pageAssets, selectedAssetId]);
+  const libraryStats = useMemo(() => pageAssetLibraryStats(pageAssets), [pageAssets]);
 
   useEffect(() => {
     if (!initialGraphs && !initialAssetsByVersionId) {
       void refreshPageAssets();
     }
   }, [initialAssetsByVersionId, initialGraphs]);
-
-  useEffect(() => {
-    if (!targetAppId) {
-      setParameterProfiles([]);
-      setTargetParameterProfileId("");
-      return;
-    }
-    let cancelled = false;
-    void apiFetchJson<ParameterProfileResponse>(
-      `/api/asset-composition/parameter-profiles?appId=${encodeURIComponent(targetAppId)}&platform=android`
-    )
-      .then((response) => {
-        if (cancelled) return;
-        const activeProfiles = response.profiles.filter((profile) => profile.status === "active");
-        setParameterProfiles(activeProfiles);
-        setTargetParameterProfileId((current) =>
-          activeProfiles.some((profile) => profile.id === current) ? current : (activeProfiles[0]?.id ?? "")
-        );
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setParameterProfiles([]);
-          setTargetParameterProfileId("");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [targetAppId]);
 
   useEffect(() => {
     if (initialGraphs || initialAssetsByVersionId) {
@@ -327,209 +257,32 @@ export function PageAssetsPanel({
     }
   }
 
-  async function runTargetPage() {
-    const query = targetText.trim();
-    if (!query) {
-      setMessage("请输入目标页面");
-      return;
-    }
-    if (!selectedSerial) {
-      setMessage("请先选择设备");
-      return;
-    }
-    if (selectedDeviceBusy) {
-      setMessage("当前设备正在执行任务，请等待结束后再启动目标页面测试");
-      return;
-    }
-    if (!selectedTargetAsset?.graphVersionId) {
-      setMessage("没有匹配到可执行的已保存页面资产，请先去资产录制补录页面");
-      return;
-    }
-    const graph = graphs.find((item) => item.activeVersion?.id === selectedTargetAsset.graphVersionId);
-    if (!graph) {
-      setMessage("页面资产缺少所属图谱，无法规划执行");
-      return;
-    }
-    try {
-      setBusy(true);
-      const routePreview = await apiFetchJson<RoutePlanPreviewResponse>(`/api/graphs/${encodeURIComponent(selectedTargetAsset.graphVersionId)}/route-plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          platform: "android",
-          targetNodeId: selectedTargetAsset.id,
-          deviceSerial: selectedSerial,
-          executionProfile: "fast_visual",
-          startAppScope: "current_device",
-          persist: false
-        })
-      });
-      const blockingMessage = targetPageRouteBlockingMessage(routePreview, selectedTargetAsset.name);
-      if (blockingMessage) {
-        setMessage(blockingMessage);
-        return;
-      }
-      const response = await apiFetchJson<GraphRunResponse>("/api/graph-runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          buildTargetPageGraphRunRequest({
-            selectedSerial,
-            graphVersionId: selectedTargetAsset.graphVersionId,
-            targetNodeId: selectedTargetAsset.id,
-            startNodeId: routePreview.startDetection?.startNodeId,
-            parameterProfileId: targetParameterProfileId || undefined,
-            overlay: buildTargetPageRuntimeOverlay({
-              targetNodeId: selectedTargetAsset.id,
-              targetName: selectedTargetAsset.name,
-              actionMode: targetActionMode,
-              targetTaskId: targetActionMode === "page_task" ? selectedTargetTask?.id : undefined,
-              verificationMode: targetVerificationMode,
-              verificationText: targetVerificationText
-            })
-          })
-        )
-      });
-      const recoveredMessage =
-        routePreview.startRecovery?.status === "recovered"
-          ? `，已先从“${routePreview.startRecovery.fromNodeName ?? "临时页面"}”返回到“${routePreview.startRecovery.recoveredNodeName ?? "可规划页面"}”`
-          : "";
-      setMessage(`已启动目标页面执行：${selectedTargetAsset.name}${recoveredMessage}`);
-      onRunStarted?.(response.run.id);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <section className="module-page page-assets-module">
-      <div className="page-assets-tabs" role="tablist" aria-label="页面资产库">
-        <button className={tabClass(activeTab, "targetTest")} type="button" onClick={() => setActiveTab("targetTest")}>
-          目标页面测试
-        </button>
-        <button className={tabClass(activeTab, "library")} type="button" onClick={() => setActiveTab("library")}>
-          已保存页面资产
-        </button>
+      <div className="panel page-assets-library-panel">
+        <div className="panel-head">
+          <div>
+            <h2>已保存页面资产</h2>
+          </div>
+          <button className="icon-button" type="button" onClick={refreshPageAssets} disabled={busy}>
+            <RefreshCw size={16} />
+            刷新
+          </button>
+        </div>
+        <PageAssetLibraryStats stats={libraryStats} />
+        <div className="page-assets-library-layout">
+          <PageAssetList
+            assets={pageAssets}
+            busy={busy}
+            emptyText="还没有保存过页面资产。请先进入资产录制页保存当前页面。"
+            selectedAssetId={selectedLibraryAsset?.id}
+            onSelectAsset={setSelectedAssetId}
+            onDeletePageAsset={deletePageAsset}
+            onOpenAssetRecording={onOpenAssetRecording}
+          />
+          {selectedLibraryAsset ? <PageAssetDetailPanel asset={selectedLibraryAsset} /> : null}
+        </div>
       </div>
-
-      {activeTab === "targetTest" ? (
-        <div className="panel page-assets-target-panel">
-          <div className="panel-head">
-            <div>
-              <h2>目标页面测试</h2>
-            </div>
-            <button className="icon-button" type="button" onClick={refreshPageAssets} disabled={busy}>
-              <RefreshCw size={16} />
-              刷新
-            </button>
-          </div>
-          <div className="page-assets-target-form">
-            <label>
-              <span>目标页面</span>
-              <input list="page-assets-target-options" value={targetText} onChange={(event) => setTargetText(event.target.value)} placeholder="输入页面名，例如：主页 / 新建公开课 / 班级详情" />
-              <datalist id="page-assets-target-options">
-                {filteredAssets.slice(0, 20).map((asset) => (
-                  <option value={asset.name} key={asset.id}>
-                    {assetIdentitySummary(asset)}
-                  </option>
-                ))}
-              </datalist>
-            </label>
-            <label>
-              <span>目标动作</span>
-              <select
-                value={targetActionMode === "page_task" ? selectedTargetTaskId : "none"}
-                onChange={(event) => {
-                  const taskId = event.target.value;
-                  setSelectedTargetTaskId(taskId === "none" ? "" : taskId);
-                  setTargetActionMode(taskId === "none" ? "none" : "page_task");
-                }}
-              >
-                <option value="none">页面到达后不执行动作</option>
-                {selectedTargetTasks.map((task) => (
-                  <option value={task.id} key={task.id}>
-                    执行页面任务：{task.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>目标验证</span>
-              <select value={targetVerificationMode} onChange={(event) => setTargetVerificationMode(readTargetVerificationMode(event.target.value))}>
-                <option value="arrived">仅验证已到达目标页面</option>
-                <option value="text_contains">验证目标页面包含文字</option>
-              </select>
-            </label>
-            {targetVerificationMode === "text_contains" ? (
-              <label>
-                <span>预期文字</span>
-                <input value={targetVerificationText} onChange={(event) => setTargetVerificationText(event.target.value)} placeholder="例如：发布成功 / 新建公开课 / 课堂信息" />
-              </label>
-            ) : null}
-            <label className="target-parameter-profile">
-              <span>执行组合（按需）</span>
-              <select value={targetParameterProfileId} onChange={(event) => setTargetParameterProfileId(event.target.value)}>
-                <option value="">不注入运行参数</option>
-                {parameterProfiles.map((profile) => (
-                  <option value={profile.id} key={profile.id}>
-                    {profile.name}{profile.environment ? ` · ${profile.environment}` : ""}
-                  </option>
-                ))}
-              </select>
-              {selectedTargetTask?.parameterKeys.length ? (
-              <small>页面任务需要：{selectedTargetTask.parameterKeys.join("、")}。请在{"测试数据 > 执行组合"}中维护这些值。</small>
-              ) : selectedParameterProfile ? (
-                <small>本次会冻结“{selectedParameterProfile.name}”的当前值；执行中修改测试数据不会影响本轮任务。</small>
-              ) : (
-                <small>当前页面不需要参数时可以不选；涉及登录、列表或表单时请选择“测试数据 &gt; 执行组合”中的数据。</small>
-              )}
-            </label>
-            <button className="icon-button primary" type="button" onClick={() => void runTargetPage()} disabled={!selectedSerial || selectedDeviceBusy || !selectedTargetAsset || busy}>
-              <PlayCircle size={16} />
-              规划并执行
-            </button>
-          </div>
-          {targetText.trim() && filteredAssets.length > 0 ? (
-            <div className="target-page-candidate">
-              <span>当前候选</span>
-              <strong>{selectedTargetAsset?.name ?? filteredAssets[0]?.name}</strong>
-              <small>{selectedTargetAsset ? assetIdentitySummary(selectedTargetAsset) : filteredAssets[0] ? assetIdentitySummary(filteredAssets[0]) : ""}</small>
-            </div>
-          ) : null}
-          {targetText.trim() && filteredAssets.length === 0 ? (
-            <button className="icon-button" type="button" onClick={onOpenAssetRecording}>
-              <DatabaseZap size={16} />
-              未找到页面资产，去资产录制
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <div className="panel page-assets-library-panel">
-          <div className="panel-head">
-            <div>
-              <h2>已保存页面资产</h2>
-            </div>
-            <button className="icon-button" type="button" onClick={refreshPageAssets} disabled={busy}>
-              <RefreshCw size={16} />
-              刷新
-            </button>
-          </div>
-          <div className="page-assets-count">{pageAssets.length} 个页面资产</div>
-          <div className="page-assets-library-layout">
-            <PageAssetList
-              assets={pageAssets}
-              busy={busy}
-              emptyText="还没有保存过页面资产。请先进入资产录制页保存当前页面。"
-              selectedAssetId={selectedAssetId}
-              onSelectAsset={setSelectedAssetId}
-              onDeletePageAsset={deletePageAsset}
-            />
-          </div>
-          {selectedLibraryAsset ? <PageAssetDetailDrawer asset={selectedLibraryAsset} onClose={() => setSelectedAssetId(undefined)} /> : null}
-        </div>
-      )}
     </section>
   );
 }
@@ -553,13 +306,68 @@ export async function loadPageAssetsSnapshot(fetchJson: typeof apiFetchJson = ap
   };
 }
 
+type PageAssetLibraryStats = {
+  pages: number;
+  matchers: number;
+  elements: number;
+  transitions: number;
+  tasks: number;
+  regions: number;
+};
+
+function PageAssetLibraryStats({ stats }: { stats: PageAssetLibraryStats }) {
+  return (
+    <section className="page-assets-summary" aria-label="页面资产概览">
+      <div>
+        <strong>{stats.pages}</strong>
+        <span>页面资产</span>
+      </div>
+      <div>
+        <strong>{stats.matchers}</strong>
+        <span>匹配依据</span>
+      </div>
+      <div>
+        <strong>{stats.elements}</strong>
+        <span>可操作</span>
+      </div>
+      <div>
+        <strong>{stats.transitions}</strong>
+        <span>连接边</span>
+      </div>
+      <div>
+        <strong>{stats.tasks}</strong>
+        <span>页面任务</span>
+      </div>
+      <div>
+        <strong>{stats.regions}</strong>
+        <span>重点区域</span>
+      </div>
+    </section>
+  );
+}
+
+function pageAssetLibraryStats(assets: DecoratedPageAsset[]): PageAssetLibraryStats {
+  return assets.reduce(
+    (stats, asset) => ({
+      pages: stats.pages + 1,
+      matchers: stats.matchers + (asset.criticalMatcherCount || asset.matcherCount),
+      elements: stats.elements + asset.elementCount,
+      transitions: stats.transitions + transitionCount(asset),
+      tasks: stats.tasks + taskCount(asset),
+      regions: stats.regions + (asset.screenshotRegions?.length ?? 0)
+    }),
+    { pages: 0, matchers: 0, elements: 0, transitions: 0, tasks: 0, regions: 0 }
+  );
+}
+
 function PageAssetList({
   assets,
   busy,
   emptyText,
   selectedAssetId,
   onSelectAsset,
-  onDeletePageAsset
+  onDeletePageAsset,
+  onOpenAssetRecording
 }: {
   assets: DecoratedPageAsset[];
   busy: boolean;
@@ -567,17 +375,28 @@ function PageAssetList({
   selectedAssetId?: string;
   onSelectAsset: (assetId: string) => void;
   onDeletePageAsset: (graphVersionId: string | undefined, assetId: string, assetName: string) => void | Promise<void>;
+  onOpenAssetRecording: () => void;
 }) {
   if (!assets.length) {
-    return <div className="empty">{emptyText}</div>;
+    return (
+      <div className="page-assets-empty">
+        <div className="empty">{emptyText}</div>
+        <button className="icon-button" type="button" onClick={onOpenAssetRecording}>
+          <DatabaseZap size={16} />
+          去资产录制
+        </button>
+      </div>
+    );
   }
   return (
     <div className="page-assets-list">
       {assets.map((asset) => (
         <article className={asset.id === selectedAssetId ? "page-asset-row selected" : "page-asset-row"} key={asset.id}>
           <button className="page-asset-main" type="button" onClick={() => onSelectAsset(asset.id)}>
+            <span className="page-asset-row-kicker">{assetGraphSummary(asset)} · {asset.status}</span>
             <strong>{asset.name}</strong>
             <span>{assetIdentitySummary(asset)}</span>
+            <small>{asset.updatedAt ? `更新于 ${asset.updatedAt}` : `${platformLabel(asset.platformScope)} · ${asset.key}`}</small>
           </button>
           <div className="page-asset-row-stats" aria-label={`${asset.name} 页面资产统计`}>
             <span>
@@ -613,51 +432,50 @@ function PageAssetList({
   );
 }
 
-function PageAssetDetailDrawer({ asset, onClose }: { asset: DecoratedPageAsset; onClose: () => void }) {
+function PageAssetDetailPanel({ asset }: { asset: DecoratedPageAsset }) {
   const identityTexts = assetIdentityTexts(asset);
   const screenshotRegions = asset.screenshotRegions ?? [];
   const transitions = asset.transitions ?? [];
   const tasks = asset.tasks ?? [];
-  const rawTexts = uniqueStrings([...(asset.visibleTexts ?? []), ...(asset.resourceIds ?? []), ...(asset.accessibilityIds ?? []), ...screenshotRegions.flatMap((region) => region.evidenceTexts ?? [])]);
   return (
-    <div className="page-asset-drawer-backdrop" role="presentation" onClick={onClose}>
-      <aside className="page-asset-detail-drawer" aria-label={`页面资产详情：${asset.name}`} onClick={(event) => event.stopPropagation()}>
-        <div className="page-asset-detail-head">
-          <div>
-            <h3>{asset.name}</h3>
-            <span>{platformLabel(asset.platformScope)} · {asset.elementCount} 个可操作元素</span>
-          </div>
-          <button className="icon-button compact" type="button" onClick={onClose} aria-label="关闭资产详情">
-            <X size={14} />
-          </button>
+    <aside className="page-asset-detail-panel" aria-label={`页面资产详情：${asset.name}`}>
+      <div className="page-asset-detail-head">
+        <div>
+          <h3>{asset.name}</h3>
+          <span>{assetGraphSummary(asset)} · {platformLabel(asset.platformScope)} · {asset.elementCount} 个可操作元素</span>
         </div>
+      </div>
 
-        <div className="page-asset-detail-content">
-          <div className="page-asset-detail-section">
-            <h4>概览</h4>
-            <dl>
-              <div>
-                <dt>确认依据</dt>
-                <dd>{asset.criticalMatcherCount || asset.matcherCount}</dd>
-              </div>
-              <div>
-                <dt>重点区域</dt>
-                <dd>{screenshotRegions.length}</dd>
-              </div>
-              <div>
-                <dt>可操作</dt>
-                <dd>{asset.elementCount}</dd>
-              </div>
-              <div>
-                <dt>连接边</dt>
-                <dd>{transitionCount(asset)}</dd>
-              </div>
-              <div>
-                <dt>页面任务</dt>
-                <dd>{taskCount(asset)}</dd>
-              </div>
-            </dl>
-          </div>
+      <div className="page-asset-detail-content">
+        <div className="page-asset-detail-section">
+          <h4>概览</h4>
+          <dl>
+            <div>
+              <dt>确认依据</dt>
+              <dd>{asset.criticalMatcherCount || asset.matcherCount}</dd>
+            </div>
+            <div>
+              <dt>重点区域</dt>
+              <dd>{screenshotRegions.length}</dd>
+            </div>
+            <div>
+              <dt>可操作</dt>
+              <dd>{asset.elementCount}</dd>
+            </div>
+            <div>
+              <dt>连接边</dt>
+              <dd>{transitionCount(asset)}</dd>
+            </div>
+            <div>
+              <dt>页面任务</dt>
+              <dd>{taskCount(asset)}</dd>
+            </div>
+            <div>
+              <dt>状态</dt>
+              <dd>{asset.status}</dd>
+            </div>
+          </dl>
+        </div>
 
           <div className="page-asset-detail-section">
             <h4>页面匹配依据</h4>
@@ -728,16 +546,14 @@ function PageAssetDetailDrawer({ asset, onClose }: { asset: DecoratedPageAsset; 
             )}
           </div>
 
-          <details className="page-asset-debug">
-            <summary>原始采集与调试信息</summary>
+          <div className="page-asset-detail-section page-asset-identity-card">
+            <h4>资产标识</h4>
             <code>{asset.key}</code>
-            <span>{asset.graphName ?? asset.appId ?? "-"}{asset.graphVersion ? ` · v${asset.graphVersion}` : ""}</span>
-            <span>{asset.status}</span>
-            {rawTexts.length ? <p>{rawTexts.slice(0, 16).join(" · ")}</p> : null}
-          </details>
+            <span>{asset.graphVersionId ?? "-"}</span>
+            {asset.updatedAt ? <span>更新于 {asset.updatedAt}</span> : null}
+          </div>
         </div>
-      </aside>
-    </div>
+    </aside>
   );
 }
 
@@ -759,8 +575,8 @@ function platformLabel(platformScope: string | undefined): string {
   return "Android";
 }
 
-function tabClass(activeTab: PageAssetsTab, tab: PageAssetsTab): string {
-  return activeTab === tab ? "page-assets-tab active" : "page-assets-tab";
+function assetGraphSummary(asset: DecoratedPageAsset): string {
+  return `${asset.graphName ?? asset.appId ?? "未分组资产"}${asset.graphVersion ? ` · v${asset.graphVersion}` : ""}`;
 }
 
 export function selectPageAssetTarget<T extends PageAssetSummary & { graphVersionId?: string }>(assets: T[], query: string): T | undefined {
@@ -940,7 +756,7 @@ export function buildTargetPageRuntimeOverlay(input: {
           id: `target-task-${input.targetNodeId}`,
           targetNodeId: input.targetNodeId,
           ...(targetTaskId ? { targetTaskId } : {}),
-          note: `目标页面测试：${input.targetName}`,
+          note: `页面资产执行：${input.targetName}`,
           runtimeParams
         }
       : targetTaskId
@@ -948,7 +764,7 @@ export function buildTargetPageRuntimeOverlay(input: {
             id: `target-task-${input.targetNodeId}`,
             targetNodeId: input.targetNodeId,
             targetTaskId,
-            note: `目标页面测试：${input.targetName}`
+            note: `页面资产执行：${input.targetName}`
           }
         : undefined;
   }
@@ -956,7 +772,7 @@ export function buildTargetPageRuntimeOverlay(input: {
     id: `target-task-${input.targetNodeId}`,
     targetNodeId: input.targetNodeId,
     ...(targetTaskId ? { targetTaskId } : {}),
-    note: `目标页面测试：${input.targetName}`,
+    note: `页面资产执行：${input.targetName}`,
     ...(runtimeParams ? { runtimeParams } : {}),
     nodeExpectationOverrides: [
       {
@@ -966,8 +782,8 @@ export function buildTargetPageRuntimeOverlay(input: {
             id: `target-text-${input.targetNodeId}`,
             type: "text",
             enabled: true,
-            title: "目标验证",
-            note: "目标页面测试临时验证，不写入页面资产库。",
+            title: "页面验证",
+            note: "页面资产执行临时验证，不写入页面资产库。",
             params: {
               expected: expectedText,
               mode: "contains",

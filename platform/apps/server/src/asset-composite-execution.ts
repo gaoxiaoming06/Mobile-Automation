@@ -1,5 +1,5 @@
 import { createId, nowIso, type RunMode, type TestRun } from "@mobile-automation/shared";
-import type { AssetCompositeExecutionPlan, CompiledAssetCompositionStep } from "./asset-composition.js";
+import { missingRequiredParameterKeysFromIssues, type AssetCompositeExecutionPlan, type CompiledAssetCompositionStep } from "./asset-composition.js";
 
 export type AssetCompositeExecutionItemStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "stopped";
 export type AssetCompositeExecutionStatus = "running" | "passed" | "failed" | "stopped";
@@ -84,6 +84,9 @@ export class AssetCompositeExecutionManager {
     plan: AssetCompositeExecutionPlan;
   }): AssetCompositeExecution {
     if (input.plan.status !== "ready") {
+      if (input.plan.status === "needs_parameters") {
+        throw new Error("请先补充参数：" + missingRequiredParameterKeysFromIssues(input.plan.issues).join("、"));
+      }
       throw new Error(input.plan.issues[0]?.message ?? "组合用例预检未通过。");
     }
     const id = createId("asset_composite_execution");

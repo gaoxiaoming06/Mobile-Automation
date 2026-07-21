@@ -22,7 +22,7 @@ describe("AssetCompositionPanel", () => {
     expect(markup).toContain("执行组合");
     expect(markup).toContain("元功能");
     expect(markup).toContain("组合用例");
-    expect(markup).toContain("在测试数据中维护");
+    expect(markup).toContain("在参数中心维护");
     expect(markup).toContain("进入指定班级");
     expect(markup).toContain("指定班级创建课堂");
     expect(markup).not.toContain("从页面资产选择能力和任务");
@@ -115,7 +115,7 @@ describe("AssetCompositionPanel", () => {
       mode: "parameters"
     }));
 
-    expect(markup).toContain("测试数据");
+    expect(markup).toContain("参数中心");
     expect(markup).toContain("数据记录");
     expect(markup).toContain("执行组合");
     expect(markup).toContain("教师账号 A");

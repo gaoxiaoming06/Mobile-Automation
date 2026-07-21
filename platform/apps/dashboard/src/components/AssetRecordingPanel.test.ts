@@ -37,7 +37,7 @@ describe("AssetRecordingPanel", () => {
     ).toEqual({ id: "region", label: "动作区域", x: 10, y: 20, width: 35, height: 35, semanticArea: "content", coordinateSpace: "screen" });
   });
 
-  it("opens the candidate-driven v2 workbench by default", () => {
+  it("opens page matching by default and keeps internal v2 candidates out of the main tabs", () => {
     const markup = renderToStaticMarkup(
       React.createElement(AssetRecordingPanel, {
         selectedSerial: "device-1",
@@ -57,13 +57,12 @@ describe("AssetRecordingPanel", () => {
       })
     );
 
-    expect(markup).toContain("v2 候选录入");
-    expect(markup).toContain("候选池");
-    expect(markup).toContain("先选候选，再确认语义");
-    expect(markup).toContain("直接录为页面身份");
-    expect(markup).toContain("录为可操作元素");
-    expect(markup).not.toContain("<h2>页面身份依据</h2>");
-    expect(markup).not.toContain("截图重点区域");
+    expect(markup).toContain("<h2>页面身份依据</h2>");
+    expect(markup).toContain("候选信息");
+    expect(markup).toContain("创建班级");
+    expect(markup).not.toContain("v2 候选录入");
+    expect(markup).not.toContain("候选池");
+    expect(markup).not.toContain("先选候选，再确认语义");
   });
 
   it("renders the manual page asset recording workflow", () => {
@@ -333,17 +332,21 @@ describe("AssetRecordingPanel", () => {
       })
     );
 
-    expect(markup).toContain("自动探索");
-    expect(markup).toContain("V2 两层探索");
+    expect(markup).toContain("发现页面连接");
+    expect(markup).not.toContain("自动探索");
+    expect(markup).toContain("两层连接发现");
+    expect(markup).not.toContain("V2 两层探索");
+    expect(markup).toContain("连接策略");
+    expect(markup).not.toContain("<span>V2</span>");
     expect(markup).toContain("搜索入口");
     expect(markup).toContain("退出登录");
     expect(markup).toContain("已跳过");
     expect(markup).toContain("到达已保存页面");
-    expect(markup).toContain("开始探索");
+    expect(markup).toContain("开始发现");
     expect(markup).not.toContain("AI 说明");
   });
 
-  it("renders a candidate-driven v2 asset workbench instead of the old manual region workflow", () => {
+  it("falls back from the legacy v2 workbench tab to page matching", () => {
     const markup = renderToStaticMarkup(
       React.createElement(AssetRecordingPanel, {
         selectedSerial: "device-1",
@@ -401,29 +404,14 @@ describe("AssetRecordingPanel", () => {
       })
     );
 
-    expect(markup).toContain("v2 候选录入");
-    expect(markup).toContain("先选候选，再确认语义");
-    expect(markup).toContain("候选池");
+    expect(markup).toContain("<h2>页面身份依据</h2>");
     expect(markup).toContain("搜索");
     expect(markup).toContain("创建班级");
-    expect(markup).toContain("直接录为页面身份");
-    expect(markup).toContain("录为可操作元素");
-    expect(markup).toContain("缺少区域，先刷新候选");
+    expect(markup).not.toContain("v2 候选录入");
+    expect(markup).not.toContain("候选池");
+    expect(markup).not.toContain("直接录为页面身份");
+    expect(markup).not.toContain("录为可操作元素");
     expect(markup).not.toContain("ocr_text:搜索@region");
-    expect(markup).toContain("region_center 不直接执行");
-    expect(markup).toContain("OCR / 视觉 / 结构重定位成功才允许点击");
-    expect(markup).toContain("PageElement");
-    expect(markup).toContain("PageTransition");
-    expect(markup).toContain("DynamicRegion / ListTemplate");
-    expect(markup).toContain("当前页录入状态");
-    expect(markup).toContain("1 个可操作元素");
-    expect(markup).toContain("1 条连接边");
-    expect(markup).toContain("1 个页面任务");
-    expect(markup).toContain("搜索入口");
-    expect(markup).toContain("主页 -&gt; 搜索");
-    expect(markup).toContain("从已录入元素补连接边");
-    expect(markup).toContain("把元素编入页面任务");
-    expect(markup).toContain("打开详情编辑");
     expect(markup).not.toContain("AI 说明");
   });
 
@@ -2274,7 +2262,9 @@ describe("AI 元素建议", () => {
         }
       })
     );
-    expect(html).toContain("AI 识别本页");
+    expect(html).toContain("AI 辅助识别");
+    expect(html).toContain("asset-ai-identify-button");
+    expect(html).not.toContain("AI 识别本页");
     expect(html).toContain("搜索入口");
     expect(html).toContain("保存该元素");
     expect(html).toContain("状态栏文案已剔除");
@@ -2299,6 +2289,6 @@ describe("AI 元素建议", () => {
         currentPage: { status: "draft_created", nodeId: "node-1", observation: {} }
       })
     );
-    expect(html).not.toContain("AI 识别本页");
+    expect(html).not.toContain("AI 辅助识别");
   });
 });

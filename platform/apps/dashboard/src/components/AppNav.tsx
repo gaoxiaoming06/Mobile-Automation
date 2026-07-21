@@ -9,13 +9,14 @@ import {
   PanelLeftOpen,
   PlayCircle,
   Radar,
+  Route,
   Settings,
   SlidersHorizontal,
   Smartphone,
   Workflow
 } from "lucide-react";
 
-export type AppNavItemId = "devices" | "caseLibrary" | "recording" | "assetRecording" | "pageAssets" | "assetComposition" | "parameterCenter" | "assetPatrol" | "stability" | "runs" | "graphs" | "packages" | "reports" | "settings";
+export type AppNavItemId = "devices" | "caseLibrary" | "recording" | "assetRecording" | "pageAssets" | "assetComposition" | "freeComposition" | "parameterCenter" | "assetPatrol" | "stability" | "runs" | "graphs" | "packages" | "reports" | "settings";
 
 type AppNavProps = {
   activeNavItem: AppNavItemId;
@@ -27,6 +28,7 @@ type AppNavProps = {
   openAssetRecording: () => void;
   openPageAssets: () => void;
   openAssetComposition: () => void;
+  openFreeComposition: () => void;
   openParameterCenter: () => void;
   openAssetPatrol: () => void;
   openStability: () => void;
@@ -45,6 +47,7 @@ export function AppNav({
   openAssetRecording,
   openPageAssets,
   openAssetComposition,
+  openFreeComposition,
   openParameterCenter,
   openAssetPatrol,
   openStability,
@@ -83,9 +86,13 @@ export function AppNav({
           <Workflow size={18} />
           <span>资产用例</span>
         </button>
-        <button className={navButtonClass(activeNavItem, "parameterCenter")} onClick={openParameterCenter} title="测试数据" type="button">
+        <button className={navButtonClass(activeNavItem, "freeComposition")} onClick={openFreeComposition} title="AI资产用例" type="button">
+          <Route size={18} />
+          <span>AI资产用例</span>
+        </button>
+        <button className={navButtonClass(activeNavItem, "parameterCenter")} onClick={openParameterCenter} title="参数中心" type="button">
           <SlidersHorizontal size={18} />
-          <span>测试数据</span>
+          <span>参数中心</span>
         </button>
         <button className={navButtonClass(activeNavItem, "assetPatrol")} onClick={openAssetPatrol} title="资产驱动巡检" type="button">
           <Radar size={18} />

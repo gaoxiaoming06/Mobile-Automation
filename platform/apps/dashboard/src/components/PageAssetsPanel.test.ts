@@ -24,7 +24,7 @@ describe("PageAssetsPanel", () => {
     );
   });
 
-  it("renders target testing as a task form instead of an asset list", () => {
+  it("renders the saved page asset library as the only page assets view", () => {
     const markup = renderToStaticMarkup(
       React.createElement(PageAssetsPanel, {
         selectedSerial: "device-1",
@@ -72,21 +72,68 @@ describe("PageAssetsPanel", () => {
       })
     );
 
-    expect(markup).toContain("目标页面测试");
     expect(markup).toContain("已保存页面资产");
-    expect(markup).toContain("目标页面");
-    expect(markup).toContain("目标动作");
-    expect(markup).toContain("目标验证");
-    expect(markup).toContain("执行组合（按需）");
-    expect(markup).toContain("页面到达后不执行动作");
-    expect(markup).toContain("仅验证已到达目标页面");
+    expect(markup).toContain("页面资产概览");
+    expect(markup).toContain("主页");
+    expect(markup).toContain("页面资产详情：主页");
+    expect(markup).not.toContain("目标页面测试");
+    expect(markup).not.toContain("目标动作");
+    expect(markup).not.toContain("目标验证");
+    expect(markup).not.toContain("执行组合（按需）");
+    expect(markup).not.toContain("规划并执行");
     expect(markup).not.toContain("PageStateFlow");
     expect(markup).not.toContain("配置一个页面级测试任务");
-    expect(markup).not.toContain("删除页面资产：主页");
     expect(markup).not.toContain("matcher 3");
   });
 
-  it("renders delete controls for saved page assets", () => {
+  it("keeps legacy target tab input on the saved asset library", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(PageAssetsPanel, {
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        initialTab: "targetTest",
+        initialTargetText: "新建课堂",
+        graphs: [
+          {
+            id: "graph-1",
+            appId: "classin-android",
+            name: "ClassIn Android 页面资产",
+            status: "active",
+            activeVersion: { id: "version-1", version: 1 }
+          }
+        ],
+        assetsByVersionId: {
+          "version-1": {
+            graphVersionId: "version-1",
+            pageAssets: [
+              {
+                id: "node-create-lesson",
+                key: "classin.teacher.lesson.create",
+                name: "新建课堂",
+                status: "active",
+                tags: ["page-asset"],
+                matcherCount: 3,
+                criticalMatcherCount: 1,
+                elementCount: 4,
+                visibleTexts: ["新建课堂"],
+                resourceIds: [],
+                accessibilityIds: []
+              }
+            ]
+          }
+        },
+        onOpenAssetRecording: () => undefined,
+        setMessage: () => undefined
+      })
+    );
+
+    expect(markup).toContain("已保存页面资产");
+    expect(markup).toContain("新建课堂");
+    expect(markup).not.toContain("目标页面测试");
+    expect(markup).not.toContain("规划并执行");
+  });
+
+  it("renders delete controls and expanded details for saved page assets", () => {
     const markup = renderToStaticMarkup(
       React.createElement(PageAssetsPanel, {
         selectedSerial: "device-1",
@@ -114,6 +161,31 @@ describe("PageAssetsPanel", () => {
                 matcherCount: 3,
                 criticalMatcherCount: 1,
                 elementCount: 2,
+                screenshotRegions: [
+                  {
+                    id: "region-title",
+                    label: "标题栏",
+                    x: 0,
+                    y: 0,
+                    width: 100,
+                    height: 12,
+                    semanticArea: "top",
+                    evidenceTexts: ["主页"]
+                  }
+                ],
+                transitions: [
+                  {
+                    id: "edge-create",
+                    key: "edge.create",
+                    name: "主页 -> 新建课堂",
+                    status: "ready",
+                    source: "manual",
+                    actionSummary: "点击 创建班级",
+                    targetNodeId: "node-create",
+                    targetName: "新建课堂",
+                    reliabilityScore: 0.92
+                  }
+                ],
                 tasks: [
                   {
                     id: "task-create-lesson",
@@ -139,6 +211,13 @@ describe("PageAssetsPanel", () => {
     expect(markup).toContain("主页");
     expect(markup).toContain("删除");
     expect(markup).toContain("详情");
+    expect(markup).toContain("页面资产详情：主页");
+    expect(markup).toContain("ClassIn Android 页面资产 · v1");
+    expect(markup).toContain("标题栏");
+    expect(markup).toContain("新建课堂");
+    expect(markup).toContain("点击 创建班级");
+    expect(markup).toContain("创建课堂");
+    expect(markup).toContain("参数：lessonName");
     expect(markup).toContain("匹配依据");
     expect(markup).toContain("可操作");
     expect(markup).toContain("出口");
@@ -149,8 +228,6 @@ describe("PageAssetsPanel", () => {
     expect(markup).not.toContain("matcher 3");
     expect(markup).not.toContain("element 2");
     expect(markup).not.toContain("调试信息");
-    expect(markup).not.toContain("<code>classin.home</code>");
-    expect(markup).not.toContain("<span>active</span>");
   });
 
   it("uses confirmed identity evidence instead of raw business visible texts in the library summary", () => {
@@ -484,7 +561,7 @@ describe("PageAssetsPanel", () => {
     ).toEqual({
       id: "target-task-node-create",
       targetNodeId: "node-create",
-      note: "目标页面测试：新建公开课",
+      note: "页面资产执行：新建公开课",
       nodeExpectationOverrides: [
         {
           nodeId: "node-create",
@@ -493,7 +570,7 @@ describe("PageAssetsPanel", () => {
               id: "target-text-node-create",
               type: "text",
               enabled: true,
-              title: "目标验证",
+              title: "页面验证",
               params: {
                 expected: "发布成功",
                 mode: "contains",
@@ -528,18 +605,19 @@ describe("PageAssetsPanel", () => {
       id: "target-task-node-create",
       targetNodeId: "node-create",
       targetTaskId: "task-create-lesson",
-      note: "目标页面测试：新建课堂",
+      note: "页面资产执行：新建课堂",
       runtimeParams: {
         lessonName: "数学课"
       }
     });
   });
 
-  it("guides page task execution to use a parameter-center profile instead of inline runtime inputs", () => {
+  it("shows page task parameters in saved asset details instead of exposing target execution inputs", () => {
     const markup = renderToStaticMarkup(
       React.createElement(PageAssetsPanel, {
         selectedSerial: "device-1",
         selectedDeviceBusy: false,
+        initialTab: "targetTest",
         initialTargetText: "新建课堂",
         initialTargetTaskId: "task-fill-lesson-form",
         graphs: [
@@ -585,10 +663,11 @@ describe("PageAssetsPanel", () => {
       })
     );
 
-    expect(markup).toContain("执行组合（按需）");
-    expect(markup).toContain("页面任务需要：lessonName、duration、recordClassroom、recordLive");
-    expect(markup).toContain("测试数据");
-    expect(markup).toContain("执行组合");
+    expect(markup).toContain("页面任务");
+    expect(markup).toContain("填写课堂表单");
+    expect(markup).toContain("参数：lessonName、duration、recordClassroom、recordLive");
+    expect(markup).not.toContain("执行组合（按需）");
+    expect(markup).not.toContain("目标页面测试");
     expect(markup).not.toContain("name=\"runtime-param-lessonName\"");
     expect(markup).not.toContain("目标项 / 班级名");
   });
@@ -611,7 +690,7 @@ describe("PageAssetsPanel", () => {
       id: "target-task-node-create",
       targetNodeId: "node-create",
       targetTaskId: "task-fill-lesson-form",
-      note: "目标页面测试：新建课堂",
+      note: "页面资产执行：新建课堂",
       runtimeParams: {
         lessonName: "自动化课堂"
       }
@@ -635,7 +714,7 @@ describe("PageAssetsPanel", () => {
       id: "target-task-node-create",
       targetNodeId: "node-create",
       targetTaskId: "task-fill-lesson-form",
-      note: "目标页面测试：新建课堂",
+      note: "页面资产执行：新建课堂",
       runtimeParams: {
         lessonName: "自动化课堂",
         className: "班级四十二号"

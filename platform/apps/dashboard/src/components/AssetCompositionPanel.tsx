@@ -49,9 +49,9 @@ type ParameterManifest = {
 };
 
 type CompositePlan = {
-  status: "ready" | "blocked";
+  status: "ready" | "needs_parameters" | "blocked";
   steps: Array<{ id: string; metaFunctionName: string; kind: string; targetPageModelId: string; pageElementId?: string; pageTaskId?: string }>;
-  issues: Array<{ code: string; message: string }>;
+  issues: Array<{ code: string; message: string; assetId?: string }>;
 };
 
 type CompositeExecution = {
@@ -278,7 +278,7 @@ export function AssetCompositionPanel({ selectedSerial, selectedDeviceBusy, defa
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parameterProfileId: caseDraft.parameterProfileId || undefined })
       });
       setPlan(response.plan);
-      setMessage(response.plan.status === "ready" ? "组合用例预检通过" : response.plan.issues[0]?.message ?? "组合用例预检失败");
+      setMessage(messageForCompositionPlan(response.plan, "组合用例"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -310,12 +310,12 @@ export function AssetCompositionPanel({ selectedSerial, selectedDeviceBusy, defa
     <section className="module-page asset-composition-module">
       <div className="module-header asset-composition-header">
         <div className="asset-composition-title">
-          <h2>{parameterMode ? "测试数据" : "资产用例"}</h2>
+          <h2>{parameterMode ? "参数中心" : "资产用例"}</h2>
           <p>{parameterMode ? "按业务领域维护可复用的运行数据，再组合成一次执行配置。" : "把页面资产编排成可复用的元功能，再组合成端到端测试用例。"}</p>
         </div>
         <div className="asset-composition-app-picker">
           <input value={appId} onChange={(event) => setAppId(event.target.value)} placeholder="App 包名" />
-          <button className="icon-button" type="button" onClick={() => void refresh()} disabled={busy} title={parameterMode ? "刷新测试数据" : "刷新资产用例"}><RefreshCw size={16} /></button>
+          <button className="icon-button" type="button" onClick={() => void refresh()} disabled={busy} title={parameterMode ? "刷新参数中心" : "刷新资产用例"}><RefreshCw size={16} /></button>
         </div>
       </div>
 
@@ -327,7 +327,7 @@ export function AssetCompositionPanel({ selectedSerial, selectedDeviceBusy, defa
         </> : <>
           <Summary label="元功能" count={data.metaFunctions.length} example={data.metaFunctions[0]?.name} />
           <Summary label="组合用例" count={data.cases.length} example={data.cases[0]?.name} />
-          <Summary label="执行组合" count={data.profiles.length} example="在测试数据中维护" />
+          <Summary label="执行组合" count={data.profiles.length} example="在参数中心维护" />
         </>}
         <Summary label="页面资产" count={data.catalog.pages.length} example={data.catalog.pages[0]?.name} />
       </div>
@@ -459,7 +459,7 @@ function ParameterProfileFields({ manifest, values, onChange, domainKey, showInt
 
   return (
     <div className="parameter-center-fields">
-      {showIntro ? <div className="parameter-center-intro"><strong>高级直接覆盖</strong><span>只在需要临时覆盖数据记录时填写；日常数据请在“测试数据 - 数据记录”中维护。</span></div> : null}
+      {showIntro ? <div className="parameter-center-intro"><strong>高级直接覆盖</strong><span>只在需要临时覆盖数据记录时填写；日常数据请在“参数中心 - 数据记录”中维护。</span></div> : null}
       {!groups.length ? <div className="empty">{domainKey ? "当前业务领域还没有提取到参数定义。" : "当前资产还没有提取到动态参数。先在页面能力或页面任务中绑定参数后再刷新。"}</div> : null}
       {domainKey ? (
         <div className="parameter-page-sections">
@@ -641,7 +641,33 @@ function metaStepKindHint(kind: MetaFunctionStep["kind"]): string {
 
 function PageSelect({ value, catalog, onChange }: { value: string; catalog: CompositionCatalog; onChange: (value: string) => void }) { return <select value={value} onChange={(event) => onChange(event.target.value)}>{catalog.pages.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>; }
 
-function PlanView({ plan }: { plan: CompositePlan }) { return <div className={`composition-plan ${plan.status}`}><strong>{plan.status === "ready" ? `预检通过 · ${plan.steps.length} 个资产步骤` : "预检未通过"}</strong>{plan.issues.map((item) => <span key={`${item.code}-${item.message}`}>{item.code} · {item.message}</span>)}</div>; }
+function PlanView({ plan }: { plan: CompositePlan }) {
+  const missingPrompt = missingParameterPrompt(plan);
+  return <div className={`composition-plan ${plan.status}`}>
+    <strong>{plan.status === "ready" ? `预检通过 · ${plan.steps.length} 个资产步骤` : plan.status === "needs_parameters" ? "需要补充参数" : "预检未通过"}</strong>
+    {missingPrompt ? <span>{missingPrompt}</span> : null}
+    {plan.status !== "needs_parameters" ? plan.issues.map((item) => <span key={`${item.code}-${item.message}`}>{item.code} · {item.message}</span>) : null}
+  </div>;
+}
+
+function messageForCompositionPlan(plan: CompositePlan, label: string): string {
+  if (plan.status === "ready") {
+    return `${label}预检通过`;
+  }
+  return missingParameterPrompt(plan) ?? plan.issues[0]?.message ?? `${label}预检失败`;
+}
+
+function missingParameterPrompt(plan: CompositePlan): string | undefined {
+  if (plan.status !== "needs_parameters") {
+    return undefined;
+  }
+  const missing = [...new Set(plan.issues
+    .filter((issue) => issue.code === "MISSING_REQUIRED_PARAMETER")
+    .map((issue) => issue.assetId?.trim() ?? "")
+    .filter(Boolean))]
+    .sort();
+  return missing.length ? `需要补充参数：${missing.join("、")}` : "需要补充参数";
+}
 
 function ExecutionView({ execution }: { execution: CompositeExecution }) { return <div className="composition-execution"><div className="panel-head"><strong>{execution.status} · {execution.completedItems}/{execution.totalItems}</strong><a href={`/api/asset-composition/executions/${encodeURIComponent(execution.id)}/report`} target="_blank" rel="noreferrer">打开报告</a></div>{execution.currentItem ? <p>当前：{execution.currentItem.metaFunctionName} · {execution.currentItem.kind}</p> : null}<div className="composition-execution-list">{execution.items.map((item) => <div key={item.id} className={item.status}><strong>{item.metaFunctionName}</strong><span>{item.kind} · {item.status}{item.error ? ` · ${item.error}` : ""}</span></div>)}</div></div>; }
 

@@ -7,6 +7,14 @@ describe("useDeviceList defaults", () => {
     expect(defaultSelectedDeviceSerial([device("ios-1", "ios"), device("android-1", "android")], "ios-1")).toBe("ios-1");
   });
 
+  it("moves selection away from an unavailable current device", () => {
+    expect(defaultSelectedDeviceSerial([unavailableDevice("ios-1", "ios"), device("android-1", "android")], "ios-1")).toBe("android-1");
+  });
+
+  it("does not select a discovered device when none can be controlled", () => {
+    expect(defaultSelectedDeviceSerial([unavailableDevice("ios-1", "ios")], "")).toBe("");
+  });
+
   it("selects an online Android device by default when there is no current selection", () => {
     expect(defaultSelectedDeviceSerial([device("ios-1", "ios"), device("android-1", "android")], "")).toBe("android-1");
   });
@@ -50,5 +58,26 @@ function device(serial: string, platform: DeviceInfo["platform"]): DeviceInfo {
     orientation: "portrait",
     capabilities: defaultAndroidCapabilities(),
     lastSeenAt: "2026-07-01T00:00:00.000Z"
+  };
+}
+
+function unavailableDevice(serial: string, platform: DeviceInfo["platform"]): DeviceInfo {
+  return {
+    ...device(serial, platform),
+    status: "offline",
+    capabilities: {
+      ...defaultAndroidCapabilities(),
+      preview: false,
+      tap: false,
+      longPress: false,
+      swipe: false,
+      back: false,
+      home: false,
+      recentApps: false,
+      textInput: false,
+      screenshot: false,
+      launchApp: false,
+      closeApp: false
+    }
   };
 }
