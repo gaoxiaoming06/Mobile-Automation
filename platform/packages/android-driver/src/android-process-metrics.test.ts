@@ -147,6 +147,133 @@ describe("AndroidProcessMetricSampler CPU", () => {
       expect.objectContaining({ cpuPercent: undefined })
     );
   });
+
+  it("keeps raw stat contents when system or process stat parsing fails", async () => {
+    const invalidSystemStat = "not cpu data";
+    const validSystemStat = "cpu  100 0 0 300 0 0 0 0 0 0";
+    const validProcessStat = "1234 (cn.eeo.classin) S 1 2 3 4 5 6 7 8 9 10 0 0";
+    const invalidProcessStat = "not a process stat";
+    const invalidSystemSampler = new AndroidProcessMetricSampler({
+      shell: createShellSequence({
+        "cat /proc/stat": [invalidSystemStat, validSystemStat],
+        "cat /proc/1234/stat": [validProcessStat, validProcessStat]
+      }),
+      sleep: async () => undefined
+    });
+    const invalidProcessSampler = new AndroidProcessMetricSampler({
+      shell: createShellSequence({
+        "cat /proc/stat": [validSystemStat, validSystemStat],
+        "cat /proc/1234/stat": [validProcessStat, invalidProcessStat]
+      }),
+      sleep: async () => undefined
+    });
+
+    await expect(invalidSystemSampler.sampleCpu("device-1", processInfo)).resolves.toEqual(
+      expect.objectContaining({
+        cpuPercent: undefined,
+        raw: expect.objectContaining({
+          reason: "parse_failed",
+          firstSystemStatRaw: invalidSystemStat,
+          secondSystemStatRaw: validSystemStat,
+          firstProcessStatRaw: validProcessStat,
+          secondProcessStatRaw: validProcessStat
+        })
+      })
+    );
+    await expect(invalidProcessSampler.sampleCpu("device-1", processInfo)).resolves.toEqual(
+      expect.objectContaining({
+        cpuPercent: undefined,
+        raw: expect.objectContaining({
+          reason: "parse_failed",
+          firstSystemStatRaw: validSystemStat,
+          secondSystemStatRaw: validSystemStat,
+          firstProcessStatRaw: validProcessStat,
+          secondProcessStatRaw: invalidProcessStat
+        })
+      })
+    );
+  });
+
+  it("records a raw reason when total delta is zero", async () => {
+    const firstSystemStat = "cpu  100 0 0 300 0 0 0 0 0 0";
+    const secondSystemStat = "cpu  100 0 0 300 0 0 0 0 0 0";
+    const firstProcessStat = "1234 (cn.eeo.classin) S 1 2 3 4 5 6 7 8 9 10 0 0";
+    const secondProcessStat = "1234 (cn.eeo.classin) S 1 2 3 4 5 6 7 8 9 10 10 0";
+    const sampler = new AndroidProcessMetricSampler({
+      shell: createShellSequence({
+        "cat /proc/stat": [firstSystemStat, secondSystemStat],
+        "cat /proc/1234/stat": [firstProcessStat, secondProcessStat]
+      }),
+      sleep: async () => undefined
+    });
+
+    await expect(sampler.sampleCpu("device-1", processInfo)).resolves.toEqual(
+      expect.objectContaining({
+        cpuPercent: undefined,
+        raw: expect.objectContaining({
+          reason: "non_positive_total_delta",
+          firstSystemStatRaw: firstSystemStat,
+          secondSystemStatRaw: secondSystemStat,
+          firstProcessStatRaw: firstProcessStat,
+          secondProcessStatRaw: secondProcessStat
+        })
+      })
+    );
+  });
+
+  it("records a raw reason when process delta is negative", async () => {
+    const firstSystemStat = "cpu  100 0 0 300 0 0 0 0 0 0";
+    const secondSystemStat = "cpu  120 0 0 320 0 0 0 0 0 0";
+    const firstProcessStat = "1234 (cn.eeo.classin) S 1 2 3 4 5 6 7 8 9 10 30 0";
+    const secondProcessStat = "1234 (cn.eeo.classin) S 1 2 3 4 5 6 7 8 9 10 20 0";
+    const sampler = new AndroidProcessMetricSampler({
+      shell: createShellSequence({
+        "cat /proc/stat": [firstSystemStat, secondSystemStat],
+        "cat /proc/1234/stat": [firstProcessStat, secondProcessStat]
+      }),
+      sleep: async () => undefined
+    });
+
+    await expect(sampler.sampleCpu("device-1", processInfo)).resolves.toEqual(
+      expect.objectContaining({
+        cpuPercent: undefined,
+        raw: expect.objectContaining({
+          reason: "negative_process_delta",
+          firstSystemStatRaw: firstSystemStat,
+          secondSystemStatRaw: secondSystemStat,
+          firstProcessStatRaw: firstProcessStat,
+          secondProcessStatRaw: secondProcessStat
+        })
+      })
+    );
+  });
+
+  it("keeps readable diagnostics when the second process stat read fails", async () => {
+    const firstSystemStat = "cpu  100 0 0 300 0 0 0 0 0 0";
+    const secondSystemStat = "cpu  120 0 0 320 0 0 0 0 0 0";
+    const firstProcessStat = "1234 (cn.eeo.classin) S 1 2 3 4 5 6 7 8 9 10 30 0";
+    const sampler = new AndroidProcessMetricSampler({
+      shell: createShellSequence({
+        "cat /proc/stat": [firstSystemStat, secondSystemStat],
+        "cat /proc/1234/stat": [firstProcessStat, new Error("process exited before second stat")]
+      }),
+      sleep: async () => undefined
+    });
+
+    await expect(sampler.sampleCpu("device-1", processInfo)).resolves.toEqual(
+      expect.objectContaining({
+        cpuPercent: undefined,
+        raw: expect.objectContaining({
+          reason: "shell_failed",
+          error: "process exited before second stat",
+          firstSystemStatRaw: firstSystemStat,
+          secondSystemStatRaw: secondSystemStat,
+          firstProcessStatRaw: firstProcessStat,
+          secondProcessStatRaw: undefined
+        })
+      })
+    );
+  });
 });
 
 describe("meminfo parsers", () => {
@@ -233,7 +360,7 @@ describe("AndroidProcessMetricSampler memory", () => {
   });
 });
 
-function createShellSequence(outputs: Record<string, string | string[] | Error>): AndroidShellExecutor {
+function createShellSequence(outputs: Record<string, string | Array<string | Error> | Error>): AndroidShellExecutor {
   const readCounts = new Map<string, number>();
   return vi.fn<AndroidShellExecutor>(async (_serial, args) => {
     const key = args.join(" ");
@@ -247,6 +374,9 @@ function createShellSequence(outputs: Record<string, string | string[] | Error>)
       const value = output[readCount];
       if (value === undefined) {
         throw new Error(`Unexpected shell command read: ${key}`);
+      }
+      if (value instanceof Error) {
+        throw value;
       }
       return value;
     }

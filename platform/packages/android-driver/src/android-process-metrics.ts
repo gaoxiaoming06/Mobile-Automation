@@ -31,6 +31,19 @@ export type AndroidProcessAppSummary = {
   systemKb?: number;
 };
 
+type CpuSampleFailureReason =
+  | "parse_failed"
+  | "non_positive_total_delta"
+  | "negative_process_delta"
+  | "shell_failed";
+
+type CpuStatRawSnapshot = {
+  firstSystemStatRaw?: string;
+  secondSystemStatRaw?: string;
+  firstProcessStatRaw?: string;
+  secondProcessStatRaw?: string;
+};
+
 export class AndroidProcessMetricSampler {
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -40,38 +53,39 @@ export class AndroidProcessMetricSampler {
 
   async sampleCpu(serial: string, process: AndroidProcessInfo): Promise<AndroidProcessMetricSample> {
     const sample = createProcessSample(process);
+    const rawStats: CpuStatRawSnapshot = {};
     try {
-      const [firstSystem, firstProcess] = await Promise.all([
-        this.shell(serial, ["cat", "/proc/stat"], { timeoutMs: 5000 }),
-        this.shell(serial, ["cat", `/proc/${process.pid}/stat`], { timeoutMs: 5000 })
-      ]);
+      rawStats.firstSystemStatRaw = await this.shell(serial, ["cat", "/proc/stat"], { timeoutMs: 5000 });
+      rawStats.firstProcessStatRaw = await this.shell(serial, ["cat", `/proc/${process.pid}/stat`], {
+        timeoutMs: 5000
+      });
       await this.sleep(250);
-      const [secondSystem, secondProcess] = await Promise.all([
-        this.shell(serial, ["cat", "/proc/stat"], { timeoutMs: 5000 }),
-        this.shell(serial, ["cat", `/proc/${process.pid}/stat`], { timeoutMs: 5000 })
-      ]);
+      rawStats.secondSystemStatRaw = await this.shell(serial, ["cat", "/proc/stat"], { timeoutMs: 5000 });
+      rawStats.secondProcessStatRaw = await this.shell(serial, ["cat", `/proc/${process.pid}/stat`], {
+        timeoutMs: 5000
+      });
 
-      const firstSystemStat = parseSystemCpuStat(firstSystem);
-      const secondSystemStat = parseSystemCpuStat(secondSystem);
-      const firstProcessStat = parseProcessCpuStat(firstProcess);
-      const secondProcessStat = parseProcessCpuStat(secondProcess);
+      const firstSystemStat = parseSystemCpuStat(rawStats.firstSystemStatRaw);
+      const secondSystemStat = parseSystemCpuStat(rawStats.secondSystemStatRaw);
+      const firstProcessStat = parseProcessCpuStat(rawStats.firstProcessStatRaw);
+      const secondProcessStat = parseProcessCpuStat(rawStats.secondProcessStatRaw);
       if (!firstSystemStat || !secondSystemStat || !firstProcessStat || !secondProcessStat) {
-        return {
-          ...sample,
-          cpuPercent: undefined,
-          raw: {
-            error: "Unable to parse CPU stat"
-          }
-        };
+        return createFailedCpuSample(sample, "parse_failed", rawStats);
       }
 
       const totalDelta = secondSystemStat.total - firstSystemStat.total;
       const processDelta = secondProcessStat.total - firstProcessStat.total;
-      if (totalDelta <= 0 || processDelta < 0) {
-        return {
-          ...sample,
-          cpuPercent: undefined
-        };
+      if (totalDelta <= 0) {
+        return createFailedCpuSample(sample, "non_positive_total_delta", rawStats, {
+          totalDelta,
+          processDelta
+        });
+      }
+      if (processDelta < 0) {
+        return createFailedCpuSample(sample, "negative_process_delta", rawStats, {
+          totalDelta,
+          processDelta
+        });
       }
 
       const coreCount = secondSystemStat.coreCount || firstSystemStat.coreCount || 1;
@@ -80,13 +94,9 @@ export class AndroidProcessMetricSampler {
         cpuPercent: (processDelta / totalDelta) * coreCount * 100
       };
     } catch (error) {
-      return {
-        ...sample,
-        cpuPercent: undefined,
-        raw: {
-          error: errorMessage(error)
-        }
-      };
+      return createFailedCpuSample(sample, "shell_failed", rawStats, {
+        error: errorMessage(error)
+      });
     }
   }
 
@@ -230,6 +240,26 @@ function createProcessSample(process: AndroidProcessInfo): AndroidProcessMetricS
     sampledAt: nowIso(),
     pid: process.pid,
     processName: process.processName
+  };
+}
+
+function createFailedCpuSample(
+  sample: AndroidProcessMetricSample,
+  reason: CpuSampleFailureReason,
+  rawStats: CpuStatRawSnapshot,
+  extraRaw: Record<string, unknown> = {}
+): AndroidProcessMetricSample {
+  return {
+    ...sample,
+    cpuPercent: undefined,
+    raw: {
+      reason,
+      firstSystemStatRaw: rawStats.firstSystemStatRaw,
+      secondSystemStatRaw: rawStats.secondSystemStatRaw,
+      firstProcessStatRaw: rawStats.firstProcessStatRaw,
+      secondProcessStatRaw: rawStats.secondProcessStatRaw,
+      ...extraRaw
+    }
   };
 }
 
