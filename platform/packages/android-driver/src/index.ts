@@ -23,6 +23,12 @@ import { parseForegroundApp, parsePackageInfo, type AndroidForegroundApp } from 
 
 export type { AndroidDeviceEventWatcher, AndroidWatchDeviceEventOptions } from "./android-events.js";
 export type { AndroidForegroundApp } from "./android-parsers.js";
+export { AndroidIncidentDumper, type AndroidIncidentArtifactWriter, type AndroidIncidentDumperOptions } from "./android-incident-dumper.js";
+export {
+  AndroidStabilityEventParser,
+  type AndroidStabilityEvent,
+  type AndroidStabilityEventParserOptions
+} from "./android-stability-events.js";
 export {
   AndroidProcessMetricSampler,
   parseAppSummary,

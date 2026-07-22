@@ -44,6 +44,92 @@ describe("AndroidLogcatEventWatcher", () => {
     await watcher.stop();
   });
 
+  it("uses target package buffers and maps target Java crashes to crash events", async () => {
+    const child = createChildProcess();
+    vi.mocked(spawn).mockReturnValueOnce(child as never);
+    const onEvent = vi.fn();
+    const watcher = await new AndroidLogcatEventWatcher().watchDeviceEvents("device-1", onEvent, {
+      since: new Date(2026, 5, 7, 15, 48, 9, 123),
+      packageName: "cn.eeo.classin"
+    });
+
+    child.stdout.write(
+      [
+        "06-07 15:48:10.000 E AndroidRuntime: FATAL EXCEPTION: main",
+        "06-07 15:48:10.001 E AndroidRuntime: Process: cn.eeo.classin, PID: 1234"
+      ].join("\n") + "\n"
+    );
+
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      "adb",
+      ["-s", "device-1", "logcat", "-v", "time", "-b", "main", "-b", "system", "-b", "events", "-b", "crash", "-T", "06-07 15:48:09.123"],
+      { stdio: "pipe" }
+    );
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "crash",
+        severity: "error",
+        summary: "Java crash detected: cn.eeo.classin"
+      })
+    );
+
+    await watcher.stop();
+  });
+
+  it("emits target native crash and process death events from package-aware logcat chunks", async () => {
+    const child = createChildProcess();
+    vi.mocked(spawn).mockReturnValueOnce(child as never);
+    const onEvent = vi.fn();
+    const watcher = await new AndroidLogcatEventWatcher().watchDeviceEvents("device-1", onEvent, {
+      packageName: "cn.eeo.classin"
+    });
+
+    child.stdout.write(
+      [
+        "06-07 15:48:10.000 F DEBUG   : pid: 1234, tid: 1234, name: cn.eeo.classin  >>> cn.eeo.classin <<<",
+        "06-07 15:48:10.001 F DEBUG   : signal 11 (SIGSEGV), code 1 (SEGV_MAPERR)",
+        "06-07 15:48:11.000 I ActivityManager: Killing 2234:cn.eeo.classin:worker/u0a123 (adj 900): remove task"
+      ].join("\n") + "\n"
+    );
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "native_crash",
+        severity: "error",
+        summary: "Native crash detected: cn.eeo.classin"
+      })
+    );
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "process_death",
+        severity: "warning",
+        summary: "Process death detected: cn.eeo.classin:worker"
+      })
+    );
+
+    await watcher.stop();
+  });
+
+  it("prefers target package parsing and does not report unrelated generic crashes", async () => {
+    const child = createChildProcess();
+    vi.mocked(spawn).mockReturnValueOnce(child as never);
+    const onEvent = vi.fn();
+    const watcher = await new AndroidLogcatEventWatcher().watchDeviceEvents("device-1", onEvent, {
+      packageName: "cn.eeo.classin"
+    });
+
+    child.stdout.write(
+      [
+        "06-07 15:48:10.000 E AndroidRuntime: FATAL EXCEPTION: main",
+        "06-07 15:48:10.001 E AndroidRuntime: Process: com.other.app, PID: 4321"
+      ].join("\n") + "\n"
+    );
+
+    expect(onEvent).not.toHaveBeenCalled();
+
+    await watcher.stop();
+  });
+
   it("emits a warning when logcat exits unexpectedly", async () => {
     const child = createChildProcess();
     vi.mocked(spawn).mockReturnValueOnce(child as never);

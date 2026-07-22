@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { nowIso } from "@mobile-automation/shared";
 import { formatLogcatSince, parseAndroidLogEvent, type AndroidObservedDeviceEvent } from "./android-parsers.js";
+import { AndroidStabilityEventParser, type AndroidStabilityEvent } from "./android-stability-events.js";
 
 export type AndroidDeviceEventWatcher = {
   stop(): Promise<void>;
@@ -8,6 +9,7 @@ export type AndroidDeviceEventWatcher = {
 
 export type AndroidWatchDeviceEventOptions = {
   since?: Date;
+  packageName?: string;
 };
 
 export class AndroidLogcatEventWatcher {
@@ -17,7 +19,8 @@ export class AndroidLogcatEventWatcher {
     options: AndroidWatchDeviceEventOptions = {}
   ): Promise<AndroidDeviceEventWatcher> {
     const since = options.since ?? new Date(Date.now() - 3000);
-    const process = spawn("adb", ["-s", serial, "logcat", "-v", "time", "-T", formatLogcatSince(since)], {
+    const stabilityParser = options.packageName ? new AndroidStabilityEventParser({ packageName: options.packageName }) : undefined;
+    const process = spawn("adb", createLogcatArgs(serial, since, !!options.packageName), {
       stdio: "pipe"
     });
     let stopped = false;
@@ -41,7 +44,10 @@ export class AndroidLogcatEventWatcher {
         if (recentLines.length > 80) {
           recentLines.shift();
         }
-        const event = parseAndroidLogEvent(trimmed, recentLines);
+        const stabilityEvent = stabilityParser?.observe(trimmed, recentLines);
+        const event = stabilityEvent
+          ? mapStabilityEvent(stabilityEvent)
+          : parseGenericLogEvent(trimmed, recentLines, !!stabilityParser);
         if (!event) {
           continue;
         }
@@ -127,4 +133,49 @@ async function stopProcess(child: ChildProcessWithoutNullStreams): Promise<void>
 
 function hasExited(child: ChildProcessWithoutNullStreams): boolean {
   return child.exitCode !== null || child.signalCode !== null;
+}
+
+function createLogcatArgs(serial: string, since: Date, includeTargetBuffers: boolean): string[] {
+  if (!includeTargetBuffers) {
+    return ["-s", serial, "logcat", "-v", "time", "-T", formatLogcatSince(since)];
+  }
+  return [
+    "-s",
+    serial,
+    "logcat",
+    "-v",
+    "time",
+    "-b",
+    "main",
+    "-b",
+    "system",
+    "-b",
+    "events",
+    "-b",
+    "crash",
+    "-T",
+    formatLogcatSince(since)
+  ];
+}
+
+function parseGenericLogEvent(line: string, recentLines: string[], suppressGenericStabilityEvents: boolean): AndroidObservedDeviceEvent | undefined {
+  const event = parseAndroidLogEvent(line, recentLines);
+  if (!event) {
+    return undefined;
+  }
+  if (suppressGenericStabilityEvents && (event.type === "crash" || event.type === "anr")) {
+    return undefined;
+  }
+  return event;
+}
+
+function mapStabilityEvent(event: AndroidStabilityEvent): AndroidObservedDeviceEvent {
+  const type: AndroidObservedDeviceEvent["type"] = event.type === "java_crash" ? "crash" : event.type;
+  return {
+    type,
+    severity: event.severity,
+    occurredAt: event.occurredAt,
+    summary: event.summary,
+    detail: event.detail
+  };
 }
