@@ -430,6 +430,110 @@ export type AssetCompositeCase = {
   updatedAt: string;
 };
 
+export type AndroidAppMonitorThreshold = {
+  enabled: boolean;
+  value: number;
+  sustainMs: number;
+  cooldownMs: number;
+};
+
+export type AndroidAppMonitorConfig = {
+  enabled: boolean;
+  packageName: string;
+  includeSubprocesses?: boolean;
+  processFilters?: string[];
+  cpuIntervalMs?: number;
+  memoryIntervalMs?: number;
+  lifecycleIntervalMs?: number;
+  enableHeapDump?: boolean;
+  thresholds?: {
+    cpuPercent?: AndroidAppMonitorThreshold;
+    pssMb?: AndroidAppMonitorThreshold;
+  };
+};
+
+export type NormalizedAndroidAppMonitorConfig = Required<
+  Omit<AndroidAppMonitorConfig, "processFilters" | "thresholds">
+> & {
+  processFilters: string[];
+  thresholds: {
+    cpuPercent?: AndroidAppMonitorThreshold;
+    pssMb?: AndroidAppMonitorThreshold;
+  };
+};
+
+export function normalizeAndroidAppMonitorConfig(config: AndroidAppMonitorConfig): NormalizedAndroidAppMonitorConfig {
+  return {
+    enabled: config.enabled,
+    packageName: config.packageName,
+    includeSubprocesses: config.includeSubprocesses ?? true,
+    processFilters: config.processFilters ?? [],
+    cpuIntervalMs: config.cpuIntervalMs ?? 1000,
+    memoryIntervalMs: config.memoryIntervalMs ?? 5000,
+    lifecycleIntervalMs: config.lifecycleIntervalMs ?? 2000,
+    enableHeapDump: config.enableHeapDump ?? false,
+    thresholds: config.thresholds ?? {}
+  };
+}
+
+export type AndroidProcessInfo = {
+  pid: number;
+  processName: string;
+  packageName: string;
+  isMainProcess: boolean;
+  discoveredAt: string;
+};
+
+export type AndroidProcessMetricSample = {
+  sampledAt: string;
+  pid: number;
+  processName: string;
+  cpuPercent?: number;
+  pssKb?: number;
+  rssKb?: number;
+  raw?: Record<string, unknown>;
+};
+
+export type AndroidProcessLifecycleEvent = {
+  occurredAt: string;
+  type: "process_started" | "process_exited" | "process_restarted";
+  pid?: number;
+  previousPid?: number;
+  processName: string;
+};
+
+export type AndroidAppMonitorIncident = {
+  id: string;
+  type: "cpu_threshold" | "memory_threshold" | "java_crash" | "native_crash" | "anr" | "process_death";
+  severity: "info" | "warning" | "error";
+  occurredAt: string;
+  processName?: string;
+  pid?: number;
+  summary: string;
+  detail?: string;
+  artifactIds: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type AndroidAppMonitorSummary = {
+  packageName: string;
+  startedAt: string;
+  endedAt?: string;
+  processes: AndroidProcessInfo[];
+  sampleCounts: {
+    cpu: number;
+    memory: number;
+    lifecycle: number;
+  };
+  incidents: AndroidAppMonitorIncident[];
+  artifacts: {
+    cpuCsvArtifactId?: string;
+    memoryCsvArtifactId?: string;
+    lifecycleCsvArtifactId?: string;
+    summaryJsonArtifactId?: string;
+  };
+};
+
 export type RunConfig = {
   caseId?: string;
   deviceSerial: string;
@@ -445,6 +549,7 @@ export type RunConfig = {
   startAppPackageName?: string;
   startSetupScope?: FlowStartSetupScope;
   executionProfile?: "full" | "fast_visual";
+  androidAppMonitor?: AndroidAppMonitorConfig;
   stabilityExploration?: {
     packageName: string;
     strategy: "conservative" | "balanced" | "aggressive";
@@ -527,6 +632,10 @@ export type DeviceEvent = {
     | "unknown_page_stuck"
     | "stability_exploration"
     | "asset_patrol"
+    | "native_crash"
+    | "process_death"
+    | "performance_threshold"
+    | "android_app_monitor"
     | "ai_diagnosis";
   severity: "info" | "warning" | "error";
   occurredAt: string;

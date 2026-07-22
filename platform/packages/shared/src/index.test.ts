@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { stepToAction, type ActionStep } from "./index.js";
+import {
+  normalizeAndroidAppMonitorConfig,
+  stepToAction,
+  type ActionStep,
+  type AndroidAppMonitorThreshold
+} from "./index.js";
 
 describe("shared stepToAction", () => {
   it("converts ratio-based tap coordinates to device coordinates", () => {
@@ -24,6 +29,86 @@ describe("shared stepToAction", () => {
     expect(() => stepToAction(actionStep({ type: "input_text_to_element", params: { text: "hello" } }))).toThrow("Unsupported direct action step: input_text_to_element");
     expect(() => stepToAction(actionStep({ type: "scroll_until_visible", params: { text: "更多" } }))).toThrow("Unsupported direct action step: scroll_until_visible");
     expect(() => stepToAction(actionStep({ type: "wait_until_state", params: { text: "完成" } }))).toThrow("Unsupported direct action step: wait_until_state");
+  });
+});
+
+describe("normalizeAndroidAppMonitorConfig", () => {
+  it("fills default android app monitor values", () => {
+    expect(normalizeAndroidAppMonitorConfig({ enabled: true, packageName: "cn.eeo.classin" })).toEqual({
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true,
+      processFilters: [],
+      cpuIntervalMs: 1000,
+      memoryIntervalMs: 5000,
+      lifecycleIntervalMs: 2000,
+      enableHeapDump: false,
+      thresholds: {}
+    });
+  });
+
+  it("keeps explicit process filters and thresholds", () => {
+    const cpuPercent: AndroidAppMonitorThreshold = {
+      enabled: true,
+      value: 85,
+      sustainMs: 3000,
+      cooldownMs: 10000
+    };
+    const pssMb: AndroidAppMonitorThreshold = {
+      enabled: true,
+      value: 512,
+      sustainMs: 5000,
+      cooldownMs: 15000
+    };
+
+    expect(
+      normalizeAndroidAppMonitorConfig({
+        enabled: true,
+        packageName: "cn.eeo.classin",
+        processFilters: ["main", ":privileged_process0"],
+        thresholds: {
+          cpuPercent,
+          pssMb
+        }
+      })
+    ).toMatchObject({
+      processFilters: ["main", ":privileged_process0"],
+      thresholds: {
+        cpuPercent,
+        pssMb
+      }
+    });
+  });
+
+  it("normalizes disabled config without dropping package name or thresholds", () => {
+    const cpuPercent: AndroidAppMonitorThreshold = {
+      enabled: false,
+      value: 90,
+      sustainMs: 1000,
+      cooldownMs: 5000
+    };
+
+    expect(
+      normalizeAndroidAppMonitorConfig({
+        enabled: false,
+        packageName: "cn.eeo.classin",
+        thresholds: {
+          cpuPercent
+        }
+      })
+    ).toEqual({
+      enabled: false,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true,
+      processFilters: [],
+      cpuIntervalMs: 1000,
+      memoryIntervalMs: 5000,
+      lifecycleIntervalMs: 2000,
+      enableHeapDump: false,
+      thresholds: {
+        cpuPercent
+      }
+    });
   });
 });
 
