@@ -3,6 +3,7 @@ import {
   normalizeAndroidAppMonitorConfig,
   stepToAction,
   type ActionStep,
+  type AndroidAppMonitorConfig,
   type AndroidAppMonitorThreshold
 } from "./index.js";
 
@@ -78,6 +79,36 @@ describe("normalizeAndroidAppMonitorConfig", () => {
         pssMb
       }
     });
+  });
+
+  it("isolates normalized process filters and thresholds from input references", () => {
+    const cpuPercent: AndroidAppMonitorThreshold = {
+      enabled: true,
+      value: 85,
+      sustainMs: 3000,
+      cooldownMs: 10000
+    };
+    const config = {
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      processFilters: ["main"],
+      thresholds: {
+        cpuPercent
+      }
+    } satisfies AndroidAppMonitorConfig;
+
+    const normalized = normalizeAndroidAppMonitorConfig(config);
+    const normalizedCpuPercent = normalized.thresholds.cpuPercent;
+    if (!normalizedCpuPercent) {
+      throw new Error("Expected normalized cpu threshold");
+    }
+
+    normalized.processFilters.push(":privileged_process0");
+    normalizedCpuPercent.value = 42;
+
+    expect(config.processFilters).toEqual(["main"]);
+    expect(cpuPercent.value).toBe(85);
+    expect(config.thresholds.cpuPercent?.value).toBe(85);
   });
 
   it("normalizes disabled config without dropping package name or thresholds", () => {

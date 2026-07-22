@@ -463,16 +463,21 @@ export type NormalizedAndroidAppMonitorConfig = Required<
 };
 
 export function normalizeAndroidAppMonitorConfig(config: AndroidAppMonitorConfig): NormalizedAndroidAppMonitorConfig {
+  const thresholds = config.thresholds ?? {};
+
   return {
     enabled: config.enabled,
     packageName: config.packageName,
     includeSubprocesses: config.includeSubprocesses ?? true,
-    processFilters: config.processFilters ?? [],
+    processFilters: [...(config.processFilters ?? [])],
     cpuIntervalMs: config.cpuIntervalMs ?? 1000,
     memoryIntervalMs: config.memoryIntervalMs ?? 5000,
     lifecycleIntervalMs: config.lifecycleIntervalMs ?? 2000,
     enableHeapDump: config.enableHeapDump ?? false,
-    thresholds: config.thresholds ?? {}
+    thresholds: {
+      ...(thresholds.cpuPercent ? { cpuPercent: { ...thresholds.cpuPercent } } : {}),
+      ...(thresholds.pssMb ? { pssMb: { ...thresholds.pssMb } } : {})
+    }
   };
 }
 
