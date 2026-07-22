@@ -141,6 +141,32 @@ describe("AndroidStabilityEventParser", () => {
     expect(event).toBeUndefined();
   });
 
+  it("does not reuse a target tombstone process when another native signal starts immediately after it", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const parser = new AndroidStabilityEventParser({ packageName: "cn.eeo.classin" });
+
+    expect(
+      parser.observe("07-22 10:00:01.002 F DEBUG   : signal 11 (SIGSEGV), code 1 (SEGV_MAPERR)", [
+        "07-22 10:00:01.001 F DEBUG   : pid: 1234, tid: 1234, name: cn.eeo.classin  >>> cn.eeo.classin <<<"
+      ])
+    ).toBeDefined();
+
+    vi.mocked(Date.now).mockReturnValue(4000);
+    const newSignal = "07-22 10:00:01.003 F DEBUG   : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE)";
+    const oldTargetCrashLines = [
+      "07-22 10:00:01.001 F DEBUG   : pid: 1234, tid: 1234, name: cn.eeo.classin  >>> cn.eeo.classin <<<",
+      "07-22 10:00:01.002 F DEBUG   : signal 11 (SIGSEGV), code 1 (SEGV_MAPERR)"
+    ];
+
+    expect(parser.observe(newSignal, oldTargetCrashLines)).toBeUndefined();
+    expect(
+      parser.observe("07-22 10:00:01.004 F DEBUG   : pid: 4321, tid: 4321, name: com.other.app  >>> com.other.app <<<", [
+        ...oldTargetCrashLines,
+        newSignal
+      ])
+    ).toBeUndefined();
+  });
+
   it("detects ANRs for the target package", () => {
     const parser = new AndroidStabilityEventParser({ packageName: "cn.eeo.classin" });
 

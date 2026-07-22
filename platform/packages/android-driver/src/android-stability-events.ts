@@ -72,16 +72,28 @@ export class AndroidStabilityEventParser {
   }
 
   private parseNativeCrash(line: string, lines: string[]): AndroidStabilityEvent | undefined {
-    if (!/(?:Fatal\s+)?signal\s+\d+/i.test(line)) {
+    if (!isNativeSignalLine(line) && !isNativeProcessMarkerLine(line)) {
       return undefined;
     }
 
     const block = currentContiguousBlock(lines, isNativeCrashLine);
-    const process = this.parseNativeProcess(block);
+    const signalIndex = findLastIndex(block, isNativeSignalLine);
+    if (signalIndex < 0) {
+      return undefined;
+    }
+
+    const previousSignalIndex = findLastIndex(block.slice(0, signalIndex), isNativeSignalLine);
+    const signalBlock = block.slice(signalIndex);
+    let incidentBlock = signalBlock;
+    let process = this.parseNativeProcess(incidentBlock);
+    if (!process && previousSignalIndex < 0 && signalIndex > 0 && isNativeProcessMarkerLine(block[signalIndex - 1])) {
+      incidentBlock = [block[signalIndex - 1], ...signalBlock];
+      process = this.parseNativeProcess(incidentBlock);
+    }
     if (!process || !this.isTargetProcess(process.processName)) {
       return undefined;
     }
-    const detail = block.join("\n");
+    const detail = incidentBlock.join("\n");
 
     return {
       type: "native_crash",
@@ -204,6 +216,14 @@ function isJavaCrashLine(line: string): boolean {
 
 function isNativeCrashLine(line: string): boolean {
   return /\bDEBUG\b|\blibc\b|Fatal\s+signal|(?:^|\s)signal\s+\d+|>>>\s*[^<]+<</i.test(line);
+}
+
+function isNativeSignalLine(line: string): boolean {
+  return /(?:Fatal\s+)?signal\s+\d+/i.test(line);
+}
+
+function isNativeProcessMarkerLine(line: string): boolean {
+  return />>>\s*[^<]+<</.test(line) || /\bpid\s+\d+\s+\([^)]+\)/i.test(line) || /\bname:\s*[^\s]+/i.test(line);
 }
 
 function lastMatch(lines: string[], pattern: RegExp): RegExpMatchArray | undefined {
