@@ -47,16 +47,18 @@ export class AndroidStabilityEventParser {
     }
 
     const block = currentContiguousBlock(lines, isJavaCrashLine);
-    if (!block.some((blockLine) => blockLine.includes("FATAL EXCEPTION"))) {
+    const fatalIndex = findLastIndex(block, (blockLine) => blockLine.includes("FATAL EXCEPTION"));
+    if (fatalIndex < 0) {
       return undefined;
     }
-    const process = lastMatch(block, /Process:\s*([^,\s]+),\s*PID:\s*(\d+)/);
+    const crashBlock = block.slice(fatalIndex);
+    const process = lastMatch(crashBlock, /Process:\s*([^,\s]+),\s*PID:\s*(\d+)/);
     const processName = process?.[1];
     if (!this.isTargetProcess(processName)) {
       return undefined;
     }
     const pid = Number(process?.[2]);
-    const detail = block.join("\n");
+    const detail = crashBlock.join("\n");
 
     return {
       type: "java_crash",
@@ -212,6 +214,15 @@ function lastMatch(lines: string[], pattern: RegExp): RegExpMatchArray | undefin
     }
   }
   return undefined;
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function parseProcessDeathLine(line: string): { processName: string; pid?: number } | undefined {

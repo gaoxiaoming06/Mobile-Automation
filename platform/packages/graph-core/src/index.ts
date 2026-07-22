@@ -1,4 +1,4 @@
-import type { ActionStep, Platform, StepExpectation } from "@mobile-automation/shared";
+import type { ActionStep, DeviceEvent, Platform, StepExpectation } from "@mobile-automation/shared";
 
 export type PlatformScope = Platform | "mobile-both";
 
@@ -414,22 +414,8 @@ export type ObservationImageRegion = {
 };
 
 export type ObservationEventSummary = {
-  type:
-    | "crash"
-    | "anr"
-    | "command_failed"
-    | "device_lost"
-    | "preview_lost"
-    | "runner_error"
-    | "video_unavailable"
-    | "start_state_failed"
-    | "app_exit"
-    | "black_screen"
-    | "unknown_page_stuck"
-    | "stability_exploration"
-    | "asset_patrol"
-    | "ai_diagnosis";
-  severity: "info" | "warning" | "error";
+  type: DeviceEvent["type"];
+  severity: DeviceEvent["severity"];
   summary: string;
   occurredAt?: string;
 };

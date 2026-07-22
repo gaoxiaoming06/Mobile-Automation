@@ -74,6 +74,34 @@ describe("AndroidStabilityEventParser", () => {
     expect(event).toBeUndefined();
   });
 
+  it("does not reuse a target Process line when another AndroidRuntime crash starts immediately after it", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const parser = new AndroidStabilityEventParser({ packageName: "cn.eeo.classin" });
+
+    expect(
+      parser.observe("07-22 10:00:00.002 E AndroidRuntime: Process: cn.eeo.classin, PID: 1234", [
+        "07-22 10:00:00.001 E AndroidRuntime: FATAL EXCEPTION: main"
+      ])
+    ).toBeDefined();
+
+    vi.mocked(Date.now).mockReturnValue(4000);
+    const backToBackRecentLines = [
+      "07-22 10:00:00.001 E AndroidRuntime: FATAL EXCEPTION: main",
+      "07-22 10:00:00.002 E AndroidRuntime: Process: cn.eeo.classin, PID: 1234",
+      "07-22 10:00:00.003 E AndroidRuntime: java.lang.IllegalStateException: target crash",
+      "07-22 10:00:00.004 E AndroidRuntime: \tat cn.eeo.classin.MainActivity.onCreate(MainActivity.kt:10)"
+    ];
+    const newFatal = "07-22 10:00:00.005 E AndroidRuntime: FATAL EXCEPTION: main";
+
+    expect(parser.observe(newFatal, backToBackRecentLines)).toBeUndefined();
+    expect(
+      parser.observe("07-22 10:00:00.006 E AndroidRuntime: Process: com.other.app, PID: 4321", [
+        ...backToBackRecentLines,
+        newFatal
+      ])
+    ).toBeUndefined();
+  });
+
   it("detects native crashes for the target package", () => {
     const parser = new AndroidStabilityEventParser({ packageName: "cn.eeo.classin" });
 

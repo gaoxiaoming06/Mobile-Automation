@@ -90,6 +90,43 @@ describe("ObservationService", () => {
     expect(observation.resolution).toEqual({ width: 1080, height: 2340 });
     expect(observation.screenshot).toEqual(expect.objectContaining({ width: 1080, height: 2340 }));
   });
+
+  it("keeps Android stability event types in observation summaries", async () => {
+    const service = new ObservationService(new FakeDriver(), new FakeOcrService());
+
+    const observation = await service.collect("device-1", {
+      includeOcr: false,
+      recentEvents: [
+        {
+          type: "native_crash",
+          severity: "error",
+          summary: "Native crash detected: cn.eeo.classin",
+          occurredAt: "2026-07-22T10:00:00.000Z"
+        },
+        {
+          type: "process_death",
+          severity: "warning",
+          summary: "Process death detected: cn.eeo.classin:worker",
+          occurredAt: "2026-07-22T10:00:01.000Z"
+        }
+      ]
+    });
+
+    expect(observation.events).toEqual([
+      {
+        type: "native_crash",
+        severity: "error",
+        summary: "Native crash detected: cn.eeo.classin",
+        occurredAt: "2026-07-22T10:00:00.000Z"
+      },
+      {
+        type: "process_death",
+        severity: "warning",
+        summary: "Process death detected: cn.eeo.classin:worker",
+        occurredAt: "2026-07-22T10:00:01.000Z"
+      }
+    ]);
+  });
 });
 
 class FakeDriver implements AutomationDeviceDriver {
