@@ -309,7 +309,7 @@ export class AndroidAppMonitorSession {
     sample: AndroidProcessMetricSample
   ): Promise<void> {
     const threshold = kind === "cpu" ? this.config.thresholds.cpuPercent : this.config.thresholds.pssMb;
-    if (!threshold || !this.isActive() || !this.isCurrentProcess(process)) {
+    if (!threshold?.enabled || !this.isActive() || !this.isCurrentProcess(process)) {
       return;
     }
     const value = kind === "cpu" ? sample.cpuPercent : sample.pssKb === undefined ? undefined : sample.pssKb / 1024;
@@ -425,10 +425,10 @@ export class AndroidAppMonitorSession {
       return;
     }
     const completeIncident: AndroidAppMonitorIncident = {
+      ...incident,
       id: `android_app_monitor_${this.options.runId}_${++this.incidentIndex}`,
       occurredAt: incident.occurredAt ?? this.clock.nowIso(),
-      artifactIds: incident.artifactIds ?? [],
-      ...incident
+      artifactIds: incident.artifactIds ?? []
     };
     this.summary.incidents.push(completeIncident);
     await this.invokeCallback(() => this.options.onIncident?.(completeIncident));

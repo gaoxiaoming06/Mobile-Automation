@@ -170,8 +170,36 @@ describe("AndroidAppMonitorSession", () => {
     );
   });
 
+  it("does not observe disabled CPU or memory thresholds", async () => {
+    const dumper = createDumper();
+    const session = new AndroidAppMonitorSession({
+      serial: "device-1",
+      runId: "run-1",
+      config: {
+        ...baseConfig,
+        thresholds: {
+          cpuPercent: { enabled: false, value: 1, sustainMs: 0, cooldownMs: 0 },
+          pssMb: { enabled: false, value: 1, sustainMs: 0, cooldownMs: 0 }
+        }
+      },
+      shell: vi.fn(),
+      writeTextArtifact: vi.fn(),
+      discovery: createDiscovery([[processInfo(111)]]),
+      sampler: createSampler({ cpuPercent: 90, pssKb: 2048 }).instance,
+      dumper: dumper.instance,
+      watcher: createWatcher().instance
+    });
+
+    await session.start();
+
+    expect(dumper.dumpCpuIncident).not.toHaveBeenCalled();
+    expect(dumper.dumpMemoryIncident).not.toHaveBeenCalled();
+    expect(session.getSummary().incidents).toEqual([]);
+  });
+
   it("turns watcher stability events into incidents, records start failures, and stops the watcher", async () => {
     const watcher = createWatcher();
+    const clock = createClock("2026-07-22T10:00:00.000Z");
     const session = new AndroidAppMonitorSession({
       serial: "device-1",
       runId: "run-1",
@@ -179,7 +207,8 @@ describe("AndroidAppMonitorSession", () => {
       shell: vi.fn(),
       writeTextArtifact: vi.fn(),
       discovery: createDiscovery([[]]),
-      watcher: watcher.instance
+      watcher: watcher.instance,
+      clock
     });
 
     await session.start();
@@ -195,7 +224,9 @@ describe("AndroidAppMonitorSession", () => {
       expect.objectContaining({
         type: "java_crash",
         severity: "error",
-        summary: "Java crash detected"
+        summary: "Java crash detected",
+        occurredAt: "2026-07-22T10:00:00.000Z",
+        artifactIds: []
       }),
       expect.objectContaining({
         type: "native_crash",
@@ -615,6 +646,13 @@ function createDeferred<T>() {
     reject = promiseReject;
   });
   return { promise, resolve, reject };
+}
+
+function createClock(iso: string) {
+  return {
+    now: () => new Date(iso).getTime(),
+    nowIso: () => iso
+  };
 }
 
 async function flushPromises(): Promise<void> {
