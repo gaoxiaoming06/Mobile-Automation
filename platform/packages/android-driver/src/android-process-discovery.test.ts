@@ -106,6 +106,36 @@ describe("AndroidProcessDiscovery", () => {
     ]);
   });
 
+  it("skips truncated subprocess names when cmdline cannot be read", async () => {
+    const discovery = new AndroidProcessDiscovery({
+      shell: createShell({
+        "ps -A -o PID,NAME": ["  PID NAME", "  203 cn.eeo.classin:priv"].join("\n"),
+        "cat /proc/203/cmdline": new Error("permission denied")
+      })
+    });
+
+    const processes = await discovery.discover("device-1", "cn.eeo.classin", {
+      includeSubprocesses: true
+    });
+
+    expect(processes).toEqual([]);
+  });
+
+  it("skips truncated subprocess names when cmdline is empty", async () => {
+    const discovery = new AndroidProcessDiscovery({
+      shell: createShell({
+        "ps -A -o PID,NAME": ["  PID NAME", "  204 cn.eeo.classin:"].join("\n"),
+        "cat /proc/204/cmdline": "\u0000"
+      })
+    });
+
+    const processes = await discovery.discover("device-1", "cn.eeo.classin", {
+      includeSubprocesses: true
+    });
+
+    expect(processes).toEqual([]);
+  });
+
   it("falls back to legacy ps when modern ps has no package candidates", async () => {
     const shell = createShell({
       "ps -A -o PID,NAME": ["  PID NAME", "  301 system_server"].join("\n"),
@@ -204,6 +234,23 @@ describe("AndroidProcessDiscovery", () => {
     ]);
   });
 
+  it("does not include subprocesses when subprocess filters are set but includeSubprocesses is false", async () => {
+    const discovery = new AndroidProcessDiscovery({
+      shell: createShell({
+        "ps -A -o PID,NAME": ["  PID NAME", "  611 cn.eeo.classin", "  612 cn.eeo.classin:push"].join("\n"),
+        "cat /proc/611/cmdline": "cn.eeo.classin\u0000",
+        "cat /proc/612/cmdline": "cn.eeo.classin:push\u0000"
+      })
+    });
+
+    const processes = await discovery.discover("device-1", "cn.eeo.classin", {
+      includeSubprocesses: false,
+      processFilters: [":push"]
+    });
+
+    expect(processes).toEqual([]);
+  });
+
   it("returns an empty list when shell commands fail", async () => {
     const discovery = new AndroidProcessDiscovery({
       shell: vi.fn<AndroidShellExecutor>(async () => {
@@ -228,6 +275,21 @@ describe("AndroidProcessDiscovery", () => {
     });
 
     expect(processes).toEqual([]);
+  });
+
+  it("does not read cmdline for unrelated short package prefixes", async () => {
+    const shell = createShell({
+      "ps -A -o PID,NAME": ["  PID NAME", "  801 cn.eeo"].join("\n"),
+      ps: ""
+    });
+    const discovery = new AndroidProcessDiscovery({ shell });
+
+    const processes = await discovery.discover("device-1", "cn.eeo.classin", {
+      includeSubprocesses: true
+    });
+
+    expect(processes).toEqual([]);
+    expect(shell).not.toHaveBeenCalledWith("device-1", ["cat", "/proc/801/cmdline"], { timeoutMs: 2000 });
   });
 });
 

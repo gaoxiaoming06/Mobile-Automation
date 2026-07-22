@@ -17,6 +17,7 @@ type AndroidProcessDiscoveryOptions = {
 
 const psTimeout: ExecTextOptions = { timeoutMs: 5000 };
 const cmdlineTimeout: ExecTextOptions = { timeoutMs: 2000 };
+const androidCommTruncationMinLength = 15;
 
 export class AndroidProcessDiscovery {
   constructor(private readonly options: AndroidProcessDiscoveryOptions) {}
@@ -31,7 +32,11 @@ export class AndroidProcessDiscovery {
     const discoveredAt = nowIso();
     const processes: AndroidProcessInfo[] = [];
     for (const process of psProcesses) {
-      const processName = (await this.readCmdline(serial, process.pid)) ?? process.name;
+      const cmdlineProcessName = await this.readCmdline(serial, process.pid);
+      if (!cmdlineProcessName && isAndroidCommTruncatedCandidate(process.name, packageName)) {
+        continue;
+      }
+      const processName = cmdlineProcessName ?? process.name;
       if (!isPackageProcess(processName, packageName, includeSubprocesses)) {
         continue;
       }
@@ -134,12 +139,16 @@ function filterPotentialPackageProcesses(processes: AndroidPsProcess[], packageN
 }
 
 function isPotentialPackageProcess(processName: string, packageName: string): boolean {
-  return (
-    processName === packageName ||
-    processName.startsWith(`${packageName}:`) ||
-    packageName.startsWith(processName) ||
-    `${packageName}:`.startsWith(processName)
-  );
+  return isPackageProcess(processName, packageName, true) || isAndroidCommTruncatedCandidate(processName, packageName);
+}
+
+function isAndroidCommTruncatedCandidate(processName: string, packageName: string): boolean {
+  if (processName === packageName || processName.length < androidCommTruncationMinLength) {
+    return false;
+  }
+
+  const subprocessPrefix = `${packageName}:`;
+  return packageName.startsWith(processName) || subprocessPrefix.startsWith(processName) || processName.startsWith(subprocessPrefix);
 }
 
 function parsePsColumns(columns: string[], pidHeaderIndex: number, nameHeaderIndex: number): AndroidPsProcess | undefined {
