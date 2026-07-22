@@ -354,6 +354,55 @@ describe("GraphRunService", () => {
     );
   });
 
+  it("does not execute graph startStrategy actions when android app monitor reports a crash during start", async () => {
+    context = await createContext();
+    const { storage } = context;
+    const incident: AndroidAppMonitorIncident = {
+      id: "incident-graph-crash",
+      type: "java_crash",
+      severity: "error",
+      occurredAt: "2026-06-09T00:00:01.000Z",
+      processName: "com.demo",
+      pid: 123,
+      summary: "Java crash detected",
+      detail: "FATAL EXCEPTION",
+      artifactIds: [],
+      metadata: { watcherEventType: "crash" }
+    };
+    const driver = new GraphAppMonitorMockDriver(context.tempRoot, { incidents: [incident] });
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new DynamicFakeOcrService(() => "首页"));
+    const { graph, targetNode } = seedGraph(storage);
+
+    const started = await service.start({
+      deviceSerial: driver.device.serial,
+      graphId: graph.id,
+      targetNodeId: targetNode.id,
+      startStrategy: "launch_app",
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "com.demo"
+      }
+    });
+
+    await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
+    const run = storage.getRun(started.run.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(driver.monitorStopCount).toBe(1);
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "crash",
+          severity: "error",
+          summary: expect.stringContaining("Java crash detected"),
+          detail: expect.stringContaining("\"processName\":\"com.demo\"")
+        })
+      ])
+    );
+  });
+
   it("starts target-node execution from the matched page asset instead of a legacy recording node", async () => {
     context = await createContext();
     const { storage } = context;

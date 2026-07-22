@@ -417,6 +417,7 @@ export class GraphRunService {
         getActiveStepResultId: () => activeStepResultId
       });
       await appMonitor.start();
+      controller.throwIfStopped();
       eventWatcher = await this.startEventWatcher(
         runId,
         config.deviceSerial,
@@ -452,7 +453,7 @@ export class GraphRunService {
         }
       }
 
-      await this.applyStartStrategy(runId, config);
+      await this.applyStartStrategy(runId, config, controller);
       await this.collectMetric(runId, config.deviceSerial);
       const graphStepResults = new Map<string, StepResult>();
       const runtimeExecutionPlan = await this.prepareRuntimeExecutionPlan({
@@ -1933,8 +1934,9 @@ export class GraphRunService {
     };
   }
 
-  private async applyStartStrategy(runId: string, config: RunConfig): Promise<void> {
+  private async applyStartStrategy(runId: string, config: RunConfig, controller?: RunExecutionController): Promise<void> {
     const strategy = config.startStrategy ?? "keep_current";
+    controller?.throwIfStopped();
     if (strategy === "keep_current") {
       return;
     }
@@ -1952,14 +1954,19 @@ export class GraphRunService {
     }
     if (strategy === "restart_app") {
       await this.driver.performAction(config.deviceSerial, { type: "close_app", packageName });
+      controller?.throwIfStopped();
       await sleep(500);
+      controller?.throwIfStopped();
       await this.driver.performAction(config.deviceSerial, { type: "launch_app", packageName });
       return;
     }
     if (strategy === "clear_data_and_launch") {
       await this.driver.performAction(config.deviceSerial, { type: "close_app", packageName });
+      controller?.throwIfStopped();
       await this.driver.clearAppData(config.deviceSerial, packageName);
+      controller?.throwIfStopped();
       await sleep(500);
+      controller?.throwIfStopped();
       await this.driver.performAction(config.deviceSerial, { type: "launch_app", packageName });
     }
   }
