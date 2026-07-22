@@ -70,6 +70,8 @@ export class AndroidAppMonitorSession {
   private started = false;
   private stopping = false;
   private stopped = false;
+  private startPromise?: Promise<void>;
+  private stopPromise?: Promise<AndroidAppMonitorSummary>;
   private incidentIndex = 0;
 
   constructor(private readonly options: AndroidAppMonitorSessionOptions) {
@@ -99,40 +101,65 @@ export class AndroidAppMonitorSession {
   }
 
   async start(): Promise<void> {
-    if (this.started) {
+    if (this.stopped || this.stopping) {
       return;
     }
+    if (this.startPromise) {
+      return this.startPromise;
+    }
+
     this.started = true;
+    this.startPromise = this.startInternal();
+    return this.startPromise;
+  }
+
+  private async startInternal(): Promise<void> {
     if (!this.config.enabled) {
       return;
     }
 
-    await this.runLifecycleLoop();
+    await this.runGuardedLoop("lifecycle", () => this.runLifecycleLoop());
+    if (!this.isActive()) {
+      return;
+    }
     await this.startWatcher();
+    if (!this.isActive()) {
+      return;
+    }
+    await this.runGuardedLoop("cpu", () => this.runSampleLoop("cpu"));
+    if (!this.isActive()) {
+      return;
+    }
+    await this.runGuardedLoop("memory", () => this.runSampleLoop("memory"));
+    if (!this.isActive()) {
+      return;
+    }
     this.scheduleLoop("lifecycle", this.config.lifecycleIntervalMs, () => this.runLifecycleLoop());
     this.scheduleLoop("cpu", this.config.cpuIntervalMs, () => this.runSampleLoop("cpu"));
     this.scheduleLoop("memory", this.config.memoryIntervalMs, () => this.runSampleLoop("memory"));
-    await this.runSampleLoop("cpu");
-    await this.runSampleLoop("memory");
   }
 
   async stop(): Promise<AndroidAppMonitorSummary> {
+    if (this.stopPromise) {
+      return this.stopPromise;
+    }
     if (this.stopped) {
       return this.getSummary();
     }
-    if (this.stopping) {
-      return this.getSummary();
-    }
     this.stopping = true;
-    for (const interval of this.intervals.splice(0)) {
-      this.clearTimer(interval);
-    }
-    if (this.eventWatcher) {
-      await this.eventWatcher.stop().catch(() => undefined);
-      this.eventWatcher = undefined;
-    }
-    this.summary.endedAt = this.clock.nowIso();
     this.stopped = true;
+    this.stopPromise = this.stopInternal();
+    return this.stopPromise;
+  }
+
+  private async stopInternal(): Promise<AndroidAppMonitorSummary> {
+    this.clearIntervals();
+    if (this.startPromise) {
+      await this.startPromise.catch(() => undefined);
+    }
+    this.clearIntervals();
+    await this.stopEventWatcher();
+    this.summary.endedAt ??= this.clock.nowIso();
     this.stopping = false;
     return this.getSummary();
   }
@@ -148,6 +175,9 @@ export class AndroidAppMonitorSession {
   }
 
   private scheduleLoop(kind: LoopKind, intervalMs: number, callback: () => Promise<void>): void {
+    if (!this.isActive()) {
+      return;
+    }
     const interval = this.setTimer(() => {
       void this.runGuardedLoop(kind, callback);
     }, intervalMs);
@@ -155,7 +185,7 @@ export class AndroidAppMonitorSession {
   }
 
   private async runGuardedLoop(kind: LoopKind, callback: () => Promise<void>): Promise<void> {
-    if (this.stopping || this.stopped || this.runningLoops.has(kind)) {
+    if (!this.isActive() || this.runningLoops.has(kind)) {
       return;
     }
     this.runningLoops.add(kind);
@@ -169,10 +199,9 @@ export class AndroidAppMonitorSession {
   }
 
   private async runLifecycleLoop(): Promise<void> {
-    if (this.stopping || this.stopped) {
+    if (!this.isActive()) {
       return;
     }
-    this.summary.sampleCounts.lifecycle += 1;
     let discovered: AndroidProcessInfo[];
     try {
       discovered = await this.discovery.discover(this.options.serial, this.config.packageName, {
@@ -182,9 +211,16 @@ export class AndroidAppMonitorSession {
     } catch {
       return;
     }
+    if (!this.isActive()) {
+      return;
+    }
 
+    this.summary.sampleCounts.lifecycle += 1;
     const discoveredByName = new Map(discovered.map((process) => [process.processName, process]));
     for (const process of discovered) {
+      if (!this.isActive()) {
+        return;
+      }
       const previous = this.currentProcesses.get(process.processName);
       this.currentProcesses.set(process.processName, process);
       this.rememberProcess(process);
@@ -195,6 +231,9 @@ export class AndroidAppMonitorSession {
           pid: process.pid,
           processName: process.processName
         });
+        if (!this.isActive()) {
+          return;
+        }
       } else if (previous.pid !== process.pid) {
         this.deleteThresholdTrackers(previous.pid);
         await this.emitLifecycleEvent({
@@ -204,10 +243,16 @@ export class AndroidAppMonitorSession {
           previousPid: previous.pid,
           processName: process.processName
         });
+        if (!this.isActive()) {
+          return;
+        }
       }
     }
 
     for (const [processName, previous] of [...this.currentProcesses.entries()]) {
+      if (!this.isActive()) {
+        return;
+      }
       if (discoveredByName.has(processName)) {
         continue;
       }
@@ -219,18 +264,35 @@ export class AndroidAppMonitorSession {
         pid: previous.pid,
         processName
       });
+      if (!this.isActive()) {
+        return;
+      }
     }
     this.refreshSummaryProcesses();
   }
 
   private async runSampleLoop(kind: AndroidAppMonitorSampleKind): Promise<void> {
-    if (this.stopping || this.stopped) {
+    if (!this.isActive()) {
       return;
     }
     for (const process of [...this.currentProcesses.values()]) {
-      const sample = await this.sampleProcess(kind, process);
+      if (!this.isActive() || !this.isCurrentProcess(process)) {
+        continue;
+      }
+      let sample: AndroidProcessMetricSample;
+      try {
+        sample = await this.sampleProcess(kind, process);
+      } catch {
+        continue;
+      }
+      if (!this.isActive() || !this.isCurrentProcess(process)) {
+        continue;
+      }
       this.summary.sampleCounts[kind] += 1;
       await this.invokeCallback(() => this.options.onSample?.(sample, kind));
+      if (!this.isActive() || !this.isCurrentProcess(process)) {
+        continue;
+      }
       await this.observeThreshold(kind, process, sample);
     }
   }
@@ -247,12 +309,15 @@ export class AndroidAppMonitorSession {
     sample: AndroidProcessMetricSample
   ): Promise<void> {
     const threshold = kind === "cpu" ? this.config.thresholds.cpuPercent : this.config.thresholds.pssMb;
-    if (!threshold) {
+    if (!threshold || !this.isActive() || !this.isCurrentProcess(process)) {
       return;
     }
     const value = kind === "cpu" ? sample.cpuPercent : sample.pssKb === undefined ? undefined : sample.pssKb / 1024;
     const breach = this.getThresholdTracker(process.pid, kind, threshold).observe(value, this.clock.now());
     if (!breach) {
+      return;
+    }
+    if (!this.isActive() || !this.isCurrentProcess(process)) {
       return;
     }
 
@@ -266,6 +331,9 @@ export class AndroidAppMonitorSession {
             });
     } catch {
       artifactIds = [];
+    }
+    if (!this.isActive() || !this.isCurrentProcess(process)) {
+      return;
     }
 
     await this.recordIncident({
@@ -288,26 +356,39 @@ export class AndroidAppMonitorSession {
 
   private async startWatcher(): Promise<void> {
     try {
-      this.eventWatcher = await this.watcher.watchDeviceEvents(
+      const eventWatcher = await this.watcher.watchDeviceEvents(
         this.options.serial,
         (event) => {
           void this.handleWatcherEvent(event);
         },
         { packageName: this.config.packageName }
       );
+      if (!this.isActive()) {
+        await eventWatcher.stop().catch(() => undefined);
+        return;
+      }
+      this.eventWatcher = eventWatcher;
     } catch (error) {
-      await this.recordIncident({
-        type: "watcher_error",
-        severity: "warning",
-        summary: "Android logcat watcher failed to start",
-        detail: errorMessage(error),
-        artifactIds: []
-      });
+      if (this.isActive()) {
+        await this.recordIncident({
+          type: "watcher_error",
+          severity: "warning",
+          summary: "Android logcat watcher failed to start",
+          detail: errorMessage(error),
+          artifactIds: []
+        });
+      }
     }
   }
 
   private async handleWatcherEvent(event: AndroidObservedDeviceEvent): Promise<void> {
+    if (!this.isActive()) {
+      return;
+    }
     await this.invokeCallback(() => this.options.onWatcherEvent?.(event));
+    if (!this.isActive()) {
+      return;
+    }
     const type = mapWatcherIncidentType(event.type);
     if (!type) {
       return;
@@ -316,13 +397,21 @@ export class AndroidAppMonitorSession {
       type,
       severity: event.severity,
       occurredAt: event.occurredAt,
+      processName: event.processName,
+      pid: event.pid,
       summary: event.summary,
       detail: event.detail,
-      artifactIds: []
+      artifactIds: [],
+      metadata: {
+        watcherEventType: event.type
+      }
     });
   }
 
   private async emitLifecycleEvent(event: AndroidProcessLifecycleEvent): Promise<void> {
+    if (!this.isActive()) {
+      return;
+    }
     await this.invokeCallback(() => this.options.onLifecycleEvent?.(event));
   }
 
@@ -332,6 +421,9 @@ export class AndroidAppMonitorSession {
       artifactIds?: string[];
     }
   ): Promise<void> {
+    if (!this.isActive()) {
+      return;
+    }
     const completeIncident: AndroidAppMonitorIncident = {
       id: `android_app_monitor_${this.options.runId}_${++this.incidentIndex}`,
       occurredAt: incident.occurredAt ?? this.clock.nowIso(),
@@ -376,6 +468,29 @@ export class AndroidAppMonitorSession {
       // User callbacks must not break monitor loops.
     }
   }
+
+  private isActive(): boolean {
+    return this.started && !this.stopping && !this.stopped && this.config.enabled;
+  }
+
+  private isCurrentProcess(process: AndroidProcessInfo): boolean {
+    return this.currentProcesses.get(process.processName)?.pid === process.pid;
+  }
+
+  private clearIntervals(): void {
+    for (const interval of this.intervals.splice(0)) {
+      this.clearTimer(interval);
+    }
+  }
+
+  private async stopEventWatcher(): Promise<void> {
+    if (!this.eventWatcher) {
+      return;
+    }
+    const eventWatcher = this.eventWatcher;
+    this.eventWatcher = undefined;
+    await eventWatcher.stop().catch(() => undefined);
+  }
 }
 
 function mapWatcherIncidentType(type: AndroidObservedDeviceEvent["type"]): AndroidAppMonitorIncident["type"] | undefined {
@@ -386,6 +501,8 @@ function mapWatcherIncidentType(type: AndroidObservedDeviceEvent["type"]): Andro
     case "anr":
     case "process_death":
       return type;
+    case "command_failed":
+      return "watcher_error";
     default:
       return undefined;
   }

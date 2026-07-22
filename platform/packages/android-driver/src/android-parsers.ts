@@ -9,6 +9,8 @@ export type AndroidDeviceLine = {
 export type AndroidObservedDeviceEvent = Pick<DeviceEvent, "type" | "severity" | "summary"> & {
   occurredAt?: string;
   detail?: string;
+  processName?: string;
+  pid?: number;
 };
 
 export type AndroidForegroundApp = {

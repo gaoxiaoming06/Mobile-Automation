@@ -175,6 +175,8 @@ function mapStabilityEvent(event: AndroidStabilityEvent): AndroidObservedDeviceE
     type,
     severity: event.severity,
     occurredAt: event.occurredAt,
+    processName: event.processName,
+    pid: event.pid,
     summary: event.summary,
     detail: event.detail
   };

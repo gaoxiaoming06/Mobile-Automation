@@ -184,9 +184,10 @@ describe("AndroidAppMonitorSession", () => {
 
     await session.start();
     watcher.emit({ type: "crash", severity: "error", summary: "Java crash detected", detail: "stack" });
-    watcher.emit({ type: "native_crash", severity: "error", summary: "Native crash detected" });
+    watcher.emit({ type: "native_crash", severity: "error", summary: "Native crash detected", processName: "cn.eeo.classin", pid: 123 });
     watcher.emit({ type: "anr", severity: "error", summary: "ANR detected" });
     watcher.emit({ type: "process_death", severity: "warning", summary: "Process death detected" });
+    watcher.emit({ type: "command_failed", severity: "warning", summary: "Android logcat watcher exited", detail: "logcat died" });
     await flushPromises();
     await session.stop();
 
@@ -199,7 +200,9 @@ describe("AndroidAppMonitorSession", () => {
       expect.objectContaining({
         type: "native_crash",
         severity: "error",
-        summary: "Native crash detected"
+        summary: "Native crash detected",
+        processName: "cn.eeo.classin",
+        pid: 123
       }),
       expect.objectContaining({
         type: "anr",
@@ -210,6 +213,15 @@ describe("AndroidAppMonitorSession", () => {
         type: "process_death",
         severity: "warning",
         summary: "Process death detected"
+      }),
+      expect.objectContaining({
+        type: "watcher_error",
+        severity: "warning",
+        summary: "Android logcat watcher exited",
+        detail: "logcat died",
+        metadata: {
+          watcherEventType: "command_failed"
+        }
       })
     ]);
     expect(watcher.stop).toHaveBeenCalledTimes(1);
@@ -256,14 +268,236 @@ describe("AndroidAppMonitorSession", () => {
     await expect(session.stop()).resolves.toEqual(expect.objectContaining({ endedAt: expect.any(String) }));
     expect(watcher.stop).toHaveBeenCalledTimes(1);
   });
+
+  it("stops a delayed watcher that resolves after stop and does not schedule intervals", async () => {
+    const timers = createTimers();
+    const watcher = createDelayedWatcher();
+    const session = new AndroidAppMonitorSession({
+      serial: "device-1",
+      runId: "run-1",
+      config: baseConfig,
+      shell: vi.fn(),
+      writeTextArtifact: vi.fn(),
+      discovery: createDiscovery([[]]),
+      watcher: watcher.instance,
+      setInterval: timers.setInterval,
+      clearInterval: timers.clearInterval
+    });
+
+    const startPromise = session.start();
+    await flushPromises();
+    const stopPromise = session.stop();
+    watcher.resolve();
+    await expect(startPromise).resolves.toBeUndefined();
+    const summary = await stopPromise;
+
+    expect(watcher.stop).toHaveBeenCalledTimes(1);
+    expect(timers.count()).toBe(0);
+    expect(summary).toEqual(expect.objectContaining({ endedAt: expect.any(String), incidents: [] }));
+  });
+
+  it("does not reenter a slow sample loop when the interval fires again", async () => {
+    const timers = createTimers();
+    const sampleGate = createDeferred<AndroidProcessMetricSample>();
+    let activeSamples = 0;
+    let maxActiveSamples = 0;
+    const sampler = {
+      sampleCpu: vi.fn(async (_serial: string, process: AndroidProcessInfo) => {
+        activeSamples += 1;
+        maxActiveSamples = Math.max(maxActiveSamples, activeSamples);
+        try {
+          return await sampleGate.promise;
+        } finally {
+          activeSamples -= 1;
+        }
+      }),
+      sampleMemory: vi.fn(async (_serial: string, process: AndroidProcessInfo) => ({
+        sampledAt: "2026-07-22T00:00:00.000Z",
+        pid: process.pid,
+        processName: process.processName
+      }))
+    } as unknown as AndroidProcessMetricSampler;
+    const session = new AndroidAppMonitorSession({
+      serial: "device-1",
+      runId: "run-1",
+      config: baseConfig,
+      shell: vi.fn(),
+      writeTextArtifact: vi.fn(),
+      discovery: createDiscovery([[], [processInfo(111)]]),
+      sampler,
+      watcher: createWatcher().instance,
+      setInterval: timers.setInterval,
+      clearInterval: timers.clearInterval
+    });
+
+    await session.start();
+    await timers.tick(0);
+    timers.fire(1);
+    timers.fire(1);
+    await flushPromises();
+    expect(sampler.sampleCpu).toHaveBeenCalledTimes(1);
+    expect(maxActiveSamples).toBe(1);
+
+    sampleGate.resolve({
+      sampledAt: "2026-07-22T00:00:00.000Z",
+      pid: 111,
+      processName: "cn.eeo.classin",
+      cpuPercent: 10
+    });
+    await flushPromises();
+    await session.stop();
+  });
+
+  it("drops sample results that resolve after stop without callbacks or threshold incidents", async () => {
+    const timers = createTimers();
+    const sampleGate = createDeferred<AndroidProcessMetricSample>();
+    const onSample = vi.fn();
+    const dumper = createDumper();
+    const sampler = {
+      sampleCpu: vi.fn(async () => sampleGate.promise),
+      sampleMemory: vi.fn(async (_serial: string, process: AndroidProcessInfo) => ({
+        sampledAt: "2026-07-22T00:00:00.000Z",
+        pid: process.pid,
+        processName: process.processName
+      }))
+    } as unknown as AndroidProcessMetricSampler;
+    const session = new AndroidAppMonitorSession({
+      serial: "device-1",
+      runId: "run-1",
+      config: {
+        ...baseConfig,
+        thresholds: {
+          cpuPercent: { enabled: true, value: 1, sustainMs: 0, cooldownMs: 0 }
+        }
+      },
+      shell: vi.fn(),
+      writeTextArtifact: vi.fn(),
+      discovery: createDiscovery([[], [processInfo(111)]]),
+      sampler,
+      dumper: dumper.instance,
+      watcher: createWatcher().instance,
+      setInterval: timers.setInterval,
+      clearInterval: timers.clearInterval,
+      onSample
+    });
+
+    await session.start();
+    await timers.tick(0);
+    timers.fire(1);
+    await flushPromises();
+    const stopPromise = session.stop();
+    sampleGate.resolve({
+      sampledAt: "2026-07-22T00:00:00.000Z",
+      pid: 111,
+      processName: "cn.eeo.classin",
+      cpuPercent: 90
+    });
+    await stopPromise;
+    await flushPromises();
+
+    expect(onSample).not.toHaveBeenCalled();
+    expect(dumper.dumpCpuIncident).not.toHaveBeenCalled();
+    expect(session.getSummary().incidents).toEqual([]);
+  });
+
+  it("drops stale pid sample results after lifecycle exit before threshold dumping", async () => {
+    const timers = createTimers();
+    const sampleGate = createDeferred<AndroidProcessMetricSample>();
+    const onSample = vi.fn();
+    const dumper = createDumper();
+    const sampler = {
+      sampleCpu: vi.fn(async () => sampleGate.promise),
+      sampleMemory: vi.fn(async (_serial: string, process: AndroidProcessInfo) => ({
+        sampledAt: "2026-07-22T00:00:00.000Z",
+        pid: process.pid,
+        processName: process.processName
+      }))
+    } as unknown as AndroidProcessMetricSampler;
+    const session = new AndroidAppMonitorSession({
+      serial: "device-1",
+      runId: "run-1",
+      config: {
+        ...baseConfig,
+        thresholds: {
+          cpuPercent: { enabled: true, value: 1, sustainMs: 0, cooldownMs: 0 }
+        }
+      },
+      shell: vi.fn(),
+      writeTextArtifact: vi.fn(),
+      discovery: createDiscovery([[], [processInfo(111)], []]),
+      sampler,
+      dumper: dumper.instance,
+      watcher: createWatcher().instance,
+      setInterval: timers.setInterval,
+      clearInterval: timers.clearInterval,
+      onSample
+    });
+
+    await session.start();
+    await timers.tick(0);
+    timers.fire(1);
+    await flushPromises();
+    await timers.tick(0);
+    sampleGate.resolve({
+      sampledAt: "2026-07-22T00:00:00.000Z",
+      pid: 111,
+      processName: "cn.eeo.classin",
+      cpuPercent: 90
+    });
+    await flushPromises();
+
+    expect(onSample).not.toHaveBeenCalled();
+    expect(dumper.dumpCpuIncident).not.toHaveBeenCalled();
+    expect(session.getSummary().incidents).toEqual([]);
+    await session.stop();
+  });
+
+  it("isolates one rejected process sample and continues sampling other processes", async () => {
+    const onSample = vi.fn();
+    const sampler = {
+      sampleCpu: vi.fn(async (_serial: string, process: AndroidProcessInfo) => {
+        if (process.pid === 111) {
+          throw new Error("proc stat unavailable");
+        }
+        return {
+          sampledAt: "2026-07-22T00:00:00.000Z",
+          pid: process.pid,
+          processName: process.processName,
+          cpuPercent: 12
+        };
+      }),
+      sampleMemory: vi.fn(async (_serial: string, process: AndroidProcessInfo) => ({
+        sampledAt: "2026-07-22T00:00:00.000Z",
+        pid: process.pid,
+        processName: process.processName
+      }))
+    } as unknown as AndroidProcessMetricSampler;
+    const session = new AndroidAppMonitorSession({
+      serial: "device-1",
+      runId: "run-1",
+      config: baseConfig,
+      shell: vi.fn(),
+      writeTextArtifact: vi.fn(),
+      discovery: createDiscovery([[processInfo(111), processInfo(222, "cn.eeo.classin:worker")]]),
+      sampler,
+      watcher: createWatcher().instance,
+      onSample
+    });
+
+    await expect(session.start()).resolves.toBeUndefined();
+    expect(sampler.sampleCpu).toHaveBeenCalledTimes(2);
+    expect(onSample).toHaveBeenCalledWith(expect.objectContaining({ pid: 222 }), "cpu");
+    expect(session.getSummary().sampleCounts.cpu).toBe(1);
+    await session.stop();
+  });
 });
 
-function processInfo(pid: number): AndroidProcessInfo {
+function processInfo(pid: number, processName = "cn.eeo.classin"): AndroidProcessInfo {
   return {
     pid,
-    processName: "cn.eeo.classin",
+    processName,
     packageName: "cn.eeo.classin",
-    isMainProcess: true,
+    isMainProcess: processName === "cn.eeo.classin",
     discoveredAt: "2026-07-22T00:00:00.000Z"
   };
 }
@@ -337,6 +571,23 @@ function createWatcher(startError?: Error) {
   };
 }
 
+function createDelayedWatcher() {
+  let onEvent: Parameters<AndroidLogcatEventWatcher["watchDeviceEvents"]>[1] | undefined;
+  const stop = vi.fn(async () => undefined);
+  const watcherGate = createDeferred<{ stop: typeof stop }>();
+  const watchDeviceEvents = vi.fn(async (_serial, callback) => {
+    onEvent = callback;
+    return watcherGate.promise;
+  });
+  return {
+    instance: { watchDeviceEvents } as unknown as AndroidLogcatEventWatcher,
+    watchDeviceEvents,
+    stop,
+    emit: (event: Parameters<NonNullable<typeof onEvent>>[0]) => onEvent?.(event),
+    resolve: () => watcherGate.resolve({ stop })
+  };
+}
+
 function createTimers() {
   const callbacks: Array<() => void> = [];
   return {
@@ -345,11 +596,25 @@ function createTimers() {
       return callback;
     },
     clearInterval: vi.fn(),
+    count: () => callbacks.length,
+    fire: (index: number) => {
+      callbacks[index]?.();
+    },
     tick: async (index: number) => {
       callbacks[index]?.();
       await flushPromises();
     }
   };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 async function flushPromises(): Promise<void> {
