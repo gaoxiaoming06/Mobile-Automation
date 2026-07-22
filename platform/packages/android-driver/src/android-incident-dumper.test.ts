@@ -66,6 +66,17 @@ describe("AndroidIncidentDumper CPU incidents", () => {
     expect(writeTextArtifact.mock.calls[0][2]).toContain("top failed");
     expect(writeTextArtifact.mock.calls[0][2]).toContain("permission denied reading /proc/1234/task");
   });
+
+  it("resolves without artifact ids when writing the CPU artifact fails", async () => {
+    const shell = vi.fn<AndroidShellExecutor>(async () => "Threads: 18\n");
+    const writeTextArtifact = vi.fn(async () => {
+      throw new Error("artifact store unavailable");
+    });
+    const dumper = new AndroidIncidentDumper({ shell, writeTextArtifact });
+
+    await expect(dumper.dumpCpuIncident("run-1", "device-1", processInfo)).resolves.toEqual([]);
+    expect(writeTextArtifact).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("AndroidIncidentDumper memory incidents", () => {
@@ -119,6 +130,26 @@ describe("AndroidIncidentDumper memory incidents", () => {
       "artifact-1"
     ]);
     expect(writeTextArtifact.mock.calls[0][2]).toContain("dumpsys meminfo timed out");
+  });
+
+  it("continues memory incident collection and returns successful artifact ids when one artifact write fails", async () => {
+    const shell = vi.fn<AndroidShellExecutor>(async (_serial, args) => {
+      if (args[0] === "dumpsys") {
+        return "TOTAL 2048\n";
+      }
+      return "Heap dump file created\n";
+    });
+    const writeTextArtifact = vi
+      .fn<(runId: string, fileName: string, content: string) => Promise<{ id: string }>>()
+      .mockRejectedValueOnce(new Error("meminfo artifact write failed"))
+      .mockResolvedValueOnce({ id: "heap-artifact" });
+    const dumper = new AndroidIncidentDumper({ shell, writeTextArtifact });
+
+    await expect(dumper.dumpMemoryIncident("run-1", "device-1", processInfo, { enableHeapDump: true })).resolves.toEqual([
+      "heap-artifact"
+    ]);
+    expect(shell.mock.calls.some((call) => call[1][0] === "am" && call[1][1] === "dumpheap")).toBe(true);
+    expect(writeTextArtifact).toHaveBeenCalledTimes(2);
   });
 });
 

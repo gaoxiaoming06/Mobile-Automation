@@ -28,10 +28,11 @@ export class AndroidStabilityEventParser {
   }
 
   observe(line: string, recentLines: string[]): AndroidStabilityEvent | undefined {
-    const detail = buildDetail(line, recentLines);
+    const lines = buildObservedLines(line, recentLines);
+    const detail = lines.join("\n");
     const event =
-      this.parseJavaCrash(line, detail) ??
-      this.parseNativeCrash(line, detail) ??
+      this.parseJavaCrash(line, lines) ??
+      this.parseNativeCrash(line, lines) ??
       this.parseAnr(line, detail) ??
       this.parseProcessDeath(line, detail);
     if (!event) {
@@ -40,39 +41,45 @@ export class AndroidStabilityEventParser {
     return this.dedupe(event);
   }
 
-  private parseJavaCrash(line: string, detail: string): AndroidStabilityEvent | undefined {
-    if (!/FATAL EXCEPTION|AndroidRuntime|Process:\s*/.test(line) || !detail.includes("FATAL EXCEPTION")) {
+  private parseJavaCrash(line: string, lines: string[]): AndroidStabilityEvent | undefined {
+    if (!/FATAL EXCEPTION|AndroidRuntime|Process:\s*/.test(line)) {
       return undefined;
     }
 
-    const process = [...detail.matchAll(/Process:\s*([^,\s]+),\s*PID:\s*(\d+)/g)]
-      .map((match) => ({ processName: match[1], pid: Number(match[2]) }))
-      .reverse()
-      .find((candidate) => this.isTargetProcess(candidate.processName));
-    if (!process) {
+    const block = currentContiguousBlock(lines, isJavaCrashLine);
+    if (!block.some((blockLine) => blockLine.includes("FATAL EXCEPTION"))) {
       return undefined;
     }
+    const process = lastMatch(block, /Process:\s*([^,\s]+),\s*PID:\s*(\d+)/);
+    const processName = process?.[1];
+    if (!this.isTargetProcess(processName)) {
+      return undefined;
+    }
+    const pid = Number(process?.[2]);
+    const detail = block.join("\n");
 
     return {
       type: "java_crash",
       severity: "error",
       occurredAt: nowIso(),
-      processName: process.processName,
-      pid: process.pid,
-      summary: `Java crash detected: ${process.processName}`,
+      processName,
+      pid,
+      summary: `Java crash detected: ${processName}`,
       detail
     };
   }
 
-  private parseNativeCrash(line: string, detail: string): AndroidStabilityEvent | undefined {
-    if (!/(?:Fatal\s+)?signal\s+\d+/i.test(line) || !/(?:\bDEBUG\b|\blibc\b|Fatal\s+signal)/i.test(detail)) {
+  private parseNativeCrash(line: string, lines: string[]): AndroidStabilityEvent | undefined {
+    if (!/(?:Fatal\s+)?signal\s+\d+/i.test(line)) {
       return undefined;
     }
 
-    const process = this.parseNativeProcess(detail);
+    const block = currentContiguousBlock(lines, isNativeCrashLine);
+    const process = this.parseNativeProcess(block);
     if (!process || !this.isTargetProcess(process.processName)) {
       return undefined;
     }
+    const detail = block.join("\n");
 
     return {
       type: "native_crash",
@@ -123,11 +130,9 @@ export class AndroidStabilityEventParser {
     };
   }
 
-  private parseNativeProcess(detail: string): { processName: string; pid?: number } | undefined {
-    const tombstoneProcess = [...detail.matchAll(/>>>\s*([^<]+?)\s*<</g)]
-      .map((match) => match[1].trim())
-      .reverse()
-      .find((processName) => this.isTargetProcess(processName));
+  private parseNativeProcess(lines: string[]): { processName: string; pid?: number } | undefined {
+    const detail = lines.join("\n");
+    const tombstoneProcess = lastMatch(lines, />>>\s*([^<]+?)\s*<</)?.[1]?.trim();
     if (tombstoneProcess) {
       return {
         processName: tombstoneProcess,
@@ -135,18 +140,15 @@ export class AndroidStabilityEventParser {
       };
     }
 
-    const libcProcess = detail.match(/\bpid\s+(\d+)\s+\(([^)]+)\)/i);
-    if (libcProcess && this.isTargetProcess(libcProcess[2])) {
+    const libcProcess = lastMatch(lines, /\bpid\s+(\d+)\s+\(([^)]+)\)/i);
+    if (libcProcess?.[2]) {
       return {
         pid: Number(libcProcess[1]),
         processName: libcProcess[2]
       };
     }
 
-    const namedProcess = [...detail.matchAll(/\bname:\s*([^\s]+)/gi)]
-      .map((match) => match[1])
-      .reverse()
-      .find((processName) => this.isTargetProcess(processName));
+    const namedProcess = lastMatch(lines, /\bname:\s*([^\s]+)/i)?.[1];
     if (namedProcess) {
       return {
         processName: namedProcess,
@@ -173,13 +175,43 @@ export class AndroidStabilityEventParser {
   }
 }
 
-function buildDetail(line: string, recentLines: string[]): string {
+function buildObservedLines(line: string, recentLines: string[]): string[] {
   const detailLines = recentLines.map((item) => item.trim()).filter(Boolean);
   const currentLine = line.trim();
   if (currentLine && detailLines[detailLines.length - 1] !== currentLine) {
     detailLines.push(currentLine);
   }
-  return detailLines.join("\n");
+  return detailLines;
+}
+
+function currentContiguousBlock(lines: string[], belongsToBlock: (line: string) => boolean): string[] {
+  const block: string[] = [];
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!belongsToBlock(line)) {
+      break;
+    }
+    block.unshift(line);
+  }
+  return block;
+}
+
+function isJavaCrashLine(line: string): boolean {
+  return /\bAndroidRuntime\b|FATAL EXCEPTION|Process:\s*/.test(line);
+}
+
+function isNativeCrashLine(line: string): boolean {
+  return /\bDEBUG\b|\blibc\b|Fatal\s+signal|(?:^|\s)signal\s+\d+|>>>\s*[^<]+<</i.test(line);
+}
+
+function lastMatch(lines: string[], pattern: RegExp): RegExpMatchArray | undefined {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = lines[index].match(pattern);
+    if (match) {
+      return match;
+    }
+  }
+  return undefined;
 }
 
 function parseProcessDeathLine(line: string): { processName: string; pid?: number } | undefined {

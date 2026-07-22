@@ -39,12 +39,12 @@ export class AndroidIncidentDumper {
       }
     }
 
-    const artifact = await this.options.writeTextArtifact(
+    const artifactId = await this.writeTextArtifactSafely(
       runId,
       `android-cpu-incident-${artifactToken(process.processName)}-${process.pid}-${Date.now()}.txt`,
       sections.join("\n\n")
     );
-    return [artifact.id];
+    return artifactId ? [artifactId] : [];
   }
 
   async dumpMemoryIncident(
@@ -64,12 +64,14 @@ export class AndroidIncidentDumper {
       meminfoSections.push(formatCommandFailure(meminfoArgs, error));
     }
 
-    const meminfoArtifact = await this.options.writeTextArtifact(
+    const meminfoArtifactId = await this.writeTextArtifactSafely(
       runId,
       `android-memory-incident-${artifactToken(process.processName)}-${process.pid}-${Date.now()}.txt`,
       meminfoSections.join("\n\n")
     );
-    artifactIds.push(meminfoArtifact.id);
+    if (meminfoArtifactId) {
+      artifactIds.push(meminfoArtifactId);
+    }
 
     if (!options.enableHeapDump) {
       return artifactIds;
@@ -89,13 +91,24 @@ export class AndroidIncidentDumper {
       dumpheapSections.push(formatCommandFailure(dumpheapArgs, error));
     }
 
-    const dumpheapArtifact = await this.options.writeTextArtifact(
+    const dumpheapArtifactId = await this.writeTextArtifactSafely(
       runId,
       `android-heapdump-incident-${artifactToken(process.processName)}-${process.pid}-${Date.now()}.txt`,
       dumpheapSections.join("\n\n")
     );
-    artifactIds.push(dumpheapArtifact.id);
+    if (dumpheapArtifactId) {
+      artifactIds.push(dumpheapArtifactId);
+    }
     return artifactIds;
+  }
+
+  private async writeTextArtifactSafely(runId: string, fileName: string, content: string): Promise<string | undefined> {
+    try {
+      const artifact = await this.options.writeTextArtifact(runId, fileName, content);
+      return artifact.id;
+    } catch {
+      return undefined;
+    }
   }
 }
 

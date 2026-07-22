@@ -52,6 +52,28 @@ describe("AndroidStabilityEventParser", () => {
     expect(event).toBeUndefined();
   });
 
+  it("does not reuse stale target Java crash lines for a later unrelated crash", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const parser = new AndroidStabilityEventParser({ packageName: "cn.eeo.classin" });
+
+    expect(
+      parser.observe("07-22 10:00:00.002 E AndroidRuntime: Process: cn.eeo.classin, PID: 1234", [
+        "07-22 10:00:00.001 E AndroidRuntime: FATAL EXCEPTION: main"
+      ])
+    ).toBeDefined();
+
+    vi.mocked(Date.now).mockReturnValue(4000);
+    const event = parser.observe("07-22 10:00:05.002 E AndroidRuntime: Process: com.other.app, PID: 4321", [
+      "07-22 10:00:00.001 E AndroidRuntime: FATAL EXCEPTION: main",
+      "07-22 10:00:00.002 E AndroidRuntime: Process: cn.eeo.classin, PID: 1234",
+      "07-22 10:00:01.000 I ActivityTaskManager: unrelated line",
+      "07-22 10:00:02.000 I ActivityTaskManager: unrelated line",
+      "07-22 10:00:05.001 E AndroidRuntime: FATAL EXCEPTION: main"
+    ]);
+
+    expect(event).toBeUndefined();
+  });
+
   it("detects native crashes for the target package", () => {
     const parser = new AndroidStabilityEventParser({ packageName: "cn.eeo.classin" });
 
@@ -68,6 +90,27 @@ describe("AndroidStabilityEventParser", () => {
         summary: "Native crash detected: cn.eeo.classin"
       })
     );
+  });
+
+  it("does not reuse stale target tombstone process lines for a later unrelated native crash", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const parser = new AndroidStabilityEventParser({ packageName: "cn.eeo.classin" });
+
+    expect(
+      parser.observe("07-22 10:00:01.002 F DEBUG   : signal 11 (SIGSEGV), code 1 (SEGV_MAPERR)", [
+        "07-22 10:00:01.001 F DEBUG   : pid: 1234, tid: 1234, name: cn.eeo.classin  >>> cn.eeo.classin <<<"
+      ])
+    ).toBeDefined();
+
+    vi.mocked(Date.now).mockReturnValue(4000);
+    const event = parser.observe("07-22 10:00:06.002 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE)", [
+      "07-22 10:00:01.001 F DEBUG   : pid: 1234, tid: 1234, name: cn.eeo.classin  >>> cn.eeo.classin <<<",
+      "07-22 10:00:02.000 I ActivityTaskManager: unrelated line",
+      "07-22 10:00:03.000 I ActivityTaskManager: unrelated line",
+      "07-22 10:00:06.001 F DEBUG   : pid: 4321, tid: 4321, name: com.other.app  >>> com.other.app <<<"
+    ]);
+
+    expect(event).toBeUndefined();
   });
 
   it("detects ANRs for the target package", () => {
