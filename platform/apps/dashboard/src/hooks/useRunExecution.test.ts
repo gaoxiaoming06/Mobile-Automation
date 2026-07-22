@@ -15,6 +15,7 @@ describe("useRunExecution helpers", () => {
       buildAndroidAppMonitorRequest({
         enabled: true,
         packageName: "",
+        startStrategy: "launch_app",
         startAppPackageName: "com.example.app",
         includeSubprocesses: true,
         cpuThresholdEnabled: true,
@@ -35,11 +36,51 @@ describe("useRunExecution helpers", () => {
     });
   });
 
+  it("does not use stale start app package when the current strategy keeps the app state", () => {
+    expect(
+      buildAndroidAppMonitorRequest({
+        enabled: true,
+        packageName: "",
+        startStrategy: "keep_current",
+        startAppPackageName: "com.example.stale",
+        includeSubprocesses: true,
+        cpuThresholdEnabled: false,
+        cpuThresholdPercent: 75,
+        memoryThresholdEnabled: false,
+        memoryThresholdMb: 640,
+        enableHeapDump: false
+      })
+    ).toBeUndefined();
+  });
+
+  it("still uses start app package fallback when the current strategy launches the app", () => {
+    expect(
+      buildAndroidAppMonitorRequest({
+        enabled: true,
+        packageName: "",
+        startStrategy: "launch_app",
+        startAppPackageName: "com.example.app",
+        includeSubprocesses: true,
+        cpuThresholdEnabled: false,
+        cpuThresholdPercent: 75,
+        memoryThresholdEnabled: false,
+        memoryThresholdMb: 640,
+        enableHeapDump: false
+      })
+    ).toEqual({
+      enabled: true,
+      packageName: "com.example.app",
+      includeSubprocesses: true,
+      enableHeapDump: false
+    });
+  });
+
   it("omits android app monitor request config when disabled", () => {
     expect(
       buildAndroidAppMonitorRequest({
         enabled: false,
         packageName: "com.example.app",
+        startStrategy: "keep_current",
         startAppPackageName: "",
         includeSubprocesses: true,
         cpuThresholdEnabled: false,

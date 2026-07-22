@@ -144,6 +144,7 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
       const androidAppMonitor = buildAndroidAppMonitorRequest({
         enabled: androidAppMonitorEnabled,
         packageName: androidAppMonitorPackageName,
+        startStrategy,
         startAppPackageName,
         includeSubprocesses: androidAppMonitorIncludeSubprocesses,
         cpuThresholdEnabled: androidAppMonitorCpuThresholdEnabled,
@@ -362,6 +363,7 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
 export type AndroidAppMonitorRequestState = {
   enabled: boolean;
   packageName: string;
+  startStrategy: FlowStartStrategy;
   startAppPackageName: string;
   includeSubprocesses: boolean;
   cpuThresholdEnabled: boolean;
@@ -375,7 +377,7 @@ export function buildAndroidAppMonitorRequest(state: AndroidAppMonitorRequestSta
   if (!state.enabled) {
     return undefined;
   }
-  const packageName = state.packageName.trim() || state.startAppPackageName.trim();
+  const packageName = state.packageName.trim() || (requiresStartAppPackageName(state.startStrategy) ? state.startAppPackageName.trim() : "");
   if (!packageName) {
     return undefined;
   }
