@@ -1,9 +1,7 @@
 import {
-  ClipboardList,
   DatabaseZap,
   FileText,
-  FolderOpen,
-  GitBranch,
+  MonitorSmartphone,
   Package,
   PanelLeftClose,
   PanelLeftOpen,
@@ -24,7 +22,6 @@ type AppNavProps = {
   setNavCollapsed: (updater: (value: boolean) => boolean) => void;
   openDevices: () => void;
   openRecording: () => void;
-  openCaseLibrary: () => void;
   openAssetRecording: () => void;
   openPageAssets: () => void;
   openAssetComposition: () => void;
@@ -33,7 +30,6 @@ type AppNavProps = {
   openAssetPatrol: () => void;
   openStability: () => void;
   openRuns: () => void;
-  openGraphs: () => void;
   openSettings: () => void;
 };
 
@@ -43,7 +39,6 @@ export function AppNav({
   setNavCollapsed,
   openDevices,
   openRecording,
-  openCaseLibrary,
   openAssetRecording,
   openPageAssets,
   openAssetComposition,
@@ -52,7 +47,6 @@ export function AppNav({
   openAssetPatrol,
   openStability,
   openRuns,
-  openGraphs,
   openSettings
 }: AppNavProps) {
   return (
@@ -66,13 +60,9 @@ export function AppNav({
           <Smartphone size={18} />
           <span>设备管理</span>
         </button>
-        <button className={navButtonClass(activeNavItem, "recording")} onClick={openRecording} title="用例录制" type="button">
-          <ClipboardList size={18} />
-          <span>用例录制</span>
-        </button>
-        <button className={navButtonClass(activeNavItem, "caseLibrary")} onClick={openCaseLibrary} title="用例库" type="button">
-          <FolderOpen size={18} />
-          <span>用例库</span>
+        <button className={navButtonClass(activeNavItem, "recording")} onClick={openRecording} title="设备详情" type="button">
+          <MonitorSmartphone size={18} />
+          <span>设备详情</span>
         </button>
         <button className={navButtonClass(activeNavItem, "assetRecording")} onClick={openAssetRecording} title="资产录制" type="button">
           <DatabaseZap size={18} />
@@ -105,15 +95,6 @@ export function AppNav({
         <button className={navButtonClass(activeNavItem, "runs")} onClick={openRuns} title="执行结果" type="button">
           <PlayCircle size={18} />
           <span>执行结果</span>
-        </button>
-        <button
-          className={`${navButtonClass(activeNavItem, "graphs")} experimental`}
-          onClick={openGraphs}
-          title="业务图谱上层能力已冻结，仅作为实验入口保留"
-          type="button"
-        >
-          <GitBranch size={18} />
-          <span>实验能力</span>
         </button>
         <button className="nav-item planned" disabled title="包管理按产品规划接入" type="button">
           <Package size={18} />

@@ -65,16 +65,32 @@ class MemoryStorage {
 }
 
 describe("App shell", () => {
-  it("includes the asset recording navigation entry and keeps existing recording modules", () => {
+  it("starts from device details and hides legacy case and experiment navigation entries", () => {
     const markup = renderToStaticMarkup(React.createElement(App));
 
-    expect(markup).toContain("用例录制");
-    expect(markup).toContain("用例库");
+    expect(markup).toContain("设备详情");
+    expect(markup).not.toContain("用例录制");
+    expect(markup).not.toContain("用例库");
+    expect(markup).not.toContain("实验能力");
     expect(markup).toContain("资产录制");
     expect(markup).toContain("页面资产库");
     expect(markup).toContain("资产驱动巡检");
     expect(markup).toContain("稳定性探索");
     expect(markup).toContain("系统设置");
+  });
+
+  it("renders device details as preview and controls without the legacy recording side panel", () => {
+    const markup = renderToStaticMarkup(React.createElement(App));
+
+    expect(markup).toContain("选择设备后开始预览");
+    expect(markup).toContain("要发送到设备的文本");
+    expect(markup).toContain("返回");
+    expect(markup).toContain("Home");
+    expect(markup).toContain("最近任务");
+    expect(markup).not.toContain("录制步骤");
+    expect(markup).not.toContain("临时阻断页");
+    expect(markup).not.toContain("recording-side-stack");
+    expect(markup).not.toContain("recording-resizer");
   });
 
   it("renders AI diagnosis settings without exposing the saved api key", () => {
@@ -1033,16 +1049,14 @@ describe("App shell", () => {
     ).toBe(false);
   });
 
-  it("uses different preview workspaces for case recording and asset recording", () => {
+  it("uses preview workspaces for device details and asset recording", () => {
     expect(previewWorkspaceKey("recording")).toBe("recording");
     expect(previewWorkspaceKey("assetRecording")).toBe("assetRecording");
     expect(previewWorkspaceKey("caseLibrary")).toBe("inactive");
   });
 
-  it("exposes independent resizable preview width variables for recording and asset recording", () => {
-    expect(workspaceStyleForNav("recording", 560, 520)).toEqual({
-      "--recording-preview-width": "560px"
-    });
+  it("keeps device details full-width while asset recording still exposes a resizable preview variable", () => {
+    expect(workspaceStyleForNav("recording", 560, 520)).toEqual({});
     expect(workspaceStyleForNav("assetRecording", 560, 520)).toEqual({
       "--asset-recording-preview-width": "520px"
     });
@@ -1063,8 +1077,8 @@ describe("App shell", () => {
       blockPreviewInteraction: true
     });
     expect(actionStrategyForWorkspace("recording", { identifying: false, recording: true })).toEqual({
-      useCachedSemanticTarget: true,
-      resolveLiveLocatorBeforeAction: true,
+      useCachedSemanticTarget: false,
+      resolveLiveLocatorBeforeAction: false,
       fetchBeforeObservationBeforeAction: false,
       blockPreviewInteraction: false
     });

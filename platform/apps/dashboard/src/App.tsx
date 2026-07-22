@@ -31,13 +31,12 @@ import {
   type AssetRecordingPageTaskDraft,
   type AssetRecordingPageTaskTransitionDraft
 } from "./components/AssetRecordingPanel";
-import { CaseLibraryPanel, type FlowExpectationOverride } from "./components/CaseLibraryPanel";
+import type { FlowExpectationOverride } from "./components/CaseLibraryPanel";
 import { PreviewPanel } from "./components/PreviewPanel";
-import { GraphCandidatesPanel } from "./components/GraphCandidatesPanel";
 import { PageAssetsPanel, parseRuntimeParams } from "./components/PageAssetsPanel";
 import { AssetCompositionPanel } from "./components/AssetCompositionPanel";
 import { FreeCompositionPanel } from "./components/FreeCompositionPanel";
-import { RuntimeInterceptorPanel, type RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
+import type { RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
 import { StepsPanel } from "./components/StepsPanel";
 import { ToolStatusBar } from "./components/StepsPanelParts";
 import { useDeviceList } from "./hooks/useDeviceList";
@@ -210,7 +209,6 @@ export const DEFAULT_AI_DIAGNOSIS_SETTINGS: PublicAiDiagnosisSettings = {
 };
 const STABILITY_DANGEROUS_TEXT_BY_PACKAGE_STORAGE_KEY = "mobile-automation.stabilityDangerousTextByPackage.v1";
 type RecordingWorkspaceStyle = CSSProperties & {
-  "--recording-preview-width"?: string;
   "--asset-recording-preview-width"?: string;
 };
 
@@ -396,7 +394,6 @@ type CurrentPageAssetApiResponse = {
 
 const recordingPreviewMinWidth = 420;
 const recordingPreviewMaxWidth = 980;
-const recordingStepsMinWidth = 540;
 
 export function previewWorkspaceKey(navItem: AppNavItemId): "recording" | "assetRecording" | "inactive" {
   if (navItem === "recording" || navItem === "assetRecording") {
@@ -405,12 +402,7 @@ export function previewWorkspaceKey(navItem: AppNavItemId): "recording" | "asset
   return "inactive";
 }
 
-export function workspaceStyleForNav(navItem: AppNavItemId, recordingPreviewWidth: number, assetRecordingPreviewWidth: number): RecordingWorkspaceStyle {
-  if (navItem === "recording") {
-    return {
-      "--recording-preview-width": `${recordingPreviewWidth}px`
-    };
-  }
+export function workspaceStyleForNav(navItem: AppNavItemId, _recordingPreviewWidth: number, assetRecordingPreviewWidth: number): RecordingWorkspaceStyle {
   if (navItem === "assetRecording") {
     return {
       "--asset-recording-preview-width": `${assetRecordingPreviewWidth}px`
@@ -437,8 +429,8 @@ export function actionStrategyForWorkspace(
     };
   }
   return {
-    useCachedSemanticTarget: navItem === "recording" && state.recording,
-    resolveLiveLocatorBeforeAction: navItem === "recording" && state.recording,
+    useCachedSemanticTarget: false,
+    resolveLiveLocatorBeforeAction: false,
     fetchBeforeObservationBeforeAction: false,
     blockPreviewInteraction: false
   };
@@ -1118,7 +1110,6 @@ export function App() {
   const [navCollapsed, setNavCollapsed] = useState(true);
   const [activeNavItem, setActiveNavItem] = useState<NavItemId>("recording");
   const [automationTab, setAutomationTab] = useState<AutomationTab>("steps");
-  const [recordingPreviewWidth, setRecordingPreviewWidth] = useState(560);
   const [assetRecordingPreviewWidth, setAssetRecordingPreviewWidth] = useState(560);
   const [highlightedCaseId, setHighlightedCaseId] = useState("");
   const [structuredFlows, setStructuredFlows] = useState<StructuredFlow[]>([]);
@@ -1443,7 +1434,6 @@ export function App() {
   }, [recording, selectedDevice]);
 
   useEffect(() => {
-    setRecordingPreviewWidth((width) => clamp(width, recordingWidthLimits().min, recordingWidthLimits().max));
     setAssetRecordingPreviewWidth((width) => clamp(width, assetRecordingWidthLimits().min, assetRecordingWidthLimits().max));
   }, [navCollapsed]);
 
@@ -1453,13 +1443,11 @@ export function App() {
       if (!resizeStart) {
         return;
       }
-      if (activeNavItem === "assetRecording") {
-        const limits = assetRecordingWidthLimits();
-        setAssetRecordingPreviewWidth(clamp(resizeStart.startWidth + event.clientX - resizeStart.startX, limits.min, limits.max));
+      if (activeNavItem !== "assetRecording") {
         return;
       }
-      const limits = recordingWidthLimits();
-      setRecordingPreviewWidth(clamp(resizeStart.startWidth + event.clientX - resizeStart.startX, limits.min, limits.max));
+      const limits = assetRecordingWidthLimits();
+      setAssetRecordingPreviewWidth(clamp(resizeStart.startWidth + event.clientX - resizeStart.startX, limits.min, limits.max));
     }
 
     function onPointerUp() {
@@ -2012,20 +2000,6 @@ export function App() {
     pointerStartRef.current = null;
   }
 
-  function recordingWidthLimits() {
-    const workspaceWidth = workspaceRef.current?.clientWidth ?? window.innerWidth;
-    const navWidth = navCollapsed ? 64 : 184;
-    const horizontalPadding = 24;
-    const gaps = 36;
-    const availableWidth = Math.max(0, workspaceWidth - navWidth - horizontalPadding - gaps);
-    const dynamicMin = Math.min(recordingPreviewMinWidth, Math.max(320, availableWidth - recordingStepsMinWidth));
-    const dynamicMax = Math.max(dynamicMin, Math.min(recordingPreviewMaxWidth, availableWidth - recordingStepsMinWidth));
-    return {
-      min: dynamicMin,
-      max: dynamicMax
-    };
-  }
-
   function assetRecordingWidthLimits() {
     const workspaceWidth = workspaceRef.current?.clientWidth ?? window.innerWidth;
     const navWidth = navCollapsed ? 64 : 184;
@@ -2039,18 +2013,6 @@ export function App() {
       min: dynamicMin,
       max: dynamicMax
     };
-  }
-
-  function onRecordingResizePointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (activeNavItem !== "recording") {
-      return;
-    }
-    event.preventDefault();
-    resizeStartRef.current = {
-      startX: event.clientX,
-      startWidth: recordingPreviewWidth
-    };
-    document.body.classList.add("recording-resize-active");
   }
 
   function onAssetRecordingResizePointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -2071,11 +2033,7 @@ export function App() {
 
   function openRecording() {
     setActiveNavItem("recording");
-    setAutomationTab("steps");
-  }
-
-  function openCaseLibrary() {
-    setActiveNavItem("caseLibrary");
+    setRecording(false);
   }
 
   function openAssetRecording() {
@@ -2136,7 +2094,7 @@ export function App() {
     setRecording(false);
     setHighlightedFlowId(savedFlow.id);
     setSelectedFlowId(savedFlow.id);
-    setActiveNavItem("caseLibrary");
+    setActiveNavItem("runs");
     await refreshStructuredFlows().catch(() => undefined);
     window.setTimeout(() => {
       setHighlightedFlowId((current) => (current === savedFlow.id ? "" : current));
@@ -2906,7 +2864,7 @@ export function App() {
     }
   }
 
-  const workspaceStyle: RecordingWorkspaceStyle = workspaceStyleForNav(activeNavItem, recordingPreviewWidth, assetRecordingPreviewWidth);
+  const workspaceStyle: RecordingWorkspaceStyle = workspaceStyleForNav(activeNavItem, 0, assetRecordingPreviewWidth);
   const stabilityPackageOptions = knownStabilityPackages(cases, structuredFlows, runs);
   const assetPatrolPackageOptions = stabilityPackageOptions;
   const currentStabilityRun =
@@ -2995,7 +2953,6 @@ export function App() {
           setNavCollapsed={setNavCollapsed}
           openDevices={openDevices}
           openRecording={openRecording}
-          openCaseLibrary={openCaseLibrary}
           openAssetRecording={openAssetRecording}
           openPageAssets={openPageAssets}
           openAssetComposition={openAssetComposition}
@@ -3004,7 +2961,6 @@ export function App() {
           openAssetPatrol={openAssetPatrol}
           openStability={openStability}
           openRuns={openRuns}
-          openGraphs={() => setActiveNavItem("graphs")}
           openSettings={openSettings}
         />
 
@@ -3028,68 +2984,37 @@ export function App() {
           />
         )}
 
-        {activeNavItem === "caseLibrary" && (
-          <CaseLibraryPanel
-            flows={structuredFlows}
-            runs={runs}
-            searchText={flowSearchText}
-            selectedFlowId={selectedFlowId}
-            highlightedFlowId={highlightedFlowId}
-            selectedSerial={selectedSerial}
-            selectedDeviceBusy={selectedDeviceBusy}
-            onSearchTextChange={setFlowSearchText}
-            onSelectFlow={setSelectedFlowId}
-            onEditFlow={editCaseFromLibrary}
-            onStartFlowRun={startSavedFlowRun}
-            onUpdateFlow={updateStructuredFlow}
-            onDeleteFlow={deleteStructuredFlow}
-          />
-        )}
-
         {activeNavItem === "recording" && (
-          <>
-            <PreviewPanel
-              key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
-              devices={selectableDevices}
-              selectedSerial={selectedSerial}
-              selectedDevice={selectedDevice}
-              previewRef={previewRef}
-              imageRef={imageRef}
-              canvasRef={canvasRef}
-              videoRef={videoRef}
-              previewUrl={previewUrl}
-              screenshotError={screenshotError}
-              previewMode={previewMode}
-              previewRenderer={previewRenderer}
-              scrcpyStreamStatus={scrcpyStreamStatus}
-              isScrcpyPreviewActive={isScrcpyPreviewActive}
-              scrcpyAvailable={scrcpyAvailable}
-              scrcpyRunning={scrcpyRunning}
-              busy={busy}
-              inputText={inputText}
-              setInputText={setInputText}
-              setMessage={setMessage}
-              startScrcpy={startScrcpy}
-              stopScrcpy={stopScrcpy}
-              runAction={runAction}
-              onSelectDevice={selectDeviceAndCloseStream}
-              handleScreenshotLoaded={handleScreenshotLoaded}
-              onPreviewPointerDown={onPreviewPointerDown}
-              onPreviewPointerUp={onPreviewPointerUp}
-              onPreviewPointerCancel={onPreviewPointerCancel}
-            />
-            <div className="recording-resizer" onPointerDown={onRecordingResizePointerDown} role="separator" aria-orientation="vertical" aria-label="调整预览和步骤区域宽度" title="拖动调整左右区域宽度" />
-            <div className="recording-side-stack">
-              <RuntimeInterceptorPanel
-                selectedSerial={selectedSerial}
-                selectedDevice={selectedDevice}
-                rules={runtimeInterceptorRules}
-                onMarkCurrentPage={markCurrentPageAsRuntimeInterceptor}
-                onDeleteRule={deleteRuntimeInterceptorRule}
-              />
-              {stepsPanel}
-            </div>
-          </>
+          <PreviewPanel
+            key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
+            devices={selectableDevices}
+            selectedSerial={selectedSerial}
+            selectedDevice={selectedDevice}
+            previewRef={previewRef}
+            imageRef={imageRef}
+            canvasRef={canvasRef}
+            videoRef={videoRef}
+            previewUrl={previewUrl}
+            screenshotError={screenshotError}
+            previewMode={previewMode}
+            previewRenderer={previewRenderer}
+            scrcpyStreamStatus={scrcpyStreamStatus}
+            isScrcpyPreviewActive={isScrcpyPreviewActive}
+            scrcpyAvailable={scrcpyAvailable}
+            scrcpyRunning={scrcpyRunning}
+            busy={busy}
+            inputText={inputText}
+            setInputText={setInputText}
+            setMessage={setMessage}
+            startScrcpy={startScrcpy}
+            stopScrcpy={stopScrcpy}
+            runAction={runAction}
+            onSelectDevice={selectDeviceAndCloseStream}
+            handleScreenshotLoaded={handleScreenshotLoaded}
+            onPreviewPointerDown={onPreviewPointerDown}
+            onPreviewPointerUp={onPreviewPointerUp}
+            onPreviewPointerCancel={onPreviewPointerCancel}
+          />
         )}
 
         {activeNavItem === "assetRecording" && (
@@ -3298,18 +3223,6 @@ export function App() {
           />
         )}
 
-        {activeNavItem === "graphs" && (
-          <GraphCandidatesPanel
-            setMessage={setMessage}
-            selectedSerial={selectedSerial}
-            selectedDeviceBusy={selectedDeviceBusy}
-            onRunStarted={(runId) => {
-              setCurrentRunId(runId);
-              setActiveNavItem("runs");
-              setAutomationTab("runs");
-            }}
-          />
-        )}
       </section>
     </main>
   );

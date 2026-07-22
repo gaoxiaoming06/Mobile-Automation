@@ -6,7 +6,7 @@ import { AppNav } from "./AppNav.js";
 const noop = vi.fn();
 
 describe("AppNav", () => {
-  it("keeps StructuredFlow modules primary and marks graph as experimental", () => {
+  it("surfaces the asset workflow and hides legacy case and experiment entries", () => {
     const markup = renderToStaticMarkup(
       React.createElement(AppNav, {
         activeNavItem: "recording",
@@ -14,7 +14,6 @@ describe("AppNav", () => {
         setNavCollapsed: noop,
         openDevices: noop,
         openRecording: noop,
-        openCaseLibrary: noop,
         openAssetRecording: noop,
         openPageAssets: noop,
         openAssetComposition: noop,
@@ -23,14 +22,14 @@ describe("AppNav", () => {
         openAssetPatrol: noop,
         openStability: noop,
         openRuns: noop,
-        openGraphs: noop,
         openSettings: noop
       })
     );
 
     expect(markup).toContain("设备管理");
-    expect(markup).toContain("用例录制");
-    expect(markup).toContain("用例库");
+    expect(markup).toContain("设备详情");
+    expect(markup).not.toContain("用例录制");
+    expect(markup).not.toContain("用例库");
     expect(markup).toContain("资产录制");
     expect(markup).toContain("页面资产库");
     expect(markup).toContain("资产用例");
@@ -39,9 +38,9 @@ describe("AppNav", () => {
     expect(markup).toContain("资产驱动巡检");
     expect(markup).toContain("稳定性探索");
     expect(markup).toContain("执行结果");
-    expect(markup).toContain("实验能力");
+    expect(markup).not.toContain("实验能力");
     expect(markup).toContain("系统设置");
-    expect(markup).toContain("业务图谱上层能力已冻结");
+    expect(markup).not.toContain("业务图谱上层能力已冻结");
     expect(markup).not.toContain("设置按产品规划接入");
     expect(markup).not.toContain(">节点测试<");
   });
