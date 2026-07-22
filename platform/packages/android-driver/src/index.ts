@@ -5,6 +5,7 @@ import {
   type DeviceInfo,
   type InstalledAppInfo,
   type MetricSample,
+  type AndroidAppMonitorConfig,
   type ToolStatus,
   nowIso
 } from "@mobile-automation/shared";
@@ -17,11 +18,23 @@ import {
 } from "./android-actions.js";
 import { AndroidDeviceDiscovery } from "./android-discovery.js";
 import { AndroidLogcatEventWatcher, type AndroidDeviceEventWatcher, type AndroidWatchDeviceEventOptions } from "./android-events.js";
+import {
+  AndroidAppMonitorSession,
+  type AndroidAppMonitorCallbacks,
+  type AndroidAppMonitorSessionOptions
+} from "./android-app-monitor.js";
 import { AndroidMetricSampler } from "./android-metrics.js";
 import { AndroidVideoRecorder, type VideoRecording } from "./android-video.js";
 import { parseForegroundApp, parsePackageInfo, type AndroidForegroundApp } from "./android-parsers.js";
 
 export type { AndroidDeviceEventWatcher, AndroidWatchDeviceEventOptions } from "./android-events.js";
+export {
+  AndroidAppMonitorSession,
+  type AndroidAppMonitorCallbacks,
+  type AndroidAppMonitorClock,
+  type AndroidAppMonitorSampleKind,
+  type AndroidAppMonitorSessionOptions
+} from "./android-app-monitor.js";
 export type { AndroidForegroundApp } from "./android-parsers.js";
 export { AndroidIncidentDumper, type AndroidIncidentArtifactWriter, type AndroidIncidentDumperOptions } from "./android-incident-dumper.js";
 export {
@@ -53,6 +66,7 @@ export type { VideoRecording } from "./android-video.js";
 type AndroidDriverOptions = {
   shell?: AndroidShellExecutor;
   actionBackend?: AndroidActionBackend;
+  appMonitor?: Pick<AndroidAppMonitorSessionOptions, "setInterval" | "clearInterval" | "sleep" | "watcher">;
 };
 
 type ExecBufferOptions = {
@@ -270,6 +284,26 @@ export class AndroidDriver {
 
   async samplePerformance(serial: string, runId: string, stepResultId?: string): Promise<MetricSample> {
     return this.metrics.samplePerformance(serial, runId, stepResultId);
+  }
+
+  async startAppMonitor(
+    serial: string,
+    runId: string,
+    config: AndroidAppMonitorConfig,
+    writeTextArtifact: AndroidAppMonitorSessionOptions["writeTextArtifact"],
+    callbacks: AndroidAppMonitorCallbacks = {}
+  ): Promise<AndroidAppMonitorSession> {
+    const session = new AndroidAppMonitorSession({
+      serial,
+      runId,
+      config,
+      shell: (deviceSerial, args, shellOptions) => this.shell(deviceSerial, args, shellOptions),
+      writeTextArtifact,
+      ...callbacks,
+      ...this.options.appMonitor
+    });
+    await session.start();
+    return session;
   }
 
   async startVideoRecording(serial: string, runId: string, localDir: string): Promise<VideoRecording> {

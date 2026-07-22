@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { AndroidDriver } from "./index.js";
 import type { AndroidActionBackend } from "./android-actions.js";
+import { type AndroidLogcatEventWatcher } from "./android-events.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -121,6 +122,68 @@ describe("AndroidDriver actions", () => {
       versionCode: "99856"
     });
     expect(calls).toEqual([["dumpsys", "package", "cn.eeo.classin"]]);
+  });
+
+  it("starts an Android app monitor session with driver shell, watcher, and dumper wiring", async () => {
+    const watcher = createAppMonitorWatcher();
+    const writeTextArtifact = vi.fn(async () => ({ id: "cpu-artifact" }));
+    const calls: string[][] = [];
+    let systemStatReads = 0;
+    let processStatReads = 0;
+    const driver = new AndroidDriver({
+      shell: vi.fn(async (_serial, args) => {
+        calls.push(args);
+        if (args[0] === "ps") {
+          return "PID NAME\n1234 cn.eeo.classin\n";
+        }
+        if (args[0] === "cat" && args[1] === "/proc/1234/cmdline") {
+          return "cn.eeo.classin\u0000";
+        }
+        if (args[0] === "cat" && args[1] === "/proc/stat") {
+          systemStatReads += 1;
+          return systemStatReads === 1
+            ? "cpu  100 0 0 300 0 0 0 0 0 0\ncpu0 100 0 0 300 0 0 0 0 0 0"
+            : "cpu  120 0 0 320 0 0 0 0 0 0\ncpu0 120 0 0 320 0 0 0 0 0 0";
+        }
+        if (args[0] === "cat" && args[1] === "/proc/1234/stat") {
+          processStatReads += 1;
+          return processStatReads === 1
+            ? "1234 (cn.eeo.classin) S 1 2 3 4 5 6 7 8 9 10 100 0"
+            : "1234 (cn.eeo.classin) S 1 2 3 4 5 6 7 8 9 10 110 0";
+        }
+        if (args[0] === "top") {
+          return "top output";
+        }
+        if (args[0] === "dumpsys") {
+          return "TOTAL 1024\n";
+        }
+        return "";
+      }),
+      appMonitor: {
+        watcher: watcher.instance,
+        sleep: async () => undefined,
+        setInterval: () => 1,
+        clearInterval: () => undefined
+      }
+    });
+
+    const session = await driver.startAppMonitor(
+      "device-1",
+      "run-1",
+      {
+        enabled: true,
+        packageName: "cn.eeo.classin",
+        thresholds: {
+          cpuPercent: { enabled: true, value: 0, sustainMs: 0, cooldownMs: 0 }
+        }
+      },
+      writeTextArtifact
+    );
+
+    expect(watcher.watchDeviceEvents).toHaveBeenCalledWith("device-1", expect.any(Function), { packageName: "cn.eeo.classin" });
+    expect(calls).toEqual(expect.arrayContaining([["ps", "-A", "-o", "PID,NAME"], ["top", "-H", "-b", "-n", "1", "-p", "1234"]]));
+    expect(session.getSummary().incidents).toEqual([expect.objectContaining({ type: "cpu_threshold", artifactIds: ["cpu-artifact"] })]);
+    await session.stop();
   });
 
   it("launches apps with the queried launcher activity instead of monkey", async () => {
@@ -497,3 +560,13 @@ describe("AndroidDriver actions", () => {
     await watcher.stop();
   });
 });
+
+function createAppMonitorWatcher() {
+  const stop = vi.fn(async () => undefined);
+  const watchDeviceEvents = vi.fn(async () => ({ stop }));
+  return {
+    instance: { watchDeviceEvents } as unknown as AndroidLogcatEventWatcher,
+    watchDeviceEvents,
+    stop
+  };
+}

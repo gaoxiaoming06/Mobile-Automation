@@ -1,6 +1,14 @@
-import { AndroidDriver, type VideoRecording } from "@mobile-automation/android-driver";
+import {
+  AndroidDriver,
+  type AndroidAppMonitorCallbacks,
+  type AndroidAppMonitorSession,
+  type AndroidAppMonitorSessionOptions,
+  type VideoRecording
+} from "@mobile-automation/android-driver";
 import { IosDriver, type IosVideoRecording } from "@mobile-automation/ios-driver";
 import type {
+  AndroidAppMonitorConfig,
+  AndroidAppMonitorSummary,
   DeviceActionRequest,
   DeviceActionResult,
   DeviceEvent,
@@ -12,6 +20,7 @@ import type {
 } from "@mobile-automation/shared";
 
 export type MobileVideoRecording = VideoRecording | IosVideoRecording;
+export type MobileAppMonitorSession = Pick<AndroidAppMonitorSession, "start" | "stop" | "getSummary">;
 
 export type ObservedDeviceEvent = Pick<DeviceEvent, "type" | "severity" | "summary"> & {
   occurredAt?: string;
@@ -36,14 +45,21 @@ export interface AutomationDeviceDriver {
   collectLogs(serial: string, lines?: number): Promise<string>;
   watchDeviceEvents?(serial: string, onEvent: (event: ObservedDeviceEvent) => void, options?: { since?: Date }): Promise<DeviceEventWatcher>;
   samplePerformance(serial: string, runId: string, stepResultId?: string): Promise<MetricSample>;
+  startAppMonitor?(
+    serial: string,
+    runId: string,
+    config: AndroidAppMonitorConfig,
+    writeTextArtifact: AndroidAppMonitorSessionOptions["writeTextArtifact"],
+    callbacks?: AndroidAppMonitorCallbacks
+  ): Promise<MobileAppMonitorSession>;
   startVideoRecording(serial: string, runId: string, localDir: string): Promise<MobileVideoRecording>;
   stopVideoRecording(recording: MobileVideoRecording, keep: boolean): Promise<string | undefined>;
 }
 
 export class MobileDriver implements AutomationDeviceDriver {
-  private readonly android = new AndroidDriver();
-  private readonly ios = new IosDriver();
   private readonly platformCache = new Map<string, DeviceInfo["platform"]>();
+
+  constructor(private readonly android = new AndroidDriver(), private readonly ios = new IosDriver()) {}
 
   async getToolStatus(): Promise<ToolStatus[]> {
     const [androidTools, iosTools] = await Promise.all([this.android.getToolStatus(), this.ios.getToolStatus()]);
@@ -134,6 +150,20 @@ export class MobileDriver implements AutomationDeviceDriver {
     return platform === "ios" ? this.ios.samplePerformance(serial, runId, stepResultId) : this.android.samplePerformance(serial, runId, stepResultId);
   }
 
+  async startAppMonitor(
+    serial: string,
+    runId: string,
+    config: AndroidAppMonitorConfig,
+    writeTextArtifact: AndroidAppMonitorSessionOptions["writeTextArtifact"],
+    callbacks: AndroidAppMonitorCallbacks = {}
+  ): Promise<MobileAppMonitorSession> {
+    const platform = await this.resolvePlatform(serial);
+    if (platform === "ios") {
+      return createIosNoopAppMonitorSession(config);
+    }
+    return this.android.startAppMonitor(serial, runId, config, writeTextArtifact, callbacks);
+  }
+
   async startVideoRecording(serial: string, runId: string, localDir: string): Promise<MobileVideoRecording> {
     const platform = await this.resolvePlatform(serial);
     return platform === "ios" ? this.ios.startVideoRecording(serial, runId, localDir) : this.android.startVideoRecording(serial, runId, localDir);
@@ -168,4 +198,42 @@ export class MobileDriver implements AutomationDeviceDriver {
     }
     return device.platform;
   }
+}
+
+function createIosNoopAppMonitorSession(config: AndroidAppMonitorConfig): MobileAppMonitorSession {
+  const summary: AndroidAppMonitorSummary = {
+    packageName: config.packageName,
+    startedAt: new Date().toISOString(),
+    processes: [],
+    sampleCounts: {
+      cpu: 0,
+      memory: 0,
+      lifecycle: 0
+    },
+    incidents: [],
+    artifacts: {}
+  };
+  let stopped = false;
+
+  return {
+    start: async () => undefined,
+    stop: async () => {
+      if (!stopped) {
+        summary.endedAt = new Date().toISOString();
+        stopped = true;
+      }
+      return cloneSummary(summary);
+    },
+    getSummary: () => cloneSummary(summary)
+  };
+}
+
+function cloneSummary(summary: AndroidAppMonitorSummary): AndroidAppMonitorSummary {
+  return {
+    ...summary,
+    processes: [...summary.processes],
+    sampleCounts: { ...summary.sampleCounts },
+    incidents: [...summary.incidents],
+    artifacts: { ...summary.artifacts }
+  };
 }

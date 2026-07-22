@@ -509,7 +509,7 @@ export type AndroidProcessLifecycleEvent = {
 
 export type AndroidAppMonitorIncident = {
   id: string;
-  type: "cpu_threshold" | "memory_threshold" | "java_crash" | "native_crash" | "anr" | "process_death";
+  type: "cpu_threshold" | "memory_threshold" | "java_crash" | "native_crash" | "anr" | "process_death" | "watcher_error";
   severity: "info" | "warning" | "error";
   occurredAt: string;
   processName?: string;
