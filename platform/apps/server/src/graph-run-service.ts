@@ -46,6 +46,7 @@ import {
 } from "@mobile-automation/shared";
 import { shouldRecordVideoForDevice } from "@mobile-automation/runner-core";
 import type { AutomationDeviceDriver, DeviceEventWatcher, MobileVideoRecording, ObservedDeviceEvent } from "./mobile-driver.js";
+import { AndroidAppMonitorRunSupport } from "./android-app-monitor-run-support.js";
 import type { OcrService } from "./ocr.js";
 import { ObservationService } from "./observation-service.js";
 import { RunArtifactService } from "./run-artifact-service.js";
@@ -130,6 +131,7 @@ export type StartGraphRunInput = {
   executionProfile?: "full" | "fast_visual";
   startAppScope?: StartAppScope;
   caseName?: string;
+  androidAppMonitor?: RunConfig["androidAppMonitor"];
 };
 
 export type StartedGraphRun = {
@@ -265,7 +267,8 @@ export class GraphRunService {
       input.startAppScope === "current_device" ? undefined : graph.targetApp,
       input.startStrategy,
       input.executionProfile,
-      input.startAppPackageName
+      input.startAppPackageName,
+      input.androidAppMonitor
     );
     const testCase = graphExecutionPlanToCase(graph.name, executionPlan.steps, graph.targetApp, input.overlay, input.caseName);
     const run = this.storage.createRun({
@@ -391,6 +394,7 @@ export class GraphRunService {
     let stopped = false;
     let videoRecording: MobileVideoRecording | undefined;
     let eventWatcher: DeviceEventWatcher | undefined;
+    let appMonitor: AndroidAppMonitorRunSupport | undefined;
     const pendingEventWrites: Promise<void>[] = [];
     let runtimeFailure = false;
     let activeStepResultId: string | undefined;
@@ -398,6 +402,21 @@ export class GraphRunService {
     try {
       controller.throwIfStopped();
       const device = await this.driver.getDeviceInfo(config.deviceSerial);
+      appMonitor = new AndroidAppMonitorRunSupport({
+        runId,
+        deviceSerial: config.deviceSerial,
+        config: config.androidAppMonitor,
+        stopOnFailure,
+        driver: this.driver,
+        artifactService: this.artifactService,
+        addDeviceEvent: (event) => this.addDeviceEvent(event),
+        stopRun: () => controller.stop(),
+        markRuntimeFailure: () => {
+          runtimeFailure = true;
+        },
+        getActiveStepResultId: () => activeStepResultId
+      });
+      await appMonitor.start();
       eventWatcher = await this.startEventWatcher(
         runId,
         config.deviceSerial,
@@ -495,6 +514,7 @@ export class GraphRunService {
     } finally {
       await eventWatcher?.stop().catch(() => undefined);
       await Promise.allSettled(pendingEventWrites);
+      await appMonitor?.stopAndWriteArtifacts();
       await this.artifactService.finalizeVideo(runId, videoRecording, failed || stopped || config.keepVideoOnSuccess);
       if (failed && !stopped) {
         await this.writeAiDiagnosis(runId, config, activeStepResultId).catch((error) => this.writeAiDiagnosisFailure(runId, config.deviceSerial, error, activeStepResultId));
@@ -1892,7 +1912,8 @@ export class GraphRunService {
     targetApp: GraphTargetApp | undefined,
     startStrategy: FlowStartStrategy | undefined,
     executionProfile: RunConfig["executionProfile"] | undefined,
-    explicitStartAppPackageName?: string
+    explicitStartAppPackageName?: string,
+    androidAppMonitor?: RunConfig["androidAppMonitor"]
   ): RunConfig {
     const startAppPackageName = explicitStartAppPackageName?.trim() || targetApp?.androidPackageName;
     const profile = executionProfile ?? "full";
@@ -1907,7 +1928,8 @@ export class GraphRunService {
       startStrategy: startStrategy ?? "keep_current",
       startAppPackageName,
       startSetupScope: "before_run",
-      executionProfile: profile
+      executionProfile: profile,
+      androidAppMonitor
     };
   }
 

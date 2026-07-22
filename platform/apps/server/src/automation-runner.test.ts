@@ -5,6 +5,10 @@ import { describe, expect, it } from "vitest";
 import { MockDriver, type MockVideoRecording } from "@mobile-automation/test-support";
 import {
   type ActionStep,
+  type AndroidAppMonitorConfig,
+  type AndroidAppMonitorIncident,
+  type AndroidProcessLifecycleEvent,
+  type AndroidProcessMetricSample,
   type ArtifactRef,
   type DeviceEvent,
   type MetricSample,
@@ -16,7 +20,7 @@ import {
   type TestRun
 } from "@mobile-automation/shared";
 import { AutomationRunner, DeviceBusyError, type RunnerStorage } from "./automation-runner.js";
-import type { DeviceEventWatcher, ObservedDeviceEvent } from "./mobile-driver.js";
+import type { DeviceEventWatcher, MobileAppMonitorSession, ObservedDeviceEvent } from "./mobile-driver.js";
 import type { OcrInput, OcrResult, OcrService } from "./ocr.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 
@@ -63,6 +67,137 @@ describe("AutomationRunner regression flow", () => {
         })
       ])
     );
+  });
+
+  it("starts android app monitor and writes metric summary artifacts before report", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new AppMonitorMockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Monitor Flow",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "com.demo",
+        processFilters: [":worker"]
+      }
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.monitorStarts).toEqual([
+      expect.objectContaining({
+        serial: driver.device.serial,
+        runId: started.id,
+        config: expect.objectContaining({ packageName: "com.demo", processFilters: [":worker"] })
+      })
+    ]);
+    expect(driver.monitorStopCount).toBe(1);
+    expect(run.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "metrics", name: "android-app-monitor-cpu.csv", mimeType: "text/csv" }),
+        expect.objectContaining({ type: "metrics", name: "android-app-monitor-memory.csv", mimeType: "text/csv" }),
+        expect.objectContaining({ type: "metrics", name: "android-app-monitor-lifecycle.csv", mimeType: "text/csv" }),
+        expect.objectContaining({ type: "report_json", name: "android-app-monitor-summary.json", mimeType: "application/json" }),
+        expect.objectContaining({ type: "report_html", name: "report.html" })
+      ])
+    );
+    const summaryIndex = storage.writes.findIndex((write) => write.relativePath.endsWith("android-app-monitor-summary.json"));
+    const reportIndex = storage.writes.findIndex((write) => write.relativePath.endsWith("report.html"));
+    expect(summaryIndex).toBeGreaterThanOrEqual(0);
+    expect(reportIndex).toBeGreaterThan(summaryIndex);
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "android_app_monitor",
+          severity: "info",
+          summary: expect.stringContaining("[Android App Monitor]")
+        })
+      ])
+    );
+  });
+
+  it("records android app monitor crash incidents and stops on failure", async () => {
+    const storage = new MemoryRunnerStorage();
+    const incident: AndroidAppMonitorIncident = {
+      id: "incident-1",
+      type: "java_crash",
+      severity: "error",
+      occurredAt: nowIso(),
+      processName: "com.demo",
+      pid: 123,
+      summary: "Java crash detected",
+      detail: "FATAL EXCEPTION",
+      artifactIds: [],
+      metadata: { signal: "SIGABRT" }
+    };
+    const driver = new AppMonitorMockDriver({ incidents: [incident] });
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Monitor Crash",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      stopOnFailure: true,
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "com.demo"
+      }
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "crash",
+          severity: "error",
+          summary: expect.stringContaining("Java crash detected"),
+          detail: expect.stringContaining("\"processName\":\"com.demo\"")
+        })
+      ])
+    );
+  });
+
+  it("continues and records a warning when android app monitor stop fails", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new AppMonitorMockDriver({ stopError: new Error("monitor stop failed") });
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Monitor Stop Failure",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "com.demo"
+      }
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "android_app_monitor",
+          severity: "warning",
+          summary: expect.stringContaining("failed to stop")
+        })
+      ])
+    );
+    expect(run.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ type: "report_html", name: "report.html" })]));
   });
 
   it("replays tap_on_element by resolving the current Android UI hierarchy", async () => {
@@ -1289,6 +1424,7 @@ function subjectPickerHierarchy(): string {
 class MemoryRunnerStorage implements RunnerStorage {
   private readonly cases = new Map<string, TestCase>();
   private readonly runs = new Map<string, TestRun>();
+  readonly writes: Array<{ relativePath: string; bytes: Buffer | string }> = [];
   readonly runtimeInterceptorRules: RuntimeInterceptorRule[] = [];
 
   createRun(input: { caseId?: string; caseName: string; deviceSerial: string; configJson: string; caseSnapshotJson: string; steps: ActionStep[] }): TestRun {
@@ -1364,6 +1500,7 @@ class MemoryRunnerStorage implements RunnerStorage {
   }
 
   async writeArtifact(relativePath: string, bytes: Buffer | string): Promise<{ absolutePath: string; sizeBytes: number }> {
+    this.writes.push({ relativePath, bytes });
     return {
       absolutePath: `/memory/${relativePath}`,
       sizeBytes: Buffer.byteLength(bytes)
@@ -1502,6 +1639,94 @@ class EventMockDriver extends MockDriver {
       });
     }
     return result;
+  }
+}
+
+class AppMonitorMockDriver extends MockDriver {
+  readonly monitorStarts: Array<{ serial: string; runId: string; config: AndroidAppMonitorConfig }> = [];
+  monitorStopCount = 0;
+
+  constructor(
+    private readonly monitorData: {
+      cpu?: AndroidProcessMetricSample[];
+      memory?: AndroidProcessMetricSample[];
+      lifecycle?: AndroidProcessLifecycleEvent[];
+      incidents?: AndroidAppMonitorIncident[];
+      startError?: Error;
+      stopError?: Error;
+    } = {}
+  ) {
+    super();
+  }
+
+  async startAppMonitor(
+    serial: string,
+    runId: string,
+    config: AndroidAppMonitorConfig,
+    _writeTextArtifact: (runId: string, fileName: string, content: string) => Promise<{ id: string }>,
+    callbacks: {
+      onSample?: (sample: AndroidProcessMetricSample, kind: "cpu" | "memory") => void | Promise<void>;
+      onLifecycleEvent?: (event: AndroidProcessLifecycleEvent) => void | Promise<void>;
+      onIncident?: (incident: AndroidAppMonitorIncident) => void | Promise<void>;
+    } = {}
+  ): Promise<MobileAppMonitorSession> {
+    if (this.monitorData.startError) {
+      throw this.monitorData.startError;
+    }
+    this.monitorStarts.push({ serial, runId, config });
+    let started = false;
+    return {
+      start: async () => {
+        if (started) {
+          return;
+        }
+        started = true;
+        for (const event of this.monitorData.lifecycle ?? [{ occurredAt: nowIso(), type: "process_started", pid: 123, processName: config.packageName }]) {
+          await callbacks.onLifecycleEvent?.(event);
+        }
+        for (const sample of this.monitorData.cpu ?? [{ sampledAt: nowIso(), pid: 123, processName: config.packageName, cpuPercent: 18.5 }]) {
+          await callbacks.onSample?.(sample, "cpu");
+        }
+        for (const sample of this.monitorData.memory ?? [{ sampledAt: nowIso(), pid: 123, processName: config.packageName, pssKb: 2048, rssKb: 4096 }]) {
+          await callbacks.onSample?.(sample, "memory");
+        }
+        for (const incident of this.monitorData.incidents ?? []) {
+          await callbacks.onIncident?.(incident);
+        }
+      },
+      stop: async () => {
+        this.monitorStopCount += 1;
+        if (this.monitorData.stopError) {
+          throw this.monitorData.stopError;
+        }
+        return this.getMonitorSummary(config);
+      },
+      getSummary: () => this.getMonitorSummary(config)
+    };
+  }
+
+  private getMonitorSummary(config: AndroidAppMonitorConfig) {
+    return {
+      packageName: config.packageName,
+      startedAt: "2026-06-09T00:00:00.000Z",
+      endedAt: "2026-06-09T00:00:02.000Z",
+      processes: [
+        {
+          pid: 123,
+          processName: config.packageName,
+          packageName: config.packageName,
+          isMainProcess: true,
+          discoveredAt: "2026-06-09T00:00:00.000Z"
+        }
+      ],
+      sampleCounts: {
+        cpu: this.monitorData.cpu?.length ?? 1,
+        memory: this.monitorData.memory?.length ?? 1,
+        lifecycle: this.monitorData.lifecycle?.length ?? 1
+      },
+      incidents: this.monitorData.incidents ?? [],
+      artifacts: {}
+    };
   }
 }
 

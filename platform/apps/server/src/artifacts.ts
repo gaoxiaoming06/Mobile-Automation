@@ -19,6 +19,6 @@ export function artifactUrl(relativePath: string): string {
   return `/artifacts/${relativePath.split(path.sep).join("/")}`;
 }
 
-export function runArtifactPath(runId: string, kind: "screenshots" | "logs" | "reports" | "videos", fileName: string): string {
+export function runArtifactPath(runId: string, kind: "screenshots" | "logs" | "reports" | "videos" | "metrics", fileName: string): string {
   return path.join("runs", runId, kind, fileName);
 }

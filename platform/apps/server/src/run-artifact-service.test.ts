@@ -58,6 +58,49 @@ describe("RunArtifactService", () => {
     expect(storage.artifacts).toEqual([artifact]);
   });
 
+  it("writes android app monitor CSV and summary JSON artifacts", async () => {
+    const storage = new MemoryArtifactStorage();
+    const service = new RunArtifactService(storage, {
+      screenshot: async () => Buffer.from("png"),
+      stopVideoRecording: async () => undefined
+    });
+
+    const summary = await service.writeAndroidAppMonitorArtifacts(
+      "run-1",
+      {
+        packageName: "com.demo",
+        startedAt: "2026-06-09T00:00:00.000Z",
+        endedAt: "2026-06-09T00:00:02.000Z",
+        processes: [],
+        sampleCounts: { cpu: 1, memory: 1, lifecycle: 1 },
+        incidents: [],
+        artifacts: {}
+      },
+      {
+        cpu: [{ sampledAt: "2026-06-09T00:00:01.000Z", pid: 123, processName: "com.demo", cpuPercent: 12.5 }],
+        memory: [{ sampledAt: "2026-06-09T00:00:01.000Z", pid: 123, processName: "com.demo", pssKb: 2048, rssKb: 4096 }],
+        lifecycle: [{ occurredAt: "2026-06-09T00:00:00.500Z", type: "process_started", pid: 123, processName: "com.demo" }]
+      }
+    );
+
+    expect(storage.artifacts).toEqual([
+      expect.objectContaining({ type: "metrics", name: "android-app-monitor-cpu.csv", mimeType: "text/csv" }),
+      expect.objectContaining({ type: "metrics", name: "android-app-monitor-memory.csv", mimeType: "text/csv" }),
+      expect.objectContaining({ type: "metrics", name: "android-app-monitor-lifecycle.csv", mimeType: "text/csv" }),
+      expect.objectContaining({ type: "report_json", name: "android-app-monitor-summary.json", mimeType: "application/json" })
+    ]);
+    expect(storage.writes.map((write) => write.relativePath)).toEqual([
+      "runs/run-1/metrics/android-app-monitor-cpu.csv",
+      "runs/run-1/metrics/android-app-monitor-memory.csv",
+      "runs/run-1/metrics/android-app-monitor-lifecycle.csv",
+      "runs/run-1/reports/android-app-monitor-summary.json"
+    ]);
+    expect(summary.artifacts.summaryJsonArtifactId).toBe(storage.artifacts[3]?.id);
+    expect(summary.artifacts.cpuCsvArtifactId).toBe(storage.artifacts[0]?.id);
+    expect(String(storage.writes[0]?.bytes)).toContain("cpuPercent");
+    expect(JSON.parse(String(storage.writes[3]?.bytes))).toEqual(summary);
+  });
+
   it("keeps stopped videos as video artifacts when requested", async () => {
     tempRoot = await mkdtemp(path.join(os.tmpdir(), "mobile-automation-artifacts-"));
     const videoPath = path.join(tempRoot, "run-1.mp4");

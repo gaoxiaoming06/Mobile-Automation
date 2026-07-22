@@ -1,7 +1,15 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { renderReportHtml } from "@mobile-automation/report-core";
-import { createId, nowIso, type ArtifactRef, type TestRun } from "@mobile-automation/shared";
+import {
+  createId,
+  nowIso,
+  type AndroidAppMonitorSummary,
+  type AndroidProcessLifecycleEvent,
+  type AndroidProcessMetricSample,
+  type ArtifactRef,
+  type TestRun
+} from "@mobile-automation/shared";
 import { artifactRoot, artifactUrl, runArtifactPath } from "./artifacts.js";
 import type { AutomationDeviceDriver, MobileVideoRecording } from "./mobile-driver.js";
 import type { ScreenshotCapture } from "./step-expectations.js";
@@ -87,6 +95,62 @@ export class RunArtifactService {
     };
     this.storage.addArtifact(artifact);
     return artifact;
+  }
+
+  async writeAndroidAppMonitorArtifacts(
+    runId: string,
+    summary: AndroidAppMonitorSummary,
+    samples: {
+      cpu: AndroidProcessMetricSample[];
+      memory: AndroidProcessMetricSample[];
+      lifecycle: AndroidProcessLifecycleEvent[];
+    }
+  ): Promise<AndroidAppMonitorSummary> {
+    const cpuCsv = await this.writeTypedArtifact(runId, "metrics", "android-app-monitor-cpu.csv", cpuSamplesToCsv(samples.cpu), "metrics", "text/csv");
+    const memoryCsv = await this.writeTypedArtifact(
+      runId,
+      "metrics",
+      "android-app-monitor-memory.csv",
+      memorySamplesToCsv(samples.memory),
+      "metrics",
+      "text/csv"
+    );
+    const lifecycleCsv = await this.writeTypedArtifact(
+      runId,
+      "metrics",
+      "android-app-monitor-lifecycle.csv",
+      lifecycleEventsToCsv(samples.lifecycle),
+      "metrics",
+      "text/csv"
+    );
+    const summaryJsonArtifactId = createId("artifact");
+    const enrichedSummary: AndroidAppMonitorSummary = {
+      ...summary,
+      sampleCounts: { ...summary.sampleCounts },
+      processes: [...summary.processes],
+      incidents: summary.incidents.map((incident) => ({
+        ...incident,
+        artifactIds: [...incident.artifactIds],
+        metadata: incident.metadata ? { ...incident.metadata } : undefined
+      })),
+      artifacts: {
+        ...summary.artifacts,
+        cpuCsvArtifactId: cpuCsv.id,
+        memoryCsvArtifactId: memoryCsv.id,
+        lifecycleCsvArtifactId: lifecycleCsv.id,
+        summaryJsonArtifactId
+      }
+    };
+    await this.writeTypedArtifact(
+      runId,
+      "reports",
+      "android-app-monitor-summary.json",
+      JSON.stringify(enrichedSummary, null, 2),
+      "report_json",
+      "application/json",
+      summaryJsonArtifactId
+    );
+    return enrichedSummary;
   }
 
   async writeExpectationImageArtifact(runId: string, stepResultId: string, fileName: string, png: Buffer): Promise<ArtifactRef> {
@@ -175,6 +239,65 @@ export class RunArtifactService {
     this.storage.addArtifact(artifact);
     return { artifact, png };
   }
+
+  private async writeTypedArtifact(
+    runId: string,
+    kind: "metrics" | "reports" | "logs",
+    fileName: string,
+    content: Buffer | string,
+    type: ArtifactRef["type"],
+    mimeType: string,
+    artifactId = createId("artifact")
+  ): Promise<ArtifactRef> {
+    const relativePath = runArtifactPath(runId, kind, fileName);
+    const written = await this.storage.writeArtifact(relativePath, content);
+    const artifact: ArtifactRef = {
+      id: artifactId,
+      runId,
+      type,
+      name: fileName,
+      path: relativePath,
+      url: artifactUrl(relativePath),
+      mimeType,
+      sizeBytes: written.sizeBytes,
+      createdAt: nowIso()
+    };
+    this.storage.addArtifact(artifact);
+    return artifact;
+  }
+}
+
+function cpuSamplesToCsv(samples: AndroidProcessMetricSample[]): string {
+  return toCsv(
+    ["sampledAt", "pid", "processName", "cpuPercent", "raw"],
+    samples.map((sample) => [sample.sampledAt, sample.pid, sample.processName, sample.cpuPercent, sample.raw ? JSON.stringify(sample.raw) : ""])
+  );
+}
+
+function memorySamplesToCsv(samples: AndroidProcessMetricSample[]): string {
+  return toCsv(
+    ["sampledAt", "pid", "processName", "pssKb", "rssKb", "raw"],
+    samples.map((sample) => [sample.sampledAt, sample.pid, sample.processName, sample.pssKb, sample.rssKb, sample.raw ? JSON.stringify(sample.raw) : ""])
+  );
+}
+
+function lifecycleEventsToCsv(events: AndroidProcessLifecycleEvent[]): string {
+  return toCsv(
+    ["occurredAt", "type", "pid", "previousPid", "processName"],
+    events.map((event) => [event.occurredAt, event.type, event.pid, event.previousPid, event.processName])
+  );
+}
+
+function toCsv(headers: string[], rows: Array<Array<string | number | undefined>>): string {
+  return `${headers.join(",")}\n${rows.map((row) => row.map(csvCell).join(",")).join("\n")}${rows.length ? "\n" : ""}`;
+}
+
+function csvCell(value: string | number | undefined): string {
+  if (value === undefined) {
+    return "";
+  }
+  const text = String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 function errorToString(error: unknown): string {

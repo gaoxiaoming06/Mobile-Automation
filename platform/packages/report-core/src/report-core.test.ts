@@ -30,6 +30,57 @@ describe("renderReportHtml", () => {
     expect(renderReportHtml(run)).toContain("passed");
   });
 
+  it("renders android app monitor metrics and summary artifacts as key attachments", () => {
+    const run: TestRun = {
+      id: "run-monitor",
+      caseName: "Monitor",
+      deviceSerial: "device-1",
+      status: "passed",
+      config: {
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 0,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false
+      },
+      steps: [],
+      stepResults: [],
+      metrics: [],
+      events: [],
+      artifacts: [
+        {
+          id: "artifact-summary",
+          runId: "run-monitor",
+          type: "report_json",
+          name: "android-app-monitor-summary.json",
+          path: "runs/run-monitor/reports/android-app-monitor-summary.json",
+          url: "/artifacts/runs/run-monitor/reports/android-app-monitor-summary.json",
+          mimeType: "application/json",
+          createdAt: "2026-06-04T00:00:00.000Z"
+        },
+        {
+          id: "artifact-cpu",
+          runId: "run-monitor",
+          type: "metrics",
+          name: "android-app-monitor-cpu.csv",
+          path: "runs/run-monitor/metrics/android-app-monitor-cpu.csv",
+          url: "/artifacts/runs/run-monitor/metrics/android-app-monitor-cpu.csv",
+          mimeType: "text/csv",
+          createdAt: "2026-06-04T00:00:00.000Z"
+        }
+      ],
+      startedAt: "2026-06-04T00:00:00.000Z"
+    };
+
+    const html = renderReportHtml(run);
+
+    expect(html).toContain("android-app-monitor-summary.json");
+    expect(html).toContain("android-app-monitor-cpu.csv");
+    expect(html).toContain("/artifacts/runs/run-monitor/metrics/android-app-monitor-cpu.csv");
+  });
+
   it("renders AI diagnosis events with evidence links", () => {
     const run: TestRun = {
       id: "run-ai",

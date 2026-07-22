@@ -74,6 +74,35 @@ describe("runner-core", () => {
     expect(normalizeRunConfig({ deviceSerial: "serial", keepVideoOnSuccess: false }).keepVideoOnSuccess).toBe(false);
   });
 
+  it("preserves android app monitor config without mutating input", () => {
+    const input = {
+      deviceSerial: "serial",
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "com.demo",
+        includeSubprocesses: false,
+        processFilters: [":push"],
+        thresholds: {
+          cpuPercent: { enabled: true, value: 80, sustainMs: 1000, cooldownMs: 5000 }
+        }
+      }
+    };
+
+    const config = normalizeRunConfig(input);
+
+    expect(config.androidAppMonitor).toEqual(input.androidAppMonitor);
+    expect(config.androidAppMonitor).not.toBe(input.androidAppMonitor);
+    expect(config.androidAppMonitor?.processFilters).not.toBe(input.androidAppMonitor.processFilters);
+    expect(config.androidAppMonitor?.thresholds?.cpuPercent).not.toBe(input.androidAppMonitor.thresholds.cpuPercent);
+
+    config.androidAppMonitor?.processFilters?.push(":worker");
+    if (config.androidAppMonitor?.thresholds?.cpuPercent) {
+      config.androidAppMonitor.thresholds.cpuPercent.value = 90;
+    }
+    expect(input.androidAppMonitor.processFilters).toEqual([":push"]);
+    expect(input.androidAppMonitor.thresholds.cpuPercent.value).toBe(80);
+  });
+
   it("executes repeat_n with enabled steps only", async () => {
     const controller = new RunExecutionController();
     const executed: string[] = [];

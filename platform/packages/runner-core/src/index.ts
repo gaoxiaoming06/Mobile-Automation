@@ -26,7 +26,22 @@ export function normalizeRunConfig(config: Partial<RunConfig> & { deviceSerial: 
     pauseAfterEachStep: config.pauseAfterEachStep ?? false,
     startStrategy: config.startStrategy ?? "keep_current",
     startAppPackageName: config.startAppPackageName,
-    startSetupScope: config.startSetupScope ?? "before_run"
+    startSetupScope: config.startSetupScope ?? "before_run",
+    androidAppMonitor: config.androidAppMonitor ? cloneAndroidAppMonitorConfig(config.androidAppMonitor) : undefined
+  };
+}
+
+function cloneAndroidAppMonitorConfig(config: NonNullable<RunConfig["androidAppMonitor"]>): NonNullable<RunConfig["androidAppMonitor"]> {
+  const thresholds = config.thresholds ?? {};
+  return {
+    ...config,
+    processFilters: config.processFilters ? [...config.processFilters] : undefined,
+    thresholds: config.thresholds
+      ? {
+          ...(thresholds.cpuPercent ? { cpuPercent: { ...thresholds.cpuPercent } } : {}),
+          ...(thresholds.pssMb ? { pssMb: { ...thresholds.pssMb } } : {})
+        }
+      : undefined
   };
 }
 

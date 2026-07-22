@@ -3,8 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActionPolicy, BusinessNode, StateMatcher } from "@mobile-automation/graph-core";
-import type { ActionStep, DeviceActionRequest, StepExpectation } from "@mobile-automation/shared";
+import type {
+  ActionStep,
+  AndroidAppMonitorConfig,
+  AndroidAppMonitorIncident,
+  AndroidProcessLifecycleEvent,
+  AndroidProcessMetricSample,
+  DeviceActionRequest,
+  StepExpectation
+} from "@mobile-automation/shared";
 import { MockDriver, type MockVideoRecording } from "@mobile-automation/test-support";
+import type { MobileAppMonitorSession } from "./mobile-driver.js";
 import type { OcrInput, OcrLayoutResult, OcrResult, OcrService } from "./ocr.js";
 
 let context: { storage: any; tempRoot: string } | undefined;
@@ -284,6 +293,65 @@ describe("GraphRunService", () => {
     expect(run.artifacts.some((artifact: { type: string }) => artifact.type === "screenshot")).toBe(true);
     expect(run.artifacts.some((artifact: { name: string }) => artifact.name === "graph-execution-result.json")).toBe(true);
     expect(run.reportHtmlPath).toBe("runs/" + started.run.id + "/reports/report.html");
+  });
+
+  it("starts android app monitor for graph runs and writes incident summary artifacts before report", async () => {
+    context = await createContext();
+    const { storage } = context;
+    const incident: AndroidAppMonitorIncident = {
+      id: "incident-graph-1",
+      type: "memory_threshold",
+      severity: "warning",
+      occurredAt: "2026-06-09T00:00:01.000Z",
+      processName: "com.demo",
+      pid: 123,
+      summary: "Memory threshold breached: com.demo",
+      detail: "pss exceeded",
+      artifactIds: [],
+      metadata: { value: 512, threshold: 256 }
+    };
+    const driver = new GraphAppMonitorMockDriver(context.tempRoot, { incidents: [incident] });
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new DynamicFakeOcrService(() => (driver.actions.some((action) => action.type === "tap") ? "目标页" : "首页")));
+    const { graph, targetNode } = seedGraph(storage);
+
+    const started = await service.start({
+      deviceSerial: driver.device.serial,
+      graphId: graph.id,
+      targetNodeId: targetNode.id,
+      startStrategy: "keep_current",
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "com.demo"
+      }
+    });
+
+    await waitForRun(storage, started.run.id, { waitForReport: true, timeoutMs: 12000 });
+    const run = storage.getRun(started.run.id);
+
+    expect(driver.monitorStarts).toEqual([
+      expect.objectContaining({
+        serial: driver.device.serial,
+        runId: started.run.id,
+        config: expect.objectContaining({ packageName: "com.demo" })
+      })
+    ]);
+    expect(driver.monitorStopCount).toBe(1);
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "performance_threshold", severity: "warning", summary: expect.stringContaining("Memory threshold breached") }),
+        expect.objectContaining({ type: "android_app_monitor", artifactIds: expect.arrayContaining([expect.any(String)]) })
+      ])
+    );
+    expect(run.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "metrics", name: "android-app-monitor-cpu.csv" }),
+        expect.objectContaining({ type: "metrics", name: "android-app-monitor-memory.csv" }),
+        expect.objectContaining({ type: "metrics", name: "android-app-monitor-lifecycle.csv" }),
+        expect.objectContaining({ type: "report_json", name: "android-app-monitor-summary.json" }),
+        expect.objectContaining({ type: "report_html", name: "report.html" })
+      ])
+    );
   });
 
   it("starts target-node execution from the matched page asset instead of a legacy recording node", async () => {
@@ -3188,6 +3256,91 @@ class GraphMockDriver extends MockDriver {
   override async stopVideoRecording(recording: MockVideoRecording, keep: boolean): Promise<string | undefined> {
     return keep ? recording.localPath : undefined;
   }
+}
+
+class GraphAppMonitorMockDriver extends GraphMockDriver {
+  readonly monitorStarts: Array<{ serial: string; runId: string; config: AndroidAppMonitorConfig }> = [];
+  monitorStopCount = 0;
+
+  constructor(
+    tempDir: string,
+    private readonly monitorData: {
+      cpu?: AndroidProcessMetricSample[];
+      memory?: AndroidProcessMetricSample[];
+      lifecycle?: AndroidProcessLifecycleEvent[];
+      incidents?: AndroidAppMonitorIncident[];
+    } = {}
+  ) {
+    super(tempDir);
+  }
+
+  async startAppMonitor(
+    serial: string,
+    runId: string,
+    config: AndroidAppMonitorConfig,
+    _writeTextArtifact: (runId: string, fileName: string, content: string) => Promise<{ id: string }>,
+    callbacks: {
+      onSample?: (sample: AndroidProcessMetricSample, kind: "cpu" | "memory") => void | Promise<void>;
+      onLifecycleEvent?: (event: AndroidProcessLifecycleEvent) => void | Promise<void>;
+      onIncident?: (incident: AndroidAppMonitorIncident) => void | Promise<void>;
+    } = {}
+  ): Promise<MobileAppMonitorSession> {
+    this.monitorStarts.push({ serial, runId, config });
+    let started = false;
+    return {
+      start: async () => {
+        if (started) {
+          return;
+        }
+        started = true;
+        for (const event of this.monitorData.lifecycle ?? [{ occurredAt: nowIsoForGraphTest(), type: "process_started", pid: 123, processName: config.packageName }]) {
+          await callbacks.onLifecycleEvent?.(event);
+        }
+        for (const sample of this.monitorData.cpu ?? [{ sampledAt: nowIsoForGraphTest(), pid: 123, processName: config.packageName, cpuPercent: 14 }]) {
+          await callbacks.onSample?.(sample, "cpu");
+        }
+        for (const sample of this.monitorData.memory ?? [{ sampledAt: nowIsoForGraphTest(), pid: 123, processName: config.packageName, pssKb: 4096 }]) {
+          await callbacks.onSample?.(sample, "memory");
+        }
+        for (const incident of this.monitorData.incidents ?? []) {
+          await callbacks.onIncident?.(incident);
+        }
+      },
+      stop: async () => {
+        this.monitorStopCount += 1;
+        return this.getMonitorSummary(config);
+      },
+      getSummary: () => this.getMonitorSummary(config)
+    };
+  }
+
+  private getMonitorSummary(config: AndroidAppMonitorConfig) {
+    return {
+      packageName: config.packageName,
+      startedAt: "2026-06-09T00:00:00.000Z",
+      endedAt: "2026-06-09T00:00:02.000Z",
+      processes: [
+        {
+          pid: 123,
+          processName: config.packageName,
+          packageName: config.packageName,
+          isMainProcess: true,
+          discoveredAt: "2026-06-09T00:00:00.000Z"
+        }
+      ],
+      sampleCounts: {
+        cpu: this.monitorData.cpu?.length ?? 1,
+        memory: this.monitorData.memory?.length ?? 1,
+        lifecycle: this.monitorData.lifecycle?.length ?? 1
+      },
+      incidents: this.monitorData.incidents ?? [],
+      artifacts: {}
+    };
+  }
+}
+
+function nowIsoForGraphTest(): string {
+  return "2026-06-09T00:00:01.000Z";
 }
 
 class VisualGraphMockDriver extends GraphMockDriver {

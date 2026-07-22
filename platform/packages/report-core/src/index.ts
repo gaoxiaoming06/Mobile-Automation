@@ -14,6 +14,7 @@ export function renderReportHtml(run: TestRun): string {
   const videoArtifacts = run.artifacts.filter((artifact) => artifact.type === "video" && !artifact.deletedAt);
   const primaryVideo = videoArtifacts[0];
   const logArtifacts = run.artifacts.filter((artifact) => artifact.type === "log");
+  const keyArtifacts = run.artifacts.filter((artifact) => ["video", "log", "metrics", "report_json"].includes(artifact.type) && !artifact.deletedAt);
   const latestMetric = run.metrics.at(-1);
   const metricSummary = summarizeMetrics(run.metrics);
   const failedSteps = run.stepResults.filter((step) => step.status !== "passed" && step.status !== "skipped");
@@ -232,7 +233,7 @@ export function renderReportHtml(run: TestRun): string {
 
     <h2>关键附件</h2>
     <div class="artifact-list">
-      ${[...videoArtifacts, ...logArtifacts].map(renderArtifact).join("") || '<div class="muted">无视频或日志附件</div>'}
+      ${keyArtifacts.map(renderArtifact).join("") || '<div class="muted">无关键附件</div>'}
     </div>
 
     <h2>步骤截图</h2>

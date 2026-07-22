@@ -34,6 +34,7 @@ import {
   shouldFailStepForExpectation
 } from "./step-expectations.js";
 import { ConditionalStepExecutor } from "./conditional-step-executor.js";
+import { AndroidAppMonitorRunSupport } from "./android-app-monitor-run-support.js";
 import { ObservationService } from "./observation-service.js";
 import { RunArtifactService } from "./run-artifact-service.js";
 import { RuntimeInterceptor, type RuntimeInterceptorRecord } from "./runtime-interceptor.js";
@@ -81,6 +82,7 @@ type StartRunInput = {
   startStrategy?: FlowStartStrategy;
   startAppPackageName?: string;
   startSetupScope?: RunConfig["startSetupScope"];
+  androidAppMonitor?: RunConfig["androidAppMonitor"];
 };
 
 type ActiveRun = {
@@ -177,7 +179,8 @@ export class AutomationRunner {
       pauseAfterEachStep: input.pauseAfterEachStep ?? false,
       startStrategy: input.startStrategy ?? defaultStartStrategy,
       startAppPackageName: input.startAppPackageName ?? defaultStartAppPackageName,
-      startSetupScope: input.startSetupScope ?? "before_run"
+      startSetupScope: input.startSetupScope ?? "before_run",
+      androidAppMonitor: input.androidAppMonitor
     });
     const run = this.storage.createRun({
       caseId: input.caseId,
@@ -332,6 +335,7 @@ export class AutomationRunner {
     let stopped = false;
     let videoRecording: MobileVideoRecording | undefined;
     let eventWatcher: DeviceEventWatcher | undefined;
+    let appMonitor: AndroidAppMonitorRunSupport | undefined;
     const pendingEventWrites: Promise<void>[] = [];
     let runtimeFailure = false;
     let activeStepResultId: string | undefined;
@@ -340,6 +344,21 @@ export class AutomationRunner {
       controller.throwIfStopped();
       const device = await this.driver.getDeviceInfo(config.deviceSerial);
       const deviceSize = device.resolution;
+      appMonitor = new AndroidAppMonitorRunSupport({
+        runId,
+        deviceSerial: config.deviceSerial,
+        config: config.androidAppMonitor,
+        stopOnFailure: config.stopOnFailure,
+        driver: this.driver,
+        artifactService: this.artifactService,
+        addDeviceEvent: (event) => this.addDeviceEvent(event),
+        stopRun: () => controller.stop(),
+        markRuntimeFailure: () => {
+          runtimeFailure = true;
+        },
+        getActiveStepResultId: () => activeStepResultId
+      });
+      await appMonitor.start();
       eventWatcher = await this.startEventWatcher(
         runId,
         config.deviceSerial,
@@ -432,6 +451,7 @@ export class AutomationRunner {
     } finally {
       await eventWatcher?.stop().catch(() => undefined);
       await Promise.allSettled(pendingEventWrites);
+      await appMonitor?.stopAndWriteArtifacts();
       await this.artifactService.finalizeVideo(runId, videoRecording, failed || stopped || config.keepVideoOnSuccess);
       const status = stopped ? "stopped" : failed ? "failed" : "passed";
       this.storage.updateRunStatus(runId, status);
