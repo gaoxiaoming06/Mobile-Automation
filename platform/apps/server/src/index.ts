@@ -41,6 +41,7 @@ import {
 import { defaultSourceScanMaxFiles, maxSourceScanMaxFiles, scanAndroidSource } from "@mobile-automation/source-scanner";
 import { WebSocketServer } from "ws";
 import { ArtifactCleanupScheduler } from "./artifact-cleanup.js";
+import { readAndroidAppMonitorConfig } from "./android-app-monitor-request.js";
 import { AutomationRunner, DeviceBusyError } from "./automation-runner.js";
 import { artifactFilePath, artifactRoot, artifactSendFileOptions, artifactUrl } from "./artifacts.js";
 import { seedBuiltinCases } from "./builtin-cases.js";
@@ -2454,6 +2455,7 @@ app.post("/api/runs", (req, res) => {
       startStrategy?: FlowStartStrategy;
       startAppPackageName?: string;
       startSetupScope?: "before_run" | "before_each_iteration";
+      androidAppMonitor?: unknown;
     };
     if (!body.deviceSerial) {
       res.status(400).json({ error: "deviceSerial is required" });
@@ -2493,7 +2495,8 @@ app.post("/api/runs", (req, res) => {
       pauseAfterEachStep: body.pauseAfterEachStep,
       startStrategy: body.startStrategy,
       startAppPackageName: body.startAppPackageName,
-      startSetupScope: body.startSetupScope
+      startSetupScope: body.startSetupScope,
+      androidAppMonitor: readAndroidAppMonitorConfig(body.androidAppMonitor)
     });
     res.status(202).json({ run });
   } catch (error) {
@@ -4911,6 +4914,7 @@ function readGraphRunRequest(body: unknown): {
   overlay?: RuntimeOverlay;
   executionProfile?: "full" | "fast_visual";
   startAppScope?: StartAppScope;
+  androidAppMonitor?: ReturnType<typeof readAndroidAppMonitorConfig>;
 } {
   const input = (body ?? {}) as {
     deviceSerial?: string;
@@ -4928,6 +4932,7 @@ function readGraphRunRequest(body: unknown): {
     overlay?: RuntimeOverlay;
     executionProfile?: string;
     startAppScope?: string;
+    androidAppMonitor?: unknown;
   };
   if (!input.deviceSerial?.trim()) {
     throw new Error("deviceSerial is required");
@@ -4954,7 +4959,8 @@ function readGraphRunRequest(body: unknown): {
     startAppPackageName: input.startAppPackageName?.trim() || undefined,
     overlay: readRuntimeOverlay(input.overlay),
     executionProfile: readExecutionProfile(input.executionProfile),
-    startAppScope: readStartAppScope(input.startAppScope)
+    startAppScope: readStartAppScope(input.startAppScope),
+    androidAppMonitor: readAndroidAppMonitorConfig(input.androidAppMonitor)
   };
 }
 

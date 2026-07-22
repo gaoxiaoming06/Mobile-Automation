@@ -1242,6 +1242,14 @@ export function App() {
     startStrategy,
     startAppPackageName,
     startSetupScope,
+    androidAppMonitorEnabled,
+    androidAppMonitorPackageName,
+    androidAppMonitorIncludeSubprocesses,
+    androidAppMonitorCpuThresholdEnabled,
+    androidAppMonitorCpuThresholdPercent,
+    androidAppMonitorMemoryThresholdEnabled,
+    androidAppMonitorMemoryThresholdMb,
+    androidAppMonitorHeapDumpEnabled,
     setCurrentRunId,
     setRepeatCount,
     setStepIntervalMs,
@@ -1250,6 +1258,14 @@ export function App() {
     setStartStrategy,
     setStartAppPackageName,
     setStartSetupScope,
+    setAndroidAppMonitorEnabled,
+    setAndroidAppMonitorPackageName,
+    setAndroidAppMonitorIncludeSubprocesses,
+    setAndroidAppMonitorCpuThresholdEnabled,
+    setAndroidAppMonitorCpuThresholdPercent,
+    setAndroidAppMonitorMemoryThresholdEnabled,
+    setAndroidAppMonitorMemoryThresholdMb,
+    setAndroidAppMonitorHeapDumpEnabled,
     refreshRuns,
     loadMoreRuns,
     startRun,
@@ -2901,6 +2917,14 @@ export function App() {
       startStrategy={startStrategy}
       startAppPackageName={startAppPackageName}
       startSetupScope={startSetupScope}
+      androidAppMonitorEnabled={androidAppMonitorEnabled}
+      androidAppMonitorPackageName={androidAppMonitorPackageName}
+      androidAppMonitorIncludeSubprocesses={androidAppMonitorIncludeSubprocesses}
+      androidAppMonitorCpuThresholdEnabled={androidAppMonitorCpuThresholdEnabled}
+      androidAppMonitorCpuThresholdPercent={androidAppMonitorCpuThresholdPercent}
+      androidAppMonitorMemoryThresholdEnabled={androidAppMonitorMemoryThresholdEnabled}
+      androidAppMonitorMemoryThresholdMb={androidAppMonitorMemoryThresholdMb}
+      androidAppMonitorHeapDumpEnabled={androidAppMonitorHeapDumpEnabled}
       currentRun={currentRun}
       currentGraphRun={currentGraphRun}
       runs={runs}
@@ -2916,6 +2940,14 @@ export function App() {
       setStartStrategy={setStartStrategy}
       setStartAppPackageName={setStartAppPackageName}
       setStartSetupScope={setStartSetupScope}
+      setAndroidAppMonitorEnabled={setAndroidAppMonitorEnabled}
+      setAndroidAppMonitorPackageName={setAndroidAppMonitorPackageName}
+      setAndroidAppMonitorIncludeSubprocesses={setAndroidAppMonitorIncludeSubprocesses}
+      setAndroidAppMonitorCpuThresholdEnabled={setAndroidAppMonitorCpuThresholdEnabled}
+      setAndroidAppMonitorCpuThresholdPercent={setAndroidAppMonitorCpuThresholdPercent}
+      setAndroidAppMonitorMemoryThresholdEnabled={setAndroidAppMonitorMemoryThresholdEnabled}
+      setAndroidAppMonitorMemoryThresholdMb={setAndroidAppMonitorMemoryThresholdMb}
+      setAndroidAppMonitorHeapDumpEnabled={setAndroidAppMonitorHeapDumpEnabled}
       moveStep={moveStep}
       removeStep={removeStep}
       insertWaitStep={insertWaitStep}

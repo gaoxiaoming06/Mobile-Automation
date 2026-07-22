@@ -22,6 +22,46 @@ describe("automation CLI", () => {
     });
   });
 
+  it("builds android app monitor config for run requests", () => {
+    const parsed = parseCliArgs([
+      "run",
+      "--device",
+      "serial-1",
+      "--case",
+      "case-1",
+      "--package",
+      "com.example.app",
+      "--android-app-monitor",
+      "--monitor-main-only",
+      "--monitor-cpu-threshold",
+      "80",
+      "--monitor-memory-threshold",
+      "512",
+      "--monitor-heap-dump"
+    ]);
+
+    expect(buildRequest(parsed).body).toEqual(
+      expect.objectContaining({
+        androidAppMonitor: {
+          enabled: true,
+          packageName: "com.example.app",
+          includeSubprocesses: false,
+          enableHeapDump: true,
+          thresholds: {
+            cpuPercent: { enabled: true, value: 80, sustainMs: 5000, cooldownMs: 30000 },
+            pssMb: { enabled: true, value: 512, sustainMs: 5000, cooldownMs: 30000 }
+          }
+        }
+      })
+    );
+  });
+
+  it("requires a package name when android app monitor is enabled", () => {
+    const parsed = parseCliArgs(["run", "--device", "serial-1", "--case", "case-1", "--android-app-monitor"]);
+
+    expect(() => buildRequest(parsed)).toThrow("--monitor-package or --package is required when --android-app-monitor is enabled");
+  });
+
   it("ignores the pnpm script argument separator", () => {
     expect(parseCliArgs(["--", "devices"]).command).toBe("devices");
   });
@@ -58,6 +98,31 @@ describe("automation CLI", () => {
         overlay: undefined
       }
     });
+  });
+
+  it("builds android app monitor config for graph-run requests", () => {
+    const parsed = parseCliArgs([
+      "graph-run",
+      "--device",
+      "serial-1",
+      "--graph",
+      "graph-1",
+      "--targetKey",
+      "classin.teacher.lesson.create",
+      "--android-app-monitor",
+      "--monitor-package",
+      "cn.eeo.classin"
+    ]);
+
+    expect(buildRequest(parsed).body).toEqual(
+      expect.objectContaining({
+        androidAppMonitor: {
+          enabled: true,
+          packageName: "cn.eeo.classin",
+          includeSubprocesses: true
+        }
+      })
+    );
   });
 
   it("passes runtime overlay JSON to graph-run requests", () => {

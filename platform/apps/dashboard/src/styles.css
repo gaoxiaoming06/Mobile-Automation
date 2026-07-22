@@ -6637,10 +6637,30 @@ button:disabled {
   line-height: 1.4;
 }
 
-.run-config .run-option input {
+.run-config .monitor-option {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 8px;
+}
+
+.run-config .run-option input,
+.run-config .threshold-field span input {
   width: 16px;
   height: 16px;
   margin: 0;
+}
+
+.run-config .threshold-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 82px;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-config .threshold-field span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #475569;
 }
 
 .action-row {

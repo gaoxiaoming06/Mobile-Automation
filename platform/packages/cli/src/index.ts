@@ -101,7 +101,8 @@ export function buildRequest(parsed: ParsedCli): CliRequest {
         stepIntervalMs: numberOption(parsed.options.interval),
         startStrategy: stringOption(parsed.options.startStrategy),
         startAppPackageName: stringOption(parsed.options.package),
-        startSetupScope: stringOption(parsed.options.startScope)
+        startSetupScope: stringOption(parsed.options.startScope),
+        androidAppMonitor: buildAndroidAppMonitorOption(parsed.options)
       }
     };
   }
@@ -133,7 +134,8 @@ export function buildRequest(parsed: ParsedCli): CliRequest {
         platform: stringOption(parsed.options.platform),
         strategy: stringOption(parsed.options.strategy),
         startStrategy: stringOption(parsed.options.startStrategy),
-        overlay: overlayJson ? JSON.parse(overlayJson) : overlayPath ? readJsonFile(overlayPath) : undefined
+        overlay: overlayJson ? JSON.parse(overlayJson) : overlayPath ? readJsonFile(overlayPath) : undefined,
+        androidAppMonitor: buildAndroidAppMonitorOption(parsed.options)
       }
     };
   }
@@ -266,6 +268,7 @@ function helpText(): string {
     "  pnpm cli -- cases",
     "  pnpm cli -- runs --limit 20",
     "  pnpm cli -- run --device <serial> --case <caseId> [--mode once|repeat_n|loop_until_stop] [--repeat 3]",
+    "  pnpm cli -- run --device <serial> --case <caseId> --android-app-monitor --monitor-package cn.eeo.classin",
     "  pnpm cli -- graph-run --device <serial> --graph <graphId> --targetKey <nodeKey>",
     "  pnpm cli -- graph-run --device <serial> --graphVersion <versionId> --targetNode <nodeId> [--overlay overlay.json]",
     "  pnpm cli -- graph-run --device <serial> --graph <graphId> --targetKey <nodeKey> [--overlayJson '{...}']",
@@ -277,7 +280,13 @@ function helpText(): string {
     "  pnpm cli -- report --run <runId>",
     "",
     "Options:",
-    "  --server <url>  Defaults to AUTOTEST_SERVER_URL or http://localhost:4010"
+    "  --server <url>  Defaults to AUTOTEST_SERVER_URL or http://localhost:4010",
+    "  --android-app-monitor  Enable Android app sidecar monitoring for run/graph-run",
+    "  --monitor-package <package>  Package to monitor; run falls back to --package",
+    "  --monitor-main-only  Monitor only the main process",
+    "  --monitor-cpu-threshold <percent>  Enable CPU threshold with 5000ms sustain / 30000ms cooldown",
+    "  --monitor-memory-threshold <mb>  Enable PSS threshold with 5000ms sustain / 30000ms cooldown",
+    "  --monitor-heap-dump  Enable heap dump capture for supported incidents"
   ].join("\n");
 }
 
@@ -297,6 +306,36 @@ function numberOption(value: string | boolean | undefined): number | undefined {
   }
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function buildAndroidAppMonitorOption(options: Record<string, string | boolean>): Record<string, unknown> | undefined {
+  if (options["android-app-monitor"] !== true) {
+    return undefined;
+  }
+  const packageName = stringOption(options["monitor-package"]) ?? stringOption(options.package) ?? stringOption(options.startAppPackageName);
+  if (!packageName) {
+    throw new Error("--monitor-package or --package is required when --android-app-monitor is enabled");
+  }
+  const cpuThreshold = numberOption(options["monitor-cpu-threshold"]);
+  const memoryThreshold = numberOption(options["monitor-memory-threshold"]);
+  return {
+    enabled: true,
+    packageName,
+    includeSubprocesses: options["monitor-main-only"] === true ? false : true,
+    ...(options["monitor-heap-dump"] === true ? { enableHeapDump: true } : {}),
+    ...(cpuThreshold || memoryThreshold
+      ? {
+          thresholds: {
+            ...(cpuThreshold ? { cpuPercent: enabledThreshold(cpuThreshold) } : {}),
+            ...(memoryThreshold ? { pssMb: enabledThreshold(memoryThreshold) } : {})
+          }
+        }
+      : {})
+  };
+}
+
+function enabledThreshold(value: number): Record<string, number | boolean> {
+  return { enabled: true, value, sustainMs: 5000, cooldownMs: 30000 };
 }
 
 function requiredOption(value: string | boolean | undefined, name: string): string {

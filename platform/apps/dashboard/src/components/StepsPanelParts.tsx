@@ -26,13 +26,29 @@ export function RunConfigDrawer({
   startStrategy,
   startAppPackageName,
   startSetupScope,
+  androidAppMonitorEnabled,
+  androidAppMonitorPackageName,
+  androidAppMonitorIncludeSubprocesses,
+  androidAppMonitorCpuThresholdEnabled,
+  androidAppMonitorCpuThresholdPercent,
+  androidAppMonitorMemoryThresholdEnabled,
+  androidAppMonitorMemoryThresholdMb,
+  androidAppMonitorHeapDumpEnabled,
   setRepeatCount,
   setStepIntervalMs,
   setLoopUntilStopped,
   setPauseAfterEachStep,
   setStartStrategy,
   setStartAppPackageName,
-  setStartSetupScope
+  setStartSetupScope,
+  setAndroidAppMonitorEnabled,
+  setAndroidAppMonitorPackageName,
+  setAndroidAppMonitorIncludeSubprocesses,
+  setAndroidAppMonitorCpuThresholdEnabled,
+  setAndroidAppMonitorCpuThresholdPercent,
+  setAndroidAppMonitorMemoryThresholdEnabled,
+  setAndroidAppMonitorMemoryThresholdMb,
+  setAndroidAppMonitorHeapDumpEnabled
 }: {
   repeatCount: number;
   stepIntervalMs: number;
@@ -41,6 +57,14 @@ export function RunConfigDrawer({
   startStrategy: FlowStartStrategy;
   startAppPackageName: string;
   startSetupScope: FlowStartSetupScope;
+  androidAppMonitorEnabled: boolean;
+  androidAppMonitorPackageName: string;
+  androidAppMonitorIncludeSubprocesses: boolean;
+  androidAppMonitorCpuThresholdEnabled: boolean;
+  androidAppMonitorCpuThresholdPercent: number;
+  androidAppMonitorMemoryThresholdEnabled: boolean;
+  androidAppMonitorMemoryThresholdMb: number;
+  androidAppMonitorHeapDumpEnabled: boolean;
   setRepeatCount: (value: number) => void;
   setStepIntervalMs: (value: number) => void;
   setLoopUntilStopped: (value: boolean) => void;
@@ -48,10 +72,18 @@ export function RunConfigDrawer({
   setStartStrategy: (value: FlowStartStrategy) => void;
   setStartAppPackageName: (value: string) => void;
   setStartSetupScope: (value: FlowStartSetupScope) => void;
+  setAndroidAppMonitorEnabled: (value: boolean) => void;
+  setAndroidAppMonitorPackageName: (value: string) => void;
+  setAndroidAppMonitorIncludeSubprocesses: (value: boolean) => void;
+  setAndroidAppMonitorCpuThresholdEnabled: (value: boolean) => void;
+  setAndroidAppMonitorCpuThresholdPercent: (value: number) => void;
+  setAndroidAppMonitorMemoryThresholdEnabled: (value: boolean) => void;
+  setAndroidAppMonitorMemoryThresholdMb: (value: number) => void;
+  setAndroidAppMonitorHeapDumpEnabled: (value: boolean) => void;
 }) {
   const startPackageRequired = requiresStartAppPackageName(startStrategy);
   const startPackageMissing = startPackageRequired && !startAppPackageName.trim();
-  const [open, setOpen] = useState(startPackageMissing);
+  const [open, setOpen] = useState(startPackageMissing || androidAppMonitorEnabled);
 
   useEffect(() => {
     if (startPackageMissing) {
@@ -68,6 +100,7 @@ export function RunConfigDrawer({
         </span>
         <small>
           {loopUntilStopped ? "持续循环" : `${repeatCount} 次`} · {stepIntervalMs} ms · {startStrategyLabel(startStrategy)}
+          {androidAppMonitorEnabled ? " · App 监控" : ""}
         </small>
       </button>
       {open && (
@@ -116,6 +149,74 @@ export function RunConfigDrawer({
         <label className="run-option">
           <input type="checkbox" checked={pauseAfterEachStep} onChange={(event) => setPauseAfterEachStep(event.target.checked)} />
           每步后暂停
+        </label>
+        <label className="run-option monitor-option">
+          <input type="checkbox" checked={androidAppMonitorEnabled} onChange={(event) => setAndroidAppMonitorEnabled(event.target.checked)} />
+          App 侧车监控
+        </label>
+        <label>
+          监控包名
+          <input
+            value={androidAppMonitorPackageName}
+            onChange={(event) => setAndroidAppMonitorPackageName(event.target.value)}
+            placeholder="com.example.app"
+            disabled={!androidAppMonitorEnabled}
+          />
+        </label>
+        <label className="run-option">
+          <input
+            type="checkbox"
+            checked={androidAppMonitorIncludeSubprocesses}
+            disabled={!androidAppMonitorEnabled}
+            onChange={(event) => setAndroidAppMonitorIncludeSubprocesses(event.target.checked)}
+          />
+          包含子进程
+        </label>
+        <label className="threshold-field">
+          <span>
+            <input
+              type="checkbox"
+              checked={androidAppMonitorCpuThresholdEnabled}
+              disabled={!androidAppMonitorEnabled}
+              onChange={(event) => setAndroidAppMonitorCpuThresholdEnabled(event.target.checked)}
+            />
+            CPU 阈值
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={1000}
+            value={androidAppMonitorCpuThresholdPercent}
+            disabled={!androidAppMonitorEnabled || !androidAppMonitorCpuThresholdEnabled}
+            onChange={(event) => setAndroidAppMonitorCpuThresholdPercent(Number(event.target.value))}
+          />
+        </label>
+        <label className="threshold-field">
+          <span>
+            <input
+              type="checkbox"
+              checked={androidAppMonitorMemoryThresholdEnabled}
+              disabled={!androidAppMonitorEnabled}
+              onChange={(event) => setAndroidAppMonitorMemoryThresholdEnabled(event.target.checked)}
+            />
+            PSS 阈值
+          </span>
+          <input
+            type="number"
+            min={1}
+            value={androidAppMonitorMemoryThresholdMb}
+            disabled={!androidAppMonitorEnabled || !androidAppMonitorMemoryThresholdEnabled}
+            onChange={(event) => setAndroidAppMonitorMemoryThresholdMb(Number(event.target.value))}
+          />
+        </label>
+        <label className="run-option">
+          <input
+            type="checkbox"
+            checked={androidAppMonitorHeapDumpEnabled}
+            disabled={!androidAppMonitorEnabled}
+            onChange={(event) => setAndroidAppMonitorHeapDumpEnabled(event.target.checked)}
+          />
+          Heap dump
         </label>
       </div>
         </div>

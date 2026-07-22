@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ActionStep, FlowStartSetupScope, FlowStartStrategy, TestRun } from "@mobile-automation/shared";
+import type { ActionStep, AndroidAppMonitorConfig, FlowStartSetupScope, FlowStartStrategy, TestRun } from "@mobile-automation/shared";
 import type { GraphRunSummary } from "../components/GraphRunDetail";
 import type { FlowExpectationOverride } from "../components/CaseLibraryPanel";
 import { defaultCaseName } from "../recording";
@@ -30,6 +30,14 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
   const [startStrategy, setStartStrategy] = useState<FlowStartStrategy>("keep_current");
   const [startAppPackageName, setStartAppPackageName] = useState("");
   const [startSetupScope, setStartSetupScope] = useState<FlowStartSetupScope>("before_run");
+  const [androidAppMonitorEnabled, setAndroidAppMonitorEnabled] = useState(false);
+  const [androidAppMonitorPackageName, setAndroidAppMonitorPackageName] = useState("");
+  const [androidAppMonitorIncludeSubprocesses, setAndroidAppMonitorIncludeSubprocesses] = useState(true);
+  const [androidAppMonitorCpuThresholdEnabled, setAndroidAppMonitorCpuThresholdEnabled] = useState(false);
+  const [androidAppMonitorCpuThresholdPercent, setAndroidAppMonitorCpuThresholdPercent] = useState(80);
+  const [androidAppMonitorMemoryThresholdEnabled, setAndroidAppMonitorMemoryThresholdEnabled] = useState(false);
+  const [androidAppMonitorMemoryThresholdMb, setAndroidAppMonitorMemoryThresholdMb] = useState(512);
+  const [androidAppMonitorHeapDumpEnabled, setAndroidAppMonitorHeapDumpEnabled] = useState(false);
   const [runsLimit, setRunsLimit] = useState(30);
   const activeRunForSelectedDevice = runs.find((run) => run.deviceSerial === selectedSerial && isActiveRun(run));
   const selectedDeviceBusy = Boolean(activeRunForSelectedDevice);
@@ -133,6 +141,21 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
         setMessage(`${startStrategyLabel(startStrategy)}需要先填写 App 包名`);
         return;
       }
+      const androidAppMonitor = buildAndroidAppMonitorRequest({
+        enabled: androidAppMonitorEnabled,
+        packageName: androidAppMonitorPackageName,
+        startAppPackageName,
+        includeSubprocesses: androidAppMonitorIncludeSubprocesses,
+        cpuThresholdEnabled: androidAppMonitorCpuThresholdEnabled,
+        cpuThresholdPercent: androidAppMonitorCpuThresholdPercent,
+        memoryThresholdEnabled: androidAppMonitorMemoryThresholdEnabled,
+        memoryThresholdMb: androidAppMonitorMemoryThresholdMb,
+        enableHeapDump: androidAppMonitorHeapDumpEnabled
+      });
+      if (androidAppMonitorEnabled && !androidAppMonitor) {
+        setMessage("请填写 App 监控包名");
+        return;
+      }
       const response = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -150,7 +173,8 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
           pauseAfterEachStep,
           startStrategy,
           startAppPackageName: startAppPackageName.trim() || undefined,
-          startSetupScope
+          startSetupScope,
+          androidAppMonitor
         })
       });
       const json = (await response.json()) as { run?: TestRun; error?: string; activeRunId?: string };
@@ -167,6 +191,14 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
     },
     [
       activeRunForSelectedDevice?.id,
+      androidAppMonitorCpuThresholdEnabled,
+      androidAppMonitorCpuThresholdPercent,
+      androidAppMonitorEnabled,
+      androidAppMonitorHeapDumpEnabled,
+      androidAppMonitorIncludeSubprocesses,
+      androidAppMonitorMemoryThresholdEnabled,
+      androidAppMonitorMemoryThresholdMb,
+      androidAppMonitorPackageName,
       caseName,
       loopUntilStopped,
       pauseAfterEachStep,
@@ -292,6 +324,14 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
     startStrategy,
     startAppPackageName,
     startSetupScope,
+    androidAppMonitorEnabled,
+    androidAppMonitorPackageName,
+    androidAppMonitorIncludeSubprocesses,
+    androidAppMonitorCpuThresholdEnabled,
+    androidAppMonitorCpuThresholdPercent,
+    androidAppMonitorMemoryThresholdEnabled,
+    androidAppMonitorMemoryThresholdMb,
+    androidAppMonitorHeapDumpEnabled,
     setCurrentRunId: selectRun,
     loadMoreRuns: () => setRunsLimit((value) => Math.min(200, value + 30)),
     setRepeatCount,
@@ -301,6 +341,14 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
     setStartStrategy,
     setStartAppPackageName,
     setStartSetupScope,
+    setAndroidAppMonitorEnabled,
+    setAndroidAppMonitorPackageName,
+    setAndroidAppMonitorIncludeSubprocesses,
+    setAndroidAppMonitorCpuThresholdEnabled,
+    setAndroidAppMonitorCpuThresholdPercent,
+    setAndroidAppMonitorMemoryThresholdEnabled,
+    setAndroidAppMonitorMemoryThresholdMb,
+    setAndroidAppMonitorHeapDumpEnabled,
     refreshRuns,
     startRun,
     startFlowRun,
@@ -309,6 +357,52 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
     resumeCurrentRun: () => controlCurrentRun("resume"),
     stepCurrentRun: () => controlCurrentRun("step")
   };
+}
+
+export type AndroidAppMonitorRequestState = {
+  enabled: boolean;
+  packageName: string;
+  startAppPackageName: string;
+  includeSubprocesses: boolean;
+  cpuThresholdEnabled: boolean;
+  cpuThresholdPercent: number;
+  memoryThresholdEnabled: boolean;
+  memoryThresholdMb: number;
+  enableHeapDump: boolean;
+};
+
+export function buildAndroidAppMonitorRequest(state: AndroidAppMonitorRequestState): AndroidAppMonitorConfig | undefined {
+  if (!state.enabled) {
+    return undefined;
+  }
+  const packageName = state.packageName.trim() || state.startAppPackageName.trim();
+  if (!packageName) {
+    return undefined;
+  }
+  const cpuThreshold = positiveNumber(state.cpuThresholdPercent);
+  const memoryThreshold = positiveNumber(state.memoryThresholdMb);
+  return {
+    enabled: true,
+    packageName,
+    includeSubprocesses: state.includeSubprocesses,
+    enableHeapDump: state.enableHeapDump,
+    ...((state.cpuThresholdEnabled && cpuThreshold) || (state.memoryThresholdEnabled && memoryThreshold)
+      ? {
+          thresholds: {
+            ...(state.cpuThresholdEnabled && cpuThreshold ? { cpuPercent: enabledThreshold(cpuThreshold) } : {}),
+            ...(state.memoryThresholdEnabled && memoryThreshold ? { pssMb: enabledThreshold(memoryThreshold) } : {})
+          }
+        }
+      : {})
+  };
+}
+
+function enabledThreshold(value: number) {
+  return { enabled: true, value, sustainMs: 5000, cooldownMs: 30000 };
+}
+
+function positiveNumber(value: number): number | undefined {
+  return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function isActiveRun(run: TestRun): boolean {

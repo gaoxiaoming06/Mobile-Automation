@@ -27,6 +27,7 @@ import { formatShortTime } from "./StepsPanelParts";
 import { StepList } from "./StepList";
 import { expectationLabel } from "./StepExpectationPanel";
 import { GraphRunDetail, type GraphRunSummary } from "./GraphRunDetail";
+import { RunConfigDrawer } from "./StepsPanelParts";
 
 type AutomationTab = "steps" | "runs";
 
@@ -44,6 +45,14 @@ type StepsPanelProps = {
   startStrategy: FlowStartStrategy;
   startAppPackageName: string;
   startSetupScope: FlowStartSetupScope;
+  androidAppMonitorEnabled: boolean;
+  androidAppMonitorPackageName: string;
+  androidAppMonitorIncludeSubprocesses: boolean;
+  androidAppMonitorCpuThresholdEnabled: boolean;
+  androidAppMonitorCpuThresholdPercent: number;
+  androidAppMonitorMemoryThresholdEnabled: boolean;
+  androidAppMonitorMemoryThresholdMb: number;
+  androidAppMonitorHeapDumpEnabled: boolean;
   currentRun: TestRun | null;
   currentGraphRun: GraphRunSummary | null;
   runs: TestRun[];
@@ -59,6 +68,14 @@ type StepsPanelProps = {
   setStartStrategy: (value: FlowStartStrategy) => void;
   setStartAppPackageName: (value: string) => void;
   setStartSetupScope: (value: FlowStartSetupScope) => void;
+  setAndroidAppMonitorEnabled: (value: boolean) => void;
+  setAndroidAppMonitorPackageName: (value: string) => void;
+  setAndroidAppMonitorIncludeSubprocesses: (value: boolean) => void;
+  setAndroidAppMonitorCpuThresholdEnabled: (value: boolean) => void;
+  setAndroidAppMonitorCpuThresholdPercent: (value: number) => void;
+  setAndroidAppMonitorMemoryThresholdEnabled: (value: boolean) => void;
+  setAndroidAppMonitorMemoryThresholdMb: (value: number) => void;
+  setAndroidAppMonitorHeapDumpEnabled: (value: boolean) => void;
   moveStep: (index: number, direction: -1 | 1) => void;
   removeStep: (index: number) => void;
   insertWaitStep: (index: number) => void;
@@ -86,6 +103,21 @@ export function StepsPanel({
   selectedCaseId,
   recording,
   caseName,
+  repeatCount,
+  stepIntervalMs,
+  loopUntilStopped,
+  pauseAfterEachStep,
+  startStrategy,
+  startAppPackageName,
+  startSetupScope,
+  androidAppMonitorEnabled,
+  androidAppMonitorPackageName,
+  androidAppMonitorIncludeSubprocesses,
+  androidAppMonitorCpuThresholdEnabled,
+  androidAppMonitorCpuThresholdPercent,
+  androidAppMonitorMemoryThresholdEnabled,
+  androidAppMonitorMemoryThresholdMb,
+  androidAppMonitorHeapDumpEnabled,
   currentRun,
   currentGraphRun,
   runs,
@@ -94,6 +126,21 @@ export function StepsPanel({
   selectedSerial,
   setRecording,
   setCaseName,
+  setRepeatCount,
+  setStepIntervalMs,
+  setLoopUntilStopped,
+  setPauseAfterEachStep,
+  setStartStrategy,
+  setStartAppPackageName,
+  setStartSetupScope,
+  setAndroidAppMonitorEnabled,
+  setAndroidAppMonitorPackageName,
+  setAndroidAppMonitorIncludeSubprocesses,
+  setAndroidAppMonitorCpuThresholdEnabled,
+  setAndroidAppMonitorCpuThresholdPercent,
+  setAndroidAppMonitorMemoryThresholdEnabled,
+  setAndroidAppMonitorMemoryThresholdMb,
+  setAndroidAppMonitorHeapDumpEnabled,
   moveStep,
   removeStep,
   insertWaitStep,
@@ -145,6 +192,38 @@ export function StepsPanel({
         </div>
 
         <input className="case-name" value={caseName} onChange={(event) => setCaseName(event.target.value)} />
+        <RunConfigDrawer
+          repeatCount={repeatCount}
+          stepIntervalMs={stepIntervalMs}
+          loopUntilStopped={loopUntilStopped}
+          pauseAfterEachStep={pauseAfterEachStep}
+          startStrategy={startStrategy}
+          startAppPackageName={startAppPackageName}
+          startSetupScope={startSetupScope}
+          androidAppMonitorEnabled={androidAppMonitorEnabled}
+          androidAppMonitorPackageName={androidAppMonitorPackageName}
+          androidAppMonitorIncludeSubprocesses={androidAppMonitorIncludeSubprocesses}
+          androidAppMonitorCpuThresholdEnabled={androidAppMonitorCpuThresholdEnabled}
+          androidAppMonitorCpuThresholdPercent={androidAppMonitorCpuThresholdPercent}
+          androidAppMonitorMemoryThresholdEnabled={androidAppMonitorMemoryThresholdEnabled}
+          androidAppMonitorMemoryThresholdMb={androidAppMonitorMemoryThresholdMb}
+          androidAppMonitorHeapDumpEnabled={androidAppMonitorHeapDumpEnabled}
+          setRepeatCount={setRepeatCount}
+          setStepIntervalMs={setStepIntervalMs}
+          setLoopUntilStopped={setLoopUntilStopped}
+          setPauseAfterEachStep={setPauseAfterEachStep}
+          setStartStrategy={setStartStrategy}
+          setStartAppPackageName={setStartAppPackageName}
+          setStartSetupScope={setStartSetupScope}
+          setAndroidAppMonitorEnabled={setAndroidAppMonitorEnabled}
+          setAndroidAppMonitorPackageName={setAndroidAppMonitorPackageName}
+          setAndroidAppMonitorIncludeSubprocesses={setAndroidAppMonitorIncludeSubprocesses}
+          setAndroidAppMonitorCpuThresholdEnabled={setAndroidAppMonitorCpuThresholdEnabled}
+          setAndroidAppMonitorCpuThresholdPercent={setAndroidAppMonitorCpuThresholdPercent}
+          setAndroidAppMonitorMemoryThresholdEnabled={setAndroidAppMonitorMemoryThresholdEnabled}
+          setAndroidAppMonitorMemoryThresholdMb={setAndroidAppMonitorMemoryThresholdMb}
+          setAndroidAppMonitorHeapDumpEnabled={setAndroidAppMonitorHeapDumpEnabled}
+        />
         {selectedCaseId && <div className="run-meta">当前编辑：{selectedCaseId}</div>}
         {activeRunForSelectedDevice && <div className="busy-note">当前设备执行中：{activeRunForSelectedDevice.caseName}</div>}
 
@@ -230,6 +309,13 @@ export function StepsPanel({
                 打开 HTML 报告
               </a>
             )}
+            {currentRun.artifacts
+              .filter(isAndroidAppMonitorArtifact)
+              .map((artifact) => (
+                <a className="report-link secondary" href={artifact.url} target="_blank" rel="noreferrer" key={artifact.id}>
+                  {artifact.name}
+                </a>
+              ))}
             {currentGraphRun && <GraphRunDetail summary={currentGraphRun} />}
             {currentRun.artifacts
               .filter((artifact) => artifact.type === "video" && !artifact.deletedAt)
@@ -342,6 +428,10 @@ function renderExpectationResultChip(result: StepExpectationResult) {
 
 function visibleExpectationResults(results: StepExpectationResult[] | undefined): StepExpectationResult[] {
   return (results ?? []).filter(shouldDisplayExpectationResult);
+}
+
+function isAndroidAppMonitorArtifact(artifact: TestRun["artifacts"][number]): boolean {
+  return !artifact.deletedAt && (artifact.type === "metrics" || artifact.type === "report_json") && artifact.name.includes("android-app-monitor");
 }
 
 type RunStepResult = TestRun["stepResults"][number];

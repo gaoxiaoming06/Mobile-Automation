@@ -15,6 +15,14 @@ function renderRunConfigDrawer(overrides: Partial<React.ComponentProps<typeof Ru
       startStrategy: "keep_current",
       startAppPackageName: "",
       startSetupScope: "before_run",
+      androidAppMonitorEnabled: false,
+      androidAppMonitorPackageName: "",
+      androidAppMonitorIncludeSubprocesses: true,
+      androidAppMonitorCpuThresholdEnabled: false,
+      androidAppMonitorCpuThresholdPercent: 80,
+      androidAppMonitorMemoryThresholdEnabled: false,
+      androidAppMonitorMemoryThresholdMb: 512,
+      androidAppMonitorHeapDumpEnabled: false,
       setRepeatCount: noop,
       setStepIntervalMs: noop,
       setLoopUntilStopped: noop,
@@ -22,6 +30,14 @@ function renderRunConfigDrawer(overrides: Partial<React.ComponentProps<typeof Ru
       setStartStrategy: noop,
       setStartAppPackageName: noop,
       setStartSetupScope: noop,
+      setAndroidAppMonitorEnabled: noop,
+      setAndroidAppMonitorPackageName: noop,
+      setAndroidAppMonitorIncludeSubprocesses: noop,
+      setAndroidAppMonitorCpuThresholdEnabled: noop,
+      setAndroidAppMonitorCpuThresholdPercent: noop,
+      setAndroidAppMonitorMemoryThresholdEnabled: noop,
+      setAndroidAppMonitorMemoryThresholdMb: noop,
+      setAndroidAppMonitorHeapDumpEnabled: noop,
       ...overrides
     })
   );
@@ -65,5 +81,17 @@ describe("RunConfigDrawer", () => {
 
     expect(markup).toContain("保持当前");
     expect(markup).not.toContain("当前起始状态需要 App 包名");
+  });
+
+  it("renders compact android app monitor controls", () => {
+    const markup = renderRunConfigDrawer({ androidAppMonitorEnabled: true, androidAppMonitorPackageName: "com.example.app" });
+
+    expect(markup).toContain("App 侧车监控");
+    expect(markup).toContain("监控包名");
+    expect(markup).toContain("包含子进程");
+    expect(markup).toContain("CPU 阈值");
+    expect(markup).toContain("PSS 阈值");
+    expect(markup).toContain("Heap dump");
+    expect(markup).toContain("com.example.app");
   });
 });

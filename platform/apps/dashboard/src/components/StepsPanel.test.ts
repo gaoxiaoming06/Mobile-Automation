@@ -88,6 +88,29 @@ describe("StepsPanel", () => {
     expect(markup).toContain("当前设备执行记录");
     expect(markup).not.toContain("执行配置");
   });
+
+  it("renders run config drawer only on the steps tab", () => {
+    const stepsMarkup = renderStepsPanel(false, { activeTab: "steps", androidAppMonitorEnabled: true });
+    const runsMarkup = renderStepsPanel(false, { activeTab: "runs" });
+
+    expect(stepsMarkup).toContain("执行配置");
+    expect(stepsMarkup).toContain("App 侧车监控");
+    expect(runsMarkup).not.toContain("执行配置");
+  });
+
+  it("renders android app monitor artifacts in run details", () => {
+    const run = createMonitorRun();
+    const markup = renderStepsPanel(false, {
+      activeTab: "runs",
+      currentRun: run,
+      runs: [run]
+    });
+
+    expect(markup).toContain("android-app-monitor-summary.json");
+    expect(markup).toContain("android-app-monitor-cpu.csv");
+    expect(markup).toContain("/artifacts/runs/run-monitor/metrics/android-app-monitor-summary.json");
+    expect(markup).toContain("/artifacts/runs/run-monitor/metrics/android-app-monitor-cpu.csv");
+  });
 });
 
 function renderStepsPanel(recording: boolean, overrides: Partial<React.ComponentProps<typeof StepsPanel>> = {}): string {
@@ -105,6 +128,14 @@ function renderStepsPanel(recording: boolean, overrides: Partial<React.Component
       startStrategy: "keep_current",
       startAppPackageName: "",
       startSetupScope: "before_run",
+      androidAppMonitorEnabled: false,
+      androidAppMonitorPackageName: "",
+      androidAppMonitorIncludeSubprocesses: true,
+      androidAppMonitorCpuThresholdEnabled: false,
+      androidAppMonitorCpuThresholdPercent: 80,
+      androidAppMonitorMemoryThresholdEnabled: false,
+      androidAppMonitorMemoryThresholdMb: 512,
+      androidAppMonitorHeapDumpEnabled: false,
       currentRun: null,
       currentGraphRun: null,
       runs: [],
@@ -119,6 +150,14 @@ function renderStepsPanel(recording: boolean, overrides: Partial<React.Component
       setStartStrategy: noop,
       setStartAppPackageName: noop,
       setStartSetupScope: noop,
+      setAndroidAppMonitorEnabled: noop,
+      setAndroidAppMonitorPackageName: noop,
+      setAndroidAppMonitorIncludeSubprocesses: noop,
+      setAndroidAppMonitorCpuThresholdEnabled: noop,
+      setAndroidAppMonitorCpuThresholdPercent: noop,
+      setAndroidAppMonitorMemoryThresholdEnabled: noop,
+      setAndroidAppMonitorMemoryThresholdMb: noop,
+      setAndroidAppMonitorHeapDumpEnabled: noop,
       moveStep: noop,
       removeStep: noop,
       insertWaitStep: noop,
@@ -679,5 +718,53 @@ function createGraphRun(): TestRun {
     startedAt: "2026-06-12T00:00:00.000Z",
     endedAt: "2026-06-12T00:00:03.000Z",
     reportHtmlPath: "runs/run-graph/reports/report.html"
+  };
+}
+
+function createMonitorRun(): TestRun {
+  return {
+    id: "run-monitor",
+    caseName: "监控用例",
+    deviceSerial: "android-serial",
+    status: "passed",
+    config: {
+      deviceSerial: "android-serial",
+      mode: "once",
+      repeatCount: 1,
+      stepIntervalMs: 400,
+      stopOnFailure: true,
+      recordVideo: true,
+      keepVideoOnSuccess: true,
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "com.example.app"
+      }
+    },
+    steps: [],
+    stepResults: [],
+    metrics: [],
+    events: [],
+    artifacts: [
+      {
+        id: "monitor-summary",
+        runId: "run-monitor",
+        type: "report_json",
+        name: "android-app-monitor-summary.json",
+        path: "runs/run-monitor/metrics/android-app-monitor-summary.json",
+        url: "/artifacts/runs/run-monitor/metrics/android-app-monitor-summary.json",
+        createdAt: "2026-07-22T00:00:00.000Z"
+      },
+      {
+        id: "monitor-cpu",
+        runId: "run-monitor",
+        type: "metrics",
+        name: "android-app-monitor-cpu.csv",
+        path: "runs/run-monitor/metrics/android-app-monitor-cpu.csv",
+        url: "/artifacts/runs/run-monitor/metrics/android-app-monitor-cpu.csv",
+        createdAt: "2026-07-22T00:00:00.000Z"
+      }
+    ],
+    startedAt: "2026-07-22T00:00:00.000Z",
+    endedAt: "2026-07-22T00:00:01.000Z"
   };
 }
