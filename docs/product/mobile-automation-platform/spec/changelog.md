@@ -4,7 +4,7 @@ doc_type: changelog
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-21
+updated_at: 2026-07-23
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -12,6 +12,30 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 ---
 
 # 自动化测试平台 Spec 变更记录
+
+## 2026-07-23
+
+### Changed
+
+- Dashboard 移除旧线性用例录制主流程：删除 `StepsPanel`、`StepList`、`CaseLibraryPanel`、`useRecorder` 和 `recording.ts`，设备详情入口改为 `deviceDetails`，执行结果展示独立为 `RunResultsPanel`。
+- 资产执行链路保持当前主线：AI资产用例、资产用例和资产驱动巡检继续基于已确认 PageStateFlow 资产编译执行计划；页面资产库只承担已保存页面资产的浏览与治理，不再承载目标页执行入口。
+- 清理 `PageAssetsPanel` 中已废弃的目标页面测试 helper / props / 测试夹具，运行参数解析迁移到独立 `runtime-params` 工具，供当前资产执行入口复用。
+- 原“录制动作写图谱资产”能力改名为资产连接候选：服务端模块和 API 收敛为 `asset-transition-candidates`，仅保留底层 `manual_recording` 来源枚举用于历史数据兼容。
+
+### Verified
+
+- `pnpm exec vitest run platform/apps/dashboard/src/components/PageAssetsPanel.test.ts platform/apps/dashboard/src/components/runtime-params.test.ts platform/apps/dashboard/src/App.test.ts` 通过，3 文件 / 83 用例。
+- `pnpm --filter @mobile-automation/dashboard typecheck` 通过。
+- `pnpm lint` 通过。
+- `pnpm test:unit` 通过，96 文件 / 1010 用例。
+
+## 2026-07-22
+
+### Added
+
+- 新增 REQ-046 / DES-047 / T-095 / AC-049：Android App 旁路性能与稳定性监控。该能力借鉴 `apk_auto_test` 的多进程发现、进程级 CPU / PSS、阈值 incident、logcat 稳定性事件和 HTML 报告证据思路，但长期实现为 TypeScript 内核，接入现有 Runner、Storage、Artifact、Report、缺陷候选和 AI 诊断链路。
+- 任务队列新增 R-036：将“目标 App 级旁路 watcher”列为当前主线支撑能力，默认监控包名对应主进程和子进程，高频时序写 artifact，Run 中保留摘要与事件。
+- 开放问题 Q-007 收口为 Android first 双层性能口径：现有步骤级系统指标继续保留，新增目标 App 旁路多进程监控，默认 CPU 1s、内存 5s；新增 Q-033 明确不整包引入 `apk_auto_test`。
 
 ## 2026-07-21
 

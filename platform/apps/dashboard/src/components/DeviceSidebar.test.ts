@@ -10,14 +10,8 @@ describe("DeviceSidebar", () => {
       React.createElement(DeviceSidebar, {
         devices: [device("android-1", "android"), unavailableDevice("ios-1", "ios")],
         selectedSerial: "android-1",
-        cases: [],
         runs: [],
-        selectedDeviceBusy: false,
-        onSelectDevice: () => undefined,
-        onLoadCase: async () => undefined,
-        onStartRun: async () => undefined,
-        onDeleteCase: async () => undefined,
-        showCases: false
+        onSelectDevice: () => undefined
       })
     );
 

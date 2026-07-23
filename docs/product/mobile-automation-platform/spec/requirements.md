@@ -4,7 +4,7 @@ doc_type: requirements
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-02
+updated_at: 2026-07-22
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -1686,6 +1686,64 @@ Dashboard 与外部调用要求：
 - AI 不得直接控制设备执行动作；设备动作仍必须由 Runner 根据验证后的 PageStateFlow 资产和策略执行。
 - 系统必须提供受控 MCP / REST 工具给 AI 查询证据、查询资产、提交修复 patch、验证 patch、按策略自动应用已验证 patch、回滚 patch、创建缺陷候选和请求继续探索，但工具不得绕过设备锁、运行队列、证据存储、资产质量校验、风险策略、预算和人工审核策略。
 
+### REQ-046：Android App 旁路性能与稳定性监控
+
+平台必须为 Android 自动化执行新增目标 App 级旁路监控能力。该能力不负责点击、输入、滑动或业务路径执行；Runner、PageStateFlow、StructuredFlow、资产驱动巡检和稳定性探索继续负责驱动 App，旁路监控只在同一个 Run 生命周期内盯住目标包名对应的进程、日志、阈值和现场证据，并把结果写入现有 Run、Artifact、Report 和缺陷候选链路。
+
+产品边界：
+
+- 旁路监控必须作为可配置能力挂载到一次 Run、一次资产巡检、一次稳定性探索或一次 CI 冒烟任务上，而不是新增一套独立测试执行器。
+- 旁路监控必须支持只监控不控制设备；它不得自行启动随机动作、不得改变业务步骤结果、不得覆盖 Runner 原始失败事实。
+- Android first 阶段优先支持 ADB 可读范围内的目标 App 进程性能、logcat 稳定性事件、进程生命周期和现场证据；iOS 后续以独立需求接入。
+- 当目标 App 未安装、未运行或设备断连时，旁路监控必须产出可读 warning / setup_failed 事件，不得让报告静默缺失监控数据。
+
+目标进程发现要求：
+
+- 用户或测试计划只需提供 Android packageName，例如 `cn.eeo.classin`。
+- 监控器必须自动发现该包名的主进程和所有子进程，例如 `cn.eeo.classin`、`cn.eeo.classin:privileged_process0`、`:push`、`:remote` 等。
+- 进程发现必须兼容 Android 新旧 `ps` 输出，并处理 `/proc/[pid]/comm` 15 字符截断问题；当候选进程名可能被截断时，必须用 `/proc/[pid]/cmdline` 校验完整进程名。
+- 监控器必须记录进程生命周期事件：`new`、`gone`、`restart`，包含 oldPid、newPid、gapSec、firstSeenAt、lastSeenAt 和 restartCount。
+- 进程过滤必须支持 `main`、`:suffix` 和完整进程名三种写法；默认监控同包名全部进程。
+
+性能采集要求：
+
+- CPU 必须按目标进程采集，而不是只采集设备系统总 CPU；报告中必须标明 CPU 口径。
+- Android first 推荐使用 `/proc/stat` + `/proc/[pid]/stat` 计算进程 CPU 百分比，并保留单核归一化口径：4 核满载可显示为 400%，不强行压到 100%。
+- 内存必须按目标进程采集 PSS，优先使用 `dumpsys meminfo <package-or-pid>` 或等价 ADB 可读来源；报告中必须区分 PSS、Java Heap、Native Heap、Graphics、Code、Stack、Private Other、System 等可解析分类。
+- 性能采集间隔必须可配置，默认 CPU 1s、内存 5s；长时间运行时原始时序数据应优先写入 artifact 文件，避免把高频样本全部塞入主 Run 对象导致报告和 SQLite 查询变慢。
+- Run 结束时必须生成进程级统计：mean、p50、p90、p95、max、samples、uptimeRatio、restartCount、sampleFailures。
+
+阈值告警要求：
+
+- 平台必须支持 CPU、内存 PSS 阈值，阈值包含 `value`、`sustainSec`、`cooldownSec`。
+- 指标超过阈值不得立即告警，必须持续超过 `sustainSec` 才生成一次 incident；告警后进入 `cooldownSec`，避免同一持续问题刷屏。
+- 告警事件必须记录 metric、process、pid、threshold、valueAtTrigger、durationAboveSec、peak、triggeredAt 和 evidence artifact。
+- 阈值默认值必须保守，且允许测试计划、RunConfig 或 Dashboard 覆盖；对于 ClassIn 等大 App，应允许按包 / 测试计划维护推荐阈值。
+
+现场证据要求：
+
+- CPU 阈值事件必须尽量采集线程级现场，例如 `top -H` 或 `/proc/[pid]/task/*/stat` 摘要，帮助定位哪个线程占用 CPU。
+- 内存阈值事件必须采集 `dumpsys meminfo -d` 文本和解析后的 JSON；heap dump 默认关闭，只有显式配置且 App debug / 设备 root 条件满足时才允许执行。
+- heap dump 被关闭、权限不足、App 不可 debug、设备不支持 root 或 ADB 命令失败时，必须写明 fallbackReason，并继续完成 Run。
+- 每条 incident 必须同时有机器可读 JSON 和人可读文本 / 日志 artifact；artifact 必须通过现有 `ArtifactRef` 进入报告。
+
+稳定性事件要求：
+
+- 旁路监控必须增强当前 Android logcat watcher，至少识别 Java Crash、Native Crash、ANR、process death、ADB/logcat 管线失败。
+- Java Crash 需要解析 exception class、进程、pid、关键栈帧和原始 logcat 片段。
+- Native Crash 需要解析 signal、fault address、进程、pid、tombstone / DEBUG 关键帧；拉取 tombstone 失败时必须记录 fallbackReason。
+- ANR 需要解析 `ANR in`、PID、Reason 和相关 ActivityManager 上下文；拉取 `/data/anr` 失败时必须记录 fallbackReason。
+- process death 需要优先从 events buffer 中的 `am_proc_died`、`am_kill` 等事件识别，并保留原因或 procState 标签。
+- 同一次 crash / ANR 可能从 logcat、events、dropbox 或 watcher 多来源出现；监控器必须按 process、pid、eventType、deviceTs / hostTs 做时间窗口去重。
+
+报告与集成要求：
+
+- HTML 报告必须新增“目标 App 旁路监控”摘要，展示监控包名、进程列表、运行时长、阈值配置、CPU / 内存峰值、p95、incident 数、稳定性事件数和采样失败数。
+- 报告必须展示进程级 CPU / 内存时间线、生命周期时间线、告警标记、事件列表和单条证据详情。
+- Dashboard 执行配置、资产巡检、稳定性探索和 CI / CLI 入口应提供是否启用旁路监控、阈值、采样间隔、进程过滤、heap dump 开关等配置。
+- 缺陷候选生成和 TAPD 提报必须能消费旁路监控事件：crash、ANR、process death、持续 CPU / 内存超阈均可生成 `DefectCandidate` 或 warning 候选。
+- AI 诊断证据包必须可以引用旁路监控的 incident JSON、meminfo、top threads、logcat slices、tombstone / ANR fallback 结果和进程生命周期。
+
 ## 非功能需求
 
 ### 性能
@@ -1693,6 +1751,7 @@ Dashboard 与外部调用要求：
 - 设备预览延迟应尽量低，MVP 目标建议小于 1000ms，最终目标小于 300ms，具体需按方案验证。
 - 单步操作下发后，UI 应在 500ms 内展示命令状态变化。
 - 性能采样不应显著影响设备测试结果。
+- 目标 App 旁路监控默认不得执行重型 heap dump；高频 CPU / 内存时序应采用流式写入 artifact，避免拖慢 Runner 或报告详情页。
 - 报告详情页应能流畅打开包含数百步、数小时性能数据的执行记录。
 
 ### 可用性
@@ -1755,7 +1814,7 @@ Dashboard 与外部调用要求：
 | Q-004 | resolved | iOS 基础工具链采用 libimobiledevice + xcrun，控制采用 WebDriverAgent；idb 暂不进入当前实现。 | 已落地基础实现 |
 | Q-005 | resolved | Android 预览方案采用 scrcpy 优先；ADB 截图轮询作为兜底方案。 | 已确定预览实现方向 |
 | Q-006 | resolved | 坐标型回放继续保留为基础能力和 fallback；固定业务流程需要支持步骤级预期输入与验证，状态感知回放作为执行稳定性增强；语义定位按元素、文字、图像 / 区域、坐标 fallback 分层推进。 | 已进入 REQ-028 / REQ-034 / REQ-035 / DES-026 / DES-034 / DES-035 |
-| Q-007 | open | 性能采样指标和采样频率是否有硬性要求？ | 影响监控实现和报告格式 |
+| Q-007 | resolved | Android first 性能采样新增两层口径：既保留现有步骤级系统指标，也新增 REQ-046 的目标 App 多进程旁路监控；默认 CPU 1s、内存 5s，长时序写 artifact，Run 中保存摘要和事件。 | 已进入 REQ-046 / DES-047 / T-095 |
 | Q-008 | resolved | 报告首版使用 Web 详情页 + HTML 导出；PDF 首版不做。 | 已确定报告交付形态 |
 | Q-009 | resolved | 需要支持 Android APK 安装 / 卸载 / 版本校验；IPA 包管理和安装后续接入。 | 已进入 REQ-026 / DES-024 / DES-031 |
 | Q-010 | resolved | 需要接入 CI/CD，通过 `POST /api/builds` 接包并可自动触发冒烟；CLI 作为后续扩展。 | 已进入 REQ-031 / DES-029 |
@@ -1778,3 +1837,4 @@ Dashboard 与外部调用要求：
 | Q-029 | resolved | Android 核心执行是否长期依赖裸 ADB？不应长期依赖。ADB 保留为设备管理、日志、安装、性能和 fallback 底座；业务图谱主执行路径应升级为语义 driver，优先 UIAutomator2 / Appium-compatible，坐标和裸 `adb shell input` 只作为兜底并进入报告。 | 已进入 REQ-035 / REQ-038 / DES-005 / DES-035 / DES-038 / T-076 |
 | Q-030 | resolved | 当前主要项目目标如何命名？命名为 PageStateFlow：页面状态资产驱动的移动端智能回放测试平台。 | 已进入 REQ-042 / DES-042 / T-084 至 T-089 |
 | Q-031 | resolved | 是否继续把全局业务图谱作为主线？不继续。当前主线改为页面资产库；BusinessGraph 上层保留 experimental，StructuredFlow 成为页面路径快照。 | 已进入 REQ-042 / DES-042 |
+| Q-033 | resolved | `apk_auto_test` 一类工具是否要整包引入？不整包引入；只借鉴其旁路监控内核。我们保留 TypeScript 平台、Dashboard、Runner、SQLite 和 Report Core，按 REQ-046 实现 Android App 级性能 / 稳定性 watcher。 | 已进入 REQ-046 / DES-047 / T-095 |

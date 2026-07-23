@@ -1,4 +1,41 @@
-import type { AndroidUiElementBounds, AndroidUiElementLocator, RecordableAction } from "./recording";
+import type { DeviceActionRequest, SemanticElementLocator } from "@mobile-automation/shared";
+
+export type AndroidUiElementLocator = SemanticElementLocator;
+
+export type AndroidUiElementBounds = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+  centerX: number;
+  centerY: number;
+};
+
+export type RecordableAction =
+  | DeviceActionRequest
+  | {
+      type: "tap_on_element";
+      locator: AndroidUiElementLocator;
+      selector?: string;
+      bounds?: AndroidUiElementBounds;
+      x: number;
+      y: number;
+      timeoutMs?: number;
+      intervalMs?: number;
+      maxDistance?: number;
+    }
+  | {
+      type: "tap_on_text";
+      text: string;
+      x: number;
+      y: number;
+      mode?: "contains" | "equals";
+      timeoutMs?: number;
+      intervalMs?: number;
+      lang?: string;
+    };
 
 export type ElementSnapshotCandidate = {
   locator?: AndroidUiElementLocator;
@@ -68,7 +105,7 @@ const elementSnapshotTtlMs = 2500;
 const textSnapshotTtlMs = 6000;
 const defaultTextMaxDistance = 140;
 
-export function createTapRecordingActionFromSnapshot(
+export function createTapAssetActionFromSnapshot(
   point: { x: number; y: number },
   deviceSize: DeviceSize,
   snapshots: SemanticSnapshots,
@@ -106,7 +143,7 @@ export function createTapRecordingActionFromSnapshot(
   return fallback;
 }
 
-export function createTapRecordingActionFromElementLookup(point: { x: number; y: number }, lookup: ElementLookupResponse | undefined): RecordableAction | undefined {
+export function createTapAssetActionFromElementLookup(point: { x: number; y: number }, lookup: ElementLookupResponse | undefined): RecordableAction | undefined {
   if (!lookup?.stable || !lookup.locator) {
     return undefined;
   }

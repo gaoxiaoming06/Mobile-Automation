@@ -222,7 +222,7 @@ describe("AssetRecordingPanel", () => {
           nodeId: "recording-node",
           pageName: "新建公开课",
           targetRef: "recording.1u41ebp",
-          matchedAssetName: "录制节点：新建公开课",
+          matchedAssetName: "资产候选节点：新建公开课",
           savedAssets: []
         },
         onPageDraftChange: () => undefined,
@@ -231,7 +231,7 @@ describe("AssetRecordingPanel", () => {
       })
     );
 
-    expect(markup).toContain("录制节点：新建公开课");
+    expect(markup).toContain("资产候选节点：新建公开课");
     expect(markup).toContain("库中暂无对应页面资产");
     expect(markup).toContain("保存页面");
     expect(markup).not.toContain("更新页面");

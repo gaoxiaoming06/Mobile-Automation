@@ -4,7 +4,7 @@ doc_type: design
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-05
+updated_at: 2026-07-22
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -3997,6 +3997,128 @@ Dashboard 提供“资产用例”入口，包含参数集、元功能、组合�
 - 自动应用只能影响目标资产的局部版本，例如 OCR alias、截图重点区域、dynamic mask、PageElement locator、PageTransition candidate 或页面变体 candidate；删除 active 资产、启用 `region_center` 执行、扩大页面 matcher 到平台依赖字段等仍必须人工复核。
 - 所有 AI 诊断、prompt 摘要、模型响应、patch、验证结果都必须进入 Run artifact 和 HTML 报告，方便复盘。
 - AI 诊断失败不能覆盖原始 Runner 失败；它只追加解释和建议，不改写执行事实。
+
+### DES-047：Android App 旁路监控设计
+
+关联需求：REQ-046、REQ-011、REQ-012、REQ-013、REQ-014、REQ-043、REQ-045
+
+Android App 旁路监控作为 Driver / Runner 之间的可观测性层存在。Runner、GraphRunService、AssetPatrolRunner、StabilityExplorer 和 CI 冒烟任务在 Run 启动时按配置创建 `AndroidAppMonitorSession`；该 session 只读 ADB、logcat 和 `/proc`，负责发现目标包名进程、持续采样、阈值判断、稳定性事件解析和现场证据采集。Run 结束或停止时，session 必须停止所有后台采集任务、flush 原始时序 artifact、写入摘要 artifact，并把 incidents / events 通过现有 Storage 和 Report Core 汇入报告。
+
+模块边界：
+
+| 模块 | 职责 |
+|---|---|
+| `AndroidProcessDiscovery` | 通过 `ps -A -o PID,NAME`、旧版 `ps`、`dumpsys activity processes` 和 `/proc/[pid]/cmdline` 发现包名相关进程 |
+| `AndroidProcessMetricSampler` | 按进程采集 CPU 单核归一化百分比和 PSS / meminfo 分类 |
+| `ThresholdTracker` | 对 CPU / 内存执行 `OK -> RISING -> COOLDOWN` 状态机，支持 sustain / cooldown |
+| `AndroidIncidentDumper` | 对 CPU / 内存告警抓取 top threads、meminfo、可选 heap dump 和 fallback reason |
+| `AndroidStabilityEventParser` | 解析 logcat main/system/events/crash buffer，识别 Java Crash、Native Crash、ANR、process death |
+| `AndroidEventDeduper` | 对多来源稳定性事件做时间窗口去重 |
+| `AndroidAppMonitorSession` | 管理 watcher 线程 / 计时器生命周期、artifact writer、status heartbeat 和 Run 集成 |
+
+核心类型建议：
+
+```ts
+type AndroidAppMonitorConfig = {
+  packageName: string;
+  processFilter?: string[];
+  cpuIntervalMs: number;
+  memoryIntervalMs: number;
+  processRescanIntervalMs: number;
+  thresholds: {
+    cpuPercent?: ThresholdConfig;
+    memoryPssMb?: ThresholdConfig;
+  };
+  evidence: {
+    enableHeapDump: boolean;
+    maxCpuIncidents: number;
+    maxMemoryIncidents: number;
+    maxStabilityIncidents: number;
+    maxConcurrentDumps: number;
+  };
+};
+
+type ThresholdConfig = {
+  value: number;
+  sustainMs: number;
+  cooldownMs: number;
+};
+
+type AndroidProcessInfo = {
+  pid: number;
+  name: string;
+  startedAt: string;
+};
+
+type AndroidAppMonitorIncident = {
+  id: string;
+  runId: string;
+  type: "cpu_threshold" | "memory_threshold" | "java_crash" | "native_crash" | "anr" | "process_death";
+  processName: string;
+  pid?: number;
+  triggeredAt: string;
+  severity: "warning" | "error";
+  summary: string;
+  threshold?: ThresholdConfig;
+  observed?: {
+    valueAtTrigger?: number;
+    durationAboveMs?: number;
+    peak?: number;
+  };
+  evidenceArtifactIds: string[];
+  fallbackReason?: string;
+};
+```
+
+采样与存储策略：
+
+- 高频原始时序不应直接塞入 `TestRun.metrics`。`metric_samples` 继续保存步骤级 / Run 级轻量摘要；旁路监控的 `cpu.csv`、`memory.csv`、`lifecycle.csv` 和 `monitor-summary.json` 写入 `runs/<runId>/metrics/` artifact。
+- 对报告列表、Run 详情和缺陷候选常用字段，Storage 只保存 summary / DeviceEvent / ArtifactRef，例如进程数、峰值、p95、incidentCount、crashCount、anrCount。
+- CSV 至少包含 timestamp、processName、pid、metric value、sample status；长时间执行按小时滚动，避免单文件过大。
+- `status.json` heartbeat 可作为 artifact 或运行态缓存，供 Dashboard 运行中展示当前进程、采样失败数、incident 数和最近告警。
+
+进程发现设计：
+
+- `parsePsOutput()` 解析 `ps -A -o PID,NAME`，兼容表头和空行。
+- `parseLegacyPsOutput()` 兼容 Android 7 及更早 `ps` 输出。
+- 当 `NAME` 等于 packageName 或以 `packageName:` 开头时直接作为候选；当 `NAME` 长度达到 15 字符且可能是 packageName 截断前缀时，必须读取 `/proc/<pid>/cmdline` 校验。
+- `dumpsys activity processes` 只作为 fallback；若 `/proc/<pid>/cmdline` 不可读且 `ps` 名称不是截断候选，可以信任短名称。
+- watcher 每隔 `processRescanIntervalMs` reconcile 一次：新增进程写 lifecycle `new`，PID 变化写 `restart`，消失写 `gone`。
+
+CPU / 内存采样设计：
+
+- CPU 采用两次 `/proc/stat` + `/proc/<pid>/stat` 差分计算：`processDelta / totalDelta * cpuCores * 100`，并在报告中标注为单核归一化百分比。
+- 内存优先使用 `dumpsys meminfo <pid>` 或 `dumpsys meminfo <package>` 中对应进程段，解析 TOTAL PSS 和 App Summary；如果设备输出格式不可解析，保留原始 meminfo 并记录 sample failure。
+- 采样失败不应中断 Run；按 processName / metric 累计 failure 计数，并在 report summary 展示。
+
+阈值与证据设计：
+
+- 每个进程每个 metric 独立维护 `ThresholdTracker`；单个进程 CPU 或内存持续超阈即生成 incident。
+- CPU incident dumper 优先抓 `top -H -p <pid> -n 1`，失败时 fallback 到 `/proc/<pid>/task/*/stat` 摘要；两者都失败时写 `fallbackReason`。
+- Memory incident dumper 默认抓 `dumpsys meminfo -d <pid>` 文本和解析 JSON；heap dump 只有 `enableHeapDump=true` 时尝试 `am dumpheap`，失败不阻断。
+- Dumper 并发通过 bounded queue / semaphore 限制，避免多进程同时超阈导致 ADB 被打爆。
+
+稳定性事件设计：
+
+- `AndroidLogcatEventWatcher` 应从 `-v threadtime -b main -b system -b events -b crash` 读取。
+- Java Crash parser 聚合 AndroidRuntime 多行块，提取 Process、PID、exception class 和 top frames。
+- Native Crash parser 聚合 libc / DEBUG 多行块，提取 signal、fault addr、pid、process 和 tombstone / backtrace frame。
+- ANR parser 聚合 ActivityManager `ANR in` 后续上下文，提取 process、pid、reason。
+- Process death parser 解析 events buffer 中 `am_proc_died`、`am_kill`、`am_anr` 等标签，转换 procState 数值为可读标签。
+- Deduper 使用 `(eventType, processName, pid, deviceTs bucket)` 和 host fallback 窗口去重；被去重的重复事件可以增加 `dedupCount`，不得重复刷 Run events。
+
+Run 集成：
+
+- `RunConfig` 增加可选 `androidAppMonitor` 配置；未配置但存在 target app packageName 时，可以由执行配置默认开启轻量监控。
+- `AutomationRunner`、`GraphRunService`、`AssetPatrolRunner`、`StabilityExplorer` 在创建 event watcher 和开始动作前启动 monitor session，在 finally 中 stop。
+- monitor 产生的 crash / ANR / process death 必须复用现有 `DeviceEvent`，并尽量关联当前 active stepResultId；CPU / memory threshold 可作为 `DeviceEvent` warning 或独立 incident artifact，同时在报告中展示。
+- 如果 monitor 自身启动失败，应写入 `command_failed` warning 和 log artifact，但不阻止 Run 执行。
+
+报告设计：
+
+- Report Core 新增“目标 App 旁路监控”区块：监控开关、包名、进程列表、采样窗口、阈值、进程级 CPU / 内存统计、生命周期事件、稳定性事件、采样失败和证据链接。
+- HTML 第一版可使用现有 SVG 折线图；后续 R-026 图表增强时再统一升级交互图表。图表应能从 artifact CSV 读取或从 monitor summary 中读取降采样点。
+- 对每条 incident 展示：类型、进程、PID、触发时间、阈值、触发值、持续时长、峰值、证据文件、fallbackReason。
 
 ## 关键数据模型
 

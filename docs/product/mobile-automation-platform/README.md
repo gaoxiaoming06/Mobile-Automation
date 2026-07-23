@@ -17,7 +17,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 
 建设一个新的自动化测试平台，通过可视化 Web 面板统一管理 Android / iOS 设备、被测应用包、页面状态资产、结构化测试流程、执行任务和测试报告。当前主要项目目标正式命名为 `PageStateFlow`：页面状态资产驱动的移动端智能回放测试平台。
 
-PageStateFlow 的核心资产是页面状态库：每个稳定全屏页面保存识别规则、截图锚点、可操作元素、动作能力和动作后的页面转移。右上角更多菜单、底部 sheet、选择器、临时弹窗和局部黑条这类页面内状态不再单独入库为页面；它们归属到父页面的 PageElement、PageAbility 或 PageTransition 中间步骤。录制不再只是保存一条线性脚本，而是边操作边学习 PageModel、PageElement 和 PageTransition；StructuredFlow / Smart Recorded Flow 继续保留为基于页面资产生成或录制固化的线性路径快照，用于回归、复现、执行到中间状态和 AI / CI 调用。
+PageStateFlow 的核心资产是页面状态库：每个稳定全屏页面保存识别规则、截图锚点、可操作元素、动作能力和动作后的页面转移。右上角更多菜单、底部 sheet、选择器、临时弹窗和局部黑条这类页面内状态不再单独入库为页面；它们归属到父页面的 PageElement、PageAbility 或 PageTransition 中间步骤。当前主执行链路不再依赖线性录制脚本，而是基于已确认资产编译执行计划；资产录入只负责沉淀和修正 PageModel、PageElement、PageTransition、PageTask。
 
 ClassIn 首页底部 Tab（主页、消息、待办、课程表、空间 / 控件、成长）按“首页 Tab 根页面组”处理：它们都是 App 内安全起点，恢复策略不会继续对这些页面执行 back；路径规划会在运行期自动生成 Tab 之间的互通边，不要求人工录入 6×5 条连接边。业务页面仍然通过各 Tab 页面上的 PageAbility / PageTransition 继续向下连接，例如从消息页到加入班级页会先自动切回主页，再执行主页的“更多菜单 -> 加入班级”复合转移。
 
@@ -30,10 +30,10 @@ ClassIn 首页底部 Tab（主页、消息、待办、课程表、空间 / 控�
 | Spec 状态 | draft |
 | 实现状态 | MVP in progress |
 | 整体平台范围 | Android + iOS + Web Dashboard |
-| MVP 范围 | Android 闭环：设备管理、浏览器内 scrcpy 预览操控、录制、编辑、执行、性能/异常采集、HTML 报告 |
-| 当前主线 | PageStateFlow、页面状态资产库、页面元素、页面转移、语义动作、动态等待、结构化路径快照和报告 |
+| MVP 范围 | Android 闭环：设备管理、浏览器内 scrcpy 预览操控、页面资产录入、资产驱动执行、性能/异常采集、HTML 报告 |
+| 当前主线 | PageStateFlow、页面状态资产库、页面元素、页面转移、页面任务、语义动作、动态等待、资产组合和报告 |
 | 实验能力 | BusinessGraph、源码扫描、目标节点路径规划、Graph Runner、候选图谱治理 |
-| 迁移策略 | legacy 坐标脚本保留兼容；新录制优先学习页面资产并生成 StructuredFlow 路径快照；图谱上层冻结为实验入口 |
+| 迁移策略 | legacy 坐标脚本和旧线性录制 UI 不再作为 Dashboard 主入口；新功能默认进入资产驱动链路，图谱上层冻结为实验入口 |
 | iOS 范围 | 基础接入：设备发现、截图预览、电量采样；配置 WebDriverAgent 后支持点击、长按、滑动、Home、输入、启动/关闭 App |
 | 权限范围 | 第一版不做登录、角色、审计 |
 | 目标仓库 | Mobile-Automation |
@@ -58,9 +58,9 @@ ClassIn 首页底部 Tab（主页、消息、待办、课程表、空间 / 控�
 1. 设备管理：发现、展示、选择、连接状态、基础信息、可用能力。
 2. 实时预览：显示当前设备画面，支持横竖屏、缩放、断连恢复。
 3. 远程操控：在预览区域完成点击、长按、滑动、返回、输入等操作。
-4. 操作录制：把用户操作转换成结构化步骤，保留时间、坐标、截图和上下文。
-5. 步骤编辑：可视化增删改、插入、排序、参数调整、禁用、复制。
-6. 自动回放：支持执行一次、执行 N 次、持续循环、失败策略、暂停恢复。
+4. 资产录入：把当前页面、可操作元素、页面转移和页面任务沉淀为可复用资产。
+5. 资产组合：基于页面任务、元功能、参数集和目标页面组合测试计划。
+6. 资产驱动执行：支持单次执行、批量/巡检、失败策略、暂停恢复。
 7. 性能采集：CPU、内存、网络、FPS、温度、电量等指标按时间线记录。
 8. 异常捕获：崩溃、ANR、系统日志、应用日志、设备断连、执行失败。
 9. 测试报告：生成执行摘要、步骤明细、性能曲线、异常证据、附件。
@@ -69,18 +69,19 @@ ClassIn 首页底部 Tab（主页、消息、待办、课程表、空间 / 控�
 12. 自动触发与通知：支持人工、定时、CI / 包服务触发，并通知测试结果。
 13. 外部工具与 AI 导航：预留 CI / CLI / MCP / Agent 工具接口，并维护 `.ai/` 仓库导航。
 14. PageStateFlow 主线：维护页面状态资产库、页面识别、页面元素、页面转移和执行到目标页面。
-15. StructuredFlow 路径快照：维护结构化录制用例、步骤详情、动态预期覆盖和执行到中间步骤。
+15. StructuredFlow 路径快照：作为历史兼容和外部调用能力保留，不再作为 Dashboard 主流程。
 16. 业务图谱实验能力：保留 BusinessNode、OperationEdge、StateMatcher、ActionPolicy、RoutePlan 和 Graph Runner 作为高阶能力，不作为默认主流程。
 17. 兼容迁移：保留 legacy 坐标脚本和报告；新功能默认面向 PageStateFlow，不为了旧坐标脚本或全局图谱上层做结构性妥协。
 
 ## AI 推荐阅读顺序
 
-1. 先读 [product-plan.md](spec/product-plan.md)，理解平台当前主线：从裸坐标录制回放升级为 PageStateFlow 页面状态资产驱动平台。
-2. 再读 [requirements.md](spec/requirements.md)，理解产品范围和开放问题。
-3. 再读 [design.md](spec/design.md)，理解建议架构、接口和关键流程。
-4. 开始实现前读 [tasks.md](spec/tasks.md)，按阶段推进。
-5. 每完成一组任务，对照 [acceptance.md](spec/acceptance.md) 验证。
-6. 变更需求或设计时同步更新 [traceability.md](spec/traceability.md) 和 [changelog.md](spec/changelog.md)。
+1. 先读 [AI / New Contributor Handoff](ai-handoff.md)，确认当前主入口、legacy 入口和执行链路验收规则。
+2. 再读 [product-plan.md](spec/product-plan.md)，理解平台当前主线：从裸坐标录制回放升级为 PageStateFlow 页面状态资产驱动平台。
+3. 再读 [requirements.md](spec/requirements.md)，理解产品范围和开放问题。
+4. 再读 [design.md](spec/design.md)，理解建议架构、接口和关键流程。
+5. 开始实现前读 [tasks.md](spec/tasks.md)，按阶段推进。
+6. 每完成一组任务，对照 [acceptance.md](spec/acceptance.md) 验证。
+7. 变更需求或设计时同步更新 [traceability.md](spec/traceability.md) 和 [changelog.md](spec/changelog.md)。
 
 ## 已知代码入口
 

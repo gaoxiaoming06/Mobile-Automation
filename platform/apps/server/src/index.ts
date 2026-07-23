@@ -162,7 +162,7 @@ import { ObservationService } from "./observation-service.js";
 import { matchCurrentPage } from "./page-matcher.js";
 import { RuntimeInterceptor, type RuntimeInterceptorRule } from "./runtime-interceptor.js";
 import { resolveRoutePlanStart, routePreviewBlockingIssue, summarizeRoutePlanStartDetection, type StartAppScope } from "./route-plan-preview.js";
-import { persistRecordingStepGraphAsset } from "./recording-graph-assets.js";
+import { persistAssetTransitionCandidate } from "./asset-transition-candidates.js";
 import { resolveReachableStartNode } from "./start-node-recovery.js";
 import { listSourceScanDirectories, listSourceScanRoots, pickSourceScanDirectory } from "./source-scan-roots.js";
 import { findNearestTextCandidate } from "./semantic-locator.js";
@@ -1139,7 +1139,7 @@ app.post("/api/graphs/:versionId/auto-explorer/run", async (req, res) => {
   }
 });
 
-app.post("/api/graphs/:versionId/recording-assets", async (req, res) => {
+app.post("/api/graphs/:versionId/asset-transition-candidates", async (req, res) => {
   try {
     const graphVersion = storage.getBusinessGraphVersion(req.params.versionId);
     if (!graphVersion) {
@@ -1151,7 +1151,7 @@ app.post("/api/graphs/:versionId/recording-assets", async (req, res) => {
       res.status(404).json({ error: "Business graph not found" });
       return;
     }
-    const body = readRecordingGraphAssetRequest(req.body);
+    const body = readAssetTransitionCandidateRequest(req.body);
     const afterObservation =
       body.afterObservation ??
       (body.deviceSerial
@@ -1166,7 +1166,7 @@ app.post("/api/graphs/:versionId/recording-assets", async (req, res) => {
       return;
     }
 
-    const result = persistRecordingStepGraphAsset({
+    const result = persistAssetTransitionCandidate({
       graphVersion,
       storage,
       beforeObservation: body.beforeObservation,
@@ -3014,7 +3014,7 @@ function readSourceScanRequest(body: unknown): Parameters<typeof scanAndroidSour
   };
 }
 
-function readRecordingGraphAssetRequest(body: unknown): {
+function readAssetTransitionCandidateRequest(body: unknown): {
   step: ActionStep;
   beforeObservation: Observation;
   afterObservation?: Observation;

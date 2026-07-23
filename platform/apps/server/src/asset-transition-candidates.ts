@@ -11,32 +11,32 @@ import { createId, nowIso, type ActionStep, type StepExpectation } from "@mobile
 import { pageAssetOnlyGraphVersion, promoteParentPageLocalStateMatch } from "./page-matcher.js";
 import { buildRuntimeUnknownNodeCandidate } from "./runtime-graph-candidate.js";
 
-export type RecordingGraphAssetWarning = {
+export type AssetTransitionCandidateWarning = {
   code: "COORDINATE_ONLY_ACTION" | "LOW_CONFIDENCE_NODE" | "OUTSIDE_TARGET_APP" | "INSUFFICIENT_OBSERVATION";
   message: string;
   stepId?: string;
 };
 
-export type RecordingGraphNodeAssetResult = {
+export type AssetTransitionCandidateNodeResult = {
   status: "matched" | "created" | "reused" | "skipped";
   node?: BusinessNode;
   reason?: string;
 };
 
-export type RecordingGraphEdgeAssetResult = {
+export type AssetTransitionCandidateEdgeResult = {
   status: "created" | "reused" | "skipped";
   edge?: OperationEdge;
   reason?: string;
 };
 
-export type RecordingGraphAssetResult = {
-  from: RecordingGraphNodeAssetResult;
-  to: RecordingGraphNodeAssetResult;
-  edge: RecordingGraphEdgeAssetResult;
-  warnings: RecordingGraphAssetWarning[];
+export type AssetTransitionCandidateResult = {
+  from: AssetTransitionCandidateNodeResult;
+  to: AssetTransitionCandidateNodeResult;
+  edge: AssetTransitionCandidateEdgeResult;
+  warnings: AssetTransitionCandidateWarning[];
 };
 
-export type RecordingGraphAssetStorage = {
+export type AssetTransitionCandidateStorage = {
   findBusinessNodeByKey(graphVersionId: string, key: string): BusinessNode | undefined;
   createBusinessNode(input: Omit<BusinessNode, "id"> & { id?: string }): BusinessNode;
   updateBusinessNodeMetadata(nodeId: string, metadata: Record<string, unknown>): BusinessNode | undefined;
@@ -46,29 +46,29 @@ export type RecordingGraphAssetStorage = {
   updateOperationEdgeStatus(edgeId: string, status: OperationEdge["status"]): OperationEdge | undefined;
 };
 
-const LOCAL_PAGE_STATE_REASON = "动作后只识别到页面内菜单/弹窗等局部状态，暂不创建录制节点。";
+const LOCAL_PAGE_STATE_REASON = "动作后只识别到页面内菜单/弹窗等局部状态，暂不创建资产候选节点。";
 
-export function persistRecordingStepGraphAsset(input: {
+export function persistAssetTransitionCandidate(input: {
   graphVersion: BusinessGraphVersion;
-  storage: RecordingGraphAssetStorage;
+  storage: AssetTransitionCandidateStorage;
   beforeObservation: Observation;
   afterObservation: Observation;
   step: ActionStep;
   targetApp?: GraphTargetApp;
   confirm?: boolean;
-}): RecordingGraphAssetResult {
-  const warnings: RecordingGraphAssetWarning[] = [];
-  const scopeViolation = validateRecordingScope(input.beforeObservation, input.afterObservation, input.targetApp);
+}): AssetTransitionCandidateResult {
+  const warnings: AssetTransitionCandidateWarning[] = [];
+  const scopeViolation = validateAssetTransitionScope(input.beforeObservation, input.afterObservation, input.targetApp);
   if (scopeViolation) {
     warnings.push(scopeViolation);
     return skippedResult(scopeViolation.message, warnings);
   }
-  const beforeSignalViolation = validateObservationHasStateSignal(input.beforeObservation, "录制前页面");
+  const beforeSignalViolation = validateObservationHasStateSignal(input.beforeObservation, "动作前页面");
   if (beforeSignalViolation) {
     warnings.push(beforeSignalViolation);
     return skippedResult(beforeSignalViolation.message, warnings);
   }
-  const afterSignalViolation = validateObservationHasStateSignal(input.afterObservation, "录制后页面");
+  const afterSignalViolation = validateObservationHasStateSignal(input.afterObservation, "动作后页面");
   if (afterSignalViolation) {
     warnings.push(afterSignalViolation);
     return skippedResult(afterSignalViolation.message, warnings);
@@ -78,19 +78,19 @@ export function persistRecordingStepGraphAsset(input: {
   if (actionReliability < 0.7) {
     warnings.push({
       code: "COORDINATE_ONLY_ACTION",
-      message: "该录制动作只包含坐标，跨设备/跨分辨率稳定性不足，需补充文字、resource-id 或图像定位后才能自动转正。",
+      message: "该动作只包含坐标，跨设备/跨分辨率稳定性不足，需补充文字、resource-id 或图像定位后才能自动转正。",
       stepId: input.step.id
     });
   }
 
-  const from = identifyOrPersistRecordingNode({
+  const from = identifyOrPersistAssetCandidateNode({
     graphVersion: input.graphVersion,
     storage: input.storage,
     observation: input.beforeObservation,
     role: "from",
     confirm: input.confirm === true
   });
-  const to = identifyOrPersistRecordingNode({
+  const to = identifyOrPersistAssetCandidateNode({
     graphVersion: input.graphVersion,
     storage: input.storage,
     observation: input.afterObservation,
@@ -109,7 +109,7 @@ export function persistRecordingStepGraphAsset(input: {
     };
   }
   if (!from.node || !to.node) {
-    return skippedResult("录制步骤没有可写入的前后业务节点。", warnings);
+    return skippedResult("本次资产候选没有可写入的前后业务节点。", warnings);
   }
 
   if (from.node.id === to.node.id) {
@@ -138,7 +138,7 @@ export function persistRecordingStepGraphAsset(input: {
   }
 
   const shouldActivateEdge = input.confirm === true && actionReliability >= 0.7;
-  const edge = persistRecordingEdge({
+  const edge = persistAssetCandidateEdge({
     graphVersionId: input.graphVersion.id,
     storage: input.storage,
     fromNode: from.node,
@@ -156,7 +156,7 @@ export function persistRecordingStepGraphAsset(input: {
   };
 }
 
-function skippedResult(reason: string, warnings: RecordingGraphAssetWarning[]): RecordingGraphAssetResult {
+function skippedResult(reason: string, warnings: AssetTransitionCandidateWarning[]): AssetTransitionCandidateResult {
   return {
     from: { status: "skipped", reason },
     to: { status: "skipped", reason },
@@ -165,7 +165,7 @@ function skippedResult(reason: string, warnings: RecordingGraphAssetWarning[]): 
   };
 }
 
-function validateRecordingScope(before: Observation, after: Observation, targetApp: GraphTargetApp | undefined): RecordingGraphAssetWarning | undefined {
+function validateAssetTransitionScope(before: Observation, after: Observation, targetApp: GraphTargetApp | undefined): AssetTransitionCandidateWarning | undefined {
   const androidPackageName = targetApp?.androidPackageName?.trim();
   if (!androidPackageName || before.platform !== "android") {
     return undefined;
@@ -175,19 +175,19 @@ function validateRecordingScope(before: Observation, after: Observation, targetA
   if (beforePackage && beforePackage !== androidPackageName) {
     return {
       code: "OUTSIDE_TARGET_APP",
-      message: `录制前页面属于 ${beforePackage}，不是当前图谱绑定的 Android 包 ${androidPackageName}，本步骤不会写入该 App 图谱。`
+      message: `动作前页面属于 ${beforePackage}，不是当前图谱绑定的 Android 包 ${androidPackageName}，本步骤不会写入该 App 图谱。`
     };
   }
   if (afterPackage && afterPackage !== androidPackageName) {
     return {
       code: "OUTSIDE_TARGET_APP",
-      message: `录制后页面属于 ${afterPackage}，不是当前图谱绑定的 Android 包 ${androidPackageName}，本步骤不会写入该 App 图谱。`
+      message: `动作后页面属于 ${afterPackage}，不是当前图谱绑定的 Android 包 ${androidPackageName}，本步骤不会写入该 App 图谱。`
     };
   }
   return undefined;
 }
 
-function validateObservationHasStateSignal(observation: Observation, label: string): RecordingGraphAssetWarning | undefined {
+function validateObservationHasStateSignal(observation: Observation, label: string): AssetTransitionCandidateWarning | undefined {
   const packageName = observationPackageName(observation);
   const visibleTexts = observation.uiElements.some((element) => Boolean(element.text?.trim())) || observation.ocrTexts.some((text) => Boolean(text.text.trim()));
   const resourceIds = observation.uiElements.some((element) => Boolean(element.resourceId?.trim() || element.accessibilityId?.trim()));
@@ -205,13 +205,13 @@ function observationPackageName(observation: Observation): string | undefined {
   return observation.packageName?.trim() || observation.uiElements.map((element) => element.packageName?.trim()).find(Boolean);
 }
 
-function identifyOrPersistRecordingNode(input: {
+function identifyOrPersistAssetCandidateNode(input: {
   graphVersion: BusinessGraphVersion;
-  storage: RecordingGraphAssetStorage;
+  storage: AssetTransitionCandidateStorage;
   observation: Observation;
   role: "from" | "to";
   confirm: boolean;
-}): RecordingGraphNodeAssetResult {
+}): AssetTransitionCandidateNodeResult {
   const pageGraphVersion = pageAssetOnlyGraphVersion(input.graphVersion);
   const match = promoteParentPageLocalStateMatch(detectNode(input.observation, pageGraphVersion, input.observation.platform), input.observation);
   if (match.status === "matched" && match.node) {
@@ -229,7 +229,7 @@ function identifyOrPersistRecordingNode(input: {
   }
 
   const candidate = buildRuntimeUnknownNodeCandidate(input.graphVersion.id, input.observation, match);
-  const key = candidate.key.replace("runtime.unknown.", "recording.");
+  const key = candidate.key.replace("runtime.unknown.", "asset.candidate.");
   const existing = input.storage.findBusinessNodeByKey(input.graphVersion.id, key);
   const now = nowIso();
   if (existing) {
@@ -237,7 +237,7 @@ function identifyOrPersistRecordingNode(input: {
       ...(existing.metadata ?? {}),
       lastObservedAt: now,
       observationCount: typeof existing.metadata?.observationCount === "number" ? existing.metadata.observationCount + 1 : 2,
-      recordingRole: input.role
+      assetCandidateRole: input.role
     };
     const updated = input.storage.updateBusinessNodeMetadata(existing.id, metadata) ?? { ...existing, metadata };
     if (input.confirm && updated.status !== "active") {
@@ -255,13 +255,13 @@ function identifyOrPersistRecordingNode(input: {
   const node = input.storage.createBusinessNode({
     ...candidate,
     key,
-    name: recordingNodeName(candidate.name),
-    tags: uniqueStrings(["manual-recording", input.confirm ? "recording-confirmed" : "needs-review", ...candidate.tags.filter((tag) => tag !== "runtime-discovered")]),
+    name: assetCandidateNodeName(candidate.name),
+    tags: uniqueStrings(["asset-transition-candidate", input.confirm ? "asset-candidate-confirmed" : "needs-review", ...candidate.tags.filter((tag) => tag !== "runtime-discovered")]),
     status: input.confirm ? "active" : "draft",
     metadata: {
       ...(candidate.metadata ?? {}),
       source: "manual_recording",
-      recordingRole: input.role,
+      assetCandidateRole: input.role,
       observationId: input.observation.id,
       observationCount: 1,
       firstObservedAt: now,
@@ -274,16 +274,16 @@ function identifyOrPersistRecordingNode(input: {
   };
 }
 
-function persistRecordingEdge(input: {
+function persistAssetCandidateEdge(input: {
   graphVersionId: string;
-  storage: RecordingGraphAssetStorage;
+  storage: AssetTransitionCandidateStorage;
   fromNode: BusinessNode;
   toNode: BusinessNode;
   step: ActionStep;
   status: OperationEdge["status"];
   reliabilityScore: number;
-}): RecordingGraphEdgeAssetResult {
-  const key = recordingEdgeKey(input.fromNode.key, input.toNode.key, input.step);
+}): AssetTransitionCandidateEdgeResult {
+  const key = assetCandidateEdgeKey(input.fromNode.key, input.toNode.key, input.step);
   const existing = input.storage.findOperationEdgeByKey(input.graphVersionId, key);
   if (existing) {
     if (input.status === "active" && existing.status !== "active") {
@@ -373,8 +373,8 @@ function actionReliabilityScore(step: ActionStep): number {
   return 0.45;
 }
 
-function recordingEdgeKey(fromKey: string, toKey: string, step: ActionStep): string {
-  return `recording.${stableHash([fromKey, toKey, step.type, actionIdentity(step)].join("|"))}`;
+function assetCandidateEdgeKey(fromKey: string, toKey: string, step: ActionStep): string {
+  return `asset.candidate.${stableHash([fromKey, toKey, step.type, actionIdentity(step)].join("|"))}`;
 }
 
 function actionIdentity(step: ActionStep): string {
@@ -409,8 +409,8 @@ function summarizeActionIntent(step: ActionStep): string {
   return step.type;
 }
 
-function recordingNodeName(name: string): string {
-  return name.replace(/^运行期未知节点：/, "录制节点：");
+function assetCandidateNodeName(name: string): string {
+  return name.replace(/^运行期未知节点：/, "资产候选节点：");
 }
 
 function isLikelyLocalPageStateObservation(observation: Observation): boolean {

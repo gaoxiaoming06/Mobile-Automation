@@ -4,7 +4,7 @@ doc_type: acceptance
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-02
+updated_at: 2026-07-23
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -977,8 +977,8 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 - THEN Dashboard 必须优先展示已保存 PageTask，并支持新增、编辑、删除。
 - AND PageTask 步骤必须能引用当前页已保存 PageElement，`wait` 步骤允许只填写等待文字或参数 key。
 - AND 保存 PageTask 必须写入源 PageModel 的 `assetRecordingPageTasks`，不得把运行期业务数据写成页面 matcher。
-- GIVEN 用户在“目标页面测试”中选择目标页面和目标页 PageTask。
-- WHEN 用户点击“规划并执行”。
+- GIVEN 用户在 AI资产用例或资产用例中选择需要执行目标页 PageTask 的资产候选。
+- WHEN 用户确认运行参数并点击执行。
 - THEN 平台必须先按 PageStateFlow 规划并执行到目标 PageModel，再把选中的 PageTask 步骤追加到 ExecutionPlan 末尾。
 - AND PageTask 运行参数是可选覆盖项：传入 `lessonName=数学课`、`duration=45分钟`、`recordClassroom=off` 时只修改对应字段；未传的 `valueParamKey` / `desiredStateParamKey` 不视为失败，对应字段步骤必须跳过并保留页面默认值。
 - AND `text_input` 步骤必须从 `RuntimeOverlay.runtimeParams` 中按 `valueParamKey` 取值，找不到运行参数时才允许使用步骤固定文本；两者都没有时跳过该输入步骤。
@@ -1124,3 +1124,36 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 - 验证方式：storage / compiler / execution 单元测试 + Dashboard 组件测试 + SemanticLocator / GraphRunService 回归 + Android 真机组合用例。
 - 真机验收：`asset_composite_execution_1533c860-64b5-4a81-a999-720dc1e6a95b` 5/5 passed；最终页面显示 `自动化组合课堂`、`30分钟`，未点击发布。
 - 回归范围：PageStateFlow assets、GraphRunService、PageTask、SemanticLocator、Dashboard navigation、SQLite migrations、HTML report。
+
+### AC-049：Android App 旁路性能与稳定性监控
+
+- 关联需求：REQ-046、REQ-011、REQ-012、REQ-013、REQ-014、REQ-043、REQ-045
+- 目标平台：Android first + Backend + Web Dashboard + Report
+- GIVEN 执行配置开启目标 App 旁路监控，且目标包名为 `cn.eeo.classin`。
+- WHEN 用户启动普通用例、StructuredFlow、资产驱动巡检或稳定性探索。
+- THEN Runner 必须在动作执行链路之外启动独立 monitor，并在 Run 结束、失败、停止或设备断连时停止并 flush summary。
+- GIVEN 目标包存在主进程和 `package:*` 子进程。
+- WHEN monitor 做进程发现。
+- THEN 系统必须通过 `ps` / `dumpsys activity processes` / `/proc/<pid>/cmdline` 识别包名对应进程，默认包含主进程和子进程，并允许用户只监控 `main`、`:suffix` 或完整进程名。
+- GIVEN Android `ps` 输出的进程名被截断。
+- WHEN `/proc/<pid>/cmdline` 可读。
+- THEN monitor 必须以 cmdline 校验真实进程名，不能把同名前缀的其他 App 误计入。
+- GIVEN monitor 按默认配置运行。
+- WHEN 采样 CPU、PSS 和进程生命周期。
+- THEN CPU 默认 1 秒采样，内存默认 5 秒采样；高频 `cpu.csv`、`memory.csv`、`lifecycle.csv` 写入 artifact，Run 数据库只保存摘要、事件和 artifact 引用。
+- GIVEN CPU 或内存阈值配置了 `sustainMs` 和 `cooldownMs`。
+- WHEN 单次尖峰未持续达到 `sustainMs`。
+- THEN 系统不得生成 incident；只有持续超阈才生成事件，并在 `cooldownMs` 内合并同类事件、记录峰值和持续时间。
+- GIVEN CPU 超阈 incident 触发。
+- WHEN 设备支持 `top -H`。
+- THEN 证据中必须保存线程级 CPU 快照；如果 `top -H` 不可用，必须保存 `/proc/<pid>/task` fallback 结果和失败原因。
+- GIVEN 内存超阈 incident 触发。
+- WHEN 设备支持 `dumpsys meminfo -d`。
+- THEN 证据中必须保存 meminfo 文本和解析后的 PSS / App Summary；heap dump 只有显式开启时才尝试，默认不得生成 hprof。
+- GIVEN logcat 出现 Java Crash、Native Crash、ANR 或 process death。
+- WHEN 事件属于目标包名或目标进程。
+- THEN 系统必须生成稳定性事件，按时间窗口和签名去重，尽量关联当前 stepResultId，并进入报告、缺陷候选和 AI 诊断证据包。
+- GIVEN Run 报告生成。
+- THEN HTML 报告必须展示“目标 App 旁路监控”区块，包含包名、进程列表、CPU / 内存统计、生命周期、阈值事件、稳定性事件、采样失败、证据链接和 ClassIn 5 分钟真机监控摘要。
+- 验证方式：android-driver parser / sampler / threshold / session 单元测试 + server Runner 接入测试 + report-core 测试 + Dashboard 配置组件测试 + Android 真机 `cn.eeo.classin` 5 分钟旁路监控。
+- 回归范围：Android Driver、MobileDriver interface、AutomationRunner、GraphRunService、AssetPatrolRunner、StabilityExplorer、RunArtifact、DeviceEvent、DefectCandidate、AiDiagnosisEvidencePack、Report Core、Dashboard run config。

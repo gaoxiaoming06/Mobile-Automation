@@ -97,74 +97,13 @@ type PageAssetsSnapshot = {
   assetsByVersionId: Record<string, GraphAssetGovernanceSummary>;
 };
 
-type RoutePlanIssue = {
-  code?: string;
-  severity?: string;
-  message?: string;
-};
-
-type RoutePlanPreviewResponse = {
-  executionPlan?: {
-    steps?: unknown[];
-    unresolvedIssues?: RoutePlanIssue[];
-  };
-  startRecovery?: {
-    status?: "recovered" | "failed";
-    fromNodeName?: string;
-    recoveredNodeName?: string;
-  };
-  startDetection?: {
-    startNodeId?: string;
-    nodeMatch?: {
-      node?: {
-        id?: string;
-        key?: string;
-        name?: string;
-      };
-    };
-  };
-};
-
-type TargetActionMode = "none" | "page_task";
-
-type TargetVerificationMode = "arrived" | "text_contains";
-
-type RuntimeOverlay = {
-  id?: string;
-  targetNodeId?: string;
-  targetTaskId?: string;
-  note?: string;
-  runtimeParams?: Record<string, string>;
-  nodeExpectationOverrides?: Array<{
-    nodeId: string;
-    expectations: Array<{
-      id: string;
-      type: "text";
-      enabled: boolean;
-      title?: string;
-      note?: string;
-      params: Record<string, unknown>;
-      createdAt: string;
-    }>;
-  }>;
-};
-
 type PageAssetsPanelProps = {
-  selectedSerial?: string;
-  selectedDeviceBusy?: boolean;
-  initialTab?: PageAssetsTab;
-  initialTargetText?: string;
-  initialTargetTaskId?: string;
-  /** @deprecated Runtime values are selected from Parameter Center. */
-  initialRuntimeParams?: Record<string, string>;
   graphs?: BusinessGraph[];
   assetsByVersionId?: Record<string, GraphAssetGovernanceSummary>;
   onOpenAssetRecording: () => void;
-  onRunStarted?: (runId: string) => void;
   setMessage: (message: string) => void;
 };
 
-type PageAssetsTab = "targetTest" | "library";
 type DecoratedPageAsset = PageAssetSummary & { graphName?: string; appId?: string; graphVersion?: number; graphVersionId?: string };
 
 export function PageAssetsPanel({
@@ -579,19 +518,6 @@ function assetGraphSummary(asset: DecoratedPageAsset): string {
   return `${asset.graphName ?? asset.appId ?? "未分组资产"}${asset.graphVersion ? ` · v${asset.graphVersion}` : ""}`;
 }
 
-export function selectPageAssetTarget<T extends PageAssetSummary & { graphVersionId?: string }>(assets: T[], query: string): T | undefined {
-  const normalizedQuery = normalizeAssetSearchText(query);
-  if (!normalizedQuery) {
-    return undefined;
-  }
-  return (
-    assets.find((asset) => normalizeAssetSearchText(asset.name) === normalizedQuery) ??
-    assets.find((asset) => normalizeAssetSearchText(asset.key) === normalizedQuery) ??
-    assets.find((asset) => searchableAssetTexts(asset).some((value) => normalizeAssetSearchText(value).includes(normalizedQuery))) ??
-    assets[0]
-  );
-}
-
 export function assetIdentitySummary(asset: PageAssetSummary, limit = 4): string {
   const texts = assetIdentityTexts(asset).slice(0, limit);
   return texts.length ? texts.join(" · ") : "暂无已确认匹配依据";
@@ -609,17 +535,6 @@ function assetIdentityTexts(asset: PageAssetSummary): string[] {
       ])
     ].filter((text): text is string => Boolean(text))
   );
-}
-
-function searchableAssetTexts(asset: PageAssetSummary & { appId?: string }): string[] {
-  return uniqueStrings([
-    asset.name,
-    asset.key,
-    asset.appId,
-    ...assetIdentityTexts(asset),
-    ...(asset.resourceIds ?? []),
-    ...(asset.accessibilityIds ?? [])
-  ].filter((text): text is string => Boolean(text)));
 }
 
 function cleanEvidenceText(value: string | undefined): string | undefined {
@@ -694,165 +609,4 @@ function semanticAreaLabel(value: string | undefined): string {
     return "底部固定区域";
   }
   return "未知区域";
-}
-
-export function buildTargetPageGraphRunRequest(input: {
-  selectedSerial: string;
-  graphVersionId: string;
-  targetNodeId: string;
-  startNodeId?: string;
-  parameterProfileId?: string;
-  overlay?: RuntimeOverlay;
-}): {
-  deviceSerial: string;
-  graphVersionId: string;
-  targetNodeId: string;
-  startStrategy: "keep_current";
-  startNodeId?: string;
-  executionProfile: "fast_visual";
-  startAppScope: "current_device";
-  parameterProfileId?: string;
-  overlay?: RuntimeOverlay;
-} {
-  return {
-    deviceSerial: input.selectedSerial,
-    graphVersionId: input.graphVersionId,
-    targetNodeId: input.targetNodeId,
-    startStrategy: "keep_current",
-    startNodeId: input.startNodeId,
-    executionProfile: "fast_visual",
-    startAppScope: "current_device",
-    ...(input.parameterProfileId ? { parameterProfileId: input.parameterProfileId } : {}),
-    overlay: input.overlay
-  };
-}
-
-export function buildTargetPageRuntimeOverlay(input: {
-  targetNodeId: string;
-  targetName: string;
-  actionMode: TargetActionMode;
-  targetTaskId?: string;
-  verificationMode: TargetVerificationMode;
-  verificationText?: string;
-  runtimeParams?: Record<string, string>;
-  runtimeParamsText?: string;
-}): RuntimeOverlay | undefined {
-  const explicitRuntimeParams = nonEmptyRuntimeParams(input.runtimeParams);
-  const textRuntimeParams = parseRuntimeParams(input.runtimeParamsText);
-  const runtimeParams = explicitRuntimeParams || textRuntimeParams
-    ? {
-        ...(textRuntimeParams ?? {}),
-        ...(explicitRuntimeParams ?? {})
-      }
-    : undefined;
-  const targetTaskId = input.actionMode === "page_task" ? input.targetTaskId?.trim() : undefined;
-  if (input.actionMode === "none" && input.verificationMode === "arrived" && !runtimeParams) {
-    return undefined;
-  }
-  const expectedText = input.verificationText?.trim();
-  if (input.verificationMode !== "text_contains" || !expectedText) {
-    return runtimeParams
-      ? {
-          id: `target-task-${input.targetNodeId}`,
-          targetNodeId: input.targetNodeId,
-          ...(targetTaskId ? { targetTaskId } : {}),
-          note: `页面资产执行：${input.targetName}`,
-          runtimeParams
-        }
-      : targetTaskId
-        ? {
-            id: `target-task-${input.targetNodeId}`,
-            targetNodeId: input.targetNodeId,
-            targetTaskId,
-            note: `页面资产执行：${input.targetName}`
-          }
-        : undefined;
-  }
-  const overlay: RuntimeOverlay = {
-    id: `target-task-${input.targetNodeId}`,
-    targetNodeId: input.targetNodeId,
-    ...(targetTaskId ? { targetTaskId } : {}),
-    note: `页面资产执行：${input.targetName}`,
-    ...(runtimeParams ? { runtimeParams } : {}),
-    nodeExpectationOverrides: [
-      {
-        nodeId: input.targetNodeId,
-        expectations: [
-          {
-            id: `target-text-${input.targetNodeId}`,
-            type: "text",
-            enabled: true,
-            title: "页面验证",
-            note: "页面资产执行临时验证，不写入页面资产库。",
-            params: {
-              expected: expectedText,
-              mode: "contains",
-              lang: "eng+chi_sim"
-            },
-            createdAt: new Date().toISOString()
-          }
-        ]
-      }
-    ]
-  };
-  return overlay;
-}
-
-function nonEmptyRuntimeParams(runtimeParams: Record<string, string> | undefined): Record<string, string> | undefined {
-  if (!runtimeParams) {
-    return undefined;
-  }
-  const entries = Object.entries(runtimeParams)
-    .map(([key, value]) => [key.trim(), value.trim()] as const)
-    .filter(([key, value]) => key && value);
-  return entries.length ? Object.fromEntries(entries) : undefined;
-}
-
-export function parseRuntimeParams(value: string | undefined): Record<string, string> | undefined {
-  const normalized = (value ?? "").trim();
-  if (!normalized) {
-    return undefined;
-  }
-  const entries = normalized
-    .split(/[\n,，;]/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => {
-      const separator = item.indexOf("=");
-      if (separator < 0) {
-        return undefined;
-      }
-      const key = item.slice(0, separator).trim();
-      const paramValue = item.slice(separator + 1).trim();
-      return key && paramValue ? [key, paramValue] as const : undefined;
-    })
-    .filter((item): item is readonly [string, string] => Boolean(item));
-  if (entries.length) {
-    return Object.fromEntries(entries);
-  }
-  return { className: normalized };
-}
-
-function readTargetActionMode(value: string): TargetActionMode {
-  return value === "page_task" ? value : "none";
-}
-
-function readTargetVerificationMode(value: string): TargetVerificationMode {
-  return value === "text_contains" ? value : "arrived";
-}
-
-function normalizeAssetSearchText(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, "");
-}
-
-export function targetPageRouteBlockingMessage(routePreview: RoutePlanPreviewResponse, targetName: string): string | undefined {
-  const blockingIssue = routePreview.executionPlan?.unresolvedIssues?.find((issue) => issue.severity === "error");
-  if (!blockingIssue) {
-    return undefined;
-  }
-  const startNodeName = routePreview.startDetection?.nodeMatch?.node?.name ?? routePreview.startDetection?.startNodeId ?? "当前页面";
-  if (blockingIssue.code === "TARGET_NODE_UNREACHABLE") {
-    return `已找到目标页面：${targetName}，但当前识别到的页面“${startNodeName}”还没有到该目标的已保存连接边。请先在资产录制里把当前页的可操作元素连接到目标页面。`;
-  }
-  return `目标页面路径规划存在阻断：${blockingIssue.message ?? blockingIssue.code ?? "未知错误"}`;
 }

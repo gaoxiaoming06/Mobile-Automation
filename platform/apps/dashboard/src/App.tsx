@@ -9,11 +9,14 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
 import {
   viewportPointToDevicePoint,
+  nowIso,
+  type ActionStep,
   type DeviceActionRequest,
   type DeviceInfo,
   type ParameterProfile,
+  type Platform,
+  type SemanticDeviceActionRequest,
   type StructuredFlow,
-  type TestCase,
   type TestRun,
   type ToolStatus
 } from "@mobile-automation/shared";
@@ -31,24 +34,22 @@ import {
   type AssetRecordingPageTaskDraft,
   type AssetRecordingPageTaskTransitionDraft
 } from "./components/AssetRecordingPanel";
-import type { FlowExpectationOverride } from "./components/CaseLibraryPanel";
 import { PreviewPanel } from "./components/PreviewPanel";
-import { PageAssetsPanel, parseRuntimeParams } from "./components/PageAssetsPanel";
+import { PageAssetsPanel } from "./components/PageAssetsPanel";
+import { parseRuntimeParams } from "./components/runtime-params";
 import { AssetCompositionPanel } from "./components/AssetCompositionPanel";
 import { FreeCompositionPanel } from "./components/FreeCompositionPanel";
 import type { RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
-import { StepsPanel } from "./components/StepsPanel";
-import { ToolStatusBar } from "./components/StepsPanelParts";
+import { RunResultsPanel } from "./components/RunResultsPanel";
+import { ToolStatusBar } from "./components/ToolStatusBar";
 import { useDeviceList } from "./hooks/useDeviceList";
 import { controllableDevices, isControllableDevice } from "./device-availability";
-import { useRecorder } from "./hooks/useRecorder";
 import { useRunExecution } from "./hooks/useRunExecution";
 import { useScrcpyStream } from "./hooks/useScrcpyStream";
 import { classifyPreviewGesture } from "./preview-gesture";
-import { attachRecordingObservationsToActionStep, createRecordedStep, type RecordableAction } from "./recording";
 import {
-  createTapRecordingActionFromElementLookup,
-  createTapRecordingActionFromSnapshot,
+  createTapAssetActionFromElementLookup,
+  createTapAssetActionFromSnapshot,
   type ElementLookupResponse,
   type ElementSnapshot,
   type SemanticSnapshots,
@@ -68,8 +69,39 @@ type ResizeStart = {
   startWidth: number;
 };
 
-type AutomationTab = "steps" | "runs";
 type NavItemId = AppNavItemId;
+type AssetRecordingAction =
+  | DeviceActionRequest
+  | {
+      type: "tap_on_element";
+      locator: Extract<SemanticDeviceActionRequest, { type: "tap_on_element" }>["locator"];
+      selector?: string;
+      bounds?: {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+        width: number;
+        height: number;
+        centerX: number;
+        centerY: number;
+      };
+      x: number;
+      y: number;
+      timeoutMs?: number;
+      intervalMs?: number;
+      maxDistance?: number;
+    }
+  | {
+      type: "tap_on_text";
+      text: string;
+      x: number;
+      y: number;
+      mode?: "contains" | "equals";
+      timeoutMs?: number;
+      intervalMs?: number;
+      lang?: string;
+    };
 type StabilityExplorerStrategy = "conservative" | "balanced" | "aggressive";
 type StabilityExplorerStartMode = "launch_app" | "current_state" | "restart_app";
 type StabilityExplorerAppExitPolicy = "back_to_app" | "restart_app" | "stop";
@@ -208,11 +240,11 @@ export const DEFAULT_AI_DIAGNOSIS_SETTINGS: PublicAiDiagnosisSettings = {
   source: "none"
 };
 const STABILITY_DANGEROUS_TEXT_BY_PACKAGE_STORAGE_KEY = "mobile-automation.stabilityDangerousTextByPackage.v1";
-type RecordingWorkspaceStyle = CSSProperties & {
+type PreviewWorkspaceStyle = CSSProperties & {
   "--asset-recording-preview-width"?: string;
 };
 
-type RecordingObservation = {
+type AssetObservation = {
   id?: string;
   deviceSerial?: string;
   platform: DeviceInfo["platform"];
@@ -259,7 +291,7 @@ type RecordingObservation = {
   raw?: Record<string, unknown>;
 };
 
-type RecordingGraphAssetApiResponse = {
+type AssetTransitionCandidateApiResponse = {
   result: {
     from: {
       status?: "matched" | "created" | "reused" | "skipped";
@@ -353,7 +385,7 @@ type CurrentPageAssetApiResponse = {
       }>;
     };
     node?: CurrentPageAssetNodeApi;
-    observation?: RecordingObservation;
+    observation?: AssetObservation;
   };
   assets?: {
     pageAssets?: Array<{
@@ -392,17 +424,17 @@ type CurrentPageAssetApiResponse = {
   error?: string;
 };
 
-const recordingPreviewMinWidth = 420;
-const recordingPreviewMaxWidth = 980;
+const assetPreviewMinWidth = 420;
+const assetPreviewMaxWidth = 980;
 
-export function previewWorkspaceKey(navItem: AppNavItemId): "recording" | "assetRecording" | "inactive" {
-  if (navItem === "recording" || navItem === "assetRecording") {
+export function previewWorkspaceKey(navItem: AppNavItemId): "deviceDetails" | "assetRecording" | "inactive" {
+  if (navItem === "deviceDetails" || navItem === "assetRecording") {
     return navItem;
   }
   return "inactive";
 }
 
-export function workspaceStyleForNav(navItem: AppNavItemId, _recordingPreviewWidth: number, assetRecordingPreviewWidth: number): RecordingWorkspaceStyle {
+export function workspaceStyleForNav(navItem: AppNavItemId, _devicePreviewWidth: number, assetRecordingPreviewWidth: number): PreviewWorkspaceStyle {
   if (navItem === "assetRecording") {
     return {
       "--asset-recording-preview-width": `${assetRecordingPreviewWidth}px`
@@ -413,7 +445,7 @@ export function workspaceStyleForNav(navItem: AppNavItemId, _recordingPreviewWid
 
 export function actionStrategyForWorkspace(
   navItem: AppNavItemId,
-  state: { identifying: boolean; recording: boolean }
+  state: { identifying: boolean }
 ): {
   useCachedSemanticTarget: boolean;
   resolveLiveLocatorBeforeAction: boolean;
@@ -1108,14 +1140,9 @@ export function App() {
   const [message, setMessage] = useState("准备连接设备");
   const [busy, setBusy] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(true);
-  const [activeNavItem, setActiveNavItem] = useState<NavItemId>("recording");
-  const [automationTab, setAutomationTab] = useState<AutomationTab>("steps");
+  const [activeNavItem, setActiveNavItem] = useState<NavItemId>("deviceDetails");
   const [assetRecordingPreviewWidth, setAssetRecordingPreviewWidth] = useState(560);
-  const [highlightedCaseId, setHighlightedCaseId] = useState("");
   const [structuredFlows, setStructuredFlows] = useState<StructuredFlow[]>([]);
-  const [flowSearchText, setFlowSearchText] = useState("");
-  const [highlightedFlowId, setHighlightedFlowId] = useState("");
-  const [selectedFlowId, setSelectedFlowId] = useState("");
   const [runtimeInterceptorRules, setRuntimeInterceptorRules] = useState<RuntimeInterceptorRule[]>([]);
   const [assetRecordingGraphVersionId, setAssetRecordingGraphVersionId] = useState("");
   const [assetRecordingPage, setAssetRecordingPage] = useState<AssetRecordingCurrentPage>({ status: "idle" });
@@ -1161,9 +1188,6 @@ export function App() {
   const pointerStartRef = useRef<PointerStart | null>(null);
   const resizeStartRef = useRef<ResizeStart | null>(null);
   const semanticSnapshotsRef = useRef<SemanticSnapshots>({});
-  const recordingGraphVersionIdRef = useRef("");
-  const elementSnapshotInFlightRef = useRef(false);
-  const textSnapshotInFlightRef = useRef(false);
   const assetRecordingIdentificationInFlightRef = useRef(0);
   const aiDiagnosisSettingsLoadedRef = useRef(false);
 
@@ -1203,78 +1227,20 @@ export function App() {
     setMessage
   });
   const {
-    steps,
-    selectedCaseId,
-    recording,
-    caseName,
-    cases,
-    setRecording,
-    setCaseName,
-    appendStep,
-    updateStepById,
-    moveStep,
-    removeStep,
-    insertWaitStep,
-    insertConditionalTapStep,
-    copyStep,
-    toggleStepEnabled,
-    updateStep,
-    addStepExpectation,
-    updateStepExpectation,
-    removeStepExpectation,
-    resetEditor,
-    saveCase,
-    loadCase,
-    loadStructuredFlow,
-    deleteCase
-  } = useRecorder({ selectedDeviceSize, selectedSerial, setMessage });
-  const {
     runs,
     currentRun,
     currentGraphRun,
     runsLimit,
     activeRunForSelectedDevice,
     selectedDeviceBusy,
-    repeatCount,
-    stepIntervalMs,
-    loopUntilStopped,
-    pauseAfterEachStep,
-    startStrategy,
-    startAppPackageName,
-    startSetupScope,
-    androidAppMonitorEnabled,
-    androidAppMonitorPackageName,
-    androidAppMonitorIncludeSubprocesses,
-    androidAppMonitorCpuThresholdEnabled,
-    androidAppMonitorCpuThresholdPercent,
-    androidAppMonitorMemoryThresholdEnabled,
-    androidAppMonitorMemoryThresholdMb,
-    androidAppMonitorHeapDumpEnabled,
     setCurrentRunId,
-    setRepeatCount,
-    setStepIntervalMs,
-    setLoopUntilStopped,
-    setPauseAfterEachStep,
-    setStartStrategy,
-    setStartAppPackageName,
-    setStartSetupScope,
-    setAndroidAppMonitorEnabled,
-    setAndroidAppMonitorPackageName,
-    setAndroidAppMonitorIncludeSubprocesses,
-    setAndroidAppMonitorCpuThresholdEnabled,
-    setAndroidAppMonitorCpuThresholdPercent,
-    setAndroidAppMonitorMemoryThresholdEnabled,
-    setAndroidAppMonitorMemoryThresholdMb,
-    setAndroidAppMonitorHeapDumpEnabled,
     refreshRuns,
     loadMoreRuns,
-    startRun,
-    startFlowRun,
     stopCurrentRun,
     pauseCurrentRun,
     resumeCurrentRun,
     stepCurrentRun
-  } = useRunExecution({ selectedSerial, caseName, steps, setMessage });
+  } = useRunExecution({ selectedSerial, setMessage });
 
   useEffect(() => {
     if (!assetDrivenExecutionId) {
@@ -1418,38 +1384,6 @@ export function App() {
   }, [activeNavItem, selectedDevice?.platform, selectedSerial]);
 
   useEffect(() => {
-    let cancelled = false;
-    recordingGraphVersionIdRef.current = "";
-    if (!recording || !selectedDevice) {
-      return;
-    }
-    const platform = selectedDevice.platform;
-
-    async function refreshRecordingGraphVersion() {
-      try {
-        const response = await fetch("/api/graphs");
-        if (!response.ok) {
-          return;
-        }
-        const json = (await response.json()) as { graphs: GraphListItem[] };
-        const graphVersionId = selectRecordingGraphVersionId(json.graphs, platform);
-        if (!cancelled) {
-          recordingGraphVersionIdRef.current = graphVersionId ?? "";
-        }
-      } catch {
-        if (!cancelled) {
-          recordingGraphVersionIdRef.current = "";
-        }
-      }
-    }
-
-    void refreshRecordingGraphVersion();
-    return () => {
-      cancelled = true;
-    };
-  }, [recording, selectedDevice]);
-
-  useEffect(() => {
     setAssetRecordingPreviewWidth((width) => clamp(width, assetRecordingWidthLimits().min, assetRecordingWidthLimits().max));
   }, [navCollapsed]);
 
@@ -1468,7 +1402,7 @@ export function App() {
 
     function onPointerUp() {
       resizeStartRef.current = null;
-      document.body.classList.remove("recording-resize-active");
+      document.body.classList.remove("asset-recording-resize-active");
     }
 
     window.addEventListener("pointermove", onPointerMove);
@@ -1478,99 +1412,11 @@ export function App() {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
-      document.body.classList.remove("recording-resize-active");
+      document.body.classList.remove("asset-recording-resize-active");
     };
   }, [activeNavItem, navCollapsed]);
 
-  useEffect(() => {
-    semanticSnapshotsRef.current = {};
-    if (!recording || activeNavItem !== "recording" || !selectedSerial || selectedDevice?.platform !== "android") {
-      return;
-    }
-
-    let cancelled = false;
-    let elementTimer: number | undefined;
-    let textTimer: number | undefined;
-    let textStartTimer: number | undefined;
-    const serial = selectedSerial;
-
-    async function refreshElementSnapshot() {
-      if (elementSnapshotInFlightRef.current) {
-        return;
-      }
-      elementSnapshotInFlightRef.current = true;
-      try {
-        const response = await fetch(`/api/devices/${encodeURIComponent(serial)}/locators/element-snapshot`);
-        if (!response.ok) {
-          return;
-        }
-        const snapshot = (await response.json()) as ElementSnapshot;
-        if (!cancelled) {
-          semanticSnapshotsRef.current = {
-            ...semanticSnapshotsRef.current,
-            element: snapshot
-          };
-        }
-      } catch {
-        // Recording must stay responsive even when a semantic snapshot fails.
-      } finally {
-        elementSnapshotInFlightRef.current = false;
-      }
-    }
-
-    async function refreshTextSnapshot() {
-      if (textSnapshotInFlightRef.current) {
-        return;
-      }
-      textSnapshotInFlightRef.current = true;
-      try {
-        const response = await fetch(`/api/devices/${encodeURIComponent(serial)}/locators/text-snapshot`);
-        if (!response.ok) {
-          return;
-        }
-        const snapshot = (await response.json()) as TextSnapshot;
-        if (!cancelled) {
-          semanticSnapshotsRef.current = {
-            ...semanticSnapshotsRef.current,
-            text: snapshot
-          };
-        }
-      } catch {
-        // OCR is a best-effort fallback for recording; click control should never wait for it.
-      } finally {
-        textSnapshotInFlightRef.current = false;
-      }
-    }
-
-    void refreshElementSnapshot();
-    elementTimer = window.setInterval(() => {
-      void refreshElementSnapshot();
-    }, 1200);
-    textStartTimer = window.setTimeout(() => {
-      void refreshTextSnapshot();
-      textTimer = window.setInterval(() => {
-        void refreshTextSnapshot();
-      }, 4000);
-    }, 600);
-
-    return () => {
-      cancelled = true;
-      semanticSnapshotsRef.current = {};
-      elementSnapshotInFlightRef.current = false;
-      textSnapshotInFlightRef.current = false;
-      if (elementTimer !== undefined) {
-        window.clearInterval(elementTimer);
-      }
-      if (textTimer !== undefined) {
-        window.clearInterval(textTimer);
-      }
-      if (textStartTimer !== undefined) {
-        window.clearTimeout(textStartTimer);
-      }
-    };
-  }, [activeNavItem, recording, selectedDevice?.platform, selectedSerial]);
-
-  async function runAction(action: DeviceActionRequest, shouldRecord = true, recordedAction?: RecordableAction) {
+  async function runAction(action: DeviceActionRequest, captureAssetTransition = true, recordedAction?: AssetRecordingAction) {
     if (!selectedSerial) {
       setMessage("请先选择设备");
       return;
@@ -1579,44 +1425,23 @@ export function App() {
       setMessage(selectedDevice.platform === "ios" ? `iOS 设备暂不支持 ${action.type}，需要设备在线并配置 WDA` : `当前设备暂不支持 ${action.type}`);
       return;
     }
-    const shouldAppendRecordingStep = activeNavItem === "recording" && recording && shouldRecord;
     const actionStrategy = actionStrategyForWorkspace(activeNavItem, {
-      identifying: assetRecordingIdentifying || assetRecordingIdentificationInFlightRef.current > 0,
-      recording
+      identifying: assetRecordingIdentifying || assetRecordingIdentificationInFlightRef.current > 0
     });
     if (actionStrategy.blockPreviewInteraction) {
       setMessage("正在识别当前页面，请稍候");
       return;
     }
-    const beforeRecordingObservation =
-      shouldAppendRecordingStep && selectedDevice
-        ? buildRecordingObservationFromSnapshots(selectedSerial, selectedDevice.platform, semanticSnapshotsRef.current)
-        : undefined;
-    const shouldCaptureAssetTransition = activeNavItem === "assetRecording" && selectedDevice && shouldRecord;
-    const cachedAssetObservation = isRecordingObservation(assetRecordingPage.observation) ? assetRecordingPage.observation : undefined;
+    const shouldCaptureAssetTransition = activeNavItem === "assetRecording" && selectedDevice && captureAssetTransition;
+    const cachedAssetObservation = isAssetObservation(assetRecordingPage.observation) ? assetRecordingPage.observation : undefined;
     const beforeAssetObservation =
       shouldCaptureAssetTransition && selectedDevice
-        ? buildRecordingObservationFromSnapshots(selectedSerial, selectedDevice.platform, semanticSnapshotsRef.current) ?? cachedAssetObservation
+        ? buildAssetObservationFromSnapshots(selectedSerial, selectedDevice.platform, semanticSnapshotsRef.current) ?? cachedAssetObservation
         : undefined;
-    const appendRecordedStep = (recordable: RecordableAction) => {
-      const step = attachRecordingObservationsToActionStep(appendStep(recordable), beforeRecordingObservation);
-      if (step.params.recordingContext) {
-        updateStepById(step.id, {
-          params: {
-            recordingContext: step.params.recordingContext
-          }
-        });
-      }
-      scheduleRecordingAfterObservation(step);
-      queueRecordingGraphAsset(step, beforeRecordingObservation);
-    };
     if (sendScrcpyDirectAction(action)) {
-      if (shouldAppendRecordingStep) {
-        appendRecordedStep(recordedAction ?? action);
-      }
       semanticSnapshotsRef.current = {};
       setMessage(`已通过 scrcpy 执行 ${action.type}`);
-      if (activeNavItem === "assetRecording") {
+      if (shouldCaptureAssetTransition) {
         scheduleAssetRecordingTransition(recordedAction ?? action, beforeAssetObservation);
       }
       return;
@@ -1632,13 +1457,10 @@ export function App() {
       if (!response.ok) {
         throw new Error(json.error ?? "动作执行失败");
       }
-      if (shouldAppendRecordingStep) {
-        appendRecordedStep(recordedAction ?? action);
-      }
       semanticSnapshotsRef.current = {};
       refreshScreenshot();
       setMessage(`已执行 ${action.type}`);
-      if (activeNavItem === "assetRecording") {
+      if (shouldCaptureAssetTransition) {
         scheduleAssetRecordingTransition(recordedAction ?? action, beforeAssetObservation);
       }
     } catch (error) {
@@ -1648,7 +1470,7 @@ export function App() {
     }
   }
 
-  function scheduleAssetRecordingTransition(recordable: RecordableAction, beforeObservation: RecordingObservation | undefined) {
+  function scheduleAssetRecordingTransition(recordable: AssetRecordingAction, beforeObservation: AssetObservation | undefined) {
     beginAssetRecordingIdentification();
     window.setTimeout(() => {
       void (async () => {
@@ -1662,8 +1484,8 @@ export function App() {
   }
 
   async function captureAssetRecordingTransition(
-    recordable: RecordableAction,
-    beforeObservation: RecordingObservation | undefined,
+    recordable: AssetRecordingAction,
+    beforeObservation: AssetObservation | undefined,
     options: { manageIdentification?: boolean } = {}
   ) {
     if (!selectedSerial || !selectedDevice) {
@@ -1680,15 +1502,15 @@ export function App() {
         return;
       }
       setAssetRecordingGraphVersionId(graphVersionId);
-      const before = beforeObservation ?? (await fetchRecordingObservation(selectedSerial).catch(() => undefined));
-      const after = await fetchRecordingObservation(selectedSerial).catch(() => undefined);
+      const before = beforeObservation ?? (await fetchAssetObservation(selectedSerial).catch(() => undefined));
+      const after = await fetchAssetObservation(selectedSerial).catch(() => undefined);
       if (!before || !after) {
         await identifyCurrentPageAsset();
         setMessage("已刷新页面信息，但本次动作缺少前后页面快照，暂未生成页面连接候选");
         return;
       }
       const step = deviceActionToAssetRecordingStep(recordable, selectedDeviceSize);
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/recording-assets`, {
+      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/asset-transition-candidates`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1699,7 +1521,7 @@ export function App() {
           includeOcr: false
         })
       });
-      const json = (await response.json()) as RecordingGraphAssetApiResponse & CurrentPageAssetApiResponse & { error?: string };
+      const json = (await response.json()) as AssetTransitionCandidateApiResponse & CurrentPageAssetApiResponse & { error?: string };
       if (!response.ok) {
         throw new Error(json.error ?? "页面连接候选生成失败");
       }
@@ -1717,148 +1539,23 @@ export function App() {
     }
   }
 
-  function scheduleRecordingAfterObservation(step: ReturnType<typeof appendStep>) {
-    if (!recording || !selectedSerial || !selectedDevice) {
-      return;
-    }
-    const serial = selectedSerial;
-    window.setTimeout(() => {
-      void (async () => {
-        const afterObservation = await fetchRecordingObservation(serial).catch(() => undefined);
-        if (!afterObservation) {
-          return;
-        }
-        const next = attachRecordingObservationsToActionStep(step, undefined, afterObservation);
-        if (next.params.recordingContext) {
-          updateStepById(step.id, {
-            params: {
-              recordingContext: next.params.recordingContext
-            },
-            expectations: next.expectations
-          });
-        }
-      })();
-    }, Math.max(600, Number(step.timing?.delayBeforeMs ?? 700)));
-  }
-
-  function queueRecordingGraphAsset(step: ReturnType<typeof appendStep>, beforeObservation: RecordingObservation | undefined) {
-    if (!recording) {
-      return;
-    }
-    const graphVersionId = recordingGraphVersionIdRef.current;
-    if (!graphVersionId) {
-      updateStepById(step.id, {
-        params: {
-          ...step.params,
-          graphAsset: {
-            status: "draft",
-            warnings: [{ code: "GRAPH_VERSION_MISSING", message: "未找到可写入的 active 业务图谱版本" }]
-          }
-        }
-      });
-      return;
-    }
-    if (!selectedSerial || !beforeObservation) {
-      updateStepById(step.id, {
-        params: {
-          ...step.params,
-          graphAsset: {
-            status: "draft",
-            warnings: [{ code: "BEFORE_OBSERVATION_MISSING", message: "录制前页面快照缺失，本步骤暂未写入图谱" }]
-          }
-        }
-      });
-      return;
-    }
-    updateStepById(step.id, {
-      params: {
-        ...step.params,
-        graphAsset: {
-          status: "pending",
-          warnings: []
-        }
-      }
-    });
-    window.setTimeout(() => {
-      void persistRecordedStepGraphAsset(graphVersionId, selectedSerial, step, beforeObservation);
-    }, Math.max(600, Number(step.timing?.delayBeforeMs ?? 900)));
-  }
-
-  async function persistRecordedStepGraphAsset(graphVersionId: string, serial: string, step: ReturnType<typeof appendStep>, beforeObservation: RecordingObservation) {
-    try {
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/recording-assets`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          step,
-          beforeObservation,
-          deviceSerial: serial,
-          confirm: true,
-          includeOcr: false
-        })
-      });
-      const json = (await response.json()) as RecordingGraphAssetApiResponse & { error?: string };
-      if (!response.ok) {
-        throw new Error(json.error ?? "录制步骤写入图谱失败");
-      }
-      const edge = json.result.edge.edge;
-      const fromNode = json.result.from.node;
-      const toNode = json.result.to.node;
-      const skipped = json.result.edge.status === "skipped" || !edge || !fromNode || !toNode;
-      updateStepById(step.id, {
-        params: {
-          ...step.params,
-          graphAsset: {
-            status: skipped ? "skipped" : edge.status === "active" ? "confirmed" : "draft",
-            fromNodeName: fromNode?.name,
-            fromNodeKey: fromNode?.key,
-            fromMatcherCount: fromNode?.matchers?.length ?? 0,
-            fromCriticalMatcherCount: fromNode?.matchers?.filter((matcher) => matcher.critical).length ?? 0,
-            toNodeName: toNode?.name,
-            toNodeKey: toNode?.key,
-            toMatcherCount: toNode?.matchers?.length ?? 0,
-            toCriticalMatcherCount: toNode?.matchers?.filter((matcher) => matcher.critical).length ?? 0,
-            edgeName: edge?.name,
-            expectationSummary: edge?.expectations?.[0]?.title,
-            reliabilityScore: edge?.reliabilityScore,
-            warnings: [
-              ...json.result.warnings,
-              ...(skipped && json.result.edge.reason ? [{ code: "GRAPH_ASSET_SKIPPED", message: json.result.edge.reason }] : [])
-            ]
-          }
-        }
-      });
-    } catch (error) {
-      updateStepById(step.id, {
-        params: {
-          ...step.params,
-          graphAsset: {
-            status: "draft",
-            warnings: [{ code: "GRAPH_ASSET_WRITE_FAILED", message: error instanceof Error ? error.message : String(error) }]
-          }
-        }
-      });
-    }
-  }
-
-  async function createTapRecordingAction(point: { x: number; y: number }): Promise<RecordableAction> {
-    const fallback: RecordableAction = { type: "tap", x: point.x, y: point.y };
+  async function createTapAssetAction(point: { x: number; y: number }): Promise<AssetRecordingAction> {
+    const fallback: AssetRecordingAction = { type: "tap", x: point.x, y: point.y };
     const actionStrategy = actionStrategyForWorkspace(activeNavItem, {
-      identifying: assetRecordingIdentifying || assetRecordingIdentificationInFlightRef.current > 0,
-      recording
+      identifying: assetRecordingIdentifying || assetRecordingIdentificationInFlightRef.current > 0
     });
     if (!actionStrategy.useCachedSemanticTarget || !selectedSerial || !selectedDevice?.capabilities.screenshot) {
       return fallback;
     }
-    const cachedAction = createTapRecordingActionFromSnapshot(point, selectedDeviceSize, semanticSnapshotsRef.current);
+    const cachedAction = createTapAssetActionFromSnapshot(point, selectedDeviceSize, semanticSnapshotsRef.current);
     if (cachedAction.type !== "tap" || selectedDevice.platform !== "android" || !actionStrategy.resolveLiveLocatorBeforeAction) {
       return cachedAction;
     }
-    const liveElementAction = await fetchTapElementRecordingAction(selectedSerial, point);
+    const liveElementAction = await fetchTapElementAssetAction(selectedSerial, point);
     return liveElementAction ?? cachedAction;
   }
 
-  async function fetchTapElementRecordingAction(serial: string, point: { x: number; y: number }): Promise<RecordableAction | undefined> {
+  async function fetchTapElementAssetAction(serial: string, point: { x: number; y: number }): Promise<AssetRecordingAction | undefined> {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 1600);
     try {
@@ -1877,7 +1574,7 @@ export function App() {
         return undefined;
       }
       const lookup = (await response.json()) as ElementLookupResponse;
-      return createTapRecordingActionFromElementLookup(point, lookup);
+      return createTapAssetActionFromElementLookup(point, lookup);
     } catch {
       return undefined;
     } finally {
@@ -2006,7 +1703,7 @@ export function App() {
       );
     } else {
       void (async () => {
-        const recordedAction = await createTapRecordingAction(endRecordedPoint);
+        const recordedAction = await createTapAssetAction(endRecordedPoint);
         await runAction({ type: "tap", x: endControlPoint.x, y: endControlPoint.y }, true, recordedAction);
       })();
     }
@@ -2023,8 +1720,8 @@ export function App() {
     const gaps = 36;
     const availableWidth = Math.max(0, workspaceWidth - navWidth - horizontalPadding - gaps);
     const assetEditorMinWidth = 540;
-    const dynamicMin = Math.min(recordingPreviewMinWidth, Math.max(320, availableWidth - assetEditorMinWidth));
-    const dynamicMax = Math.max(dynamicMin, Math.min(recordingPreviewMaxWidth, availableWidth - assetEditorMinWidth));
+    const dynamicMin = Math.min(assetPreviewMinWidth, Math.max(320, availableWidth - assetEditorMinWidth));
+    const dynamicMax = Math.max(dynamicMin, Math.min(assetPreviewMaxWidth, availableWidth - assetEditorMinWidth));
     return {
       min: dynamicMin,
       max: dynamicMax
@@ -2040,16 +1737,15 @@ export function App() {
       startX: event.clientX,
       startWidth: assetRecordingPreviewWidth
     };
-    document.body.classList.add("recording-resize-active");
+    document.body.classList.add("asset-recording-resize-active");
   }
 
   function openDevices() {
     setActiveNavItem("devices");
   }
 
-  function openRecording() {
-    setActiveNavItem("recording");
-    setRecording(false);
+  function openDeviceDetails() {
+    setActiveNavItem("deviceDetails");
   }
 
   function openAssetRecording() {
@@ -2089,81 +1785,10 @@ export function App() {
       setCurrentRunId("");
     }
     setActiveNavItem("runs");
-    setAutomationTab("runs");
   }
 
   function selectDeviceAndCloseStream(device: DeviceInfo) {
     selectDevice(device, () => closeScrcpyStream("device switch"));
-  }
-
-  async function startSavedCaseRun(caseId: string) {
-    setActiveNavItem("runs");
-    setAutomationTab("runs");
-    await startRun(caseId);
-  }
-
-  async function saveCaseAndOpenLibrary() {
-    const savedFlow = await saveCase();
-    if (!savedFlow) {
-      return;
-    }
-    setRecording(false);
-    setHighlightedFlowId(savedFlow.id);
-    setSelectedFlowId(savedFlow.id);
-    setActiveNavItem("runs");
-    await refreshStructuredFlows().catch(() => undefined);
-    window.setTimeout(() => {
-      setHighlightedFlowId((current) => (current === savedFlow.id ? "" : current));
-    }, 2600);
-  }
-
-  async function editCaseFromLibrary(flowId: string) {
-    const loadedFlow = await loadStructuredFlow(flowId);
-    if (!loadedFlow) {
-      return;
-    }
-    setSelectedFlowId(flowId);
-    setHighlightedFlowId(flowId);
-    openRecording();
-    window.setTimeout(() => {
-      setHighlightedFlowId((current) => (current === flowId ? "" : current));
-    }, 1800);
-  }
-
-  async function startSavedFlowRun(flowId: string, stopAtStepId?: string, expectationOverrides?: FlowExpectationOverride[]) {
-    setSelectedFlowId(flowId);
-    setActiveNavItem("runs");
-    setAutomationTab("runs");
-    await startFlowRun(flowId, stopAtStepId, expectationOverrides);
-  }
-
-  async function updateStructuredFlow(flow: StructuredFlow) {
-    const response = await fetch(`/api/structured-flows/${encodeURIComponent(flow.id)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(flow)
-    });
-    const json = (await response.json()) as { flow?: StructuredFlow; error?: string };
-    if (!response.ok || !json.flow) {
-      setMessage(json.error ?? "更新结构化用例失败");
-      return;
-    }
-    setSelectedFlowId(json.flow.id);
-    await refreshStructuredFlows().catch(() => undefined);
-    setMessage(`已更新结构化用例：${json.flow.name}`);
-  }
-
-  async function deleteStructuredFlow(flowId: string) {
-    const response = await fetch(`/api/structured-flows/${encodeURIComponent(flowId)}`, { method: "DELETE" });
-    if (!response.ok && response.status !== 204) {
-      setMessage("删除结构化用例失败");
-      return;
-    }
-    if (selectedFlowId === flowId) {
-      setSelectedFlowId("");
-    }
-    await refreshStructuredFlows().catch(() => undefined);
-    setMessage("已删除结构化用例");
   }
 
   async function markCurrentPageAsRuntimeInterceptor() {
@@ -2172,7 +1797,7 @@ export function App() {
       return;
     }
     try {
-      const observation = await fetchRecordingObservation(selectedSerial);
+      const observation = await fetchAssetObservation(selectedSerial);
       if (!observation) {
         setMessage("当前页面识别失败，无法生成临时阻断规则");
         return;
@@ -2880,8 +2505,8 @@ export function App() {
     }
   }
 
-  const workspaceStyle: RecordingWorkspaceStyle = workspaceStyleForNav(activeNavItem, 0, assetRecordingPreviewWidth);
-  const stabilityPackageOptions = knownStabilityPackages(cases, structuredFlows, runs);
+  const workspaceStyle: PreviewWorkspaceStyle = workspaceStyleForNav(activeNavItem, 0, assetRecordingPreviewWidth);
+  const stabilityPackageOptions = knownStabilityPackages(structuredFlows, runs);
   const assetPatrolPackageOptions = stabilityPackageOptions;
   const currentStabilityRun =
     (currentRun?.config.runKind === "stability_exploration" ? currentRun : undefined) ??
@@ -2902,64 +2527,14 @@ export function App() {
     runs.find((run) => run.config.runKind === "asset_patrol" && run.deviceSerial === selectedSerial);
   const assetPatrolSummary = assetDrivenExecutionProgressSummary(assetDrivenExecution) ?? assetDrivenRunProgressSummary(currentAssetPatrolRun, assetPatrolPackageName);
 
-  const stepsPanel = (
-    <StepsPanel
-      activeTab={activeNavItem === "runs" ? "runs" : automationTab}
-      steps={steps}
+  const runResultsPanel = (
+    <RunResultsPanel
       selectedDevice={selectedDevice}
-      selectedCaseId={selectedCaseId}
-      recording={recording}
-      caseName={caseName}
-      repeatCount={repeatCount}
-      stepIntervalMs={stepIntervalMs}
-      loopUntilStopped={loopUntilStopped}
-      pauseAfterEachStep={pauseAfterEachStep}
-      startStrategy={startStrategy}
-      startAppPackageName={startAppPackageName}
-      startSetupScope={startSetupScope}
-      androidAppMonitorEnabled={androidAppMonitorEnabled}
-      androidAppMonitorPackageName={androidAppMonitorPackageName}
-      androidAppMonitorIncludeSubprocesses={androidAppMonitorIncludeSubprocesses}
-      androidAppMonitorCpuThresholdEnabled={androidAppMonitorCpuThresholdEnabled}
-      androidAppMonitorCpuThresholdPercent={androidAppMonitorCpuThresholdPercent}
-      androidAppMonitorMemoryThresholdEnabled={androidAppMonitorMemoryThresholdEnabled}
-      androidAppMonitorMemoryThresholdMb={androidAppMonitorMemoryThresholdMb}
-      androidAppMonitorHeapDumpEnabled={androidAppMonitorHeapDumpEnabled}
       currentRun={currentRun}
       currentGraphRun={currentGraphRun}
       runs={runs}
       runsLimit={runsLimit}
-      activeRunForSelectedDevice={activeRunForSelectedDevice}
       selectedSerial={selectedSerial}
-      setRecording={setRecording}
-      setCaseName={setCaseName}
-      setRepeatCount={setRepeatCount}
-      setStepIntervalMs={setStepIntervalMs}
-      setLoopUntilStopped={setLoopUntilStopped}
-      setPauseAfterEachStep={setPauseAfterEachStep}
-      setStartStrategy={setStartStrategy}
-      setStartAppPackageName={setStartAppPackageName}
-      setStartSetupScope={setStartSetupScope}
-      setAndroidAppMonitorEnabled={setAndroidAppMonitorEnabled}
-      setAndroidAppMonitorPackageName={setAndroidAppMonitorPackageName}
-      setAndroidAppMonitorIncludeSubprocesses={setAndroidAppMonitorIncludeSubprocesses}
-      setAndroidAppMonitorCpuThresholdEnabled={setAndroidAppMonitorCpuThresholdEnabled}
-      setAndroidAppMonitorCpuThresholdPercent={setAndroidAppMonitorCpuThresholdPercent}
-      setAndroidAppMonitorMemoryThresholdEnabled={setAndroidAppMonitorMemoryThresholdEnabled}
-      setAndroidAppMonitorMemoryThresholdMb={setAndroidAppMonitorMemoryThresholdMb}
-      setAndroidAppMonitorHeapDumpEnabled={setAndroidAppMonitorHeapDumpEnabled}
-      moveStep={moveStep}
-      removeStep={removeStep}
-      insertWaitStep={insertWaitStep}
-      insertConditionalTapStep={insertConditionalTapStep}
-      copyStep={copyStep}
-      toggleStepEnabled={toggleStepEnabled}
-      updateStep={updateStep}
-      addStepExpectation={addStepExpectation}
-      updateStepExpectation={updateStepExpectation}
-      removeStepExpectation={removeStepExpectation}
-      resetEditor={resetEditor}
-      saveCase={saveCaseAndOpenLibrary}
       stopCurrentRun={stopCurrentRun}
       pauseCurrentRun={pauseCurrentRun}
       resumeCurrentRun={resumeCurrentRun}
@@ -2984,7 +2559,7 @@ export function App() {
           navCollapsed={navCollapsed}
           setNavCollapsed={setNavCollapsed}
           openDevices={openDevices}
-          openRecording={openRecording}
+          openDeviceDetails={openDeviceDetails}
           openAssetRecording={openAssetRecording}
           openPageAssets={openPageAssets}
           openAssetComposition={openAssetComposition}
@@ -3002,21 +2577,17 @@ export function App() {
             selectedSerial={selectedSerial}
             selectedDevice={selectedDevice}
             tools={tools}
-            cases={cases}
             runs={runs}
             activeRunForSelectedDevice={activeRunForSelectedDevice}
             selectedDeviceBusy={selectedDeviceBusy}
             onSelectDevice={selectDeviceAndCloseStream}
-            onLoadCase={editCaseFromLibrary}
-            onStartRun={startSavedCaseRun}
-            onDeleteCase={deleteCase}
-            onOpenRecording={openRecording}
+            onOpenDeviceDetails={openDeviceDetails}
             onOpenRuns={openRuns}
             onRefreshDevices={() => refreshDevices().catch((error) => setMessage(error.message))}
           />
         )}
 
-        {activeNavItem === "recording" && (
+        {activeNavItem === "deviceDetails" && (
           <PreviewPanel
             key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
             devices={selectableDevices}
@@ -3107,14 +2678,7 @@ export function App() {
 
         {activeNavItem === "pageAssets" && (
           <PageAssetsPanel
-            selectedSerial={selectedSerial}
-            selectedDeviceBusy={selectedDeviceBusy}
             onOpenAssetRecording={openAssetRecording}
-            onRunStarted={(runId) => {
-              setCurrentRunId(runId);
-              setActiveNavItem("runs");
-              setAutomationTab("runs");
-            }}
             setMessage={setMessage}
           />
         )}
@@ -3243,7 +2807,7 @@ export function App() {
           />
         )}
 
-        {activeNavItem === "runs" && <section className="module-page execution-module">{stepsPanel}</section>}
+        {activeNavItem === "runs" && <section className="module-page execution-module">{runResultsPanel}</section>}
 
         {activeNavItem === "settings" && (
           <SettingsView
@@ -4016,15 +3580,11 @@ type DeviceManagementViewProps = {
   selectedSerial: string;
   selectedDevice?: DeviceInfo;
   tools: ToolStatus[];
-  cases: TestCase[];
   runs: TestRun[];
   activeRunForSelectedDevice?: TestRun;
   selectedDeviceBusy: boolean;
   onSelectDevice: (device: DeviceInfo) => void;
-  onLoadCase: (caseId: string) => Promise<void>;
-  onStartRun: (caseId: string) => Promise<void>;
-  onDeleteCase: (caseId: string) => Promise<void>;
-  onOpenRecording: () => void;
+  onOpenDeviceDetails: () => void;
   onOpenRuns: () => void;
   onRefreshDevices: () => void;
 };
@@ -4034,15 +3594,11 @@ function DeviceManagementView({
   selectedSerial,
   selectedDevice,
   tools,
-  cases,
   runs,
   activeRunForSelectedDevice,
   selectedDeviceBusy,
   onSelectDevice,
-  onLoadCase,
-  onStartRun,
-  onDeleteCase,
-  onOpenRecording,
+  onOpenDeviceDetails,
   onOpenRuns,
   onRefreshDevices
 }: DeviceManagementViewProps) {
@@ -4057,14 +3613,8 @@ function DeviceManagementView({
       <DeviceSidebar
         devices={devices}
         selectedSerial={selectedSerial}
-        cases={cases}
         runs={runs}
-        selectedDeviceBusy={selectedDeviceBusy}
         onSelectDevice={onSelectDevice}
-        onLoadCase={onLoadCase}
-        onStartRun={onStartRun}
-        onDeleteCase={onDeleteCase}
-        showCases={false}
       />
 
       <div className="device-detail-panel">
@@ -4110,8 +3660,8 @@ function DeviceManagementView({
                 </div>
                 <div className="device-profile-actions">
                   <span className={`device-status-pill ${selectedDevice.status}`}>{selectedDevice.status}</span>
-                  <button className="icon-button primary" type="button" onClick={onOpenRecording}>
-                    进入录制
+                  <button className="icon-button primary" type="button" onClick={onOpenDeviceDetails}>
+                    打开设备详情
                   </button>
                   <button className="icon-button" type="button" onClick={onOpenRuns}>
                     查看执行
@@ -4198,7 +3748,7 @@ function DeviceManagementView({
   );
 }
 
-function selectRecordingGraphVersionId(
+function selectAssetGraphVersionId(
   graphs: GraphListItem[],
   platform: DeviceInfo["platform"]
 ): string | undefined {
@@ -4219,16 +3769,11 @@ async function fetchWritableGraphVersionId(platform: DeviceInfo["platform"]): Pr
     return undefined;
   }
   const json = (await response.json()) as { graphs: GraphListItem[] };
-  return selectRecordingGraphVersionId(json.graphs, platform);
+  return selectAssetGraphVersionId(json.graphs, platform);
 }
 
-function knownStabilityPackages(cases: TestCase[], flows: StructuredFlow[], runs: TestRun[]): string[] {
+function knownStabilityPackages(flows: StructuredFlow[], runs: TestRun[]): string[] {
   const packages = new Set<string>();
-  for (const testCase of cases) {
-    if (testCase.targetApp?.androidPackageName) {
-      packages.add(testCase.targetApp.androidPackageName);
-    }
-  }
   for (const flow of flows) {
     if (flow.targetApp.androidPackageName) {
       packages.add(flow.targetApp.androidPackageName);
@@ -4494,7 +4039,7 @@ function pageTaskFieldTypeMetadata(value: unknown): AssetRecordingPageTask["step
     : "tap";
 }
 
-function inferVisualPageName(observation: RecordingObservation | undefined, fallback?: string): string | undefined {
+function inferVisualPageName(observation: AssetObservation | undefined, fallback?: string): string | undefined {
   const texts = compactUnique(
     [
       ...(observation?.uiElements.map((element) => element.text) ?? []),
@@ -4512,7 +4057,7 @@ function sanitizeAssetDisplayName(name: string | undefined): string | undefined 
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.replace(/^(运行期未知节点|录制节点)：\s*/, "").trim() || trimmed;
+  return trimmed.replace(/^(运行期未知节点|资产候选节点|录制节点)：\s*/, "").trim() || trimmed;
 }
 
 function isLikelyPageTitle(text: string): boolean {
@@ -4524,7 +4069,7 @@ function stringMetadata(metadata: Record<string, unknown> | undefined, key: stri
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function observationScreenshotUrl(observation: RecordingObservation | undefined): string | undefined {
+function observationScreenshotUrl(observation: AssetObservation | undefined): string | undefined {
   const screenshotBase64 = observation?.raw?.screenshotBase64;
   if (typeof screenshotBase64 === "string" && screenshotBase64.trim()) {
     return `data:image/png;base64,${screenshotBase64}`;
@@ -4597,7 +4142,7 @@ function numberMetadata(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function manualOperationElementsMetadata(metadata: Record<string, unknown> | undefined, resolution: RecordingObservation["resolution"]): NonNullable<AssetRecordingCurrentPage["elements"]> {
+function manualOperationElementsMetadata(metadata: Record<string, unknown> | undefined, resolution: AssetObservation["resolution"]): NonNullable<AssetRecordingCurrentPage["elements"]> {
   type PageElement = NonNullable<AssetRecordingCurrentPage["elements"]>[number];
   const value = metadata?.assetRecordingManualElements;
   if (!Array.isArray(value)) {
@@ -5046,7 +4591,7 @@ function summarizeEvidenceDiagnostics(evidence: CurrentPageMatcherEvidenceApi[] 
     .map((result) => `${result.type ?? "matcher"}:${result.expected ?? result.actual ?? "unknown"}`);
 }
 
-function summarizeObservationElements(observation: RecordingObservation | undefined) {
+function summarizeObservationElements(observation: AssetObservation | undefined) {
   const previewCrop = summarizeOperationPreviewCrop(observation?.resolution);
   const elementCandidates = (observation?.uiElements ?? [])
     .filter((element) => element.visible !== false && hasStableOperationSignal(element))
@@ -5077,7 +4622,7 @@ function summarizeObservationElements(observation: RecordingObservation | undefi
   return [...elementCandidates, ...summarizeInferredScrollRegions(observation, previewCrop)];
 }
 
-function summarizeInferredScrollRegions(observation: RecordingObservation | undefined, previewCrop: ReturnType<typeof summarizeOperationPreviewCrop>) {
+function summarizeInferredScrollRegions(observation: AssetObservation | undefined, previewCrop: ReturnType<typeof summarizeOperationPreviewCrop>) {
   const resolution = observation?.resolution;
   if (!resolution?.width || !resolution.height) {
     return [];
@@ -5115,7 +4660,7 @@ function summarizeInferredScrollRegions(observation: RecordingObservation | unde
   ];
 }
 
-function looksLikeScrollableCardText(element: RecordingObservation["uiElements"][number]): boolean {
+function looksLikeScrollableCardText(element: AssetObservation["uiElements"][number]): boolean {
   const text = `${element.text ?? ""} ${element.contentDesc ?? ""}`;
   return /班级|课程|开放加入|加入|课节|课堂/.test(text);
 }
@@ -5131,7 +4676,7 @@ function combinedBounds(items: Array<{ x: number; y: number; width: number; heig
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
-function summarizeBoundsRegion(bounds: { x: number; y: number; width: number; height: number }, resolution: NonNullable<RecordingObservation["resolution"]>) {
+function summarizeBoundsRegion(bounds: { x: number; y: number; width: number; height: number }, resolution: NonNullable<AssetObservation["resolution"]>) {
   return {
     x: clampPercent((bounds.x / resolution.width) * 100),
     y: clampPercent((bounds.y / resolution.height) * 100),
@@ -5146,7 +4691,7 @@ function uniqueRounded(values: number[], tolerance: number): number[] {
   }, []);
 }
 
-function summarizeScrollProfile(element: RecordingObservation["uiElements"][number]) {
+function summarizeScrollProfile(element: AssetObservation["uiElements"][number]) {
   const label = `${element.text ?? ""} ${element.contentDesc ?? ""} ${element.resourceId ?? ""} ${element.className ?? ""}`.toLowerCase();
   const isGridLike = /grid|recycler|class_list|班级|card/.test(label);
   const isHorizontalLike = /tab|horizontal|carousel|横向|分类/.test(label);
@@ -5159,7 +4704,7 @@ function summarizeScrollProfile(element: RecordingObservation["uiElements"][numb
   };
 }
 
-function summarizeOperationPreviewCrop(resolution: RecordingObservation["resolution"]): { x: number; y: number; width: number; height: number } | undefined {
+function summarizeOperationPreviewCrop(resolution: AssetObservation["resolution"]): { x: number; y: number; width: number; height: number } | undefined {
   if (!resolution?.width || !resolution.height) {
     return undefined;
   }
@@ -5173,7 +4718,7 @@ function summarizeOperationPreviewCrop(resolution: RecordingObservation["resolut
   };
 }
 
-function summarizeElementRegion(element: RecordingObservation["uiElements"][number], resolution: RecordingObservation["resolution"]): { x: number; y: number; width: number; height: number } | undefined {
+function summarizeElementRegion(element: AssetObservation["uiElements"][number], resolution: AssetObservation["resolution"]): { x: number; y: number; width: number; height: number } | undefined {
   if (!element.bounds || !resolution?.width || !resolution.height || element.bounds.width <= 0 || element.bounds.height <= 0) {
     return undefined;
   }
@@ -5191,14 +4736,14 @@ function clampPercent(value: number, min = 0, max = 100): number {
   return Math.min(max, Math.max(min, Math.round(value * 100) / 100));
 }
 
-function hasStableOperationSignal(element: RecordingObservation["uiElements"][number]): boolean {
+function hasStableOperationSignal(element: AssetObservation["uiElements"][number]): boolean {
   if (element.scrollable && (element.resourceId || element.accessibilityId || element.contentDesc || element.text)) {
     return true;
   }
   return Boolean(element.resourceId || element.accessibilityId || element.contentDesc || element.text);
 }
 
-function summarizeElementActionKind(element: RecordingObservation["uiElements"][number]): "tap" | "scroll" | "long_press" {
+function summarizeElementActionKind(element: AssetObservation["uiElements"][number]): "tap" | "scroll" | "long_press" {
   if (element.scrollable) {
     return "scroll";
   }
@@ -5208,14 +4753,14 @@ function summarizeElementActionKind(element: RecordingObservation["uiElements"][
   return "tap";
 }
 
-function summarizeElementAvailability(element: RecordingObservation["uiElements"][number]): "visible" | "conditional" {
+function summarizeElementAvailability(element: AssetObservation["uiElements"][number]): "visible" | "conditional" {
   if (element.clickable || element.scrollable || element.longClickable) {
     return "visible";
   }
   return "conditional";
 }
 
-function summarizeObservationTexts(observation: RecordingObservation | undefined, source: "ui" | "ocr"): string[] {
+function summarizeObservationTexts(observation: AssetObservation | undefined, source: "ui" | "ocr"): string[] {
   if (source === "ocr") {
     return compactUnique(
       (observation?.ocrTexts ?? [])
@@ -5233,7 +4778,7 @@ function summarizeObservationTexts(observation: RecordingObservation | undefined
   );
 }
 
-function summarizeOcrEvidenceValue(text: RecordingObservation["ocrTexts"][number], resolution: RecordingObservation["resolution"]): string | undefined {
+function summarizeOcrEvidenceValue(text: AssetObservation["ocrTexts"][number], resolution: AssetObservation["resolution"]): string | undefined {
   const value = text.text?.trim();
   if (!value) {
     return undefined;
@@ -5246,8 +4791,8 @@ function summarizeOcrEvidenceValue(text: RecordingObservation["ocrTexts"][number
 }
 
 function normalizeOcrEvidenceRegion(
-  region: RecordingObservation["ocrTexts"][number]["region"],
-  resolution: RecordingObservation["resolution"]
+  region: AssetObservation["ocrTexts"][number]["region"],
+  resolution: AssetObservation["resolution"]
 ): { x: number; y: number; width: number; height: number } | undefined {
   if (!region || region.width <= 0 || region.height <= 0) {
     return undefined;
@@ -5280,7 +4825,7 @@ function formatEvidenceNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : String(value).replace(/0+$/, "").replace(/\.$/, "");
 }
 
-function summarizeAssetAiDescription(status: NonNullable<CurrentPageAssetApiResponse["result"]>["status"], pageName: string | undefined, observation: RecordingObservation | undefined): string {
+function summarizeAssetAiDescription(status: NonNullable<CurrentPageAssetApiResponse["result"]>["status"], pageName: string | undefined, observation: AssetObservation | undefined): string {
   const texts = compactUnique(
     [
       ...(observation?.uiElements.map((element) => element.text || element.contentDesc || element.accessibilityId) ?? []),
@@ -5320,11 +4865,11 @@ export function pageAssetMessage(response: CurrentPageAssetApiResponse, mappedPa
   return "当前页面识别完成";
 }
 
-function buildRecordingObservationFromSnapshots(
+function buildAssetObservationFromSnapshots(
   serial: string,
   platform: DeviceInfo["platform"],
   snapshots: SemanticSnapshots
-): RecordingObservation | undefined {
+): AssetObservation | undefined {
   const element = snapshots.element;
   const text = snapshots.text;
   if (!element && !text) {
@@ -5372,7 +4917,7 @@ function buildRecordingObservationFromSnapshots(
         ? { width: text.width, height: text.height }
         : undefined;
   return {
-    id: `recording_observation_${Date.now()}`,
+    id: `asset_observation_${Date.now()}`,
     deviceSerial: serial,
     platform,
     capturedAt: latestCapturedAt([element?.capturedAt, text?.capturedAt]),
@@ -5383,30 +4928,158 @@ function buildRecordingObservationFromSnapshots(
   };
 }
 
-function deviceActionToAssetRecordingStep(action: RecordableAction, deviceSize: { width: number; height: number }): ReturnType<typeof createRecordedStep> {
-  return createRecordedStep({
-    action,
-    order: 1,
-    deviceSize,
+function deviceActionToAssetRecordingStep(action: AssetRecordingAction, deviceSize: { width: number; height: number }): ActionStep {
+  const base = {
     id: `asset-step-${Date.now()}`,
-    autoExpectations: false
-  });
+    order: 1,
+    enabled: true,
+    params: {},
+    preconditions: [],
+    expectations: [],
+    createdAt: nowIso()
+  };
+  if (action.type === "tap") {
+    return {
+      ...base,
+      type: "tap",
+      coordinate: coordinateForPoint(action, deviceSize)
+    };
+  }
+  if (action.type === "tap_on_text") {
+    return {
+      ...base,
+      type: "tap_on_text",
+      title: `点击文字：${action.text}`,
+      params: {
+        text: action.text,
+        mode: action.mode ?? "contains",
+        timeoutMs: action.timeoutMs ?? 3000,
+        intervalMs: action.intervalMs ?? 500,
+        lang: action.lang ?? "",
+        locator: "ocr_text"
+      },
+      coordinate: coordinateForPoint(action, deviceSize)
+    };
+  }
+  if (action.type === "tap_on_element") {
+    return {
+      ...base,
+      type: "tap_on_element",
+      title: `点击元素：${action.selector ?? describeAssetElementLocator(action.locator)}`,
+      params: {
+        locator: action.locator,
+        selector: action.selector ?? describeAssetElementLocator(action.locator),
+        bounds: action.bounds,
+        resourceId: action.locator.resourceId,
+        text: action.locator.text,
+        contentDesc: action.locator.contentDesc,
+        className: action.locator.className,
+        packageName: action.locator.packageName,
+        occurrence: action.locator.occurrence,
+        timeoutMs: action.timeoutMs ?? 3000,
+        intervalMs: action.intervalMs ?? 500,
+        maxDistance: action.maxDistance ?? 240
+      },
+      coordinate: coordinateForPoint(action, deviceSize)
+    };
+  }
+  if (action.type === "swipe") {
+    return {
+      ...base,
+      type: "swipe",
+      params: { durationMs: action.durationMs ?? 450 },
+      coordinate: {
+        startX: action.startX,
+        startY: action.startY,
+        endX: action.endX,
+        endY: action.endY,
+        startXRatio: ratio(action.startX, deviceSize.width),
+        startYRatio: ratio(action.startY, deviceSize.height),
+        endXRatio: ratio(action.endX, deviceSize.width),
+        endYRatio: ratio(action.endY, deviceSize.height),
+        deviceWidth: deviceSize.width,
+        deviceHeight: deviceSize.height
+      }
+    };
+  }
+  if (action.type === "long_press") {
+    return {
+      ...base,
+      type: "long_press",
+      params: { durationMs: action.durationMs ?? 800 },
+      coordinate: coordinateForPoint(action, deviceSize)
+    };
+  }
+  if (action.type === "hide_keyboard") {
+    return {
+      ...base,
+      type: "wait",
+      params: { durationMs: 0, internalDeviceAction: "hide_keyboard" }
+    };
+  }
+  return {
+    ...base,
+    type: action.type,
+    params: actionToAssetStepParams(action)
+  };
 }
 
-async function fetchRecordingObservation(serial: string): Promise<RecordingObservation | undefined> {
+function coordinateForPoint(point: { x: number; y: number }, deviceSize: { width: number; height: number }): NonNullable<ActionStep["coordinate"]> {
+  return {
+    x: point.x,
+    y: point.y,
+    xRatio: ratio(point.x, deviceSize.width),
+    yRatio: ratio(point.y, deviceSize.height),
+    deviceWidth: deviceSize.width,
+    deviceHeight: deviceSize.height
+  };
+}
+
+function ratio(value: number, size: number): number | undefined {
+  return size > 0 ? value / size : undefined;
+}
+
+function actionToAssetStepParams(action: DeviceActionRequest): Record<string, unknown> {
+  if (action.type === "input_text" || action.type === "input_keyevents") {
+    return { text: action.text, ...(action.type === "input_keyevents" ? { intervalMs: action.intervalMs } : {}) };
+  }
+  if (action.type === "wait") {
+    return { durationMs: action.durationMs };
+  }
+  if (action.type === "launch_app" || action.type === "close_app") {
+    return { packageName: action.packageName };
+  }
+  return {};
+}
+
+function describeAssetElementLocator(locator: Extract<SemanticDeviceActionRequest, { type: "tap_on_element" }>["locator"]): string {
+  const occurrence = typeof locator.occurrence === "number" && Number.isFinite(locator.occurrence) && locator.occurrence > 1 ? `#${Math.floor(locator.occurrence)}` : "";
+  if (locator.resourceId) {
+    return `id=${locator.resourceId}${occurrence}`;
+  }
+  if (locator.contentDesc) {
+    return `desc=${locator.contentDesc}${occurrence}`;
+  }
+  if (locator.text) {
+    return `text=${locator.text}${occurrence}`;
+  }
+  return "android_uiautomator";
+}
+
+async function fetchAssetObservation(serial: string): Promise<AssetObservation | undefined> {
   const response = await fetch(`/api/devices/${encodeURIComponent(serial)}/observation?screenshot=false&uiTree=true&ocr=false`);
   if (!response.ok) {
     return undefined;
   }
   const json = (await response.json()) as { observation?: unknown };
-  return isRecordingObservation(json.observation) ? json.observation : undefined;
+  return isAssetObservation(json.observation) ? json.observation : undefined;
 }
 
-function isRecordingObservation(value: unknown): value is RecordingObservation {
+function isAssetObservation(value: unknown): value is AssetObservation {
   if (!value || typeof value !== "object") {
     return false;
   }
-  const input = value as Partial<RecordingObservation>;
+  const input = value as Partial<AssetObservation>;
   return (
     (input.platform === "android" || input.platform === "ios") &&
     typeof input.capturedAt === "string" &&
@@ -5415,7 +5088,7 @@ function isRecordingObservation(value: unknown): value is RecordingObservation {
   );
 }
 
-function pickRuntimeInterceptorTriggerText(observation: RecordingObservation): string {
+function pickRuntimeInterceptorTriggerText(observation: AssetObservation): string {
   const candidates = compactUnique(
     [
       ...observation.uiElements.map((element) => element.text),
@@ -5427,7 +5100,7 @@ function pickRuntimeInterceptorTriggerText(observation: RecordingObservation): s
   return candidates[0] ?? "";
 }
 
-function pickRuntimeInterceptorActionText(observation: RecordingObservation, triggerText: string): string {
+function pickRuntimeInterceptorActionText(observation: AssetObservation, triggerText: string): string {
   const actionWords = ["关闭", "取消", "知道了", "稍后", "跳过", "允许", "确定", "暂不"];
   const texts = compactUnique(
     [

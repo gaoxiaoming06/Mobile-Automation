@@ -872,7 +872,7 @@ describe("App shell", () => {
     ).toBe(false);
     expect(
       shouldAutoSyncAssetPatrolRuntimeParams({
-        activeNavItem: "recording",
+	        activeNavItem: "deviceDetails",
         packageName: "cn.eeo.classin",
         lastSyncedPackageName: ""
       })
@@ -905,7 +905,7 @@ describe("App shell", () => {
     ).toBe(false);
     expect(
       shouldRestoreAssetDrivenExecution({
-        activeNavItem: "recording",
+	        activeNavItem: "deviceDetails",
         selectedSerial: "device-1",
         packageName: "cn.eeo.classin",
         assetDrivenExecutionId: ""
@@ -1050,33 +1050,33 @@ describe("App shell", () => {
   });
 
   it("uses preview workspaces for device details and asset recording", () => {
-    expect(previewWorkspaceKey("recording")).toBe("recording");
+    expect(previewWorkspaceKey("deviceDetails")).toBe("deviceDetails");
     expect(previewWorkspaceKey("assetRecording")).toBe("assetRecording");
-    expect(previewWorkspaceKey("caseLibrary")).toBe("inactive");
+    expect(previewWorkspaceKey("settings")).toBe("inactive");
   });
 
   it("keeps device details full-width while asset recording still exposes a resizable preview variable", () => {
-    expect(workspaceStyleForNav("recording", 560, 520)).toEqual({});
+    expect(workspaceStyleForNav("deviceDetails", 560, 520)).toEqual({});
     expect(workspaceStyleForNav("assetRecording", 560, 520)).toEqual({
       "--asset-recording-preview-width": "520px"
     });
-    expect(workspaceStyleForNav("caseLibrary", 560, 520)).toEqual({});
+    expect(workspaceStyleForNav("settings", 560, 520)).toEqual({});
   });
 
   it("keeps asset recording device actions immediate and blocks only while identifying", () => {
-    expect(actionStrategyForWorkspace("assetRecording", { identifying: false, recording: false })).toEqual({
+    expect(actionStrategyForWorkspace("assetRecording", { identifying: false })).toEqual({
       useCachedSemanticTarget: true,
       resolveLiveLocatorBeforeAction: false,
       fetchBeforeObservationBeforeAction: false,
       blockPreviewInteraction: false
     });
-    expect(actionStrategyForWorkspace("assetRecording", { identifying: true, recording: false })).toEqual({
+	    expect(actionStrategyForWorkspace("assetRecording", { identifying: true })).toEqual({
       useCachedSemanticTarget: false,
       resolveLiveLocatorBeforeAction: false,
       fetchBeforeObservationBeforeAction: false,
       blockPreviewInteraction: true
     });
-    expect(actionStrategyForWorkspace("recording", { identifying: false, recording: true })).toEqual({
+	    expect(actionStrategyForWorkspace("deviceDetails", { identifying: false })).toEqual({
       useCachedSemanticTarget: false,
       resolveLiveLocatorBeforeAction: false,
       fetchBeforeObservationBeforeAction: false,

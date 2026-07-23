@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  createTapRecordingActionFromElementLookup,
-  createTapRecordingActionFromSnapshot,
+  createTapAssetActionFromElementLookup,
+  createTapAssetActionFromSnapshot,
   findCachedElementAtPoint,
   findCachedTextNearPoint,
   type ElementSnapshot,
@@ -12,9 +12,9 @@ const capturedAt = "2026-06-10T10:00:00.000Z";
 const now = Date.parse(capturedAt) + 100;
 const deviceSize = { width: 1000, height: 2000 };
 
-describe("semantic recording snapshots", () => {
+describe("semantic asset snapshots", () => {
   it("uses a fresh Android element snapshot before OCR or coordinates", () => {
-    const action = createTapRecordingActionFromSnapshot(
+    const action = createTapAssetActionFromSnapshot(
       { x: 120, y: 220 },
       deviceSize,
       {
@@ -35,7 +35,7 @@ describe("semantic recording snapshots", () => {
   });
 
   it("falls back to OCR text when no element candidate matches", () => {
-    const action = createTapRecordingActionFromSnapshot(
+    const action = createTapAssetActionFromSnapshot(
       { x: 700, y: 820 },
       deviceSize,
       {
@@ -56,7 +56,7 @@ describe("semantic recording snapshots", () => {
   });
 
   it("converts a live element lookup into a semantic tap before using coordinates", () => {
-    const action = createTapRecordingActionFromElementLookup(
+    const action = createTapAssetActionFromElementLookup(
       { x: 943, y: 1030 },
       {
         stable: true,
@@ -94,8 +94,8 @@ describe("semantic recording snapshots", () => {
     );
   });
 
-  it("preserves occurrence for repeated element locators during recording", () => {
-    const action = createTapRecordingActionFromSnapshot(
+  it("preserves occurrence for repeated element locators during asset capture", () => {
+    const action = createTapAssetActionFromSnapshot(
       { x: 650, y: 650 },
       deviceSize,
       {
@@ -140,8 +140,8 @@ describe("semantic recording snapshots", () => {
     );
   });
 
-  it("preserves occurrence from live element lookup during recording", () => {
-    const action = createTapRecordingActionFromElementLookup(
+  it("preserves occurrence from live element lookup during asset capture", () => {
+    const action = createTapAssetActionFromElementLookup(
       { x: 650, y: 650 },
       {
         stable: true,
@@ -180,7 +180,7 @@ describe("semantic recording snapshots", () => {
   });
 
   it("ignores stale snapshots and keeps recording as a coordinate tap", () => {
-    const action = createTapRecordingActionFromSnapshot(
+    const action = createTapAssetActionFromSnapshot(
       { x: 120, y: 220 },
       deviceSize,
       {

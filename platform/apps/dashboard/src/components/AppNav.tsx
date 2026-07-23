@@ -14,14 +14,14 @@ import {
   Workflow
 } from "lucide-react";
 
-export type AppNavItemId = "devices" | "caseLibrary" | "recording" | "assetRecording" | "pageAssets" | "assetComposition" | "freeComposition" | "parameterCenter" | "assetPatrol" | "stability" | "runs" | "graphs" | "packages" | "reports" | "settings";
+export type AppNavItemId = "devices" | "deviceDetails" | "assetRecording" | "pageAssets" | "assetComposition" | "freeComposition" | "parameterCenter" | "assetPatrol" | "stability" | "runs" | "settings";
 
 type AppNavProps = {
   activeNavItem: AppNavItemId;
   navCollapsed: boolean;
   setNavCollapsed: (updater: (value: boolean) => boolean) => void;
   openDevices: () => void;
-  openRecording: () => void;
+  openDeviceDetails: () => void;
   openAssetRecording: () => void;
   openPageAssets: () => void;
   openAssetComposition: () => void;
@@ -38,7 +38,7 @@ export function AppNav({
   navCollapsed,
   setNavCollapsed,
   openDevices,
-  openRecording,
+  openDeviceDetails,
   openAssetRecording,
   openPageAssets,
   openAssetComposition,
@@ -60,7 +60,7 @@ export function AppNav({
           <Smartphone size={18} />
           <span>设备管理</span>
         </button>
-        <button className={navButtonClass(activeNavItem, "recording")} onClick={openRecording} title="设备详情" type="button">
+        <button className={navButtonClass(activeNavItem, "deviceDetails")} onClick={openDeviceDetails} title="设备详情" type="button">
           <MonitorSmartphone size={18} />
           <span>设备详情</span>
         </button>

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { BusinessGraphVersion, BusinessNode, Observation, OperationEdge } from "@mobile-automation/graph-core";
 import type { ActionStep } from "@mobile-automation/shared";
-import { persistRecordingStepGraphAsset } from "./recording-graph-assets.js";
+import { persistAssetTransitionCandidate } from "./asset-transition-candidates.js";
 
-describe("persistRecordingStepGraphAsset", () => {
-  it("turns a semantic recorded step into active graph nodes, edge action, and destination expectation", () => {
-    const storage = new MemoryRecordingGraphStorage();
+describe("persistAssetTransitionCandidate", () => {
+  it("turns a semantic asset action into active graph nodes, edge action, and destination expectation", () => {
+    const storage = new MemoryAssetCandidateStorage();
     const graphVersion = graph();
     const step = actionStep({
       id: "step-open-class",
@@ -17,7 +17,7 @@ describe("persistRecordingStepGraphAsset", () => {
       }
     });
 
-    const result = persistRecordingStepGraphAsset({
+    const result = persistAssetTransitionCandidate({
       graphVersion,
       storage,
       beforeObservation: observation({
@@ -72,9 +72,9 @@ describe("persistRecordingStepGraphAsset", () => {
     expect(storage.edges).toHaveLength(1);
   });
 
-  it("keeps coordinate-only recorded actions as draft graph edges even when confirmed", () => {
-    const storage = new MemoryRecordingGraphStorage();
-    const result = persistRecordingStepGraphAsset({
+  it("keeps coordinate-only asset actions as draft graph edges even when confirmed", () => {
+    const storage = new MemoryAssetCandidateStorage();
+    const result = persistAssetTransitionCandidate({
       graphVersion: graph(),
       storage,
       beforeObservation: observation({
@@ -108,10 +108,10 @@ describe("persistRecordingStepGraphAsset", () => {
     );
   });
 
-  it("rejects recording observations that are outside the graph target Android package", () => {
-    const storage = new MemoryRecordingGraphStorage();
+  it("rejects asset observations that are outside the graph target Android package", () => {
+    const storage = new MemoryAssetCandidateStorage();
 
-    const result = persistRecordingStepGraphAsset({
+    const result = persistAssetTransitionCandidate({
       graphVersion: graph(),
       storage,
       beforeObservation: observation({
@@ -146,9 +146,9 @@ describe("persistRecordingStepGraphAsset", () => {
   });
 
   it("does not create unknown-unknown nodes when observation has no meaningful app state", () => {
-    const storage = new MemoryRecordingGraphStorage();
+    const storage = new MemoryAssetCandidateStorage();
 
-    const result = persistRecordingStepGraphAsset({
+    const result = persistAssetTransitionCandidate({
       graphVersion: graph(),
       storage,
       beforeObservation: {
@@ -196,9 +196,9 @@ describe("persistRecordingStepGraphAsset", () => {
       ],
       metadata: { assetRecordingConfirmed: true, pageName: "主页" }
     });
-    const storage = new MemoryRecordingGraphStorage();
+    const storage = new MemoryAssetCandidateStorage();
 
-    const result = persistRecordingStepGraphAsset({
+    const result = persistAssetTransitionCandidate({
       graphVersion: graph({ nodes: [home] }),
       storage,
       beforeObservation: observation({
@@ -253,9 +253,9 @@ describe("persistRecordingStepGraphAsset", () => {
       ],
       metadata: { source: "manual_recording" }
     });
-    const storage = new MemoryRecordingGraphStorage();
+    const storage = new MemoryAssetCandidateStorage();
 
-    const result = persistRecordingStepGraphAsset({
+    const result = persistAssetTransitionCandidate({
       graphVersion: graph({ nodes: [home, legacyPopupNode] }),
       storage,
       beforeObservation: observation({
@@ -307,9 +307,9 @@ describe("persistRecordingStepGraphAsset", () => {
       matchers: [{ id: "matcher-add-friend", type: "text", value: "添加好友", weight: 3, critical: true, platformScope: "android" }],
       metadata: { source: "manual_recording" }
     });
-    const storage = new MemoryRecordingGraphStorage([legacyPopupNode]);
+    const storage = new MemoryAssetCandidateStorage([legacyPopupNode]);
 
-    const result = persistRecordingStepGraphAsset({
+    const result = persistAssetTransitionCandidate({
       graphVersion: graph({ nodes: [home, legacyPopupNode] }),
       storage,
       beforeObservation: observation({
@@ -340,7 +340,7 @@ describe("persistRecordingStepGraphAsset", () => {
   });
 });
 
-class MemoryRecordingGraphStorage {
+class MemoryAssetCandidateStorage {
   nodes: BusinessNode[];
   edges: OperationEdge[] = [];
 

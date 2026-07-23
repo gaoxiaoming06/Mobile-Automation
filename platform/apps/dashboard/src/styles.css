@@ -116,13 +116,13 @@ button:disabled {
 }
 
 .recording-resizer:hover::before,
-.recording-resize-active .recording-resizer::before {
+.asset-recording-resize-active .recording-resizer::before {
   width: 6px;
   background: #7ba2e8;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
-.recording-resize-active {
+.asset-recording-resize-active {
   cursor: col-resize;
   user-select: none;
 }

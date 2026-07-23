@@ -9,6 +9,7 @@ coverage/
 *.tsbuildinfo
 
 # Local runtime data
+reports/
 platform/data/artifacts/*
 !platform/data/artifacts/README.md
 platform/data/*.db

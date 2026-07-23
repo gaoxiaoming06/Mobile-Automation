@@ -1,13 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ActionStep, AndroidAppMonitorConfig, FlowStartSetupScope, FlowStartStrategy, TestRun } from "@mobile-automation/shared";
+import type { AndroidAppMonitorConfig, FlowStartStrategy, TestRun } from "@mobile-automation/shared";
 import type { GraphRunSummary } from "../components/GraphRunDetail";
-import type { FlowExpectationOverride } from "../components/CaseLibraryPanel";
-import { defaultCaseName } from "../recording";
 
 type UseRunExecutionOptions = {
   selectedSerial: string;
-  caseName: string;
-  steps: ActionStep[];
   setMessage: (message: string) => void;
 };
 
@@ -18,26 +14,11 @@ export function runListRefreshIntervalMs(runs: TestRun[]): number {
   return runs.some(isActiveRun) ? ACTIVE_RUN_LIST_REFRESH_INTERVAL_MS : IDLE_RUN_LIST_REFRESH_INTERVAL_MS;
 }
 
-export function useRunExecution({ selectedSerial, caseName, steps, setMessage }: UseRunExecutionOptions) {
+export function useRunExecution({ selectedSerial, setMessage }: UseRunExecutionOptions) {
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [currentRunId, setCurrentRunId] = useState("");
   const [currentRun, setCurrentRun] = useState<TestRun | null>(null);
   const [currentGraphRun, setCurrentGraphRun] = useState<GraphRunSummary | null>(null);
-  const [repeatCount, setRepeatCount] = useState(1);
-  const [stepIntervalMs, setStepIntervalMs] = useState(400);
-  const [loopUntilStopped, setLoopUntilStopped] = useState(false);
-  const [pauseAfterEachStep, setPauseAfterEachStep] = useState(false);
-  const [startStrategy, setStartStrategy] = useState<FlowStartStrategy>("keep_current");
-  const [startAppPackageName, setStartAppPackageName] = useState("");
-  const [startSetupScope, setStartSetupScope] = useState<FlowStartSetupScope>("before_run");
-  const [androidAppMonitorEnabled, setAndroidAppMonitorEnabled] = useState(false);
-  const [androidAppMonitorPackageName, setAndroidAppMonitorPackageName] = useState("");
-  const [androidAppMonitorIncludeSubprocesses, setAndroidAppMonitorIncludeSubprocesses] = useState(true);
-  const [androidAppMonitorCpuThresholdEnabled, setAndroidAppMonitorCpuThresholdEnabled] = useState(false);
-  const [androidAppMonitorCpuThresholdPercent, setAndroidAppMonitorCpuThresholdPercent] = useState(80);
-  const [androidAppMonitorMemoryThresholdEnabled, setAndroidAppMonitorMemoryThresholdEnabled] = useState(false);
-  const [androidAppMonitorMemoryThresholdMb, setAndroidAppMonitorMemoryThresholdMb] = useState(512);
-  const [androidAppMonitorHeapDumpEnabled, setAndroidAppMonitorHeapDumpEnabled] = useState(false);
   const [runsLimit, setRunsLimit] = useState(30);
   const activeRunForSelectedDevice = runs.find((run) => run.deviceSerial === selectedSerial && isActiveRun(run));
   const selectedDeviceBusy = Boolean(activeRunForSelectedDevice);
@@ -123,155 +104,6 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
     };
   }, [currentRunId, refreshRuns]);
 
-  const startRun = useCallback(
-    async (caseId?: string) => {
-      if (!selectedSerial) {
-        setMessage("请先选择设备");
-        return;
-      }
-      if (!caseId && !steps.length) {
-        setMessage("没有可回放的步骤");
-        return;
-      }
-      if (selectedDeviceBusy) {
-        setMessage(`当前设备正在执行：${activeRunForSelectedDevice?.id ?? ""}`);
-        return;
-      }
-      if (requiresStartAppPackageName(startStrategy) && !startAppPackageName.trim()) {
-        setMessage(`${startStrategyLabel(startStrategy)}需要先填写 App 包名`);
-        return;
-      }
-      const androidAppMonitor = buildAndroidAppMonitorRequest({
-        enabled: androidAppMonitorEnabled,
-        packageName: androidAppMonitorPackageName,
-        startStrategy,
-        startAppPackageName,
-        includeSubprocesses: androidAppMonitorIncludeSubprocesses,
-        cpuThresholdEnabled: androidAppMonitorCpuThresholdEnabled,
-        cpuThresholdPercent: androidAppMonitorCpuThresholdPercent,
-        memoryThresholdEnabled: androidAppMonitorMemoryThresholdEnabled,
-        memoryThresholdMb: androidAppMonitorMemoryThresholdMb,
-        enableHeapDump: androidAppMonitorHeapDumpEnabled
-      });
-      if (androidAppMonitorEnabled && !androidAppMonitor) {
-        setMessage("请填写 App 监控包名");
-        return;
-      }
-      const response = await fetch("/api/runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          deviceSerial: selectedSerial,
-          caseId,
-          caseName: caseName.trim() || defaultCaseName,
-          steps: caseId ? undefined : steps,
-          mode: loopUntilStopped ? "loop_until_stop" : repeatCount > 1 ? "repeat_n" : "once",
-          repeatCount,
-          stepIntervalMs,
-          stopOnFailure: true,
-          recordVideo: true,
-          keepVideoOnSuccess: true,
-          pauseAfterEachStep,
-          startStrategy,
-          startAppPackageName: startAppPackageName.trim() || undefined,
-          startSetupScope,
-          androidAppMonitor
-        })
-      });
-      const json = (await response.json()) as { run?: TestRun; error?: string; activeRunId?: string };
-      if (!response.ok || !json.run) {
-        setMessage(json.error ?? (json.activeRunId ? `设备正在执行：${json.activeRunId}` : "启动执行失败"));
-        await refreshRuns().catch(() => undefined);
-        return;
-      }
-      setCurrentRunId(json.run.id);
-      setCurrentRun(json.run);
-      setCurrentGraphRun(null);
-      setRuns((current) => mergeRuns(json.run as TestRun, current));
-      setMessage(`已启动回放：${json.run.id}`);
-    },
-    [
-      activeRunForSelectedDevice?.id,
-      androidAppMonitorCpuThresholdEnabled,
-      androidAppMonitorCpuThresholdPercent,
-      androidAppMonitorEnabled,
-      androidAppMonitorHeapDumpEnabled,
-      androidAppMonitorIncludeSubprocesses,
-      androidAppMonitorMemoryThresholdEnabled,
-      androidAppMonitorMemoryThresholdMb,
-      androidAppMonitorPackageName,
-      caseName,
-      loopUntilStopped,
-      pauseAfterEachStep,
-      refreshRuns,
-      repeatCount,
-      selectedDeviceBusy,
-      selectedSerial,
-      setMessage,
-      startAppPackageName,
-      startSetupScope,
-      startStrategy,
-      stepIntervalMs,
-      steps
-    ]
-  );
-
-  const startFlowRun = useCallback(
-    async (flowId: string, stopAtStepId?: string, expectationOverrides?: FlowExpectationOverride[]) => {
-      if (!selectedSerial) {
-        setMessage("请先选择设备");
-        return;
-      }
-      if (!flowId) {
-        setMessage("请选择结构化用例");
-        return;
-      }
-      if (selectedDeviceBusy) {
-        setMessage(`当前设备正在执行：${activeRunForSelectedDevice?.id ?? ""}`);
-        return;
-      }
-      const response = await fetch("/api/flow-runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          deviceSerial: selectedSerial,
-          flowId,
-          stopAtStepId,
-          mode: loopUntilStopped ? "loop_until_stop" : repeatCount > 1 ? "repeat_n" : "once",
-          repeatCount,
-          stepIntervalMs,
-          stopOnFailure: true,
-          recordVideo: true,
-          keepVideoOnSuccess: true,
-          pauseAfterEachStep,
-          expectationOverrides
-        })
-      });
-      const json = (await response.json()) as { run?: TestRun; error?: string; activeRunId?: string };
-      if (!response.ok || !json.run) {
-        setMessage(json.error ?? (json.activeRunId ? `设备正在执行：${json.activeRunId}` : "启动结构化用例失败"));
-        await refreshRuns().catch(() => undefined);
-        return;
-      }
-      setCurrentRunId(json.run.id);
-      setCurrentRun(json.run);
-      setCurrentGraphRun(null);
-      setRuns((current) => mergeRuns(json.run as TestRun, current));
-      setMessage(`已启动结构化用例：${json.run.id}`);
-    },
-    [
-      activeRunForSelectedDevice?.id,
-      loopUntilStopped,
-      pauseAfterEachStep,
-      refreshRuns,
-      repeatCount,
-      selectedDeviceBusy,
-      selectedSerial,
-      setMessage,
-      stepIntervalMs
-    ]
-  );
-
   const controlCurrentRun = useCallback(
     async (action: "pause" | "resume" | "step") => {
       if (!currentRun?.id || (currentRun.status !== "running" && currentRun.status !== "paused")) {
@@ -318,41 +150,9 @@ export function useRunExecution({ selectedSerial, caseName, steps, setMessage }:
     runsLimit,
     activeRunForSelectedDevice,
     selectedDeviceBusy,
-    repeatCount,
-    stepIntervalMs,
-    loopUntilStopped,
-    pauseAfterEachStep,
-    startStrategy,
-    startAppPackageName,
-    startSetupScope,
-    androidAppMonitorEnabled,
-    androidAppMonitorPackageName,
-    androidAppMonitorIncludeSubprocesses,
-    androidAppMonitorCpuThresholdEnabled,
-    androidAppMonitorCpuThresholdPercent,
-    androidAppMonitorMemoryThresholdEnabled,
-    androidAppMonitorMemoryThresholdMb,
-    androidAppMonitorHeapDumpEnabled,
     setCurrentRunId: selectRun,
     loadMoreRuns: () => setRunsLimit((value) => Math.min(200, value + 30)),
-    setRepeatCount,
-    setStepIntervalMs,
-    setLoopUntilStopped,
-    setPauseAfterEachStep,
-    setStartStrategy,
-    setStartAppPackageName,
-    setStartSetupScope,
-    setAndroidAppMonitorEnabled,
-    setAndroidAppMonitorPackageName,
-    setAndroidAppMonitorIncludeSubprocesses,
-    setAndroidAppMonitorCpuThresholdEnabled,
-    setAndroidAppMonitorCpuThresholdPercent,
-    setAndroidAppMonitorMemoryThresholdEnabled,
-    setAndroidAppMonitorMemoryThresholdMb,
-    setAndroidAppMonitorHeapDumpEnabled,
     refreshRuns,
-    startRun,
-    startFlowRun,
     stopCurrentRun,
     pauseCurrentRun: () => controlCurrentRun("pause"),
     resumeCurrentRun: () => controlCurrentRun("resume"),
@@ -411,23 +211,6 @@ function isActiveRun(run: TestRun): boolean {
   return run.status === "running" || run.status === "paused";
 }
 
-function mergeRuns(run: TestRun, runs: TestRun[]): TestRun[] {
-  return [run, ...runs.filter((item) => item.id !== run.id)];
-}
-
 function requiresStartAppPackageName(strategy: FlowStartStrategy): boolean {
   return strategy === "launch_app" || strategy === "restart_app" || strategy === "clear_data_and_launch";
-}
-
-function startStrategyLabel(strategy: FlowStartStrategy): string {
-  if (strategy === "launch_app") {
-    return "启动 App";
-  }
-  if (strategy === "restart_app") {
-    return "重启 App";
-  }
-  if (strategy === "clear_data_and_launch") {
-    return "清数据后启动";
-  }
-  return "当前起始状态";
 }

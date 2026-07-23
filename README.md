@@ -2,7 +2,7 @@
 
 Mobile visual automation testing platform.
 
-The first MVP focuses on Android device discovery, browser-embedded scrcpy live preview, remote control, operation recording, step editing, replay execution, performance/event capture, and HTML test reports. iOS support is now implemented as a first incremental layer for device discovery, screenshot preview, basic battery sampling, and WDA-backed control when WebDriverAgent is configured.
+The first MVP now focuses on Android device discovery, browser-embedded scrcpy live preview, remote control, PageStateFlow asset authoring, asset-driven execution, performance/event capture, and HTML test reports. iOS support is implemented as a first incremental layer for device discovery, screenshot preview, basic battery sampling, and WDA-backed control when WebDriverAgent is configured.
 
 ## Project Structure
 
@@ -67,11 +67,12 @@ Start here:
 For future implementation sessions:
 
 1. [README.md](README.md)
-2. [AI development workflow](docs/guides/ai-development-workflow.md)
-3. [docs/product/mobile-automation-platform/README.md](docs/product/mobile-automation-platform/README.md)
-4. Relevant ADRs in [docs/adr](docs/adr/)
-5. Relevant local skill in [skills/skills](skills/skills/)
-6. Implementation task in [tasks.md](docs/product/mobile-automation-platform/spec/tasks.md)
+2. [AI / new contributor handoff](docs/product/mobile-automation-platform/ai-handoff.md)
+3. [AI development workflow](docs/guides/ai-development-workflow.md)
+4. [docs/product/mobile-automation-platform/README.md](docs/product/mobile-automation-platform/README.md)
+5. Relevant ADRs in [docs/adr](docs/adr/)
+6. Relevant local skill in [skills/skills](skills/skills/)
+7. Implementation task in [tasks.md](docs/product/mobile-automation-platform/spec/tasks.md)
 
 ## First Implementation Direction
 
@@ -81,7 +82,7 @@ For future implementation sessions:
 4. Implement Android driver foundation.
 5. Implement server device/session APIs.
 6. Implement dashboard device list and preview.
-7. Implement recorder, runner, and report loop.
+7. Implement page assets, asset-driven execution, and report loop.
 
 ## Local Development
 

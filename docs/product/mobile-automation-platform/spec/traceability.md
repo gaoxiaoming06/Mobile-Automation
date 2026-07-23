@@ -4,7 +4,7 @@ doc_type: traceability
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-02
+updated_at: 2026-07-22
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -62,6 +62,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | REQ-043 自动缺陷提报与 TAPD 集成 | DES-043、DES-016、DES-029、DES-033 | T-091 | 从测试失败报告生成缺陷候选，去重后按 manual_review / auto_create 策略提交 TAPD，并在报告和外部 API 返回缺陷状态 | AC-045 |
 | REQ-044 资产驱动巡检 | DES-044、DES-042、DES-016、DES-030 | T-092 | 基于 active PageStateFlow 资产验证页面健康、元素重定位、连接边稳定性、PageTask 可执行性和性能异常；保留自动探索 / 稳定性探索为独立发现入口 | AC-046 |
 | REQ-045 探索异常 AI 诊断与受控资产修复 | DES-045、DES-044、DES-043、DES-042、DES-030 | T-093 | 执行异常先固化证据并脱敏，再由规则和 AI 诊断分类；业务异常生成报告 / 缺陷候选并按策略重启继续，资产问题默认生成受控 patch，高置信低风险且验证通过时可自动应用为新的 active 资产版本并继续 | AC-047 |
+| REQ-046 Android App 旁路性能与稳定性监控 | DES-047、DES-014、DES-015、DES-016、DES-043、DES-045 | T-095 | Android first 目标 App watcher：按包名发现主进程和子进程，采集进程级 CPU / PSS、生命周期、阈值 incident、Java / Native Crash、ANR、process death 和证据，接入报告、缺陷候选与 AI 诊断 | AC-049 |
 | REQ-ADT-004 参数中心与参数集 | DES-046、DES-042、DES-017 | T-094 | App 级类型化 Parameter Profile、版本化 CRUD、编译期参数合并和必需参数校验 | AC-048 |
 | REQ-ADT-006 元功能库 | DES-046、DES-042、DES-039 | T-094 | 通过 reach_page / invoke_capability / run_page_task / verify_page 引用 active 页面资产组成可复用业务能力 | AC-048 |
 | REQ-ADT-007 组合用例 | DES-046、DES-016、DES-039 | T-094 | 多元功能编排、预检、重复执行、停止和分层报告；运行时重新编译当前 active 资产 | AC-048 |
@@ -116,6 +117,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | DES-044 资产驱动巡检设计 | T-092 | AssetPatrolPlan、页面健康检查、区域滚动检查、元素重定位检查、连接边验证、PageTask dry-run、巡检报告和候选修复闭环 |
 | DES-045 探索异常 AI 诊断与受控资产修复设计 | T-093 | EvidencePackBuilder、RuleFailureClassifier、AiDiagnosisService、DiagnosisPolicyEngine、AssetPatchCandidate、MCP / REST 工具和报告诊断区 |
 | DES-046 资产衍生组合测试设计 | T-094 | Parameter Profile、Meta Function、Asset Composite Case、active 资产编译、组合执行会话、Dashboard 和分层报告 |
+| DES-047 Android App 旁路监控设计 | T-095 | AndroidProcessDiscovery、AndroidProcessMetricSampler、ThresholdTracker、AndroidIncidentDumper、AndroidStabilityEventParser、AndroidAppMonitorSession、artifact writer 和报告区块 |
 
 ## 开放问题追踪
 
@@ -127,7 +129,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | Q-004 iOS 工具链 | REQ-002、REQ-003、REQ-004 | DES-006 | resolved: libimobiledevice + xcrun + WebDriverAgent |
 | Q-005 Android 预览方案 | REQ-003、REQ-004 | DES-005、DES-008 | resolved: scrcpy 优先，ADB 截图轮询兜底 |
 | Q-006 坐标回放还是控件 / OCR / 图像能力 | REQ-006、REQ-007、REQ-024、REQ-028、REQ-034 | DES-009、DES-026、DES-034 | resolved: 坐标型回放继续保留为基础能力和 fallback；固定业务流程需要步骤级预期验证，状态感知回放作为稳定性增强 |
-| Q-007 性能指标和采样频率 | REQ-011 | DES-014 | TODO(confirm) |
+| Q-007 性能指标和采样频率 | REQ-011、REQ-046 | DES-014、DES-047 | resolved: 保留步骤级系统指标；Android first 新增目标 App 多进程旁路监控，默认 CPU 1s、内存 5s，高频时序写 artifact，Run 中保存摘要和事件 |
 | Q-008 报告导出格式 | REQ-013、REQ-020 | DES-016 | resolved: HTML |
 | Q-009 APK / IPA 安装 | REQ-017、REQ-026 | DES-005、DES-006、DES-024、DES-031 | resolved: Android APK 安装 / 卸载 / 版本校验优先；IPA 后续接入 |
 | Q-010 CI 集成 | REQ-020、REQ-031 | DES-020、DES-029 | resolved: `POST /api/builds` 接包并可自动触发冒烟；CLI 后续扩展 |
@@ -153,3 +155,4 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | Q-030 业务图谱是否仍作为当前主线 | REQ-036、REQ-037、REQ-038、REQ-041、REQ-042 | DES-036、DES-037、DES-038、DES-041、DES-042 | resolved: 不作为当前主线。当前主线为 PageStateFlow；StructuredFlow 是线性路径快照；BusinessGraph 上层、源码扫描、候选治理、目标节点规划冻结为实验能力，底层 StateMatcher / ActionPolicy / Observation / RuntimeOverlay / 动态等待继续复用 |
 | Q-031 当前主要项目目标如何命名和收敛 | REQ-042、REQ-041、REQ-036 | DES-042、DES-041、DES-036 | resolved: 命名为 PageStateFlow，中文为“页面状态资产驱动的移动端智能回放测试平台”；页面资产库成为当前主线，StructuredFlow 是路径快照，BusinessGraph 上层继续 experimental |
 | Q-032 资产驱动巡检是否替代自动探索 / 稳定性探索 | REQ-044、REQ-032、REQ-042 | DES-044、DES-030、DES-042 | resolved: 不替代。资产驱动巡检按 active 页面资产验证稳定性和覆盖面；自动探索 / 稳定性探索继续作为未知页面、异常状态和 crash / ANR 发现入口，二者入口、策略和资产写入权限隔离 |
+| Q-033 是否整包引入 `apk_auto_test` | REQ-046、REQ-011、REQ-012、REQ-013、REQ-014 | DES-047、DES-014、DES-015、DES-016 | resolved: 不整包引入 Python CLI；只借鉴其多进程发现、进程级采样、阈值 incident、稳定性事件和报告证据思路，并以 TypeScript 内核接入现有平台 |

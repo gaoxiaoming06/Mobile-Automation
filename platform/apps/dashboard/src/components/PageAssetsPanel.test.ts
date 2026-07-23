@@ -1,16 +1,12 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as PageAssetsModule from "./PageAssetsPanel.js";
 import {
   PageAssetsPanel,
   assetIdentitySummary,
-  buildTargetPageGraphRunRequest,
-  buildTargetPageRuntimeOverlay,
   displayRegionEvidenceSummary,
-  loadPageAssetsSnapshot,
-  parseRuntimeParams,
-  selectPageAssetTarget,
-  targetPageRouteBlockingMessage
+  loadPageAssetsSnapshot
 } from "./PageAssetsPanel.js";
 
 describe("PageAssetsPanel", () => {
@@ -24,11 +20,21 @@ describe("PageAssetsPanel", () => {
     );
   });
 
+  it("does not expose target-page execution helpers from the page asset library module", () => {
+    expect(Object.keys(PageAssetsModule)).not.toEqual(
+      expect.arrayContaining([
+        "buildTargetPageGraphRunRequest",
+        "buildTargetPageRuntimeOverlay",
+        "selectPageAssetTarget",
+        "parseRuntimeParams",
+        "targetPageRouteBlockingMessage"
+      ])
+    );
+  });
+
   it("renders the saved page asset library as the only page assets view", () => {
     const markup = renderToStaticMarkup(
       React.createElement(PageAssetsPanel, {
-        selectedSerial: "device-1",
-        selectedDeviceBusy: false,
         graphs: [
           {
             id: "graph-1",
@@ -86,13 +92,9 @@ describe("PageAssetsPanel", () => {
     expect(markup).not.toContain("matcher 3");
   });
 
-  it("keeps legacy target tab input on the saved asset library", () => {
+  it("renders matching saved assets without restoring target-page test controls", () => {
     const markup = renderToStaticMarkup(
       React.createElement(PageAssetsPanel, {
-        selectedSerial: "device-1",
-        selectedDeviceBusy: false,
-        initialTab: "targetTest",
-        initialTargetText: "新建课堂",
         graphs: [
           {
             id: "graph-1",
@@ -136,9 +138,6 @@ describe("PageAssetsPanel", () => {
   it("renders delete controls and expanded details for saved page assets", () => {
     const markup = renderToStaticMarkup(
       React.createElement(PageAssetsPanel, {
-        selectedSerial: "device-1",
-        selectedDeviceBusy: false,
-        initialTab: "library",
         graphs: [
           {
             id: "graph-1",
@@ -248,9 +247,6 @@ describe("PageAssetsPanel", () => {
     };
     const markup = renderToStaticMarkup(
       React.createElement(PageAssetsPanel, {
-        selectedSerial: "device-1",
-        selectedDeviceBusy: false,
-        initialTab: "library",
         graphs: [
           {
             id: "graph-1",
@@ -317,9 +313,6 @@ describe("PageAssetsPanel", () => {
     };
     const markup = renderToStaticMarkup(
       React.createElement(PageAssetsPanel, {
-        selectedSerial: "device-1",
-        selectedDeviceBusy: false,
-        initialTab: "library",
         graphs: [
           {
             id: "graph-1",
@@ -404,222 +397,9 @@ describe("PageAssetsPanel", () => {
     expect(snapshot.assetsByVersionId["version-new"]?.pageAssets.map((asset) => asset.name)).toEqual(["主页"]);
   });
 
-  it("selects the matching saved page asset as the graph run target", () => {
-    const target = selectPageAssetTarget(
-      [
-        {
-          id: "node-home",
-          key: "classin.teacher.classes",
-          name: "主页",
-          status: "active",
-          tags: ["page-asset"],
-          matcherCount: 7,
-          criticalMatcherCount: 3,
-          elementCount: 7,
-          visibleTexts: ["主页", "创建公开课"],
-          resourceIds: [],
-          accessibilityIds: [],
-          graphVersionId: "version-1"
-        },
-        {
-          id: "node-create-public-course",
-          key: "runtime.unknown.1u41ebp",
-          name: "新建公开课",
-          status: "active",
-          tags: ["page-asset"],
-          matcherCount: 12,
-          criticalMatcherCount: 6,
-          elementCount: 5,
-          visibleTexts: ["新建公开课", "课堂信息"],
-          resourceIds: [],
-          accessibilityIds: [],
-          graphVersionId: "version-1"
-        }
-      ],
-      "新建公开课"
-    );
-
-    expect(target).toEqual(expect.objectContaining({ id: "node-create-public-course", graphVersionId: "version-1" }));
-  });
-
-  it("does not select a graph run target before the user enters a query", () => {
-    const target = selectPageAssetTarget(
-      [
-        {
-          id: "node-home",
-          key: "classin.teacher.classes",
-          name: "主页",
-          status: "active",
-          tags: ["page-asset"],
-          matcherCount: 7,
-          criticalMatcherCount: 3,
-          elementCount: 7,
-          visibleTexts: ["主页"],
-          resourceIds: [],
-          accessibilityIds: [],
-          graphVersionId: "version-1"
-        }
-      ],
-      ""
-    );
-
-    expect(target).toBeUndefined();
-  });
-
-  it("explains route gaps before starting target page execution", () => {
-    expect(
-      targetPageRouteBlockingMessage(
-        {
-          executionPlan: {
-            unresolvedIssues: [
-              {
-                code: "TARGET_NODE_UNREACHABLE",
-                severity: "error",
-                message: "Target node node-create is unreachable from node-home."
-              }
-            ]
-          },
-          startDetection: {
-            nodeMatch: {
-              node: {
-                name: "主页"
-              }
-            }
-          }
-        },
-        "新建公开课"
-      )
-    ).toBe("已找到目标页面：新建公开课，但当前识别到的页面“主页”还没有到该目标的已保存连接边。请先在资产录制里把当前页的可操作元素连接到目标页面。");
-  });
-
-  it("does not block target execution when the route preview recovered from a transient page", () => {
-    expect(
-      targetPageRouteBlockingMessage(
-        {
-          executionPlan: {
-            unresolvedIssues: []
-          },
-          startRecovery: {
-            status: "recovered",
-            fromNodeName: "搜索",
-            recoveredNodeName: "主页"
-          }
-        },
-        "新建课堂"
-      )
-    ).toBeUndefined();
-  });
-
-  it("starts target page execution against the asset graph version instead of resolving by graph id", () => {
-    expect(
-      buildTargetPageGraphRunRequest({
-        selectedSerial: "device-1",
-        graphVersionId: "version-asset",
-        targetNodeId: "node-create",
-        startNodeId: "node-home"
-      })
-    ).toEqual({
-      deviceSerial: "device-1",
-      graphVersionId: "version-asset",
-      targetNodeId: "node-create",
-      startStrategy: "keep_current",
-      startNodeId: "node-home",
-      startAppScope: "current_device",
-      overlay: undefined,
-      executionProfile: "fast_visual"
-    });
-  });
-
-  it("passes the selected parameter profile to the server instead of embedding values in the browser request", () => {
-    expect(
-      buildTargetPageGraphRunRequest({
-        selectedSerial: "device-1",
-        graphVersionId: "version-asset",
-        targetNodeId: "node-create",
-        parameterProfileId: "profile-teacher-test"
-      })
-    ).toEqual(expect.objectContaining({ parameterProfileId: "profile-teacher-test" }));
-    expect(
-      buildTargetPageGraphRunRequest({
-        selectedSerial: "device-1",
-        graphVersionId: "version-asset",
-        targetNodeId: "node-create",
-        parameterProfileId: "profile-teacher-test"
-      })
-    ).not.toHaveProperty("runtimeParams");
-  });
-
-  it("builds runtime overlay for target text verification without saving it to page assets", () => {
-    expect(
-      buildTargetPageRuntimeOverlay({
-        targetNodeId: "node-create",
-        targetName: "新建公开课",
-        actionMode: "none",
-        verificationMode: "text_contains",
-        verificationText: "发布成功"
-      })
-    ).toEqual({
-      id: "target-task-node-create",
-      targetNodeId: "node-create",
-      note: "页面资产执行：新建公开课",
-      nodeExpectationOverrides: [
-        {
-          nodeId: "node-create",
-          expectations: [
-            expect.objectContaining({
-              id: "target-text-node-create",
-              type: "text",
-              enabled: true,
-              title: "页面验证",
-              params: {
-                expected: "发布成功",
-                mode: "contains",
-                lang: "eng+chi_sim"
-              }
-            })
-          ]
-        }
-      ]
-    });
-  });
-
-  it("builds runtime params overlay for parameterized target execution", () => {
-    expect(parseRuntimeParams("className=班级四十一号, lessonName=数学课")).toEqual({
-      className: "班级四十一号",
-      lessonName: "数学课"
-    });
-    expect(parseRuntimeParams("班级四十二号")).toEqual({
-      className: "班级四十二号"
-    });
-
-    expect(
-      buildTargetPageRuntimeOverlay({
-        targetNodeId: "node-create",
-        targetName: "新建课堂",
-        actionMode: "page_task",
-        targetTaskId: "task-create-lesson",
-        verificationMode: "arrived",
-        runtimeParamsText: "lessonName=数学课"
-      })
-    ).toEqual({
-      id: "target-task-node-create",
-      targetNodeId: "node-create",
-      targetTaskId: "task-create-lesson",
-      note: "页面资产执行：新建课堂",
-      runtimeParams: {
-        lessonName: "数学课"
-      }
-    });
-  });
-
   it("shows page task parameters in saved asset details instead of exposing target execution inputs", () => {
     const markup = renderToStaticMarkup(
       React.createElement(PageAssetsPanel, {
-        selectedSerial: "device-1",
-        selectedDeviceBusy: false,
-        initialTab: "targetTest",
-        initialTargetText: "新建课堂",
-        initialTargetTaskId: "task-fill-lesson-form",
         graphs: [
           {
             id: "graph-1",
@@ -672,53 +452,4 @@ describe("PageAssetsPanel", () => {
     expect(markup).not.toContain("目标项 / 班级名");
   });
 
-  it("keeps page task runtime params optional and only sends filled overrides", () => {
-    expect(
-      buildTargetPageRuntimeOverlay({
-        targetNodeId: "node-create",
-        targetName: "新建课堂",
-        actionMode: "page_task",
-        targetTaskId: "task-fill-lesson-form",
-        verificationMode: "arrived",
-        runtimeParams: {
-          lessonName: "自动化课堂",
-          duration: "",
-          recordClassroom: " "
-        }
-      })
-    ).toEqual({
-      id: "target-task-node-create",
-      targetNodeId: "node-create",
-      targetTaskId: "task-fill-lesson-form",
-      note: "页面资产执行：新建课堂",
-      runtimeParams: {
-        lessonName: "自动化课堂"
-      }
-    });
-  });
-
-  it("merges route runtime params into page task runtime params", () => {
-    expect(
-      buildTargetPageRuntimeOverlay({
-        targetNodeId: "node-create",
-        targetName: "新建课堂",
-        actionMode: "page_task",
-        targetTaskId: "task-fill-lesson-form",
-        verificationMode: "arrived",
-        runtimeParams: {
-          lessonName: "自动化课堂"
-        },
-        runtimeParamsText: "className=班级四十二号"
-      })
-    ).toEqual({
-      id: "target-task-node-create",
-      targetNodeId: "node-create",
-      targetTaskId: "task-fill-lesson-form",
-      note: "页面资产执行：新建课堂",
-      runtimeParams: {
-        lessonName: "自动化课堂",
-        className: "班级四十二号"
-      }
-    });
-  });
 });

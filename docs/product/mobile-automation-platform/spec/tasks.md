@@ -4,7 +4,7 @@ doc_type: tasks
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-07-12
+updated_at: 2026-07-23
 related_repos: ["Mobile-Automation"]
 related_modules: []
 platform_scope: mobile-both
@@ -27,6 +27,8 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 ## 当前修复队列
 
 > 该队列用于承接 review 中确认合理、但不适合混入小修的一组问题。执行窗口按 Codex 开发轮次推进：下一轮表示下一次进入实现任务时优先处理，第二轮表示主流程回归测试稳定后处理，稳定性阶段表示核心功能完整后处理。
+>
+> 2026-07-23 之后，历史行里出现的“用例录制 / StepsPanel / useRecorder / recording.ts”只代表历史追溯，不再代表当前 Dashboard 主入口。当前主流程是 PageStateFlow 资产驱动执行；旧线性录制 UI 已在 R-037 移除。
 
 | 编号 | 优先级 | 状态 | 计划窗口 | 内容 | 验收方式 |
 |---|---|---|---|---|---|
@@ -65,6 +67,8 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | R-033 | P0 | done | 当前轮 | StructuredFlow 阶段收敛治理：顶层 README / product-plan / requirements / design / acceptance / tasks / traceability / skills 曾明确 StructuredFlow 是主线，BusinessGraph 上层冻结为实验能力；该结论已被 R-034 PageStateFlow 主线切换覆盖，StructuredFlow 保留为路径快照 | 后续开发默认进入 PageStateFlow / 页面资产库 / TestRuleCore；StructuredFlow 继续作为路径快照和回归用例；除非明确重新打开图谱方向，否则不扩展源码扫描、候选图谱治理、自动晋级和目标节点规划 |
 | R-034 | P0 | in-progress | 当前主线 | PageStateFlow 主线切换：当前主要项目目标命名为“页面状态资产驱动的移动端智能回放测试平台”；新增 PageStateLibrary / PageModel / PageElement / PageTransition / PathPlan，录制用于学习页面资产，StructuredFlow 作为页面路径快照，BusinessGraph 上层继续 experimental；当前已把页面匹配和手工操作区域从“固定坐标”升级为“原始相对区域 + semanticArea + coordinateSpace + OCR / layout / image evidence”，并让 `tap_on_image` 运行时优先在同一语义区域内按 OCR 文案重定位；登录 / 表单类固定语义控件进一步收口为 `runtime-locator:*` + `structural_locator` + `coordinateSpace=runtime`，历史圈选区域只保留为 `searchHintRegion` 调试证据 | 文档完成 REQ-042 / DES-042 / AC-044 / T-084 至 T-089；当前已验证页面身份依据保存、区域 OCR 漂移匹配、手工 PageElement / PageTransition 语义字段透传、视觉点击重定位、资产录制面板 semanticArea 人工确认、连接边页签、`compound_navigation` 复合跳转、同一触发区域多条复合菜单出口共存、同屏 grid candidate 下游失败后尝试下一个候选，以及目标执行报告结构化解释；本轮已清理 active graph 中旧平台依赖 matcher / 旧录制节点 / `tap_on_element + android_uiautomator` 旧边，修复 `state_is` 以 `nodeId` 为权威身份，并用真机通过 `主页 -> 新建公开课`、`主页 -> 添加好友`、`主页 -> 加入班级`、`主页 -> 班级详情 -> 新建课堂` 四条核心回归；PageTask 已在真机打通 `text_input` 输入后 OCR 反查、`picker_select` 选择时长和 `toggle_set` 安全开关，验证新建课堂页可填写课堂标题和课堂时长但不点击发布；登录页本地资产已改为 4 个 runtime structural PageElement + 1 个 `账号密码登录` PageTask + 1 条 `source_page_navigation` 任务边，旧区域点击登录边已下线；当前已补齐并验证 `班级详情` 到教学方案、学习方案、班级聊天、班级待办、班级公告、发布活动类型选择页、新建课堂，以及 `发布活动类型选择页` 到新建课堂、新建作业、新建测验、新建录播课、新建资料的出口；后续继续补 subpage_edit、滚动翻页候选闭环、跨设备样本验证、PageTransition 批量治理、更多真实页面出口，以及独立稳定性探索测试入口 |
 | R-035 | P0 | done | 当前轮 | 已关闭 `tap_on_image` / 输入型 PageElement 的默认 `region_center` 执行兜底：普通手工 `image-region` 必须优先依赖 OCR / recorded crop template / 视觉候选 / 结构候选等运行时重定位证据；当跨设备、分辨率变化或已有 `targetText` / `visualLocator` 但重定位失败时，不再退化为原始圈选坐标点击，而是失败并暴露 `runtime_relocation_required` | Server 测试覆盖 OCR / template / visual candidate 命中才执行、重定位失败不点击、报告 metadata 区分 `ocr_text` / `template_search` / `visual_candidate` / `region_center_disabled`；剩余 P0 follow-up 是把失败修复 UI 做成专门 locator 修复卡片 |
+| R-036 | P0 | planned | 当前主线支撑 | Android App 旁路性能与稳定性监控：借鉴 `apk_auto_test` 的多进程发现、进程级 CPU / PSS、sustain / cooldown 阈值、incident 证据、logcat 稳定性事件解析和 HTML 报告思路，但以 TypeScript 内核接入现有 Runner、Storage、Artifact、Report、缺陷候选和 AI 诊断链路，不引入独立 Python CLI 作为长期主路径 | `T-095` 完成后，Run 可按包名自动监控主进程和子进程；报告展示进程级 CPU / 内存曲线、生命周期、阈值事件、crash / ANR / process death 和证据；高频时序写 artifact，Run 中只保存摘要；真机 ClassIn 5 分钟监控可生成可读报告 |
+| R-037 | P0 | done | 当前轮 | 移除旧线性录制 Dashboard 主流程：删除 `StepsPanel`、`StepList`、`CaseLibraryPanel`、`useRecorder`、`recording.ts`，设备预览入口改为 `deviceDetails`，运行结果展示收敛到 `RunResultsPanel`，原录制写图谱资产能力改名为资产连接候选 | Dashboard / Server typecheck 通过；聚焦测试覆盖导航、App 主入口、语义资产快照和资产连接候选；新功能不得重新挂回旧录制入口 |
 
 ## Phase 0：需求确认与工程决策
 
@@ -1600,23 +1604,16 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 
 ### T-088A：目标执行模块一期
 
-- 状态：in_progress
+- 状态：superseded
 - 关联需求：REQ-042、REQ-039
 - 关联设计：DES-042、DES-039
 - 目标平台：Dashboard + server planner
 - 修改边界：Dashboard navigation、TargetExecutionPage、TargetResolver API、PathPlanner preview API、run API
 - 任务内容：
-  1. [partial] 新增“目标执行”导航模块：当前入口先收敛在“页面资产库 / 目标页面测试”页签。
-  2. [partial] 目标页面输入框支持页面名、key、页面摘要和 resource-id 检索，并通过下拉候选选择对应页面资产；targetRef、别名、业务描述和意图标签检索待 AI 可读字段产品化后补齐。
-  3. [partial] 目标页面测试页签已从资产列表改为任务表单：包含“目标页面 / 目标动作 / 目标验证 / 运行参数”。当前目标动作一期支持“页面到达后不执行动作”和“执行目标页 PageTask”；目标验证支持“仅验证已到达目标页面”和“验证目标页面包含文字”，文字验证通过 RuntimeOverlay 临时加到目标节点，不写入页面资产库；运行参数支持 `className=班级四十一号`、`lessonName=数学课` 这类 `key=value` 输入，用于替换 PageAbility / PageTransition action params 中的 `{{key}}` 模板，也用于 PageTask 的 `valueParamKey`。PageElement 单动作选择、动作后局部变化验证、多动作链待后续补齐。
-  4. 无候选时提示“尚未录入该页面资产”，并提供跳转到资产录制模块。
-  5. 多候选时展示消歧列表，不直接执行。
-  6. 单候选时识别当前页面并展示规划路径、风险、跨平台 fallback 提示和 route gap。
-  7. [partial] 用户点击“规划并执行”后，会从当前目标页面候选中选择最佳匹配的已保存页面资产作为目标节点，先调用 route-plan preview 识别当前起点并预检路径，再调用现有 `/api/graph-runs` 触发执行并跳转执行结果页；当前仍复用实验图谱执行接口，能否到达目标页取决于源页面到目标页面是否已有 active PageTransition / graph edge。缺边时后端返回路径不可达或规划失败；资产录制详情的“连接边”页签已可从当前页已保存 PageElement 创建 navigate / compound_navigation PageTransition，用于补齐“输入页面名 -> 自动到达”的基础路径；inline state / local state 专用结果模型仍待后续增强。
-  8. [done] 目标执行预检和实际执行均接入起点恢复：例如当前停留在“搜索”页、目标是“新建课堂”时，不要求存在“搜索 -> 新建课堂”的边；系统会先返回到“主页”等可规划页面，再从该页面重新计算路径。恢复成功会在页面提示和运行事件中记录，恢复失败则继续返回 route gap。
-  9. [done] 新增 `fast_visual` 快速执行模式：目标页面测试的 route-plan preview 和 graph-run 请求默认携带 `executionProfile=fast_visual`；预检和执行 Observation 关闭 UI tree；graph-run 复用预检识别出的 `startNodeId`，避免重复起点识别；fast run 默认不录制视频，减少执行启动开销；执行动作优先使用 PageAbility / PageElement 生成的 `tap_on_image` 区域点击。
-  10. [done] 目标执行支持 `RuntimeOverlay.targetTaskId`：当用户在目标动作中选择 PageTask，Dashboard 会把 `targetTaskId` 写入 route-plan preview 和 graph-run 请求；GraphRunService 到达目标 PageModel 后追加 PageTask 步骤，并把 `runtimeParams` 注入 `text_input` 等步骤。
-- 验证方式：Dashboard 组件测试覆盖无候选跳转资产录制、多候选消歧、单候选路径预览、route gap 提示和触发执行；当前已覆盖页面资产库目标页签、目标页面 / 目标动作 / 目标验证 / 运行参数任务表单、目标资产选择、PageTask 目标动作选择、RuntimeOverlay `targetTaskId`、RuntimeOverlay 文字验证、RuntimeOverlay 运行参数请求、执行入口挂接、`fast_visual` 请求参数和预检起点复用。server 测试覆盖 TargetResolver / PathPlanner preview / run API，并覆盖 `fast_visual` 不采集 Android UI hierarchy、关闭成功视频保留、按人工区域 `tap_on_image` 执行，以及目标页 PageTask 追加执行。
+  1. [superseded] Dashboard 不再提供“页面资产库 / 目标页面测试”入口；`PageAssetsPanel` 只用于浏览和治理已保存页面资产。
+  2. [superseded] 新的执行入口统一走 AI资产用例、资产用例和资产驱动巡检；运行参数、PageTask 注入、性能监控和报告证据必须在这些入口对应链路中接入。
+  3. [guardrail] 不得再从 `PageAssetsPanel` 直接拼 route-plan / graph-run 请求；如需恢复“跑到某个页面”的产品能力，应新建独立目标执行模块，并先更新需求、设计、入口和报告归属。
+- 验证方式：Dashboard 组件测试应覆盖 `PageAssetsPanel` 不导出目标页执行 helper、不渲染“目标页面测试 / 规划并执行”等旧控件；资产执行相关能力转由 AI资产用例、资产用例和资产驱动巡检测试覆盖。
 
 ### T-089：页面资产库产品化和外部调用入口
 
@@ -1626,14 +1623,14 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 - 目标平台：Dashboard + REST + CLI / MCP adapter
 - 修改边界：Dashboard navigation、REST routes、CLI commands、MCP tools、docs/guides
 - 任务内容：
-  1. [partial] Dashboard 主导航新增“页面资产库”，一期先拆出独立模块，包含“目标页面测试”和“已保存页面资产”两个页签；页面列表只展示经过资产录制确认保存的页面资产，页面详情、Android / iOS 覆盖状态、AI 可读信息编辑、元素列表、转移列表和最近验证结果待补。
+  1. [partial] Dashboard 主导航新增“页面资产库”，当前只展示“已保存页面资产”；旧“目标页面测试”页签已移除。页面列表只展示经过资产录制确认保存的页面资产，页面详情、Android / iOS 覆盖状态、AI 可读信息编辑、元素列表、转移列表和最近验证结果待补。
   2. 新增 REST：`GET /api/page-state/libraries`、`GET /api/page-state/pages`、`GET /api/page-state/pages/:id`、`PATCH /api/page-state/pages/:id`、`GET /api/page-state/transitions`、`POST /api/page-state/runs`。
   3. CLI / MCP adapter 增加 listPages、getPageDetail、searchTargets、resolveTarget、identifyCurrentPage、runToPage、getPageRunStatus、getPageRunReport。
   4. 用例库中 StructuredFlow 详情展示其引用的 PageModel / PageTransition，支持从失败步骤跳转到页面资产修复。
   5. 更新用户指南，说明页面资产、录制快照、阻断页和实验图谱的区别。
   6. 页面资产库支持合并重复逻辑页面、更新平台 profile、标记改版失效、恢复旧版本范围。
   7. 页面资产库支持编辑 targetRef、别名、业务描述、业务域、角色、意图标签和示例 AI 指令。
-- 验证方式：API 测试覆盖 CRUD、runToPage、设备锁、RuntimeOverlay、平台 profile 更新、AI 可读字段和 stale 标记；CLI / MCP mock REST 测试覆盖 searchTargets / resolveTarget 工具 schema；Dashboard 组件测试覆盖页面资产库浏览、双页签、AI 信息编辑、Android / iOS 覆盖状态、跳转和失败修复入口；当前已覆盖页面资产库独立模块、目标页面测试页签、已保存页面资产页签和资产录制跳转入口。
+- 验证方式：API 测试覆盖 CRUD、设备锁、RuntimeOverlay、平台 profile 更新、AI 可读字段和 stale 标记；CLI / MCP mock REST 测试覆盖 searchTargets / resolveTarget 工具 schema；Dashboard 组件测试覆盖页面资产库浏览、AI 信息编辑、Android / iOS 覆盖状态、跳转和失败修复入口；当前已覆盖页面资产库独立模块、已保存页面资产列表、资产详情和资产录制跳转入口。
 
 ### T-090：受控探索录制与稳定性探索 PoC
 
@@ -1755,3 +1752,28 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
   6. 新增 OCR 相对结构输入定位，允许通过稳定锚点找到动态已有值输入行；“新建课堂”标题输入资产已从固定截图区域迁移为 runtime structural locator。
   7. 真机完成 `进入指定班级 -> 创建课堂但不发布`：参数 `className=班级四十二号`、`lessonName=自动化组合课堂`、`duration=30`，5/5 资产步骤通过，最终停留在发布前页面。
 - 后续：参数反向引用展示、从成功执行一键保存元功能草稿、定时调度和资产包迁移由独立任务承接，不阻塞 v1 使用。
+
+## Phase 18：Android App 旁路监控
+
+### T-095：Android App 旁路性能与稳定性监控内核
+
+- 状态：planned
+- 关联需求：REQ-046、REQ-011、REQ-012、REQ-013、REQ-014、REQ-043、REQ-045
+- 关联设计：DES-047、DES-014、DES-015、DES-016、DES-043、DES-045
+- 目标平台：Android Driver + server Runner adapters + Storage artifacts + Report Core + Dashboard run config
+- 修改边界：`platform/packages/android-driver`、`platform/apps/server/src/automation-runner.ts`、`platform/apps/server/src/graph-run-service.ts`、`platform/apps/server/src/asset-patrol.ts`、`platform/apps/server/src/stability-explorer.ts`、`platform/packages/report-core`、Dashboard 执行配置和报告入口
+- 产品口径：新增目标 App 级旁路 watcher；Runner 继续负责动作执行，旁路 watcher 负责监控包名对应进程、性能阈值、稳定性事件和现场证据。
+- 任务内容：
+  1. 定义 shared / driver 层配置和结果类型：`AndroidAppMonitorConfig`、`AndroidProcessInfo`、`AndroidProcessMetricSample`、`AndroidProcessLifecycleEvent`、`AndroidAppMonitorIncident`、`AndroidAppMonitorSummary`。
+  2. 新增 `AndroidProcessDiscovery`，兼容 `ps -A -o PID,NAME`、旧版 `ps`、`dumpsys activity processes` 和 `/proc/<pid>/cmdline` 校验，支持 `main`、`:suffix`、完整进程名过滤。
+  3. 新增进程级 CPU / PSS sampler：CPU 用 `/proc/stat` + `/proc/<pid>/stat` 差分计算单核归一化百分比；内存用 `dumpsys meminfo` 解析 PSS 和 App Summary 分类。
+  4. 新增 `ThresholdTracker` 和 per-process tracker pool，支持 CPU / 内存阈值、`sustainMs`、`cooldownMs`、峰值记录和告警状态机。
+  5. 新增 incident dumper：CPU 告警抓 `top -H` 或 `/proc/<pid>/task` fallback；内存告警抓 `dumpsys meminfo -d` 文本和解析 JSON；heap dump 默认关闭，只在显式配置时尝试。
+  6. 增强 Android logcat watcher：读取 main / system / events / crash buffer，解析 Java Crash、Native Crash、ANR、process death，并按时间窗口去重。
+  7. 新增 `AndroidAppMonitorSession`，管理进程发现、采样循环、logcat watcher、artifact writer、status heartbeat、bounded dump 并发和 stop / flush 生命周期。
+  8. 接入 Runner：AutomationRunner、GraphRunService、AssetPatrolRunner、StabilityExplorer 在 Run 开始时按 RunConfig 启动 monitor，在 finally 中停止；事件尽量关联 active stepResultId。
+  9. 存储策略：高频 `cpu.csv`、`memory.csv`、`lifecycle.csv`、`monitor-summary.json` 写入 artifact；Storage 只保存 DeviceEvent、ArtifactRef 和必要 summary，不把高频样本全部塞进 `metric_samples`。
+  10. Report Core 新增“目标 App 旁路监控”区块，展示包名、进程列表、阈值、CPU / 内存统计、生命周期、incident、稳定性事件、采样失败和证据链接。
+  11. Dashboard 执行配置、稳定性探索、资产巡检和 CI/CLI 入参支持 monitor 开关、阈值、采样间隔、进程过滤、heap dump 开关；默认开启轻量监控，heap dump 默认关闭。
+  12. 缺陷候选和 AI 诊断接入：crash / ANR / process death / 持续 CPU 或内存超阈可进入 DefectCandidate 和 AiDiagnosisEvidencePack。
+- 验证方式：先写失败测试覆盖进程发现解析、cmdline 截断校验、CPU / PSS 解析、阈值 sustain / cooldown、CPU / 内存 incident dumper fallback、Java / Native / ANR / process death parser、事件去重、monitor session stop flush、Runner 接入、Report 展示和 Dashboard 配置；再实现代码；最后用真实 Android 设备运行 `cn.eeo.classin` 5 分钟，确认自动发现主进程与 `:privileged_process0`，报告生成 CPU / 内存曲线、生命周期和至少一次阈值 / clean 结果。
