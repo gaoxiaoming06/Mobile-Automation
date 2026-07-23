@@ -144,6 +144,11 @@ export class AndroidAppMonitorRunSupport {
       summary: `${this.options.summaryPrefix ?? "[Android App Monitor]"} collected ${summary.sampleCounts.cpu} CPU, ${summary.sampleCounts.memory} memory, ${summary.sampleCounts.lifecycle} lifecycle samples`,
       detail: JSON.stringify({
         packageName: summary.packageName,
+        sampleCounts: {
+          cpu: summary.sampleCounts.cpu,
+          memory: summary.sampleCounts.memory,
+          lifecycle: summary.sampleCounts.lifecycle
+        },
         processes: summary.processes.map((process) => ({
           pid: process.pid,
           processName: process.processName,

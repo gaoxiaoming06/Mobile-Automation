@@ -1,8 +1,9 @@
-import { createId, nowIso, type DeviceActionRequest, type RunMode, type TestRun } from "@mobile-automation/shared";
+import { createId, nowIso, type DeviceActionRequest, type RunConfig, type RunMode, type TestRun } from "@mobile-automation/shared";
 import { missingRequiredParameterKeysFromIssues, type AssetCompositeExecutionPlan, type CompiledAssetCompositionStep } from "./asset-composition.js";
 
 export type AssetCompositeExecutionItemStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "stopped";
 export type AssetCompositeExecutionStatus = "running" | "passed" | "failed" | "stopped";
+export type AssetCompositeExecutionType = "asset_composition" | "free_composition";
 
 export type AssetCompositeExecutionItem = {
   id: string;
@@ -31,6 +32,7 @@ export type AssetCompositeExecution = {
   deviceSerial: string;
   compositeCaseId: string;
   compositeCaseName: string;
+  executionType: AssetCompositeExecutionType;
   graphVersionId: string;
   status: AssetCompositeExecutionStatus;
   totalItems: number;
@@ -54,6 +56,8 @@ export type AssetCompositeGraphRunRequest = {
   executionProfile: "fast_visual";
   stopOnFailure: boolean;
   caseName: string;
+  executionContext?: RunConfig["executionContext"];
+  androidAppMonitor?: RunConfig["androidAppMonitor"];
   overlay: {
     id: string;
     targetNodeId: string;
@@ -84,6 +88,8 @@ export class AssetCompositeExecutionManager {
     stopOnFailure: boolean;
     runMode: RunMode;
     repeatCount: number;
+    executionType?: AssetCompositeExecutionType;
+    androidAppMonitor?: RunConfig["androidAppMonitor"];
     plan: AssetCompositeExecutionPlan;
   }): AssetCompositeExecution {
     if (input.plan.status !== "ready") {
@@ -101,6 +107,7 @@ export class AssetCompositeExecutionManager {
       deviceSerial: input.deviceSerial,
       compositeCaseId: input.compositeCaseId,
       compositeCaseName: input.compositeCaseName,
+      executionType: input.executionType ?? "asset_composition",
       graphVersionId: input.plan.graphVersionId,
       status: "running",
       totalItems: items.length,
@@ -113,7 +120,7 @@ export class AssetCompositeExecutionManager {
     };
     this.executions.set(id, execution);
     const state = { promise: Promise.resolve(), cancelled: false, runId: undefined as string | undefined };
-    state.promise = this.execute(execution, input.plan, input.stopOnFailure, input.runMode, state);
+    state.promise = this.execute(execution, input.plan, input.stopOnFailure, input.runMode, input.androidAppMonitor, state);
     this.active.set(id, state);
     void state.promise.finally(() => this.active.delete(id));
     return execution;
@@ -156,6 +163,7 @@ export class AssetCompositeExecutionManager {
     plan: AssetCompositeExecutionPlan,
     stopOnFailure: boolean,
     runMode: RunMode,
+    androidAppMonitor: RunConfig["androidAppMonitor"] | undefined,
     state: { cancelled: boolean; runId?: string }
   ): Promise<void> {
     const compiledById = new Map(plan.steps.map((step) => [step.id, step]));
@@ -185,7 +193,7 @@ export class AssetCompositeExecutionManager {
           await this.dependencies.performAction(execution.deviceSerial, systemActionRequest(step));
           item.status = state.cancelled ? "stopped" : "passed";
         } else {
-          const started = await this.dependencies.startGraphRun(graphRunRequest(execution, step));
+          const started = await this.dependencies.startGraphRun(graphRunRequest(execution, item, step, androidAppMonitor));
           state.runId = started.runId;
           item.runId = started.runId;
           await this.dependencies.waitForRun(started.runId);
@@ -288,7 +296,12 @@ function systemActionRequest(step: CompiledAssetCompositionStep): DeviceActionRe
   throw new Error(`Unsupported system action: ${step.systemAction ?? step.kind}`);
 }
 
-function graphRunRequest(execution: AssetCompositeExecution, step: CompiledAssetCompositionStep): AssetCompositeGraphRunRequest {
+function graphRunRequest(
+  execution: AssetCompositeExecution,
+  item: AssetCompositeExecutionItem,
+  step: CompiledAssetCompositionStep,
+  androidAppMonitor?: RunConfig["androidAppMonitor"]
+): AssetCompositeGraphRunRequest {
   const startNodeId = step.kind === "invoke_capability"
     ? step.sourcePageModelId
     : step.kind === "run_page_task" || step.kind === "verify_page"
@@ -304,6 +317,16 @@ function graphRunRequest(execution: AssetCompositeExecution, step: CompiledAsset
     executionProfile: "fast_visual",
     stopOnFailure: true,
     caseName: `资产组合｜${execution.compositeCaseName}｜${step.metaFunctionName}`,
+    executionContext: {
+      parentExecutionId: execution.id,
+      parentExecutionType: execution.executionType,
+      parentExecutionName: execution.compositeCaseName,
+      executionItemId: item.id,
+      itemOrder: item.order,
+      itemLabel: step.metaFunctionStepName ?? step.metaFunctionName,
+      itemKind: step.kind
+    },
+    ...(androidAppMonitor ? { androidAppMonitor } : {}),
     overlay: {
       id: `asset-composite-${execution.id}-${step.id}`,
       targetNodeId: step.targetPageModelId,

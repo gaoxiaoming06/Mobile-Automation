@@ -30,7 +30,7 @@ describe("renderReportHtml", () => {
     expect(renderReportHtml(run)).toContain("passed");
   });
 
-  it("renders android app monitor metrics and summary artifacts as key attachments", () => {
+  it("renders android app monitor summary as a readable report section without raw csv links", () => {
     const run: TestRun = {
       id: "run-monitor",
       caseName: "Monitor",
@@ -48,7 +48,24 @@ describe("renderReportHtml", () => {
       steps: [],
       stepResults: [],
       metrics: [],
-      events: [],
+      events: [
+        {
+          id: "event-monitor",
+          runId: "run-monitor",
+          deviceSerial: "device-1",
+          type: "android_app_monitor",
+          severity: "warning",
+          occurredAt: "2026-06-04T00:00:02.000Z",
+          summary: "[Android App Monitor] collected 12 CPU, 6 memory, 2 lifecycle samples",
+          detail: JSON.stringify({
+            packageName: "cn.eeo.classin",
+            sampleCounts: { cpu: 12, memory: 6, lifecycle: 2 },
+            processes: [{ pid: 123, processName: "cn.eeo.classin", isMainProcess: true }],
+            incidents: 1
+          }),
+          artifactIds: ["artifact-summary", "artifact-cpu"]
+        }
+      ],
       artifacts: [
         {
           id: "artifact-summary",
@@ -76,9 +93,13 @@ describe("renderReportHtml", () => {
 
     const html = renderReportHtml(run);
 
-    expect(html).toContain("android-app-monitor-summary.json");
-    expect(html).toContain("android-app-monitor-cpu.csv");
-    expect(html).toContain("/artifacts/runs/run-monitor/metrics/android-app-monitor-cpu.csv");
+    expect(html).toContain("App 性能监控");
+    expect(html).toContain("有告警");
+    expect(html).toContain("cn.eeo.classin");
+    expect(html).toContain("<strong>12</strong>");
+    expect(html).not.toContain("android-app-monitor-summary.json");
+    expect(html).not.toContain("android-app-monitor-cpu.csv");
+    expect(html).not.toContain("/artifacts/runs/run-monitor/metrics/android-app-monitor-cpu.csv");
   });
 
   it("renders AI diagnosis events with evidence links", () => {

@@ -131,6 +131,7 @@ export type StartGraphRunInput = {
   executionProfile?: "full" | "fast_visual";
   startAppScope?: StartAppScope;
   caseName?: string;
+  executionContext?: RunConfig["executionContext"];
   androidAppMonitor?: RunConfig["androidAppMonitor"];
 };
 
@@ -268,6 +269,7 @@ export class GraphRunService {
       input.startStrategy,
       input.executionProfile,
       input.startAppPackageName,
+      input.executionContext,
       input.androidAppMonitor
     );
     const testCase = graphExecutionPlanToCase(graph.name, executionPlan.steps, graph.targetApp, input.overlay, input.caseName);
@@ -1914,6 +1916,7 @@ export class GraphRunService {
     startStrategy: FlowStartStrategy | undefined,
     executionProfile: RunConfig["executionProfile"] | undefined,
     explicitStartAppPackageName?: string,
+    executionContext?: RunConfig["executionContext"],
     androidAppMonitor?: RunConfig["androidAppMonitor"]
   ): RunConfig {
     const startAppPackageName = explicitStartAppPackageName?.trim() || targetApp?.androidPackageName;
@@ -1930,6 +1933,7 @@ export class GraphRunService {
       startAppPackageName,
       startSetupScope: "before_run",
       executionProfile: profile,
+      ...(executionContext ? { executionContext } : {}),
       androidAppMonitor
     };
   }

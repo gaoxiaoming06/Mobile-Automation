@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, Play, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type {
+  AndroidAppMonitorConfig,
   AssetCompositeCase,
   AssetCompositeCaseStep,
   AssetParameterValue,
@@ -80,11 +81,26 @@ type AssetCompositionPanelProps = {
   setMessage: (message: string) => void;
   initialData?: AssetCompositionInitialData;
   mode?: "all" | "parameters";
+  androidAppMonitor?: AndroidAppMonitorConfig;
+  androidAppMonitorEnabled?: boolean;
+  onAndroidAppMonitorEnabledChange?: (enabled: boolean) => void;
+  androidAppMonitorForPackage?: (packageName: string) => AndroidAppMonitorConfig | undefined;
 };
 
 type CompositionTab = "records" | "profiles" | "meta" | "cases";
 
-export function AssetCompositionPanel({ selectedSerial, selectedDeviceBusy, defaultAppId, setMessage, initialData, mode = "all" }: AssetCompositionPanelProps) {
+export function AssetCompositionPanel({
+  selectedSerial,
+  selectedDeviceBusy,
+  defaultAppId,
+  setMessage,
+  initialData,
+  mode = "all",
+  androidAppMonitor,
+  androidAppMonitorEnabled,
+  onAndroidAppMonitorEnabledChange,
+  androidAppMonitorForPackage
+}: AssetCompositionPanelProps) {
   const parameterMode = mode === "parameters";
   const [appId, setAppId] = useState(defaultAppId);
   const [tab, setTab] = useState<CompositionTab>(parameterMode ? "records" : "meta");
@@ -122,6 +138,8 @@ export function AssetCompositionPanel({ selectedSerial, selectedDeviceBusy, defa
   const selectedProfile = data.profiles.find((item) => item.id === selectedProfileId);
   const selectedMetaFunction = data.metaFunctions.find((item) => item.id === selectedMetaFunctionId);
   const selectedCase = data.cases.find((item) => item.id === selectedCaseId);
+  const activeAndroidAppMonitor = androidAppMonitorForPackage?.(appId) ?? androidAppMonitor;
+  const activeAndroidAppMonitorEnabled = androidAppMonitorEnabled ?? Boolean(activeAndroidAppMonitor);
 
   async function refresh() {
     if (!appId.trim()) {
@@ -294,7 +312,13 @@ export function AssetCompositionPanel({ selectedSerial, selectedDeviceBusy, defa
     setBusy(true);
     try {
       const response = await apiFetchJson<{ execution: CompositeExecution; plan: CompositePlan }>(`/api/asset-composition/cases/${encodeURIComponent(caseDraft.id)}/execute`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deviceSerial: selectedSerial, parameterProfileId: caseDraft.parameterProfileId || undefined })
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(assetCompositionExecuteRequestBody({
+          selectedSerial,
+          parameterProfileId: caseDraft.parameterProfileId,
+          androidAppMonitor: activeAndroidAppMonitor
+        }))
       });
       setPlan(response.plan);
       setExecution(response.execution);
@@ -331,6 +355,14 @@ export function AssetCompositionPanel({ selectedSerial, selectedDeviceBusy, defa
         </>}
         <Summary label="页面资产" count={data.catalog.pages.length} example={data.catalog.pages[0]?.name} />
       </div>
+
+      {!parameterMode ? (
+        <AppMonitorExecutionToggle
+          enabled={activeAndroidAppMonitorEnabled}
+          packageName={appId}
+          onChange={onAndroidAppMonitorEnabledChange}
+        />
+      ) : null}
 
       <div className="segmented asset-composition-tabs">
         {parameterMode ? <>
@@ -434,6 +466,38 @@ export function AssetCompositionPanel({ selectedSerial, selectedDeviceBusy, defa
         </EditorLayout>
       ) : null}
     </section>
+  );
+}
+
+export function assetCompositionExecuteRequestBody(input: {
+  selectedSerial: string;
+  parameterProfileId?: string;
+  androidAppMonitor?: AndroidAppMonitorConfig;
+}) {
+  return {
+    deviceSerial: input.selectedSerial,
+    ...(input.parameterProfileId?.trim() ? { parameterProfileId: input.parameterProfileId.trim() } : {}),
+    ...(input.androidAppMonitor ? { androidAppMonitor: input.androidAppMonitor } : {})
+  };
+}
+
+function AppMonitorExecutionToggle({
+  enabled,
+  packageName,
+  onChange
+}: {
+  enabled: boolean;
+  packageName: string;
+  onChange?: (enabled: boolean) => void;
+}) {
+  return (
+    <label className="app-monitor-execution-toggle">
+      <span>
+        <strong>App 进程监控</strong>
+        <small>{enabled ? `开启 · ${packageName.trim() || "-"}` : "关闭"}</small>
+      </span>
+      <input type="checkbox" checked={enabled} onChange={(event) => onChange?.(event.target.checked)} />
+    </label>
   );
 }
 

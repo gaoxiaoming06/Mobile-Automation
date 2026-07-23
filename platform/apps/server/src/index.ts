@@ -18,6 +18,7 @@ import {
   type Platform,
   type MetaFunctionParameter,
   type MetaFunctionStep,
+  type RunConfig,
   type RunMode,
   type StepExpectation,
   type StepExpectationResult,
@@ -413,6 +414,7 @@ app.post("/api/asset-composition/cases/:id/execute", (req, res) => {
       stopOnFailure: compositeCase.stopOnFailure,
       runMode: compositeCase.runMode,
       repeatCount: compositeCase.runMode === "once" ? 1 : compositeCase.repeatCount,
+      androidAppMonitor: readAndroidAppMonitorConfig(body.androidAppMonitor),
       plan
     });
     res.status(202).json({ execution, plan });
@@ -565,6 +567,8 @@ app.post("/api/free-composition/sessions/:id/execute", (req, res) => {
       stopOnFailure: session.compositeCase.stopOnFailure,
       runMode: session.compositeCase.runMode,
       repeatCount: session.compositeCase.runMode === "once" ? 1 : session.compositeCase.repeatCount,
+      executionType: "free_composition",
+      androidAppMonitor: readAndroidAppMonitorConfig(body.androidAppMonitor),
       plan: session.plan
     });
     const running = freeCompositionSessions.markExecutionStarted(session.id, execution.id, { riskConfirmed: body.riskConfirmed === true });
@@ -2385,7 +2389,12 @@ app.post("/api/asset-patrols/execute", async (req, res) => {
     });
     assetDrivenExecutionSessions.set(assetDrivenExecution.id, assetDrivenExecution);
     const startForeground = await collectForegroundObservation(body.deviceSerial);
-    const started = await startAssetDrivenGraphTarget(body.deviceSerial, executionTarget);
+    const started = await startAssetDrivenGraphTarget(
+      body.deviceSerial,
+      executionTarget,
+      assetDrivenRunExecutionContext(assetDrivenExecution, executionTarget, 0),
+      body.androidAppMonitor
+    );
     markAssetDrivenExecutionItemStarted(assetDrivenExecution, 0, started.run);
     const queueState = { runId: started.run.id, sessionId: assetDrivenExecution.id, cancelled: false, promise: Promise.resolve() };
     const queuePromise = continueAssetDrivenExecutionQueue({
@@ -2545,6 +2554,7 @@ app.post("/api/flow-runs", async (req, res) => {
       keepVideoOnSuccess: body.keepVideoOnSuccess,
       pauseAfterEachStep: body.pauseAfterEachStep,
       stopAtStepId: body.stopAtStepId,
+      androidAppMonitor: readAndroidAppMonitorConfig((body as { androidAppMonitor?: unknown }).androidAppMonitor),
       expectationOverrides: body.expectationOverrides
     });
     res.status(202).json({ run });
@@ -2812,6 +2822,7 @@ function readAssetPatrolRequest(body: unknown): AssetPatrolStartInput {
     allowBusinessSubmit?: unknown;
     dangerousTextPatterns?: unknown;
     runtimeParams?: unknown;
+    androidAppMonitor?: unknown;
   };
   return {
     deviceSerial: input.deviceSerial?.trim() ?? "",
@@ -2825,7 +2836,8 @@ function readAssetPatrolRequest(body: unknown): AssetPatrolStartInput {
     allowRiskyActions: readOptionalBoolean(input.allowRiskyActions),
     allowBusinessSubmit: readOptionalBoolean(input.allowBusinessSubmit),
     dangerousTextPatterns: readRawStringArray(input.dangerousTextPatterns),
-    runtimeParams: readAssetPatrolRuntimeParams(input.runtimeParams)
+    runtimeParams: readAssetPatrolRuntimeParams(input.runtimeParams),
+    androidAppMonitor: readAndroidAppMonitorConfig(input.androidAppMonitor)
   };
 }
 
@@ -2890,6 +2902,7 @@ function readStabilityExplorerRequest(body: unknown): StabilityExplorerStartInpu
     stopOnAnr?: unknown;
     stopOnBlackScreen?: unknown;
     stopOnUnknownPageStuck?: unknown;
+    androidAppMonitor?: unknown;
   };
   return {
     deviceSerial: input.deviceSerial?.trim() ?? "",
@@ -2907,7 +2920,8 @@ function readStabilityExplorerRequest(body: unknown): StabilityExplorerStartInpu
     stopOnCrash: readOptionalBoolean(input.stopOnCrash),
     stopOnAnr: readOptionalBoolean(input.stopOnAnr),
     stopOnBlackScreen: readOptionalBoolean(input.stopOnBlackScreen),
-    stopOnUnknownPageStuck: readOptionalBoolean(input.stopOnUnknownPageStuck)
+    stopOnUnknownPageStuck: readOptionalBoolean(input.stopOnUnknownPageStuck),
+    androidAppMonitor: readAndroidAppMonitorConfig(input.androidAppMonitor)
   };
 }
 
@@ -3220,7 +3234,12 @@ function autoExploreBlockedReport(message: string, maxDepth: number, maxActions:
   };
 }
 
-async function startAssetDrivenGraphTarget(deviceSerial: string, target: AssetDrivenReadyExecutionTarget) {
+async function startAssetDrivenGraphTarget(
+  deviceSerial: string,
+  target: AssetDrivenReadyExecutionTarget,
+  executionContext?: RunConfig["executionContext"],
+  androidAppMonitor?: RunConfig["androidAppMonitor"]
+) {
   return graphRunner.start({
     deviceSerial,
     graphVersionId: target.graphVersionId,
@@ -3231,8 +3250,66 @@ async function startAssetDrivenGraphTarget(deviceSerial: string, target: AssetDr
     executionProfile: "fast_visual",
     stopOnFailure: true,
     overlay: target.overlay,
-    caseName: assetDrivenGraphRunCaseName(target)
+    caseName: assetDrivenGraphRunCaseName(target),
+    executionContext,
+    androidAppMonitor
   });
+}
+
+function assetDrivenRunExecutionContext(
+  session: AssetDrivenExecutionSession,
+  target: AssetDrivenReadyExecutionTarget,
+  itemIndex: number,
+  itemKind: "asset_target" | "retry" = "asset_target",
+  retryOfRunId?: string
+): RunConfig["executionContext"] {
+  const item = session.items[itemIndex];
+  return {
+    parentExecutionId: session.id,
+    parentExecutionType: "asset_patrol",
+    parentExecutionName: session.packageName,
+    executionItemId: item?.id ?? `${session.id}_${itemKind}_${target.transitionId ?? target.pageTaskId ?? target.targetNodeId}`,
+    itemOrder: item?.order ?? itemIndex + 1,
+    itemLabel: item?.label ?? assetDrivenExecutionTargetLabel(target),
+    itemKind,
+    ...(retryOfRunId ? { retryOfRunId } : {})
+  };
+}
+
+function assetDrivenRecoveryExecutionContext(
+  session: AssetDrivenExecutionSession,
+  afterItemOrder: number,
+  retryOfRunId?: string
+): RunConfig["executionContext"] {
+  return {
+    parentExecutionId: session.id,
+    parentExecutionType: "asset_patrol",
+    parentExecutionName: session.packageName,
+    executionItemId: `${session.id}_recovery_after_${afterItemOrder}${retryOfRunId ? `_${retryOfRunId}` : ""}`,
+    itemOrder: afterItemOrder + 0.5,
+    itemLabel: "恢复到巡检起点",
+    itemKind: "recovery",
+    retryOfRunId,
+    recovery: true
+  };
+}
+
+function assetDrivenRecoveryTargetExecutionContext(
+  context: RunConfig["executionContext"] | undefined,
+  target: AssetDrivenReadyExecutionTarget
+): RunConfig["executionContext"] | undefined {
+  if (!context) {
+    return undefined;
+  }
+  return {
+    ...context,
+    executionItemId: `${context.executionItemId ?? context.parentExecutionId}_${target.transitionId ?? target.pageTaskId ?? target.targetNodeId}`,
+    itemLabel: `恢复：${assetDrivenExecutionTargetLabel(target)}`
+  };
+}
+
+function assetDrivenExecutionTargetLabel(target: AssetDrivenReadyExecutionTarget): string {
+  return target.transitionName?.trim() || `${target.startNodeName} -> ${target.targetNodeName}`;
 }
 
 const ASSET_DRIVEN_CASE_NAME_PARAM_KEYS = ["className", "lessonName"] as const;
@@ -3319,7 +3396,8 @@ async function continueAssetDrivenExecutionQueue(input: {
       startNodeId: input.startNodeId,
       graphVersionId: input.targets[0]?.graphVersionId,
       startComponentName: input.startComponentName,
-      knownCurrentNodeId: previousRun?.status === "passed" ? input.targets[targetIndex - 1]?.targetNodeId : undefined
+      knownCurrentNodeId: previousRun?.status === "passed" ? input.targets[targetIndex - 1]?.targetNodeId : undefined,
+      recoveryExecutionContext: assetDrivenRecoveryExecutionContext(input.session, targetIndex)
     });
     recordAssetDrivenExecutionRecovery(input.session, {
       afterItemOrder: targetIndex,
@@ -3337,11 +3415,15 @@ async function continueAssetDrivenExecutionQueue(input: {
     if (input.queueState.cancelled) {
       return;
     }
-    const started = await startAssetDrivenGraphTarget(input.body.deviceSerial, target);
+    const started = await startAssetDrivenGraphTarget(
+      input.body.deviceSerial,
+      target,
+      assetDrivenRunExecutionContext(input.session, target, targetIndex),
+      input.body.androidAppMonitor
+    );
     previousRunId = started.run.id;
     input.queueState.runId = previousRunId;
-    const itemIndex = input.targets.indexOf(target);
-    markAssetDrivenExecutionItemStarted(input.session, itemIndex, started.run);
+    markAssetDrivenExecutionItemStarted(input.session, targetIndex, started.run);
     await graphRunner.waitForRun(previousRunId);
     const completedRun = storage.getRun(previousRunId);
     if (completedRun) {
@@ -3352,7 +3434,7 @@ async function continueAssetDrivenExecutionQueue(input: {
           config: input.config,
           startNodeId: input.startNodeId,
           target,
-          itemIndex,
+          itemIndex: targetIndex,
           startComponentName: input.startComponentName,
           failedRun: completedRun,
           session: input.session,
@@ -3390,7 +3472,8 @@ async function tryRepairAndRetryAssetDrivenTarget(input: {
     packageName: input.config.packageName,
     startNodeId: input.startNodeId,
     graphVersionId: input.target.graphVersionId,
-    startComponentName: input.startComponentName
+    startComponentName: input.startComponentName,
+    recoveryExecutionContext: assetDrivenRecoveryExecutionContext(input.session, input.itemIndex + 1, input.failedRun.id)
   });
   recordAssetDrivenExecutionRecovery(input.session, {
     afterItemOrder: input.itemIndex + 1,
@@ -3413,7 +3496,12 @@ async function tryRepairAndRetryAssetDrivenTarget(input: {
   if (input.queueState.cancelled) {
     return undefined;
   }
-  const retry = await startAssetDrivenGraphTarget(input.body.deviceSerial, input.target);
+  const retry = await startAssetDrivenGraphTarget(
+    input.body.deviceSerial,
+    input.target,
+    assetDrivenRunExecutionContext(input.session, input.target, input.itemIndex, "retry", input.failedRun.id),
+    input.body.androidAppMonitor
+  );
   input.queueState.runId = retry.run.id;
   markAssetDrivenExecutionItemStarted(input.session, input.itemIndex, retry.run);
   await graphRunner.waitForRun(retry.run.id);
@@ -3629,6 +3717,7 @@ async function recoverAssetDrivenStartPage(input: {
   graphVersionId?: string;
   startComponentName?: string;
   knownCurrentNodeId?: string;
+  recoveryExecutionContext?: RunConfig["executionContext"];
   maxBacks?: number;
 }): Promise<{ restored: boolean; strategy: string; durationMs: number; message: string }> {
   const startedAt = Date.now();
@@ -3662,7 +3751,12 @@ async function recoverAssetDrivenStartPage(input: {
     });
     if (recoveryTarget) {
       strategies.push("verified_target_transition");
-      const started = await startAssetDrivenGraphTarget(input.body.deviceSerial, recoveryTarget);
+      const started = await startAssetDrivenGraphTarget(
+        input.body.deviceSerial,
+        recoveryTarget,
+        assetDrivenRecoveryTargetExecutionContext(input.recoveryExecutionContext, recoveryTarget),
+        input.body.androidAppMonitor
+      );
       await graphRunner.waitForRun(started.run.id);
       if (storage.getRun(started.run.id)?.status !== "passed") {
         return result(false, "上一条成功边的目标页恢复边执行失败。");
@@ -3746,7 +3840,12 @@ async function recoverAssetDrivenStartPage(input: {
       strategies.push("matched_page_transition");
       knownCurrentNodeId = undefined;
       recoveryTransitionAttempts += 1;
-      const started = await startAssetDrivenGraphTarget(input.body.deviceSerial, recoveryTarget);
+      const started = await startAssetDrivenGraphTarget(
+        input.body.deviceSerial,
+        recoveryTarget,
+        assetDrivenRecoveryTargetExecutionContext(input.recoveryExecutionContext, recoveryTarget),
+        input.body.androidAppMonitor
+      );
       await graphRunner.waitForRun(started.run.id);
       if (storage.getRun(started.run.id)?.status !== "passed") {
         return result(false, "运行期匹配页面的恢复边执行失败。");

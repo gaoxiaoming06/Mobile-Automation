@@ -1,6 +1,8 @@
 import {
+  androidAppMonitorDisplaySummaryFromRun,
   isSystemGuardExpectationType,
   shouldDisplayExpectationResult,
+  type AndroidAppMonitorDisplaySummary,
   type ArtifactRef,
   type MetricSample,
   type StepExpectationResult,
@@ -14,7 +16,7 @@ export function renderReportHtml(run: TestRun): string {
   const videoArtifacts = run.artifacts.filter((artifact) => artifact.type === "video" && !artifact.deletedAt);
   const primaryVideo = videoArtifacts[0];
   const logArtifacts = run.artifacts.filter((artifact) => artifact.type === "log");
-  const keyArtifacts = run.artifacts.filter((artifact) => ["video", "log", "metrics", "report_json"].includes(artifact.type) && !artifact.deletedAt);
+  const keyArtifacts = run.artifacts.filter((artifact) => ["video", "log", "metrics", "report_json"].includes(artifact.type) && !artifact.deletedAt && !isAndroidAppMonitorArtifact(artifact));
   const latestMetric = run.metrics.at(-1);
   const metricSummary = summarizeMetrics(run.metrics);
   const failedSteps = run.stepResults.filter((step) => step.status !== "passed" && step.status !== "skipped");
@@ -162,6 +164,7 @@ export function renderReportHtml(run: TestRun): string {
       <div class="metric"><span>视频证据</span><strong>${videoArtifacts.length ? `${videoArtifacts.length} 个` : "无"}</strong></div>
     </section>
     ${renderMetricTrend(run.metrics)}
+    ${renderAndroidAppMonitorReport(run)}
 
     ${primaryVideo ? renderVideoEvidence(primaryVideo) : renderVideoUnavailable(run)}
 
@@ -969,6 +972,31 @@ function renderVideoEvidence(artifact: ArtifactRef): string {
 
 function renderArtifact(artifact: ArtifactRef): string {
   return `<div class="artifact"><a href="${escapeAttr(artifact.url)}">${escapeHtml(artifact.name)}</a><span class="muted"> ${escapeHtml(artifact.type)}</span></div>`;
+}
+
+function renderAndroidAppMonitorReport(run: TestRun): string {
+  const summary = androidAppMonitorDisplaySummaryFromRun(run);
+  if (!summary) {
+    return "";
+  }
+  return `<h2>App 性能监控</h2>
+    <section class="summary">
+      <div class="metric"><span>状态</span><strong>${escapeHtml(androidAppMonitorHealthLabel(summary))}</strong></div>
+      <div class="metric"><span>监控 App</span><strong>${escapeHtml(summary.packageName)}</strong></div>
+      <div class="metric"><span>进程数</span><strong>${summary.processCount}</strong></div>
+      <div class="metric"><span>告警</span><strong>${summary.incidentCount}</strong></div>
+      <div class="metric"><span>CPU 采样</span><strong>${summary.cpuSamples}</strong></div>
+      <div class="metric"><span>内存采样</span><strong>${summary.memorySamples}</strong></div>
+      <div class="metric"><span>生命周期采样</span><strong>${summary.lifecycleSamples}</strong></div>
+    </section>`;
+}
+
+function androidAppMonitorHealthLabel(summary: AndroidAppMonitorDisplaySummary): string {
+  return summary.severity === "error" || summary.severity === "warning" || summary.incidentCount > 0 ? "有告警" : "正常";
+}
+
+function isAndroidAppMonitorArtifact(artifact: ArtifactRef): boolean {
+  return artifact.name.includes("android-app-monitor");
 }
 
 function renderVideoUnavailable(run: TestRun): string {

@@ -8,6 +8,11 @@ describe("AssetCompositeExecutionManager", () => {
     const runs = new Map<string, TestRun>();
     const requests: Array<Record<string, unknown>> = [];
     let runIndex = 0;
+    const androidAppMonitor = {
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true
+    };
     const manager = new AssetCompositeExecutionManager({
       startGraphRun: async (request) => {
         requests.push(request as unknown as Record<string, unknown>);
@@ -28,8 +33,9 @@ describe("AssetCompositeExecutionManager", () => {
       stopOnFailure: true,
       runMode: "once",
       repeatCount: 1,
+      androidAppMonitor,
       plan: executionPlan()
-    });
+    } as Parameters<AssetCompositeExecutionManager["start"]>[0] & { androidAppMonitor: typeof androidAppMonitor });
     await manager.waitForExecution(execution.id);
 
     const completed = manager.getExecution(execution.id)!;
@@ -44,7 +50,16 @@ describe("AssetCompositeExecutionManager", () => {
     expect(requests[2]).toEqual(expect.objectContaining({
       startNodeId: "page-create",
       targetNodeId: "page-create",
-      overlay: expect.objectContaining({ targetTaskId: "task-fill-lesson", runtimeParams: { className: "班级四十二号", lessonName: "自动化课堂" } })
+      overlay: expect.objectContaining({ targetTaskId: "task-fill-lesson", runtimeParams: { className: "班级四十二号", lessonName: "自动化课堂" } }),
+      executionContext: expect.objectContaining({
+        parentExecutionId: execution.id,
+        parentExecutionType: "asset_composition",
+        parentExecutionName: "指定班级创建课堂",
+        executionItemId: `${execution.id}_item_3`,
+        itemOrder: 3,
+        itemKind: "run_page_task"
+      }),
+      androidAppMonitor
     }));
     expect(renderAssetCompositeExecutionReportHtml(completed)).toContain("创建课堂但不发布");
     expect(renderAssetCompositeExecutionReportHtml(completed)).toContain("task-fill-lesson");

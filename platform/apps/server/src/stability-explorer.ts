@@ -55,6 +55,7 @@ export type StabilityExplorerConfig = Required<Omit<StabilityExplorerConfigInput
 
 export type StabilityExplorerStartInput = StabilityExplorerConfigInput & {
   deviceSerial: string;
+  androidAppMonitor?: RunConfig["androidAppMonitor"];
 };
 
 export type StabilityCandidate = {
@@ -140,6 +141,7 @@ export class StabilityExplorer {
       keepVideoOnSuccess: false,
       startStrategy: stabilityStartStrategy(config.startMode),
       startAppPackageName: config.packageName,
+      androidAppMonitor: input.androidAppMonitor,
       stabilityExploration: config
     };
     const steps = buildPlaceholderSteps(config.maxActions);

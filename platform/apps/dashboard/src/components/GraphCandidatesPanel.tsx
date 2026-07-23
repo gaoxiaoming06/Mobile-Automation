@@ -1,6 +1,6 @@
 import { FolderOpen, GitBranch, Import, PlayCircle, Search, Wand2 } from "lucide-react";
 import { Children, useEffect, useState, type ReactNode } from "react";
-import type { TestRun } from "@mobile-automation/shared";
+import type { AndroidAppMonitorConfig, TestRun } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api";
 
 type SourceMatcher = {
@@ -292,6 +292,7 @@ type GraphCandidatesPanelProps = {
   setMessage: (message: string) => void;
   selectedSerial?: string;
   selectedDeviceBusy?: boolean;
+  androidAppMonitor?: AndroidAppMonitorConfig;
   onRunStarted?: (runId: string) => void;
 };
 
@@ -302,7 +303,7 @@ type PickDirectoryResponse = {
 
 type GraphPanelTab = "nodeTest" | "graphs" | "assets";
 
-export function GraphCandidatesPanel({ setMessage, selectedSerial = "", selectedDeviceBusy = false, onRunStarted }: GraphCandidatesPanelProps) {
+export function GraphCandidatesPanel({ setMessage, selectedSerial = "", selectedDeviceBusy = false, androidAppMonitor, onRunStarted }: GraphCandidatesPanelProps) {
   const [appId, setAppId] = useState("classin-android");
   const [repoPath, setRepoPath] = useState("");
   const [maxFiles, setMaxFiles] = useState(20000);
@@ -643,12 +644,12 @@ export function GraphCandidatesPanel({ setMessage, selectedSerial = "", selected
       const response = await apiFetchJson<GraphRunResponse>("/api/graph-runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          deviceSerial: selectedSerial,
+        body: JSON.stringify(graphRunRequestBody({
+          selectedSerial,
           graphId: graph.id,
           targetNodeId,
-          startStrategy: "keep_current"
-        })
+          androidAppMonitor
+        }))
       });
       setLastGraphRun(response);
       setMessage(`已启动目标节点执行：${response.run.id}`);
@@ -684,12 +685,12 @@ export function GraphCandidatesPanel({ setMessage, selectedSerial = "", selected
       const response = await apiFetchJson<GraphRunResponse>("/api/graph-runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          deviceSerial: selectedSerial,
+        body: JSON.stringify(graphRunRequestBody({
+          selectedSerial,
           graphId: graph.id,
           target: buildTargetQuery(target),
-          startStrategy: "keep_current"
-        })
+          androidAppMonitor
+        }))
       });
       setLastGraphRun(response);
       setMessage(`已启动目标节点执行：${response.run.id}`);
@@ -902,6 +903,23 @@ export function GraphCandidatesPanel({ setMessage, selectedSerial = "", selected
       )}
     </section>
   );
+}
+
+export function graphRunRequestBody(input: {
+  selectedSerial: string;
+  graphId: string;
+  targetNodeId?: string;
+  target?: unknown;
+  androidAppMonitor?: AndroidAppMonitorConfig;
+}) {
+  return {
+    deviceSerial: input.selectedSerial,
+    graphId: input.graphId,
+    ...(input.targetNodeId ? { targetNodeId: input.targetNodeId } : {}),
+    ...(input.target ? { target: input.target } : {}),
+    startStrategy: "keep_current",
+    ...(input.androidAppMonitor ? { androidAppMonitor: input.androidAppMonitor } : {})
+  };
 }
 
 function executableTargetNodes(graph: BusinessGraph): GraphNodeSummary[] {

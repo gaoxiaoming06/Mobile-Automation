@@ -8,14 +8,19 @@ import {
   AssetPatrolPanel,
   ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE,
   ASSET_DRIVEN_TEST_ACTION_LABEL,
+  AndroidAppMonitorSettingsPanel,
   AiDiagnosisSettingsPanel,
   DEFAULT_ASSET_PATROL_PACKAGE_NAME,
+  DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
   DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES,
   DEFAULT_STABILITY_EXPLORER_APP_EXIT_POLICY,
   DEFAULT_STABILITY_EXPLORER_MAX_DEPTH,
   DEFAULT_STABILITY_EXPLORER_START_MODE,
   DEFAULT_STABILITY_DANGEROUS_TEXT,
+  StabilityExplorerPanel,
   actionStrategyForWorkspace,
+  androidAppMonitorDefaultEnabled,
+  androidAppMonitorForExecution,
   assetConnectionEdgeMessage,
   assetPatrolPanelDisplayMode,
   assetPatrolPlanGroups,
@@ -164,6 +169,22 @@ describe("App shell", () => {
     expect(panelOverrideRule).toContain("overflow-y: auto");
   });
 
+  it("keeps the settings page scrollable with readable advanced monitor controls", () => {
+    const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+    const settingsModuleRule = styles.match(/\.settings-module\s*\{[^}]+\}/)?.[0] ?? "";
+    const settingsPanelRule = styles.match(/\.settings-module > \.panel\s*\{[^}]+\}/)?.[0] ?? "";
+    const advancedGridRule = styles.match(/\.settings-advanced-grid\s*\{[^}]+\}/)?.[0] ?? "";
+    const thresholdRowRule = styles.match(/\.settings-threshold-row\s*\{[^}]+\}/)?.[0] ?? "";
+
+    expect(settingsModuleRule).toContain("max-height:");
+    expect(settingsModuleRule).toContain("overflow-y: auto");
+    expect(settingsModuleRule).toContain("overflow-x: hidden");
+    expect(settingsPanelRule).toContain("flex: 0 0 auto");
+    expect(settingsPanelRule).toContain("overflow: hidden");
+    expect(advancedGridRule).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
+    expect(thresholdRowRule).toContain("grid-template-columns: minmax(0, 1fr) minmax(120px, 160px)");
+  });
+
   it("defaults stability exploration start mode to restart app", () => {
     expect(DEFAULT_STABILITY_EXPLORER_START_MODE).toBe("restart_app");
   });
@@ -193,6 +214,12 @@ describe("App shell", () => {
   });
 
   it("builds a bounded stability exploration request body", () => {
+    const androidAppMonitor = {
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true
+    };
+
     expect(
       stabilityExplorerRequestBody({
         selectedSerial: "device-1",
@@ -211,8 +238,9 @@ describe("App shell", () => {
         appExitPolicy: "restart_app",
         backtrackStrategy: "shallow",
         maxDepth: 2,
-        dangerousTextPatternsText: "删除\n支付\n "
-      })
+        dangerousTextPatternsText: "删除\n支付\n ",
+        androidAppMonitor
+      } as Parameters<typeof stabilityExplorerRequestBody>[0] & { androidAppMonitor: typeof androidAppMonitor })
     ).toEqual({
       deviceSerial: "device-1",
       packageName: "com.demo",
@@ -229,7 +257,8 @@ describe("App shell", () => {
       stopOnCrash: true,
       stopOnAnr: true,
       stopOnBlackScreen: true,
-      stopOnUnknownPageStuck: true
+      stopOnUnknownPageStuck: true,
+      androidAppMonitor
     });
   });
 
@@ -306,6 +335,12 @@ describe("App shell", () => {
   });
 
   it("builds an asset patrol request body with safe defaults exposed by the UI", () => {
+    const androidAppMonitor = {
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true
+    };
+
     expect(
       assetPatrolRequestBody({
         selectedSerial: "device-1",
@@ -316,8 +351,9 @@ describe("App shell", () => {
         maxTransitions: 8,
         allowRiskyActions: false,
         allowBusinessSubmit: false,
-        dangerousTextPatternsText: "删除\n退出登录\n发布"
-      })
+        dangerousTextPatternsText: "删除\n退出登录\n发布",
+        androidAppMonitor
+      } as Parameters<typeof assetPatrolRequestBody>[0] & { androidAppMonitor: typeof androidAppMonitor })
     ).toEqual({
       deviceSerial: "device-1",
       packageName: "cn.eeo.classin",
@@ -327,7 +363,8 @@ describe("App shell", () => {
       maxTransitions: 8,
       allowRiskyActions: false,
       allowBusinessSubmit: false,
-      dangerousTextPatterns: ["删除", "退出登录", "发布"]
+      dangerousTextPatterns: ["删除", "退出登录", "发布"],
+      androidAppMonitor
     });
   });
 
@@ -461,6 +498,173 @@ describe("App shell", () => {
 
   it("defaults asset patrol to the ClassIn Android package", () => {
     expect(DEFAULT_ASSET_PATROL_PACKAGE_NAME).toBe("cn.eeo.classin");
+  });
+
+  it("defaults app process monitoring to asset patrol and stability executions", () => {
+    expect(DEFAULT_ANDROID_APP_MONITOR_SETTINGS.defaultMode).toBe("asset_and_stability");
+    expect(androidAppMonitorDefaultEnabled("asset_and_stability", "asset_patrol")).toBe(true);
+    expect(androidAppMonitorDefaultEnabled("asset_and_stability", "stability_exploration")).toBe(true);
+    expect(androidAppMonitorDefaultEnabled("asset_and_stability", "asset_composition")).toBe(false);
+    expect(androidAppMonitorDefaultEnabled("all_runs", "free_composition")).toBe(true);
+    expect(androidAppMonitorDefaultEnabled("off", "stability_exploration")).toBe(false);
+  });
+
+  it("builds app monitor requests from the current execution target package and explicit override", () => {
+    expect(
+      androidAppMonitorForExecution(
+        DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
+        {
+          executionKind: "stability_exploration",
+          startStrategy: "restart_app",
+          executionPackageName: " com.demo "
+        }
+      )
+    ).toEqual({
+      enabled: true,
+      packageName: "com.demo",
+      includeSubprocesses: true,
+      enableHeapDump: false
+    });
+
+    expect(
+      androidAppMonitorForExecution(
+        DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
+        {
+          executionKind: "asset_patrol",
+          startStrategy: "keep_current",
+          executionPackageName: "cn.eeo.classin",
+          enabledOverride: false
+        }
+      )
+    ).toBeUndefined();
+
+    expect(
+      androidAppMonitorForExecution(
+        DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
+        {
+          executionKind: "stability_exploration",
+          startStrategy: "restart_app",
+          executionPackageName: " "
+        }
+      )
+    ).toBeUndefined();
+  });
+
+  it("renders only app process monitor defaults in settings without a package-name field", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AndroidAppMonitorSettingsPanel, {
+        draft: DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
+        onDraftChange: () => undefined
+      })
+    );
+
+    expect(markup).toContain("App 监控默认");
+    expect(markup).toContain("资产巡检/稳定性");
+    expect(markup).toContain("所有正式执行");
+    expect(markup).not.toContain("包名跟随");
+    expect(markup).not.toContain("默认包名");
+    expect(markup).not.toContain("cn.eeo.classin");
+  });
+
+  it("uses plain-language app monitor settings labels", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AndroidAppMonitorSettingsPanel, {
+        draft: DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
+        onDraftChange: () => undefined
+      })
+    );
+
+    expect(markup).toContain("不额外采集应用 CPU、内存数据");
+    expect(markup).toContain("抓取内存快照");
+    expect(markup).toContain("CPU 使用率告警");
+    expect(markup).toContain("内存占用告警");
+    expect(markup).not.toContain("每个 run");
+    expect(markup).not.toContain("Heap Dump");
+    expect(markup).not.toContain("PSS MB");
+  });
+
+  it("shows app process monitor confirmation in asset patrol execution config", () => {
+    const noop = () => undefined;
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetPatrolPanel, {
+        devices: [],
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        packageName: "cn.eeo.classin",
+        packageOptions: ["cn.eeo.classin"],
+        startMode: "current_state",
+        pageScope: "current_page",
+        maxDurationMinutes: 2,
+        maxTransitions: 8,
+        allowRiskyActions: false,
+        allowBusinessSubmit: false,
+        dangerousTextPatternsText: "删除\n退出登录",
+        androidAppMonitorEnabled: true,
+        onAndroidAppMonitorEnabledChange: noop,
+        busy: false,
+        onSelectDevice: noop,
+        onPackageNameChange: noop,
+        onStartModeChange: noop,
+        onPageScopeChange: noop,
+        onMaxDurationMinutesChange: noop,
+        onMaxTransitionsChange: noop,
+        onAllowRiskyActionsChange: noop,
+        onAllowBusinessSubmitChange: noop,
+        onDangerousTextPatternsChange: noop,
+        onExecute: noop,
+        onStop: noop,
+        onOpenRun: noop
+      })
+    );
+
+    expect(markup).toContain("App 进程监控");
+    expect(markup).toContain("开启");
+    expect(markup).toContain("cn.eeo.classin");
+  });
+
+  it("shows app process monitor confirmation in stability execution config", () => {
+    const noop = () => undefined;
+    const markup = renderToStaticMarkup(
+      React.createElement(StabilityExplorerPanel, {
+        devices: [],
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        packageName: "cn.eeo.classin",
+        packageOptions: ["cn.eeo.classin"],
+        maxDurationMinutes: 3,
+        maxActions: 100,
+        strategy: "balanced",
+        startMode: "restart_app",
+        seed: "",
+        allowedActions: { tap: true, swipe: true, back: true, wait: true },
+        appExitPolicy: "back_to_app",
+        backtrackStrategy: "shallow",
+        maxDepth: 4,
+        dangerousTextPatternsText: "删除\n支付",
+        androidAppMonitorEnabled: true,
+        onAndroidAppMonitorEnabledChange: noop,
+        busy: false,
+        onSelectDevice: noop,
+        onPackageNameChange: noop,
+        onMaxDurationMinutesChange: noop,
+        onMaxActionsChange: noop,
+        onStrategyChange: noop,
+        onStartModeChange: noop,
+        onSeedChange: noop,
+        onAllowedActionsChange: noop,
+        onAppExitPolicyChange: noop,
+        onBacktrackStrategyChange: noop,
+        onMaxDepthChange: noop,
+        onDangerousTextPatternsChange: noop,
+        onStart: noop,
+        onStop: noop,
+        onOpenRun: noop
+      })
+    );
+
+    expect(markup).toContain("App 进程监控");
+    expect(markup).toContain("开启");
+    expect(markup).toContain("cn.eeo.classin");
   });
 
   it("exposes only the real asset-driven execution action in the asset patrol panel", () => {

@@ -1,4 +1,4 @@
-import type { RunMode, StepExpectation, StructuredFlow, TestRun } from "@mobile-automation/shared";
+import type { RunConfig, RunMode, StepExpectation, StructuredFlow, TestRun } from "@mobile-automation/shared";
 import type { AutomationDeviceDriver } from "./mobile-driver.js";
 import type { OcrService } from "./ocr.js";
 import { AutomationRunner, DeviceBusyError, type RunnerStorage } from "./automation-runner.js";
@@ -18,6 +18,7 @@ export type StartStructuredFlowRunInput = {
   keepVideoOnSuccess?: boolean;
   pauseAfterEachStep?: boolean;
   stopAtStepId?: string;
+  androidAppMonitor?: RunConfig["androidAppMonitor"];
   expectationOverrides?: StructuredFlowExpectationOverride[];
 };
 
@@ -68,7 +69,8 @@ export class StructuredFlowRunner {
       pauseAfterEachStep: input.pauseAfterEachStep,
       startStrategy: flow.startStrategy === "install_build_and_launch" ? "restart_app" : flow.startStrategy,
       startAppPackageName: targetPackageName,
-      startSetupScope: "before_run"
+      startSetupScope: "before_run",
+      androidAppMonitor: input.androidAppMonitor
     });
   }
 

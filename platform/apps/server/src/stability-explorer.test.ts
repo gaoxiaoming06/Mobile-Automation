@@ -196,6 +196,34 @@ describe("StabilityExplorer", () => {
     );
   });
 
+  it("stores android app monitor config in stability exploration runs", async () => {
+    const storage = new MemoryExplorerStorage();
+    const driver = new ScriptedExplorerDriver("com.demo");
+    const explorer = new StabilityExplorer(storage, driver, scriptedOcr([
+      [{ text: "当前页入口", x: 260, y: 560, width: 220, height: 80 }]
+    ]));
+    const androidAppMonitor = {
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true
+    };
+
+    const run = explorer.start({
+      deviceSerial: "device-1",
+      packageName: "com.demo",
+      startMode: "current_state",
+      maxActions: 1,
+      maxDurationMs: 30_000,
+      strategy: "conservative",
+      allowedActions: ["tap"],
+      seed: "stable-seed",
+      androidAppMonitor
+    } as Parameters<StabilityExplorer["start"]>[0] & { androidAppMonitor: typeof androidAppMonitor });
+    await explorer.waitForRun(run.id);
+
+    expect(storage.getRun(run.id)?.config.androidAppMonitor).toEqual(androidAppMonitor);
+  });
+
   it("handles temporary pages with runtime interceptor rules before normal exploration", async () => {
     const storage = new MemoryExplorerStorage();
     const driver = new RuntimeInterceptorExplorerDriver();

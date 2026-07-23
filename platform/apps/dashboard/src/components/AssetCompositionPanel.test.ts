@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   AssetCompositionPanel,
+  assetCompositionExecuteRequestBody,
   parameterProfileValuesFromText,
   parameterProfileValuesToText,
   type AssetCompositionInitialData
@@ -39,6 +40,40 @@ describe("AssetCompositionPanel", () => {
       lessonName: { type: "template", value: "自动化课堂-{{timestamp}}" }
     });
     expect(parameterProfileValuesToText(values)).toContain("duration:number=30");
+  });
+
+  it("includes android app monitor config when building execution requests", () => {
+    const androidAppMonitor = {
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true
+    };
+
+    expect(assetCompositionExecuteRequestBody({
+      selectedSerial: "device-1",
+      parameterProfileId: "profile-1",
+      androidAppMonitor
+    })).toEqual({
+      deviceSerial: "device-1",
+      parameterProfileId: "profile-1",
+      androidAppMonitor
+    });
+  });
+
+  it("shows app process monitor confirmation near composite execution controls", () => {
+    const markup = renderToStaticMarkup(React.createElement(AssetCompositionPanel, {
+      selectedSerial: "device-1",
+      selectedDeviceBusy: false,
+      defaultAppId: "cn.eeo.classin",
+      setMessage: () => undefined,
+      initialData: initialData(),
+      androidAppMonitorEnabled: true,
+      onAndroidAppMonitorEnabledChange: () => undefined
+    }));
+
+    expect(markup).toContain("App 进程监控");
+    expect(markup).toContain("开启");
+    expect(markup).toContain("cn.eeo.classin");
   });
 
   it("groups parameter profile fields by the page scenario instead of exposing a raw key=value editor", () => {

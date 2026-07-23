@@ -539,6 +539,20 @@ export type AndroidAppMonitorSummary = {
   };
 };
 
+export type RunExecutionParentType = "asset_composition" | "free_composition" | "asset_patrol";
+
+export type RunExecutionContext = {
+  parentExecutionId: string;
+  parentExecutionType: RunExecutionParentType;
+  parentExecutionName: string;
+  executionItemId?: string;
+  itemOrder?: number;
+  itemLabel?: string;
+  itemKind?: string;
+  retryOfRunId?: string;
+  recovery?: boolean;
+};
+
 export type RunConfig = {
   caseId?: string;
   deviceSerial: string;
@@ -554,6 +568,7 @@ export type RunConfig = {
   startAppPackageName?: string;
   startSetupScope?: FlowStartSetupScope;
   executionProfile?: "full" | "fast_visual";
+  executionContext?: RunExecutionContext;
   androidAppMonitor?: AndroidAppMonitorConfig;
   stabilityExploration?: {
     packageName: string;
@@ -684,6 +699,90 @@ export type TestRun = {
   endedAt?: string;
   reportHtmlPath?: string;
 };
+
+export type AndroidAppMonitorDisplaySummary = {
+  packageName: string;
+  processCount: number;
+  cpuSamples: number;
+  memorySamples: number;
+  lifecycleSamples: number;
+  incidentCount: number;
+  severity: DeviceEvent["severity"];
+};
+
+export function androidAppMonitorDisplaySummaryFromRun(run: Pick<TestRun, "events">): AndroidAppMonitorDisplaySummary | undefined {
+  const event = [...run.events].reverse().find((candidate) => candidate.type === "android_app_monitor");
+  if (!event) {
+    return undefined;
+  }
+  const detail = objectRecordFromJson(event.detail);
+  const sampleCounts = objectRecord(detail?.sampleCounts);
+  const legacyCounts = legacyAndroidAppMonitorSampleCounts(event.summary);
+  const processes = Array.isArray(detail?.processes) ? detail.processes : [];
+  const incidents = detail?.incidents;
+  return {
+    packageName: stringFromUnknown(detail?.packageName) || "-",
+    processCount: processes.length,
+    cpuSamples: numberFromUnknown(sampleCounts?.cpu) ?? legacyCounts.cpu,
+    memorySamples: numberFromUnknown(sampleCounts?.memory) ?? legacyCounts.memory,
+    lifecycleSamples: numberFromUnknown(sampleCounts?.lifecycle) ?? legacyCounts.lifecycle,
+    incidentCount: Array.isArray(incidents) ? incidents.length : numberFromUnknown(incidents) ?? 0,
+    severity: event.severity
+  };
+}
+
+export function androidAppMonitorDisplaySummaryForRuns(runs: Array<Pick<TestRun, "events">>): AndroidAppMonitorDisplaySummary | undefined {
+  const summaries = runs.map(androidAppMonitorDisplaySummaryFromRun).filter((summary): summary is AndroidAppMonitorDisplaySummary => Boolean(summary));
+  if (!summaries.length) {
+    return undefined;
+  }
+  const severity = summaries.some((summary) => summary.severity === "error")
+    ? "error"
+    : summaries.some((summary) => summary.severity === "warning" || summary.incidentCount > 0)
+      ? "warning"
+      : "info";
+  return {
+    packageName: summaries[0]?.packageName ?? "-",
+    processCount: summaries.reduce((sum, summary) => sum + summary.processCount, 0),
+    cpuSamples: summaries.reduce((sum, summary) => sum + summary.cpuSamples, 0),
+    memorySamples: summaries.reduce((sum, summary) => sum + summary.memorySamples, 0),
+    lifecycleSamples: summaries.reduce((sum, summary) => sum + summary.lifecycleSamples, 0),
+    incidentCount: summaries.reduce((sum, summary) => sum + summary.incidentCount, 0),
+    severity
+  };
+}
+
+function objectRecordFromJson(text: string | undefined): Record<string, unknown> | undefined {
+  if (!text) {
+    return undefined;
+  }
+  try {
+    return objectRecord(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function numberFromUnknown(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringFromUnknown(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function legacyAndroidAppMonitorSampleCounts(summary: string): { cpu: number; memory: number; lifecycle: number } {
+  const match = summary.match(/collected\s+(\d+)\s+CPU,\s+(\d+)\s+memory,\s+(\d+)\s+lifecycle/i);
+  return {
+    cpu: match?.[1] ? Number(match[1]) : 0,
+    memory: match?.[2] ? Number(match[2]) : 0,
+    lifecycle: match?.[3] ? Number(match[3]) : 0
+  };
+}
 
 export type ToolStatus = {
   name: string;

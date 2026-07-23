@@ -60,6 +60,34 @@ describe("AssetPatrol", () => {
     }));
   });
 
+  it("stores android app monitor config in legacy asset patrol runs", async () => {
+    const graphVersion = graphVersionWithNodes([
+      pageNode({
+        id: "node-home",
+        key: "home",
+        name: "主页",
+        matchers: [matcher("package", "com.demo", 2)]
+      })
+    ]);
+    const storage = new MemoryAssetPatrolStorage({ graphVersion });
+    const patrol = new AssetPatrol(storage, new ScriptedAssetPatrolDriver("com.demo"), scriptedOcr([[]]));
+    const androidAppMonitor = {
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true
+    };
+
+    const run = patrol.start({
+      deviceSerial: "device-1",
+      packageName: "com.demo",
+      maxTransitions: 0,
+      androidAppMonitor
+    } as Parameters<AssetPatrol["start"]>[0] & { androidAppMonitor: typeof androidAppMonitor });
+    await patrol.waitForRun(run.id);
+
+    expect(storage.getRun(run.id)?.config.androidAppMonitor).toEqual(androidAppMonitor);
+  });
+
   it("diagnoses an unmatched current page and creates no executable checks", () => {
     const plan = buildAssetPatrolPlan({
       observation: observation({ ocrTexts: [{ text: "未知页面", region: { x: 100, y: 100, width: 200, height: 80 } }] }),

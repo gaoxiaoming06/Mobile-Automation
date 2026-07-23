@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  androidAppMonitorDisplaySummaryFromRun,
   normalizeAndroidAppMonitorConfig,
   stepToAction,
   type ActionStep,
   type AndroidAppMonitorConfig,
-  type AndroidAppMonitorThreshold
+  type AndroidAppMonitorThreshold,
+  type TestRun
 } from "./index.js";
 
 describe("shared stepToAction", () => {
@@ -143,6 +145,57 @@ describe("normalizeAndroidAppMonitorConfig", () => {
   });
 });
 
+describe("androidAppMonitorDisplaySummaryFromRun", () => {
+  it("extracts readable app performance summary from android app monitor event detail", () => {
+    expect(
+      androidAppMonitorDisplaySummaryFromRun(
+        runWithAndroidAppMonitorEvent({
+          severity: "warning",
+          detail: JSON.stringify({
+            packageName: "cn.eeo.classin",
+            sampleCounts: { cpu: 12, memory: 6, lifecycle: 4 },
+            processes: [
+              { pid: 123, processName: "cn.eeo.classin", isMainProcess: true },
+              { pid: 456, processName: "cn.eeo.classin:worker", isMainProcess: false }
+            ],
+            incidents: 1
+          })
+        })
+      )
+    ).toEqual({
+      packageName: "cn.eeo.classin",
+      processCount: 2,
+      cpuSamples: 12,
+      memorySamples: 6,
+      lifecycleSamples: 4,
+      incidentCount: 1,
+      severity: "warning"
+    });
+  });
+
+  it("falls back to sample counts embedded in legacy monitor event summary", () => {
+    expect(
+      androidAppMonitorDisplaySummaryFromRun(
+        runWithAndroidAppMonitorEvent({
+          summary: "[Android App Monitor] collected 3 CPU, 2 memory, 1 lifecycle samples",
+          detail: JSON.stringify({
+            packageName: "cn.eeo.classin",
+            processes: [],
+            incidents: 0
+          })
+        })
+      )
+    ).toMatchObject({
+      packageName: "cn.eeo.classin",
+      cpuSamples: 3,
+      memorySamples: 2,
+      lifecycleSamples: 1,
+      incidentCount: 0,
+      severity: "info"
+    });
+  });
+});
+
 function actionStep(overrides: Partial<ActionStep>): ActionStep {
   return {
     id: "step-1",
@@ -152,5 +205,41 @@ function actionStep(overrides: Partial<ActionStep>): ActionStep {
     params: {},
     createdAt: "2026-06-09T00:00:00.000Z",
     ...overrides
+  };
+}
+
+function runWithAndroidAppMonitorEvent(overrides: Partial<TestRun["events"][number]>): TestRun {
+  return {
+    id: "run-monitor",
+    caseName: "Monitor",
+    deviceSerial: "device-1",
+    status: "passed",
+    config: {
+      deviceSerial: "device-1",
+      mode: "once",
+      repeatCount: 1,
+      stepIntervalMs: 0,
+      stopOnFailure: true,
+      recordVideo: false,
+      keepVideoOnSuccess: false
+    },
+    steps: [],
+    stepResults: [],
+    metrics: [],
+    events: [
+      {
+        id: "event-monitor",
+        runId: "run-monitor",
+        deviceSerial: "device-1",
+        type: "android_app_monitor",
+        severity: "info",
+        occurredAt: "2026-06-09T00:00:00.000Z",
+        summary: "[Android App Monitor] collected 0 CPU, 0 memory, 0 lifecycle samples",
+        artifactIds: [],
+        ...overrides
+      }
+    ],
+    artifacts: [],
+    startedAt: "2026-06-09T00:00:00.000Z"
   };
 }

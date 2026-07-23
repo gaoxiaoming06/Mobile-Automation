@@ -1,6 +1,6 @@
 import { Play, RefreshCw, Search, Send } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { ParameterProfile, Platform, RunMode } from "@mobile-automation/shared";
+import type { AndroidAppMonitorConfig, ParameterProfile, Platform, RunMode } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api";
 
 type FreeCompositionCandidate = {
@@ -79,9 +79,23 @@ type FreeCompositionPanelProps = {
   defaultAppId: string;
   setMessage: (message: string) => void;
   initialData?: FreeCompositionInitialData;
+  androidAppMonitor?: AndroidAppMonitorConfig;
+  androidAppMonitorEnabled?: boolean;
+  onAndroidAppMonitorEnabledChange?: (enabled: boolean) => void;
+  androidAppMonitorForPackage?: (packageName: string) => AndroidAppMonitorConfig | undefined;
 };
 
-export function FreeCompositionPanel({ selectedSerial, selectedDeviceBusy, defaultAppId, setMessage, initialData }: FreeCompositionPanelProps) {
+export function FreeCompositionPanel({
+  selectedSerial,
+  selectedDeviceBusy,
+  defaultAppId,
+  setMessage,
+  initialData,
+  androidAppMonitor,
+  androidAppMonitorEnabled,
+  onAndroidAppMonitorEnabledChange,
+  androidAppMonitorForPackage
+}: FreeCompositionPanelProps) {
   const initialSession = initialData?.sessions[0];
   const initialCandidate = initialSession?.resolution.candidates[0];
   const [appId, setAppId] = useState(defaultAppId);
@@ -109,6 +123,8 @@ export function FreeCompositionPanel({ selectedSerial, selectedDeviceBusy, defau
   const replyingToMissingParameters = conversationMissingKeys.length > 0 && selectedSession?.resolution.status !== "missing_assets";
   const conversationMessages = selectedSession ? conversationMessagesForSession(selectedSession, activeCandidate, profiles) : [];
   const flowSelectLabel = activeCandidate?.kind === "generated_flow" ? "执行流程" : "候选流程";
+  const activeAndroidAppMonitor = androidAppMonitorForPackage?.(appId) ?? androidAppMonitor;
+  const activeAndroidAppMonitorEnabled = androidAppMonitorEnabled ?? Boolean(activeAndroidAppMonitor);
 
   useEffect(() => {
     if (!selectedSession?.executionId || selectedSession.status !== "running") {
@@ -255,7 +271,7 @@ export function FreeCompositionPanel({ selectedSerial, selectedDeviceBusy, defau
       const response = await apiFetchJson<{ session: FreeCompositionSession; execution: CompositeExecution; plan: CompositePlan }>(`/api/free-composition/sessions/${encodeURIComponent(selectedSession.id)}/execute`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deviceSerial: selectedSerial, confirmed: true, riskConfirmed })
+        body: JSON.stringify(freeCompositionExecuteRequestBody({ selectedSerial, riskConfirmed, androidAppMonitor: activeAndroidAppMonitor }))
       });
       updateSession(response.session);
       setMessage(`已启动AI资产用例：${response.execution.id}`);
@@ -336,6 +352,11 @@ export function FreeCompositionPanel({ selectedSerial, selectedDeviceBusy, defau
               </select></label>
               {hasRisk ? <label className="checkbox-field"><input type="checkbox" checked={riskConfirmed} onChange={(event) => setRiskConfirmed(event.target.checked)} />确认执行发布/提交等风险操作</label> : null}
             </div>
+            <AppMonitorExecutionToggle
+              enabled={activeAndroidAppMonitorEnabled}
+              packageName={appId}
+              onChange={onAndroidAppMonitorEnabledChange}
+            />
 
             <div className="composition-run-actions free-composition-action-bar">
               <button className="secondary-button" type="button" disabled={!activeCandidateId || busy} onClick={() => void generatePlan()}>生成计划</button>
@@ -350,6 +371,39 @@ export function FreeCompositionPanel({ selectedSerial, selectedDeviceBusy, defau
         </div>
       </div>
     </section>
+  );
+}
+
+export function freeCompositionExecuteRequestBody(input: {
+  selectedSerial: string;
+  riskConfirmed: boolean;
+  androidAppMonitor?: AndroidAppMonitorConfig;
+}) {
+  return {
+    deviceSerial: input.selectedSerial,
+    confirmed: true,
+    riskConfirmed: input.riskConfirmed,
+    ...(input.androidAppMonitor ? { androidAppMonitor: input.androidAppMonitor } : {})
+  };
+}
+
+function AppMonitorExecutionToggle({
+  enabled,
+  packageName,
+  onChange
+}: {
+  enabled: boolean;
+  packageName: string;
+  onChange?: (enabled: boolean) => void;
+}) {
+  return (
+    <label className="app-monitor-execution-toggle">
+      <span>
+        <strong>App 进程监控</strong>
+        <small>{enabled ? `开启 · ${packageName.trim() || "-"}` : "关闭"}</small>
+      </span>
+      <input type="checkbox" checked={enabled} onChange={(event) => onChange?.(event.target.checked)} />
+    </label>
   );
 }
 

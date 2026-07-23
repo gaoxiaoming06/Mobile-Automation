@@ -63,6 +63,7 @@ export type AssetPatrolConfig = Required<Omit<AssetPatrolConfigInput, "dangerous
 
 export type AssetPatrolStartInput = AssetPatrolConfigInput & {
   deviceSerial: string;
+  androidAppMonitor?: RunConfig["androidAppMonitor"];
 };
 
 export type AssetPatrolIssue = {
@@ -331,6 +332,7 @@ export class AssetPatrol {
       keepVideoOnSuccess: false,
       startStrategy: assetPatrolStartStrategy(config.startMode),
       startAppPackageName: config.packageName,
+      androidAppMonitor: input.androidAppMonitor,
       assetPatrol: config
     };
     const steps = buildPlaceholderSteps(config.maxTransitions + 24);

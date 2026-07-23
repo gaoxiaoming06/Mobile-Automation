@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   FreeCompositionPanel,
+  freeCompositionExecuteRequestBody,
   freeCompositionReplyProfileId,
   freeCompositionReplyRuntimeOverrides
 } from "./FreeCompositionPanel.js";
@@ -148,6 +149,80 @@ describe("FreeCompositionPanel", () => {
     expect(markup).toContain("free-composition-execution-panel");
     expect(markup).toContain("free-composition-result-stack");
     expect(markup).toContain("free-composition-session-feed");
+  });
+
+  it("includes android app monitor config when building execution requests", () => {
+    const androidAppMonitor = {
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true
+    };
+
+    expect(freeCompositionExecuteRequestBody({
+      selectedSerial: "device-1",
+      riskConfirmed: true,
+      androidAppMonitor
+    })).toEqual({
+      deviceSerial: "device-1",
+      confirmed: true,
+      riskConfirmed: true,
+      androidAppMonitor
+    });
+  });
+
+  it("shows app process monitor confirmation near AI asset execution controls", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(FreeCompositionPanel, {
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        defaultAppId: "cn.eeo.classin",
+        setMessage: vi.fn(),
+        initialData: {
+          sessions: [
+            {
+              id: "free_composition_monitor",
+              appId: "cn.eeo.classin",
+              platform: "android",
+              prompt: "测试登录",
+              createdAt: "2026-07-18T00:00:00.000Z",
+              updatedAt: "2026-07-18T00:00:00.000Z",
+              status: "awaiting_confirmation",
+              resolution: {
+                status: "ready",
+                message: "已找到可执行候选。",
+                intent: { prompt: "测试登录", runMode: "once", repeatCount: 1, riskTerms: [] },
+                candidates: [
+                  {
+                    id: "case_login",
+                    kind: "composite_case",
+                    appId: "cn.eeo.classin",
+                    platform: "android",
+                    name: "登录巡检",
+                    parameterKeys: [],
+                    score: 100,
+                    matchedTerms: ["登录"]
+                  }
+                ]
+              },
+              plan: {
+                status: "ready",
+                runtimeParams: {},
+                requiredParameters: [],
+                steps: [{ id: "step-1", metaFunctionName: "登录巡检", kind: "invoke_capability", targetPageModelId: "page-home" }],
+                issues: []
+              }
+            }
+          ],
+          profiles: []
+        },
+        androidAppMonitorEnabled: true,
+        onAndroidAppMonitorEnabledChange: () => undefined
+      })
+    );
+
+    expect(markup).toContain("App 进程监控");
+    expect(markup).toContain("开启");
+    expect(markup).toContain("cn.eeo.classin");
   });
 
   it("uses AI asset case naming in the empty session state", () => {

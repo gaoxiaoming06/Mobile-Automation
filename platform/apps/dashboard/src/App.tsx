@@ -11,8 +11,10 @@ import {
   viewportPointToDevicePoint,
   nowIso,
   type ActionStep,
+  type AndroidAppMonitorConfig,
   type DeviceActionRequest,
   type DeviceInfo,
+  type FlowStartStrategy,
   type ParameterProfile,
   type Platform,
   type SemanticDeviceActionRequest,
@@ -44,7 +46,7 @@ import { RunResultsPanel } from "./components/RunResultsPanel";
 import { ToolStatusBar } from "./components/ToolStatusBar";
 import { useDeviceList } from "./hooks/useDeviceList";
 import { controllableDevices, isControllableDevice } from "./device-availability";
-import { useRunExecution } from "./hooks/useRunExecution";
+import { buildAndroidAppMonitorRequest, useRunExecution, type AndroidAppMonitorRequestState } from "./hooks/useRunExecution";
 import { useScrcpyStream } from "./hooks/useScrcpyStream";
 import { classifyPreviewGesture } from "./preview-gesture";
 import {
@@ -108,6 +110,18 @@ type StabilityExplorerAppExitPolicy = "back_to_app" | "restart_app" | "stop";
 type StabilityExplorerBacktrackStrategy = "none" | "shallow" | "depth_first";
 type AssetPatrolStartMode = "current_state" | "launch_app" | "restart_app";
 type AssetPatrolPageScope = "current_page" | "reachable_pages" | "tagged_pages" | "all_active_pages";
+export type AndroidAppMonitorDefaultMode = "off" | "asset_and_stability" | "all_runs";
+export type AndroidAppMonitorExecutionKind =
+  | "asset_patrol"
+  | "stability_exploration"
+  | "asset_composition"
+  | "free_composition"
+  | "graph_run"
+  | "flow_run";
+type AndroidAppMonitorSettingsDraft = Omit<AndroidAppMonitorRequestState, "enabled" | "packageName" | "startStrategy" | "startAppPackageName"> & {
+  defaultMode: AndroidAppMonitorDefaultMode;
+};
+type AndroidAppMonitorExecutionOverrides = Partial<Record<AndroidAppMonitorExecutionKind, boolean>>;
 type AssetPatrolPlanStep = {
   id: string;
   order: number;
@@ -238,6 +252,15 @@ export const DEFAULT_AI_DIAGNOSIS_SETTINGS: PublicAiDiagnosisSettings = {
   timeoutMs: 30_000,
   apiKeyConfigured: false,
   source: "none"
+};
+export const DEFAULT_ANDROID_APP_MONITOR_SETTINGS: AndroidAppMonitorSettingsDraft = {
+  defaultMode: "asset_and_stability",
+  includeSubprocesses: true,
+  cpuThresholdEnabled: false,
+  cpuThresholdPercent: 80,
+  memoryThresholdEnabled: false,
+  memoryThresholdMb: 1024,
+  enableHeapDump: false
 };
 const STABILITY_DANGEROUS_TEXT_BY_PACKAGE_STORAGE_KEY = "mobile-automation.stabilityDangerousTextByPackage.v1";
 type PreviewWorkspaceStyle = CSSProperties & {
@@ -621,6 +644,7 @@ export function stabilityExplorerRequestBody(input: {
   backtrackStrategy: StabilityExplorerBacktrackStrategy;
   maxDepth: number;
   dangerousTextPatternsText: string;
+  androidAppMonitor?: AndroidAppMonitorConfig;
 }) {
   return {
     deviceSerial: input.selectedSerial,
@@ -638,7 +662,8 @@ export function stabilityExplorerRequestBody(input: {
     stopOnCrash: true,
     stopOnAnr: true,
     stopOnBlackScreen: true,
-    stopOnUnknownPageStuck: true
+    stopOnUnknownPageStuck: true,
+    ...(input.androidAppMonitor ? { androidAppMonitor: input.androidAppMonitor } : {})
   };
 }
 
@@ -663,6 +688,7 @@ export function assetPatrolRequestBody(input: {
   dangerousTextPatternsText: string;
   parameterProfileId?: string;
   runtimeParamsText?: string;
+  androidAppMonitor?: AndroidAppMonitorConfig;
 }) {
   const runtimeParams = parseRuntimeParams(input.runtimeParamsText);
   return {
@@ -676,7 +702,8 @@ export function assetPatrolRequestBody(input: {
     allowBusinessSubmit: input.allowBusinessSubmit,
     dangerousTextPatterns: dangerousTextPatternsFromText(input.dangerousTextPatternsText),
     ...(input.parameterProfileId?.trim() ? { parameterProfileId: input.parameterProfileId.trim() } : {}),
-    ...(runtimeParams ? { runtimeParams } : {})
+    ...(runtimeParams ? { runtimeParams } : {}),
+    ...(input.androidAppMonitor ? { androidAppMonitor: input.androidAppMonitor } : {})
   };
 }
 
@@ -1135,6 +1162,53 @@ export function aiDiagnosisSettingsRequestBody(draft: AiDiagnosisSettingsDraft):
   };
 }
 
+export function androidAppMonitorForExecution(
+  draft: AndroidAppMonitorSettingsDraft,
+  input: {
+    executionKind: AndroidAppMonitorExecutionKind;
+    startStrategy: FlowStartStrategy;
+    executionPackageName: string;
+    enabledOverride?: boolean;
+  }
+): AndroidAppMonitorConfig | undefined {
+  const executionPackageName = input.executionPackageName.trim();
+  if (!executionPackageName) {
+    return undefined;
+  }
+  return buildAndroidAppMonitorRequest({
+    ...draft,
+    enabled: androidAppMonitorEnabledForExecution(draft, input.executionKind, input.enabledOverride),
+    packageName: executionPackageName,
+    startStrategy: input.startStrategy,
+    startAppPackageName: executionPackageName
+  });
+}
+
+export function androidAppMonitorDefaultEnabled(defaultMode: AndroidAppMonitorDefaultMode, executionKind: AndroidAppMonitorExecutionKind): boolean {
+  if (defaultMode === "all_runs") {
+    return true;
+  }
+  if (defaultMode === "asset_and_stability") {
+    return executionKind === "asset_patrol" || executionKind === "stability_exploration";
+  }
+  return false;
+}
+
+function androidAppMonitorEnabledForExecution(
+  draft: AndroidAppMonitorSettingsDraft,
+  executionKind: AndroidAppMonitorExecutionKind,
+  enabledOverride?: boolean
+): boolean {
+  return enabledOverride ?? androidAppMonitorDefaultEnabled(draft.defaultMode, executionKind);
+}
+
+function flowStartStrategyForExplorerStartMode(mode: StabilityExplorerStartMode | AssetPatrolStartMode): FlowStartStrategy {
+  if (mode === "current_state") {
+    return "keep_current";
+  }
+  return mode;
+}
+
 export function App() {
   const [inputText, setInputText] = useState("");
   const [message, setMessage] = useState("准备连接设备");
@@ -1181,6 +1255,8 @@ export function App() {
   const [assetDrivenExecution, setAssetDrivenExecution] = useState<AssetDrivenExecutionSession>();
   const [aiDiagnosisSettings, setAiDiagnosisSettings] = useState<PublicAiDiagnosisSettings>(DEFAULT_AI_DIAGNOSIS_SETTINGS);
   const [aiDiagnosisDraft, setAiDiagnosisDraft] = useState<AiDiagnosisSettingsDraft>(aiDiagnosisDraftFromSettings(DEFAULT_AI_DIAGNOSIS_SETTINGS));
+  const [androidAppMonitorDraft, setAndroidAppMonitorDraft] = useState<AndroidAppMonitorSettingsDraft>(DEFAULT_ANDROID_APP_MONITOR_SETTINGS);
+  const [androidAppMonitorExecutionOverrides, setAndroidAppMonitorExecutionOverrides] = useState<AndroidAppMonitorExecutionOverrides>({});
   const activePreviewWorkspaceKey = previewWorkspaceKey(activeNavItem);
 
   const workspaceRef = useRef<HTMLElement | null>(null);
@@ -1241,6 +1317,26 @@ export function App() {
     resumeCurrentRun,
     stepCurrentRun
   } = useRunExecution({ selectedSerial, setMessage });
+  const assetCompositionAndroidAppMonitorEnabled = androidAppMonitorEnabledForExecution(
+    androidAppMonitorDraft,
+    "asset_composition",
+    androidAppMonitorExecutionOverrides.asset_composition
+  );
+  const freeCompositionAndroidAppMonitorEnabled = androidAppMonitorEnabledForExecution(
+    androidAppMonitorDraft,
+    "free_composition",
+    androidAppMonitorExecutionOverrides.free_composition
+  );
+  const assetPatrolAndroidAppMonitorEnabled = androidAppMonitorEnabledForExecution(
+    androidAppMonitorDraft,
+    "asset_patrol",
+    androidAppMonitorExecutionOverrides.asset_patrol
+  );
+  const stabilityAndroidAppMonitorEnabled = androidAppMonitorEnabledForExecution(
+    androidAppMonitorDraft,
+    "stability_exploration",
+    androidAppMonitorExecutionOverrides.stability_exploration
+  );
 
   useEffect(() => {
     if (!assetDrivenExecutionId) {
@@ -2262,6 +2358,26 @@ export function App() {
     setAssetPatrolParameterProfileId("");
   }
 
+  function updateAndroidAppMonitorExecutionOverride(kind: AndroidAppMonitorExecutionKind, enabled: boolean) {
+    setAndroidAppMonitorExecutionOverrides((current) => ({
+      ...current,
+      [kind]: enabled
+    }));
+  }
+
+  function keepCurrentAndroidAppMonitorForPackage(
+    executionKind: AndroidAppMonitorExecutionKind,
+    packageName: string,
+    enabledOverride?: boolean
+  ): AndroidAppMonitorConfig | undefined {
+    return androidAppMonitorForExecution(androidAppMonitorDraft, {
+      executionKind,
+      startStrategy: "keep_current",
+      executionPackageName: packageName,
+      enabledOverride
+    });
+  }
+
   function assetPatrolRequestPayload() {
     return assetPatrolRequestBody({
       selectedSerial,
@@ -2273,7 +2389,13 @@ export function App() {
       allowRiskyActions: assetPatrolAllowRiskyActions,
       allowBusinessSubmit: assetPatrolAllowBusinessSubmit,
       dangerousTextPatternsText: assetPatrolDangerousText,
-      parameterProfileId: assetPatrolParameterProfileId
+      parameterProfileId: assetPatrolParameterProfileId,
+      androidAppMonitor: androidAppMonitorForExecution(androidAppMonitorDraft, {
+        executionKind: "asset_patrol",
+        startStrategy: flowStartStrategyForExplorerStartMode(assetPatrolStartMode),
+        executionPackageName: assetPatrolPackageName,
+        enabledOverride: androidAppMonitorExecutionOverrides.asset_patrol
+      })
     });
   }
 
@@ -2469,7 +2591,13 @@ export function App() {
             appExitPolicy: stabilityAppExitPolicy,
             backtrackStrategy: stabilityBacktrackStrategy,
             maxDepth: stabilityMaxDepth,
-            dangerousTextPatternsText: stabilityDangerousText
+            dangerousTextPatternsText: stabilityDangerousText,
+            androidAppMonitor: androidAppMonitorForExecution(androidAppMonitorDraft, {
+              executionKind: "stability_exploration",
+              startStrategy: flowStartStrategyForExplorerStartMode(stabilityStartMode),
+              executionPackageName: stabilityPackageName,
+              enabledOverride: androidAppMonitorExecutionOverrides.stability_exploration
+            })
           })
         )
       });
@@ -2689,6 +2817,11 @@ export function App() {
             selectedDeviceBusy={selectedDeviceBusy}
             defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
             setMessage={setMessage}
+            androidAppMonitorEnabled={assetCompositionAndroidAppMonitorEnabled}
+            onAndroidAppMonitorEnabledChange={(enabled) => updateAndroidAppMonitorExecutionOverride("asset_composition", enabled)}
+            androidAppMonitorForPackage={(packageName) =>
+              keepCurrentAndroidAppMonitorForPackage("asset_composition", packageName, androidAppMonitorExecutionOverrides.asset_composition)
+            }
           />
         )}
 
@@ -2698,6 +2831,11 @@ export function App() {
             selectedDeviceBusy={selectedDeviceBusy}
             defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
             setMessage={setMessage}
+            androidAppMonitorEnabled={freeCompositionAndroidAppMonitorEnabled}
+            onAndroidAppMonitorEnabledChange={(enabled) => updateAndroidAppMonitorExecutionOverride("free_composition", enabled)}
+            androidAppMonitorForPackage={(packageName) =>
+              keepCurrentAndroidAppMonitorForPackage("free_composition", packageName, androidAppMonitorExecutionOverrides.free_composition)
+            }
           />
         )}
 
@@ -2708,6 +2846,11 @@ export function App() {
             selectedDeviceBusy={selectedDeviceBusy}
             defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
             setMessage={setMessage}
+            androidAppMonitorEnabled={assetCompositionAndroidAppMonitorEnabled}
+            onAndroidAppMonitorEnabledChange={(enabled) => updateAndroidAppMonitorExecutionOverride("asset_composition", enabled)}
+            androidAppMonitorForPackage={(packageName) =>
+              keepCurrentAndroidAppMonitorForPackage("asset_composition", packageName, androidAppMonitorExecutionOverrides.asset_composition)
+            }
           />
         )}
 
@@ -2732,7 +2875,9 @@ export function App() {
             assetDrivenExecution={assetDrivenExecution}
             currentRun={currentAssetPatrolRun}
             summary={assetPatrolSummary}
+            androidAppMonitorEnabled={assetPatrolAndroidAppMonitorEnabled}
             busy={busy}
+            onAndroidAppMonitorEnabledChange={(enabled) => updateAndroidAppMonitorExecutionOverride("asset_patrol", enabled)}
             onSelectDevice={(serial) => {
               const device = selectableDevices.find((item) => item.serial === serial);
               if (device) {
@@ -2780,7 +2925,9 @@ export function App() {
             dangerousTextPatternsText={stabilityDangerousText}
             currentRun={currentStabilityRun}
             summary={stabilitySummary}
+            androidAppMonitorEnabled={stabilityAndroidAppMonitorEnabled}
             busy={busy}
+            onAndroidAppMonitorEnabledChange={(enabled) => updateAndroidAppMonitorExecutionOverride("stability_exploration", enabled)}
             onSelectDevice={(serial) => {
               const device = selectableDevices.find((item) => item.serial === serial);
               if (device) {
@@ -2813,8 +2960,10 @@ export function App() {
           <SettingsView
             aiSettings={aiDiagnosisSettings}
             aiDraft={aiDiagnosisDraft}
+            androidAppMonitorDraft={androidAppMonitorDraft}
             busy={busy}
             onAiDraftChange={(patch) => setAiDiagnosisDraft((draft) => ({ ...draft, ...patch }))}
+            onAndroidAppMonitorDraftChange={(patch) => setAndroidAppMonitorDraft((draft) => ({ ...draft, ...patch }))}
             onSaveAiSettings={() => void saveAiDiagnosisSettings()}
           />
         )}
@@ -2827,20 +2976,28 @@ export function App() {
 type SettingsViewProps = {
   aiSettings: PublicAiDiagnosisSettings;
   aiDraft: AiDiagnosisSettingsDraft;
+  androidAppMonitorDraft: AndroidAppMonitorSettingsDraft;
   busy: boolean;
   onAiDraftChange: (patch: Partial<AiDiagnosisSettingsDraft>) => void;
+  onAndroidAppMonitorDraftChange: (patch: Partial<AndroidAppMonitorSettingsDraft>) => void;
   onSaveAiSettings: () => void;
 };
 
 function SettingsView({
   aiSettings,
   aiDraft,
+  androidAppMonitorDraft,
   busy,
   onAiDraftChange,
+  onAndroidAppMonitorDraftChange,
   onSaveAiSettings
 }: SettingsViewProps) {
   return (
     <section className="module-page settings-module">
+      <AndroidAppMonitorSettingsPanel
+        draft={androidAppMonitorDraft}
+        onDraftChange={onAndroidAppMonitorDraftChange}
+      />
       <AiDiagnosisSettingsPanel
         settings={aiSettings}
         draft={aiDraft}
@@ -2859,6 +3016,112 @@ type AiDiagnosisSettingsPanelProps = {
   onDraftChange: (patch: Partial<AiDiagnosisSettingsDraft>) => void;
   onSave: () => void;
 };
+
+type AndroidAppMonitorSettingsPanelProps = {
+  draft: AndroidAppMonitorSettingsDraft;
+  onDraftChange: (patch: Partial<AndroidAppMonitorSettingsDraft>) => void;
+};
+
+export function AndroidAppMonitorSettingsPanel({
+  draft,
+  onDraftChange
+}: AndroidAppMonitorSettingsPanelProps) {
+  return (
+    <div className="panel settings-card app-monitor-settings-card">
+      <div className="panel-head">
+        <div>
+          <h2>Android 性能监控</h2>
+        </div>
+      </div>
+      <div className="monitor-default-block">
+        <span className="settings-field-title">App 监控默认</span>
+        <div className="settings-option-grid" role="radiogroup" aria-label="App 监控默认">
+          {androidAppMonitorDefaultModeOptions().map((option) => (
+            <label className="settings-option-card" key={option.value}>
+              <input
+                type="radio"
+                name="android-app-monitor-default"
+                value={option.value}
+                checked={draft.defaultMode === option.value}
+                onChange={() => onDraftChange({ defaultMode: option.value })}
+              />
+              <span>
+                <strong>{option.label}</strong>
+                <small>{option.detail}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <details className="settings-advanced-section">
+        <summary>高级采样与告警</summary>
+        <div className="settings-advanced-grid">
+          <label className="settings-advanced-toggle">
+            <span>
+              <strong>包含子进程</strong>
+              <small>同时采集同一应用下的子进程。</small>
+            </span>
+            <input type="checkbox" checked={draft.includeSubprocesses} onChange={(event) => onDraftChange({ includeSubprocesses: event.target.checked })} />
+          </label>
+          <label className="settings-advanced-toggle">
+            <span>
+              <strong>抓取内存快照</strong>
+              <small>达到内存阈值时保存现场，耗时较长。</small>
+            </span>
+            <input type="checkbox" checked={draft.enableHeapDump} onChange={(event) => onDraftChange({ enableHeapDump: event.target.checked })} />
+          </label>
+          <div className="settings-threshold-row">
+            <label className="settings-threshold-toggle">
+              <input type="checkbox" checked={draft.cpuThresholdEnabled} onChange={(event) => onDraftChange({ cpuThresholdEnabled: event.target.checked })} />
+              <span>
+                <strong>CPU 使用率告警</strong>
+                <small>超过阈值时在报告中标记。</small>
+              </span>
+            </label>
+            <label className="settings-inline-field">
+              阈值 %
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={draft.cpuThresholdPercent}
+                onChange={(event) => onDraftChange({ cpuThresholdPercent: clampNumberInput(event.target.value, 1, 100, DEFAULT_ANDROID_APP_MONITOR_SETTINGS.cpuThresholdPercent) })}
+              />
+            </label>
+          </div>
+          <div className="settings-threshold-row">
+            <label className="settings-threshold-toggle">
+              <input type="checkbox" checked={draft.memoryThresholdEnabled} onChange={(event) => onDraftChange({ memoryThresholdEnabled: event.target.checked })} />
+              <span>
+                <strong>内存占用告警</strong>
+                <small>超过上限时在报告中标记。</small>
+              </span>
+            </label>
+            <label className="settings-inline-field">
+              上限 MB
+              <input
+                type="number"
+                min={1}
+                max={8192}
+                value={draft.memoryThresholdMb}
+                onChange={(event) => onDraftChange({ memoryThresholdMb: clampNumberInput(event.target.value, 1, 8192, DEFAULT_ANDROID_APP_MONITOR_SETTINGS.memoryThresholdMb) })}
+              />
+            </label>
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function androidAppMonitorDefaultModeOptions(): Array<{ value: AndroidAppMonitorDefaultMode; label: string; detail: string }> {
+  return [
+    { value: "asset_and_stability", label: "资产巡检/稳定性", detail: "默认采集长链路和探索任务的应用 CPU、内存证据。" },
+    { value: "off", label: "关闭", detail: "不额外采集应用 CPU、内存数据，报告仍保留基础设备性能。" },
+    { value: "all_runs", label: "所有正式执行", detail: "资产用例、AI 资产用例也默认采集应用性能。" }
+  ];
+}
 
 export function AiDiagnosisSettingsPanel({
   settings,
@@ -2935,6 +3198,26 @@ function settingsSourceLabel(source: AiDiagnosisSettingsSource): string {
   return "未配置";
 }
 
+function AppMonitorExecutionToggle({
+  enabled,
+  packageName,
+  onChange
+}: {
+  enabled: boolean;
+  packageName: string;
+  onChange?: (enabled: boolean) => void;
+}) {
+  return (
+    <label className="app-monitor-execution-toggle">
+      <span>
+        <strong>App 进程监控</strong>
+        <small>{enabled ? `开启 · ${packageName.trim() || "-"}` : "关闭"}</small>
+      </span>
+      <input type="checkbox" checked={enabled} onChange={(event) => onChange?.(event.target.checked)} />
+    </label>
+  );
+}
+
 type AssetPatrolPanelProps = {
   devices: DeviceInfo[];
   selectedSerial: string;
@@ -2959,7 +3242,9 @@ type AssetPatrolPanelProps = {
   assetDrivenExecution?: AssetDrivenExecutionSession;
   currentRun?: TestRun;
   summary?: ReturnType<typeof assetDrivenExecutionProgressSummary> | ReturnType<typeof assetDrivenRunProgressSummary>;
+  androidAppMonitorEnabled?: boolean;
   busy: boolean;
+  onAndroidAppMonitorEnabledChange?: (enabled: boolean) => void;
   onSelectDevice: (serial: string) => void;
   onPackageNameChange: (value: string) => void;
   onStartModeChange: (value: AssetPatrolStartMode) => void;
@@ -2999,7 +3284,9 @@ export function AssetPatrolPanel({
   assetDrivenExecution,
   currentRun,
   summary,
+  androidAppMonitorEnabled = false,
   busy,
+  onAndroidAppMonitorEnabledChange,
   onSelectDevice,
   onPackageNameChange,
   onStartModeChange,
@@ -3121,6 +3408,12 @@ export function AssetPatrolPanel({
             危险词
             <textarea value={dangerousTextPatternsText} onChange={(event) => onDangerousTextPatternsChange(event.target.value)} rows={5} />
           </label>
+
+          <AppMonitorExecutionToggle
+            enabled={androidAppMonitorEnabled}
+            packageName={packageName}
+            onChange={onAndroidAppMonitorEnabledChange}
+          />
 
           <div className="stability-danger-list">
             <div className="runtime-param-header">
@@ -3338,7 +3631,9 @@ type StabilityExplorerPanelProps = {
   dangerousTextPatternsText: string;
   currentRun?: TestRun;
   summary?: ReturnType<typeof stabilityRunProgressSummary>;
+  androidAppMonitorEnabled?: boolean;
   busy: boolean;
+  onAndroidAppMonitorEnabledChange?: (enabled: boolean) => void;
   onSelectDevice: (serial: string) => void;
   onPackageNameChange: (value: string) => void;
   onMaxDurationMinutesChange: (value: number) => void;
@@ -3356,7 +3651,7 @@ type StabilityExplorerPanelProps = {
   onOpenRun: (runId: string) => void;
 };
 
-function StabilityExplorerPanel({
+export function StabilityExplorerPanel({
   devices,
   selectedSerial,
   selectedDevice,
@@ -3375,7 +3670,9 @@ function StabilityExplorerPanel({
   dangerousTextPatternsText,
   currentRun,
   summary,
+  androidAppMonitorEnabled = false,
   busy,
+  onAndroidAppMonitorEnabledChange,
   onSelectDevice,
   onPackageNameChange,
   onMaxDurationMinutesChange,
@@ -3511,6 +3808,12 @@ function StabilityExplorerPanel({
             危险词
             <textarea value={dangerousTextPatternsText} onChange={(event) => onDangerousTextPatternsChange(event.target.value)} rows={5} />
           </label>
+
+          <AppMonitorExecutionToggle
+            enabled={androidAppMonitorEnabled}
+            packageName={packageName}
+            onChange={onAndroidAppMonitorEnabledChange}
+          />
 
           <div className="action-row">
             <button className="icon-button primary" type="button" disabled={!canStart} onClick={onStart}>

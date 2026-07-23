@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { GraphAssetGovernanceView, GraphCandidatesPanel, GraphRegisteredListView, GraphRoutePreview, GraphTargetQuality } from "./GraphCandidatesPanel.js";
+import { GraphAssetGovernanceView, GraphCandidatesPanel, GraphRegisteredListView, GraphRoutePreview, GraphTargetQuality, graphRunRequestBody } from "./GraphCandidatesPanel.js";
 
 describe("GraphCandidatesPanel", () => {
   it("renders source scan controls and explains candidate graph import", () => {
@@ -24,6 +24,27 @@ describe("GraphCandidatesPanel", () => {
 
     expect(markup).toContain("输入目标后每次运行都会重新识别当前位置、规划路径并执行");
     expect(markup).toContain("当前设备：ERLDU20115007395");
+  });
+
+  it("includes android app monitor config when building graph run requests", () => {
+    const androidAppMonitor = {
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true
+    };
+
+    expect(graphRunRequestBody({
+      selectedSerial: "device-1",
+      graphId: "graph-1",
+      targetNodeId: "node-1",
+      androidAppMonitor
+    })).toEqual({
+      deviceSerial: "device-1",
+      graphId: "graph-1",
+      targetNodeId: "node-1",
+      startStrategy: "keep_current",
+      androidAppMonitor
+    });
   });
 
   it("marks the route preview step list as the internal scroll region", () => {
