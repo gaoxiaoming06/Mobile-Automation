@@ -70,10 +70,11 @@ class MemoryStorage {
 }
 
 describe("App shell", () => {
-  it("starts from device details and hides legacy case and experiment navigation entries", () => {
+  it("starts from device management and hides legacy case, experiment, and device detail navigation entries", () => {
     const markup = renderToStaticMarkup(React.createElement(App));
 
-    expect(markup).toContain("设备详情");
+    expect(markup).toContain("设备管理");
+    expect(markup).not.toContain("设备详情");
     expect(markup).not.toContain("用例录制");
     expect(markup).not.toContain("用例库");
     expect(markup).not.toContain("实验能力");
@@ -84,7 +85,7 @@ describe("App shell", () => {
     expect(markup).toContain("系统设置");
   });
 
-  it("renders device details as preview and controls without the legacy recording side panel", () => {
+  it("renders device management as preview controls beside device status", () => {
     const markup = renderToStaticMarkup(React.createElement(App));
 
     expect(markup).toContain("选择设备后开始预览");
@@ -92,6 +93,8 @@ describe("App shell", () => {
     expect(markup).toContain("返回");
     expect(markup).toContain("Home");
     expect(markup).toContain("最近任务");
+    expect(markup).toContain("设备资产与可用状态");
+    expect(markup).not.toContain("打开设备详情");
     expect(markup).not.toContain("录制步骤");
     expect(markup).not.toContain("临时阻断页");
     expect(markup).not.toContain("recording-side-stack");
@@ -1076,7 +1079,7 @@ describe("App shell", () => {
     ).toBe(false);
     expect(
       shouldAutoSyncAssetPatrolRuntimeParams({
-	        activeNavItem: "deviceDetails",
+        activeNavItem: "devices",
         packageName: "cn.eeo.classin",
         lastSyncedPackageName: ""
       })
@@ -1109,7 +1112,7 @@ describe("App shell", () => {
     ).toBe(false);
     expect(
       shouldRestoreAssetDrivenExecution({
-	        activeNavItem: "deviceDetails",
+        activeNavItem: "devices",
         selectedSerial: "device-1",
         packageName: "cn.eeo.classin",
         assetDrivenExecutionId: ""
@@ -1253,14 +1256,14 @@ describe("App shell", () => {
     ).toBe(false);
   });
 
-  it("uses preview workspaces for device details and asset recording", () => {
-    expect(previewWorkspaceKey("deviceDetails")).toBe("deviceDetails");
+  it("uses preview workspaces for device management and asset recording", () => {
+    expect(previewWorkspaceKey("devices")).toBe("deviceDetails");
     expect(previewWorkspaceKey("assetRecording")).toBe("assetRecording");
     expect(previewWorkspaceKey("settings")).toBe("inactive");
   });
 
-  it("keeps device details full-width while asset recording still exposes a resizable preview variable", () => {
-    expect(workspaceStyleForNav("deviceDetails", 560, 520)).toEqual({});
+  it("keeps device management full-width while asset recording still exposes a resizable preview variable", () => {
+    expect(workspaceStyleForNav("devices", 560, 520)).toEqual({});
     expect(workspaceStyleForNav("assetRecording", 560, 520)).toEqual({
       "--asset-recording-preview-width": "520px"
     });
@@ -1280,7 +1283,7 @@ describe("App shell", () => {
       fetchBeforeObservationBeforeAction: false,
       blockPreviewInteraction: true
     });
-	    expect(actionStrategyForWorkspace("deviceDetails", { identifying: false })).toEqual({
+    expect(actionStrategyForWorkspace("devices", { identifying: false })).toEqual({
       useCachedSemanticTarget: false,
       resolveLiveLocatorBeforeAction: false,
       fetchBeforeObservationBeforeAction: false,

@@ -6,7 +6,7 @@ import {
   Smartphone
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent } from "react";
+import type { CSSProperties, PointerEvent, ReactNode } from "react";
 import {
   viewportPointToDevicePoint,
   nowIso,
@@ -22,7 +22,6 @@ import {
   type TestRun,
   type ToolStatus
 } from "@mobile-automation/shared";
-import { DeviceSidebar } from "./components/DeviceSidebar";
 import { AppNav, type AppNavItemId } from "./components/AppNav";
 import {
   AssetRecordingPanel,
@@ -451,8 +450,11 @@ const assetPreviewMinWidth = 420;
 const assetPreviewMaxWidth = 980;
 
 export function previewWorkspaceKey(navItem: AppNavItemId): "deviceDetails" | "assetRecording" | "inactive" {
-  if (navItem === "deviceDetails" || navItem === "assetRecording") {
-    return navItem;
+  if (navItem === "devices") {
+    return "deviceDetails";
+  }
+  if (navItem === "assetRecording") {
+    return "assetRecording";
   }
   return "inactive";
 }
@@ -1214,7 +1216,7 @@ export function App() {
   const [message, setMessage] = useState("准备连接设备");
   const [busy, setBusy] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(true);
-  const [activeNavItem, setActiveNavItem] = useState<NavItemId>("deviceDetails");
+  const [activeNavItem, setActiveNavItem] = useState<NavItemId>("devices");
   const [assetRecordingPreviewWidth, setAssetRecordingPreviewWidth] = useState(560);
   const [structuredFlows, setStructuredFlows] = useState<StructuredFlow[]>([]);
   const [runtimeInterceptorRules, setRuntimeInterceptorRules] = useState<RuntimeInterceptorRule[]>([]);
@@ -1838,10 +1840,6 @@ export function App() {
 
   function openDevices() {
     setActiveNavItem("devices");
-  }
-
-  function openDeviceDetails() {
-    setActiveNavItem("deviceDetails");
   }
 
   function openAssetRecording() {
@@ -2672,6 +2670,39 @@ export function App() {
     />
   );
 
+  const devicePreviewPanel = (
+    <PreviewPanel
+      key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
+      devices={selectableDevices}
+      selectedSerial={selectedSerial}
+      selectedDevice={selectedDevice}
+      previewRef={previewRef}
+      imageRef={imageRef}
+      canvasRef={canvasRef}
+      videoRef={videoRef}
+      previewUrl={previewUrl}
+      screenshotError={screenshotError}
+      previewMode={previewMode}
+      previewRenderer={previewRenderer}
+      scrcpyStreamStatus={scrcpyStreamStatus}
+      isScrcpyPreviewActive={isScrcpyPreviewActive}
+      scrcpyAvailable={scrcpyAvailable}
+      scrcpyRunning={scrcpyRunning}
+      busy={busy}
+      inputText={inputText}
+      setInputText={setInputText}
+      setMessage={setMessage}
+      startScrcpy={startScrcpy}
+      stopScrcpy={stopScrcpy}
+      runAction={runAction}
+      onSelectDevice={selectDeviceAndCloseStream}
+      handleScreenshotLoaded={handleScreenshotLoaded}
+      onPreviewPointerDown={onPreviewPointerDown}
+      onPreviewPointerUp={onPreviewPointerUp}
+      onPreviewPointerCancel={onPreviewPointerCancel}
+    />
+  );
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -2687,7 +2718,6 @@ export function App() {
           navCollapsed={navCollapsed}
           setNavCollapsed={setNavCollapsed}
           openDevices={openDevices}
-          openDeviceDetails={openDeviceDetails}
           openAssetRecording={openAssetRecording}
           openPageAssets={openPageAssets}
           openAssetComposition={openAssetComposition}
@@ -2704,47 +2734,12 @@ export function App() {
             devices={devices}
             selectedSerial={selectedSerial}
             selectedDevice={selectedDevice}
+            previewPanel={devicePreviewPanel}
             tools={tools}
             runs={runs}
             activeRunForSelectedDevice={activeRunForSelectedDevice}
-            selectedDeviceBusy={selectedDeviceBusy}
-            onSelectDevice={selectDeviceAndCloseStream}
-            onOpenDeviceDetails={openDeviceDetails}
             onOpenRuns={openRuns}
             onRefreshDevices={() => refreshDevices().catch((error) => setMessage(error.message))}
-          />
-        )}
-
-        {activeNavItem === "deviceDetails" && (
-          <PreviewPanel
-            key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
-            devices={selectableDevices}
-            selectedSerial={selectedSerial}
-            selectedDevice={selectedDevice}
-            previewRef={previewRef}
-            imageRef={imageRef}
-            canvasRef={canvasRef}
-            videoRef={videoRef}
-            previewUrl={previewUrl}
-            screenshotError={screenshotError}
-            previewMode={previewMode}
-            previewRenderer={previewRenderer}
-            scrcpyStreamStatus={scrcpyStreamStatus}
-            isScrcpyPreviewActive={isScrcpyPreviewActive}
-            scrcpyAvailable={scrcpyAvailable}
-            scrcpyRunning={scrcpyRunning}
-            busy={busy}
-            inputText={inputText}
-            setInputText={setInputText}
-            setMessage={setMessage}
-            startScrcpy={startScrcpy}
-            stopScrcpy={stopScrcpy}
-            runAction={runAction}
-            onSelectDevice={selectDeviceAndCloseStream}
-            handleScreenshotLoaded={handleScreenshotLoaded}
-            onPreviewPointerDown={onPreviewPointerDown}
-            onPreviewPointerUp={onPreviewPointerUp}
-            onPreviewPointerCancel={onPreviewPointerCancel}
           />
         )}
 
@@ -3882,12 +3877,10 @@ type DeviceManagementViewProps = {
   devices: DeviceInfo[];
   selectedSerial: string;
   selectedDevice?: DeviceInfo;
+  previewPanel: ReactNode;
   tools: ToolStatus[];
   runs: TestRun[];
   activeRunForSelectedDevice?: TestRun;
-  selectedDeviceBusy: boolean;
-  onSelectDevice: (device: DeviceInfo) => void;
-  onOpenDeviceDetails: () => void;
   onOpenRuns: () => void;
   onRefreshDevices: () => void;
 };
@@ -3896,12 +3889,10 @@ function DeviceManagementView({
   devices,
   selectedSerial,
   selectedDevice,
+  previewPanel,
   tools,
   runs,
   activeRunForSelectedDevice,
-  selectedDeviceBusy,
-  onSelectDevice,
-  onOpenDeviceDetails,
   onOpenRuns,
   onRefreshDevices
 }: DeviceManagementViewProps) {
@@ -3913,12 +3904,7 @@ function DeviceManagementView({
 
   return (
     <section className="module-page device-module">
-      <DeviceSidebar
-        devices={devices}
-        selectedSerial={selectedSerial}
-        runs={runs}
-        onSelectDevice={onSelectDevice}
-      />
+      <div className="device-management-preview">{previewPanel}</div>
 
       <div className="device-detail-panel">
         <div className="panel module-head-panel">
@@ -3963,9 +3949,6 @@ function DeviceManagementView({
                 </div>
                 <div className="device-profile-actions">
                   <span className={`device-status-pill ${selectedDevice.status}`}>{selectedDevice.status}</span>
-                  <button className="icon-button primary" type="button" onClick={onOpenDeviceDetails}>
-                    打开设备详情
-                  </button>
                   <button className="icon-button" type="button" onClick={onOpenRuns}>
                     查看执行
                   </button>

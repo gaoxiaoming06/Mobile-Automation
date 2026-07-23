@@ -1,7 +1,6 @@
 import {
   DatabaseZap,
   FileText,
-  MonitorSmartphone,
   Package,
   PanelLeftClose,
   PanelLeftOpen,
@@ -14,14 +13,13 @@ import {
   Workflow
 } from "lucide-react";
 
-export type AppNavItemId = "devices" | "deviceDetails" | "assetRecording" | "pageAssets" | "assetComposition" | "freeComposition" | "parameterCenter" | "assetPatrol" | "stability" | "runs" | "settings";
+export type AppNavItemId = "devices" | "assetRecording" | "pageAssets" | "assetComposition" | "freeComposition" | "parameterCenter" | "assetPatrol" | "stability" | "runs" | "settings";
 
 type AppNavProps = {
   activeNavItem: AppNavItemId;
   navCollapsed: boolean;
   setNavCollapsed: (updater: (value: boolean) => boolean) => void;
   openDevices: () => void;
-  openDeviceDetails: () => void;
   openAssetRecording: () => void;
   openPageAssets: () => void;
   openAssetComposition: () => void;
@@ -38,7 +36,6 @@ export function AppNav({
   navCollapsed,
   setNavCollapsed,
   openDevices,
-  openDeviceDetails,
   openAssetRecording,
   openPageAssets,
   openAssetComposition,
@@ -59,10 +56,6 @@ export function AppNav({
         <button className={navButtonClass(activeNavItem, "devices")} onClick={openDevices} title="设备管理" type="button">
           <Smartphone size={18} />
           <span>设备管理</span>
-        </button>
-        <button className={navButtonClass(activeNavItem, "deviceDetails")} onClick={openDeviceDetails} title="设备详情" type="button">
-          <MonitorSmartphone size={18} />
-          <span>设备详情</span>
         </button>
         <button className={navButtonClass(activeNavItem, "assetRecording")} onClick={openAssetRecording} title="资产录制" type="button">
           <DatabaseZap size={18} />
