@@ -6,9 +6,27 @@ export type VisualSemanticArea = "top" | "content" | "bottom" | "unknown";
 
 export type GraphLifecycleStatus = "draft" | "active" | "deprecated" | "rejected";
 
-export type GraphTargetApp = {
+export type GraphTargetProfilePlatform = Platform | "harmony" | "flutter";
+
+export type GraphTargetProfile = {
+  id: string;
+  platform: GraphTargetProfilePlatform;
+  displayName?: string;
   androidPackageName?: string;
   iosBundleId?: string;
+  harmonyBundleName?: string;
+  flutterAppId?: string;
+  isPrimary?: boolean;
+  launchConfig?: Record<string, unknown>;
+  systemGuardPolicy?: Record<string, unknown>;
+};
+
+export type GraphTargetApp = {
+  productId?: string;
+  productName?: string;
+  androidPackageName?: string;
+  iosBundleId?: string;
+  profiles?: GraphTargetProfile[];
 };
 
 export type BusinessGraph = {

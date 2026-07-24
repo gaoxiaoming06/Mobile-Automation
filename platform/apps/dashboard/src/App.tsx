@@ -339,9 +339,36 @@ type AssetTransitionCandidateApiResponse = {
   };
 };
 
+type AssetGraphTargetProfile = {
+  id?: string;
+  platform?: DeviceInfo["platform"] | "harmony" | "flutter";
+  displayName?: string;
+  androidPackageName?: string;
+  iosBundleId?: string;
+  harmonyBundleName?: string;
+  flutterAppId?: string;
+  isPrimary?: boolean;
+};
+
+type AssetGraphTargetApp = {
+  productId?: string;
+  productName?: string;
+  androidPackageName?: string;
+  iosBundleId?: string;
+  profiles?: AssetGraphTargetProfile[];
+};
+
+type AssetTargetProfileLookup = {
+  androidPackageName?: string;
+  iosBundleId?: string;
+};
+
 type GraphListItem = {
+  appId?: string;
+  name?: string;
   status?: string;
   platformScope?: string;
+  targetApp?: AssetGraphTargetApp;
   activeVersion?: {
     id?: string;
     status?: string;
@@ -1594,14 +1621,17 @@ export function App() {
       beginAssetRecordingIdentification();
     }
     try {
-      const graphVersionId = assetRecordingGraphVersionId || (await fetchWritableGraphVersionId(selectedDevice.platform));
+      const before = beforeObservation ?? (await fetchAssetObservation(selectedSerial).catch(() => undefined));
+      const after = await fetchAssetObservation(selectedSerial).catch(() => undefined);
+      const targetProfile = targetProfileLookupFromObservation(before) ?? targetProfileLookupFromObservation(after);
+      const graphVersionId = targetProfile
+        ? await fetchWritableGraphVersionId(selectedDevice.platform, targetProfile)
+        : assetRecordingGraphVersionId || (await fetchWritableGraphVersionId(selectedDevice.platform));
       if (!graphVersionId) {
         await identifyCurrentPageAsset();
         return;
       }
       setAssetRecordingGraphVersionId(graphVersionId);
-      const before = beforeObservation ?? (await fetchAssetObservation(selectedSerial).catch(() => undefined));
-      const after = await fetchAssetObservation(selectedSerial).catch(() => undefined);
       if (!before || !after) {
         await identifyCurrentPageAsset();
         setMessage("已刷新页面信息，但本次动作缺少前后页面快照，暂未生成页面连接候选");
@@ -1967,13 +1997,18 @@ export function App() {
     }
     try {
       beginAssetRecordingIdentification();
-      const graphVersionId = assetRecordingGraphVersionId || (await fetchWritableGraphVersionId(selectedDevice.platform));
+      const { graphVersionId, targetProfile } = await resolveAssetRecordingGraphVersionId({
+        platform: selectedDevice.platform,
+        existingGraphVersionId: assetRecordingGraphVersionId,
+        observe: () => fetchAssetForegroundObservation(selectedSerial),
+        fetchWritableGraphVersionId
+      });
       if (!graphVersionId) {
         setAssetRecordingPage({
           status: "error",
-          message: "未找到可写入的页面资产库版本，请先初始化 PageStateFlow 资产库"
+          message: targetProfile ? "当前前台 App 尚未绑定产品资产库 Profile，请先绑定后再录入资产" : "未找到可写入的页面资产库版本，请先初始化产品资产库"
         });
-        setMessage("未找到可写入的页面资产库版本");
+        setMessage(targetProfile ? "当前前台 App 尚未绑定产品资产库 Profile" : "未找到可写入的页面资产库版本");
         return;
       }
       setAssetRecordingGraphVersionId(graphVersionId);
@@ -2301,9 +2336,13 @@ export function App() {
       setMessage("请先选择设备");
       return;
     }
-    const graphVersionId = assetRecordingPage.graphVersionId || assetRecordingGraphVersionId || (await fetchWritableGraphVersionId(selectedDevice.platform));
+    const pageObservation = assetRecordingPage.status !== "idle" && isAssetObservation(assetRecordingPage.observation) ? assetRecordingPage.observation : undefined;
+    const targetProfile = targetProfileLookupFromObservation(pageObservation)
+      ?? targetProfileLookupFromObservation(await fetchAssetObservation(selectedSerial).catch(() => undefined));
+    const graphVersionId = assetRecordingPage.graphVersionId
+      || (targetProfile ? await fetchWritableGraphVersionId(selectedDevice.platform, targetProfile) : assetRecordingGraphVersionId || (await fetchWritableGraphVersionId(selectedDevice.platform)));
     if (!graphVersionId) {
-      setMessage("未找到可写入的页面资产库版本");
+      setMessage(targetProfile ? "当前前台 App 尚未绑定产品资产库 Profile" : "未找到可写入的页面资产库版本");
       return;
     }
     try {
@@ -2831,6 +2870,9 @@ export function App() {
             androidAppMonitorForPackage={(packageName) =>
               keepCurrentAndroidAppMonitorForPackage("free_composition", packageName, androidAppMonitorExecutionOverrides.free_composition)
             }
+            onBack={() => void runAction({ type: "back" }, false)}
+            onLaunchApp={(packageName) => void runAction({ type: "launch_app", packageName }, false)}
+            onOpenAssetRecording={openAssetRecording}
           />
         )}
 
@@ -4034,28 +4076,185 @@ function DeviceManagementView({
   );
 }
 
-function selectAssetGraphVersionId(
+export function selectAssetGraphVersionId(
   graphs: GraphListItem[],
-  platform: DeviceInfo["platform"]
+  platform: DeviceInfo["platform"],
+  targetProfile?: AssetTargetProfileLookup
 ): string | undefined {
-  return graphs.find((graph) => {
+  const activeGraphs = graphs.filter((graph) => {
     if (graph.status === "deprecated" || !graph.activeVersion?.id) {
       return false;
     }
     if (graph.activeVersion.status && graph.activeVersion.status !== "active") {
       return false;
     }
-    return graph.platformScope === platform || graph.platformScope === "mobile-both";
-  })?.activeVersion?.id;
+    return platformScopeMatchesGraph(graph.platformScope, platform);
+  });
+  if (hasTargetProfileLookup(targetProfile, platform)) {
+    return activeGraphs.find((graph) => graphMatchesTargetProfile(graph, targetProfile, platform))?.activeVersion?.id;
+  }
+  return activeGraphs[0]?.activeVersion?.id;
 }
 
-async function fetchWritableGraphVersionId(platform: DeviceInfo["platform"]): Promise<string | undefined> {
+type AssetRecordingGraphVersionResolution = {
+  graphVersionId?: string;
+  targetProfile?: AssetTargetProfileLookup;
+};
+
+export async function resolveAssetRecordingGraphVersionId(input: {
+  platform: DeviceInfo["platform"];
+  existingGraphVersionId?: string;
+  observe: () => Promise<AssetObservation | undefined>;
+  fetchWritableGraphVersionId: (platform: DeviceInfo["platform"], targetProfile?: AssetTargetProfileLookup) => Promise<string | undefined>;
+  retryDelayMs?: number;
+  maxProfileAttempts?: number;
+}): Promise<AssetRecordingGraphVersionResolution> {
+  if (input.existingGraphVersionId) {
+    return { graphVersionId: input.existingGraphVersionId };
+  }
+  const maxAttempts = Math.max(1, Math.floor(input.maxProfileAttempts ?? 2));
+  let lastTargetProfile: AssetTargetProfileLookup | undefined;
+  for (let index = 0; index < maxAttempts; index += 1) {
+    const targetProfile = targetProfileLookupFromObservation(await input.observe().catch(() => undefined));
+    if (targetProfile) {
+      lastTargetProfile = targetProfile;
+      const graphVersionId = await input.fetchWritableGraphVersionId(input.platform, targetProfile);
+      if (graphVersionId) {
+        return { graphVersionId, targetProfile };
+      }
+    } else {
+      const graphVersionId = await input.fetchWritableGraphVersionId(input.platform);
+      if (graphVersionId) {
+        return { graphVersionId };
+      }
+    }
+    if (index < maxAttempts - 1) {
+      await delay(input.retryDelayMs ?? 250);
+    }
+  }
+  return { targetProfile: lastTargetProfile };
+}
+
+function delay(ms: number): Promise<void> {
+  const delayMs = Number.isFinite(ms) ? Math.max(0, ms) : 0;
+  return delayMs > 0 ? new Promise((resolve) => setTimeout(resolve, delayMs)) : Promise.resolve();
+}
+
+async function fetchWritableGraphVersionId(platform: DeviceInfo["platform"], targetProfile?: AssetTargetProfileLookup): Promise<string | undefined> {
   const response = await fetch("/api/graphs");
   if (!response.ok) {
     return undefined;
   }
   const json = (await response.json()) as { graphs: GraphListItem[] };
-  return selectAssetGraphVersionId(json.graphs, platform);
+  return selectAssetGraphVersionId(json.graphs, platform, targetProfile);
+}
+
+function graphMatchesTargetProfile(graph: GraphListItem, targetProfile: AssetTargetProfileLookup | undefined, platform: DeviceInfo["platform"]): boolean {
+  return targetProfilesForGraph(graph).some((profile) => {
+    if (platform === "android") {
+      const androidPackageName = normalizeText(targetProfile?.androidPackageName);
+      return profile.platform === "android" && Boolean(androidPackageName) && normalizeText(profile.androidPackageName) === androidPackageName;
+    }
+    const iosBundleId = normalizeText(targetProfile?.iosBundleId);
+    return profile.platform === "ios" && Boolean(iosBundleId) && normalizeText(profile.iosBundleId) === iosBundleId;
+  });
+}
+
+function targetProfilesForGraph(graph: GraphListItem): AssetGraphTargetProfile[] {
+  const profiles = (graph.targetApp?.profiles ?? []).map(normalizeAssetGraphTargetProfile).filter((profile): profile is AssetGraphTargetProfile => Boolean(profile));
+  const legacyProfiles: AssetGraphTargetProfile[] = [];
+  const androidPackageName = normalizeText(graph.targetApp?.androidPackageName);
+  if (androidPackageName) {
+    legacyProfiles.push({
+      id: "legacy-android-primary",
+      platform: "android",
+      displayName: "Android",
+      androidPackageName,
+      isPrimary: profiles.every((profile) => profile.platform !== "android")
+    });
+  }
+  const iosBundleId = normalizeText(graph.targetApp?.iosBundleId);
+  if (iosBundleId) {
+    legacyProfiles.push({
+      id: "legacy-ios-primary",
+      platform: "ios",
+      displayName: "iOS",
+      iosBundleId,
+      isPrimary: profiles.every((profile) => profile.platform !== "ios")
+    });
+  }
+  return dedupeAssetGraphTargetProfiles([...profiles, ...legacyProfiles]);
+}
+
+function normalizeAssetGraphTargetProfile(profile: AssetGraphTargetProfile): AssetGraphTargetProfile | undefined {
+  const platform = profile.platform === "android" || profile.platform === "ios" || profile.platform === "harmony" || profile.platform === "flutter" ? profile.platform : undefined;
+  if (!platform) {
+    return undefined;
+  }
+  return {
+    ...profile,
+    id: normalizeText(profile.id) ?? `${platform}:profile`,
+    platform,
+    displayName: normalizeText(profile.displayName),
+    androidPackageName: normalizeText(profile.androidPackageName),
+    iosBundleId: normalizeText(profile.iosBundleId),
+    harmonyBundleName: normalizeText(profile.harmonyBundleName),
+    flutterAppId: normalizeText(profile.flutterAppId)
+  };
+}
+
+function dedupeAssetGraphTargetProfiles(profiles: AssetGraphTargetProfile[]): AssetGraphTargetProfile[] {
+  const seen = new Set<string>();
+  const result: AssetGraphTargetProfile[] = [];
+  for (const profile of profiles) {
+    const key = assetGraphTargetProfileKey(profile);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(profile);
+  }
+  return result;
+}
+
+function assetGraphTargetProfileKey(profile: AssetGraphTargetProfile): string {
+  if (profile.platform === "android" && profile.androidPackageName) {
+    return `android:${profile.androidPackageName}`;
+  }
+  if (profile.platform === "ios" && profile.iosBundleId) {
+    return `ios:${profile.iosBundleId}`;
+  }
+  if (profile.platform === "harmony" && profile.harmonyBundleName) {
+    return `harmony:${profile.harmonyBundleName}`;
+  }
+  if (profile.platform === "flutter" && profile.flutterAppId) {
+    return `flutter:${profile.flutterAppId}`;
+  }
+  return `${profile.platform ?? "unknown"}:${profile.id ?? ""}`;
+}
+
+function targetProfileLookupFromObservation(observation: AssetObservation | undefined): AssetTargetProfileLookup | undefined {
+  if (!observation) {
+    return undefined;
+  }
+  if (observation.platform === "android") {
+    const androidPackageName = normalizeText(observation.packageName);
+    return androidPackageName ? { androidPackageName } : undefined;
+  }
+  const iosBundleId = normalizeText(observation.bundleId);
+  return iosBundleId ? { iosBundleId } : undefined;
+}
+
+function hasTargetProfileLookup(targetProfile: AssetTargetProfileLookup | undefined, platform: DeviceInfo["platform"]): boolean {
+  return platform === "android" ? Boolean(normalizeText(targetProfile?.androidPackageName)) : Boolean(normalizeText(targetProfile?.iosBundleId));
+}
+
+function platformScopeMatchesGraph(scope: string | undefined, platform: DeviceInfo["platform"]): boolean {
+  return !scope || scope === platform || scope === "mobile-both";
+}
+
+function normalizeText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function knownStabilityPackages(flows: StructuredFlow[], runs: TestRun[]): string[] {
@@ -5354,6 +5553,15 @@ function describeAssetElementLocator(locator: Extract<SemanticDeviceActionReques
 
 async function fetchAssetObservation(serial: string): Promise<AssetObservation | undefined> {
   const response = await fetch(`/api/devices/${encodeURIComponent(serial)}/observation?screenshot=false&uiTree=true&ocr=false`);
+  if (!response.ok) {
+    return undefined;
+  }
+  const json = (await response.json()) as { observation?: unknown };
+  return isAssetObservation(json.observation) ? json.observation : undefined;
+}
+
+async function fetchAssetForegroundObservation(serial: string): Promise<AssetObservation | undefined> {
+  const response = await fetch(`/api/devices/${encodeURIComponent(serial)}/observation?screenshot=false&uiTree=false&ocr=false`);
   if (!response.ok) {
     return undefined;
   }

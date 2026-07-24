@@ -3,9 +3,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   FreeCompositionPanel,
+  freeCompositionAnalyzeRequestBody,
   freeCompositionExecuteRequestBody,
   freeCompositionReplyProfileId,
-  freeCompositionReplyRuntimeOverrides
+  freeCompositionReplyRuntimeOverrides,
+  freeCompositionSessionDisplayMessage
 } from "./FreeCompositionPanel.js";
 
 describe("FreeCompositionPanel", () => {
@@ -149,6 +151,8 @@ describe("FreeCompositionPanel", () => {
     expect(markup).toContain("free-composition-execution-panel");
     expect(markup).toContain("free-composition-result-stack");
     expect(markup).toContain("free-composition-session-feed");
+    expect(markup).toContain("确认当前在主页");
+    expect(markup).toContain("点击「打开成长」并进入成长");
   });
 
   it("includes android app monitor config when building execution requests", () => {
@@ -434,6 +438,185 @@ describe("FreeCompositionPanel", () => {
     expect(freeCompositionReplyRuntimeOverrides("eeo123", ["password"])).toEqual({
       password: "eeo123"
     });
+  });
+
+  it("includes the selected device when analyzing an AI asset use case", () => {
+    expect(freeCompositionAnalyzeRequestBody({
+      appId: " cn.eeo.classin ",
+      prompt: " 跳转到主页 ",
+      selectedSerial: "device-1"
+    })).toEqual({
+      appId: "cn.eeo.classin",
+      platform: "android",
+      prompt: "跳转到主页",
+      deviceSerial: "device-1"
+    });
+  });
+
+  it("renders a target-satisfied AI asset use case without execution actions", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(FreeCompositionPanel, {
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        defaultAppId: "cn.eeo.classin",
+        setMessage: vi.fn(),
+        initialData: {
+          sessions: [
+            {
+              id: "free_composition_noop",
+              appId: "cn.eeo.classin",
+              platform: "android",
+              prompt: "跳转到主页",
+              createdAt: "2026-07-18T00:00:00.000Z",
+              updatedAt: "2026-07-18T00:00:00.000Z",
+              status: "passed",
+              resolution: {
+                status: "ready",
+                message: "当前设备已在目标页面，无需执行。",
+                intent: {
+                  prompt: "跳转到主页",
+                  runMode: "once",
+                  repeatCount: 1,
+                  riskTerms: [],
+                  runtimeOverrides: {}
+                },
+                candidates: [
+                  {
+                    id: "generated_flow:current_page:page-home",
+                    kind: "generated_flow",
+                    appId: "cn.eeo.classin",
+                    platform: "android",
+                    name: "当前已在主页",
+                    parameterKeys: [],
+                    score: 240,
+                    matchedTerms: ["主页"],
+                    composedCandidateIds: [],
+                    requiresExecution: false
+                  }
+                ]
+              },
+              selectedCandidateId: "generated_flow:current_page:page-home",
+              plan: {
+                status: "ready",
+                runtimeParams: {},
+                requiredParameters: [],
+                steps: [],
+                issues: []
+              }
+            }
+          ],
+          profiles: []
+        }
+      })
+    );
+
+    expect(markup).toContain("当前设备已在目标页面，无需执行。");
+    expect(markup).toContain("当前已在主页");
+    expect(markup).toContain("目标已满足");
+    expect(markup).not.toContain("生成计划");
+    expect(markup).not.toContain("开始执行");
+    expect(markup).not.toContain("可以开始执行");
+    expect(markup).not.toContain("预检通过 · 0 个资产步骤");
+  });
+
+  it("renders current-page recognition blockers as a short action choice", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(FreeCompositionPanel, {
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        defaultAppId: "cn.eeo.classin",
+        setMessage: vi.fn(),
+        onBack: vi.fn(),
+        onOpenAssetRecording: vi.fn(),
+        initialData: {
+          sessions: [
+            {
+              id: "free_composition_unknown_current_page",
+              appId: "cn.eeo.classin",
+              platform: "android",
+              prompt: "到主页",
+              createdAt: "2026-07-18T00:00:00.000Z",
+              updatedAt: "2026-07-18T00:00:00.000Z",
+              status: "blocked",
+              resolution: {
+                status: "missing_assets",
+                message: "未能稳定识别当前设备页面，无法从当前页规划到目标页“主页”。请先回到已录入页面、关闭当前前景页，或补充当前页面资产后重试。",
+                intent: {
+                  prompt: "到主页",
+                  runMode: "once",
+                  repeatCount: 1,
+                  riskTerms: []
+                },
+                candidates: []
+              }
+            }
+          ],
+          profiles: []
+        }
+      })
+    );
+
+    expect(markup).toContain("未能稳定识别当前设备页面，无法从当前页规划到目标页“主页”。");
+    expect(markup).toContain("返回上一页");
+    expect(markup).not.toContain("lucide-arrow-left");
+    expect(markup).toContain("去录制新资产");
+    expect(markup).not.toContain("请先回到已录入页面");
+    expect(markup).not.toContain("候选流程");
+    expect(markup).not.toContain("生成计划");
+    expect(markup).not.toContain("开始执行");
+  });
+
+  it("renders outside-app blockers with a launch app action", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(FreeCompositionPanel, {
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        defaultAppId: "cn.eeo.classin",
+        setMessage: vi.fn(),
+        onBack: vi.fn(),
+        onLaunchApp: vi.fn(),
+        onOpenAssetRecording: vi.fn(),
+        initialData: {
+          sessions: [
+            {
+              id: "free_composition_outside_app",
+              appId: "cn.eeo.classin",
+              platform: "android",
+              prompt: "到主页",
+              createdAt: "2026-07-18T00:00:00.000Z",
+              updatedAt: "2026-07-18T00:00:00.000Z",
+              status: "blocked",
+              resolution: {
+                status: "missing_assets",
+                message: "当前设备不在目标 App 内，无法从当前页规划到目标页“主页”。请先启动目标 App 后重试。",
+                intent: {
+                  prompt: "到主页",
+                  runMode: "once",
+                  repeatCount: 1,
+                  riskTerms: []
+                },
+                candidates: []
+              }
+            }
+          ],
+          profiles: []
+        }
+      })
+    );
+
+    expect(markup).toContain("当前设备不在目标 App 内，无法从当前页规划到目标页“主页”。");
+    expect(markup).toContain("启动app");
+    expect(markup).toContain("返回上一页");
+    expect(markup).toContain("去录制新资产");
+  });
+
+  it("shortens current-page recognition blockers for the global status message", () => {
+    expect(freeCompositionSessionDisplayMessage({
+      resolution: {
+        status: "missing_assets",
+        message: "未能稳定识别当前设备页面，无法从当前页规划到目标页“主页”。请先回到已录入页面、关闭当前前景页，或补充当前页面资产后重试。"
+      }
+    })).toBe("未能稳定识别当前设备页面，无法从当前页规划到目标页“主页”。");
   });
 
   it("extracts explicit key-value pairs from a parameter reply", () => {

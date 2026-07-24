@@ -176,6 +176,227 @@ describe("resolveFreeComposition", () => {
     });
   });
 
+  it("plans a single generated route from the current page to the requested target page", () => {
+    const result = resolveFreeComposition("跳转到主页", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      currentPage: {
+        pageModelId: "page-login",
+        pageModelName: "登录"
+      },
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-login", pageModelName: "登录", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-space", pageModelName: "空间", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-search", pageModelName: "搜索", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-login",
+          sourcePageModelName: "登录",
+          targetPageModelId: "page-home",
+          targetPageModelName: "主页",
+          pageElementId: "login-button",
+          pageElementLabel: "登录按钮",
+          pageTransitionId: "edge-login-home",
+          pageTransitionName: "登录 -> 主页",
+          status: "active"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-space",
+          targetPageModelName: "空间",
+          pageElementId: "open-space",
+          pageElementLabel: "打开空间",
+          pageTransitionId: "edge-home-space",
+          pageTransitionName: "主页 -> 空间",
+          status: "active"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-search",
+          targetPageModelName: "搜索",
+          pageElementId: "open-search",
+          pageElementLabel: "搜索",
+          pageTransitionId: "edge-home-search",
+          pageTransitionName: "主页 -> 搜索",
+          status: "active"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "登录 / 登录按钮 → 主页",
+      composedCandidateIds: ["page_transition:page-login:login-button:page-home"]
+    });
+  });
+
+  it("returns a single no-op flow when the current page is already the requested target page", () => {
+    const result = resolveFreeComposition("跳转到主页", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      currentPage: {
+        pageModelId: "page-home",
+        pageModelName: "主页"
+      },
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-space", pageModelName: "空间", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-space",
+          targetPageModelName: "空间",
+          pageElementId: "open-space",
+          pageElementLabel: "打开空间",
+          pageTransitionId: "edge-home-space",
+          pageTransitionName: "主页 -> 空间",
+          status: "active"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.message).toBe("当前设备已在目标页面，无需执行。");
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "当前已在主页",
+      pageModelId: "page-home",
+      composedCandidateIds: [],
+      requiresExecution: false
+    });
+  });
+
+  it("does not offer routes from arbitrary pages when device current page detection failed", () => {
+    const result = resolveFreeComposition("跳转到主页", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      currentPageDetectionAttempted: true,
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-login", pageModelName: "登录", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-schedule", pageModelName: "课程表", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-login",
+          sourcePageModelName: "登录",
+          targetPageModelId: "page-home",
+          targetPageModelName: "主页",
+          pageElementId: "login-button",
+          pageElementLabel: "登录按钮",
+          pageTransitionId: "edge-login-home",
+          pageTransitionName: "登录 -> 主页",
+          status: "active"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-schedule",
+          sourcePageModelName: "课程表",
+          targetPageModelId: "page-home",
+          targetPageModelName: "主页",
+          pageElementId: "open-home",
+          pageElementLabel: "切回主页",
+          pageTransitionId: "edge-schedule-home",
+          pageTransitionName: "课程表 -> 主页",
+          status: "active"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("missing_assets");
+    expect(result.candidates).toEqual([]);
+    expect(result.message).toContain("未能稳定识别当前设备页面");
+  });
+
+  it("explains route planning blockers differently when the device is outside the target app", () => {
+    const result = resolveFreeComposition("跳转到主页", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      currentPageDetectionAttempted: true,
+      currentPageDetectionFailure: {
+        reason: "outside_app",
+        expectedAppId: "cn.eeo.classin",
+        actualAppId: "com.android.launcher"
+      },
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" }
+      ]
+    });
+
+    expect(result.status).toBe("missing_assets");
+    expect(result.candidates).toEqual([]);
+    expect(result.message).toContain("当前设备不在目标 App 内");
+    expect(result.message).toContain("请先启动目标 App 后重试");
+  });
+
+  it("carries required runtime parameters from a current-page transition route", () => {
+    const result = resolveFreeComposition("跳转到班级详情", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      currentPage: {
+        pageModelId: "page-home",
+        pageModelName: "主页"
+      },
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-detail", pageModelName: "班级详情", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-detail",
+          targetPageModelName: "班级详情",
+          pageElementId: "class-grid",
+          pageElementLabel: "班级列表",
+          pageTransitionId: "transition-home-detail",
+          pageTransitionName: "主页 -> 班级详情",
+          parameterKeys: ["className"],
+          status: "active"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "主页 / 班级列表 → 班级详情",
+      parameterKeys: ["className"]
+    });
+  });
+
   it("explains a page target that exists but has no executable route", () => {
     const result = resolveFreeComposition("打开新建公开课", {
       appId: "cn.eeo.classin",

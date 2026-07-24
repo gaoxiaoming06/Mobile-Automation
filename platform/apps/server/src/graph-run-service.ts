@@ -4,6 +4,7 @@ import {
   RunExecutionController,
   type GraphExpectationEvaluationInput,
   type GraphExecutionResult,
+  type GraphNodeDetectionOptions,
   type GraphRecoveryRecord,
   type GraphRunnerDriver
 } from "@mobile-automation/runner-core";
@@ -161,6 +162,7 @@ export class GraphRunService {
   private readonly expectationEvaluator: StepExpectationEvaluator;
   private readonly semanticStepResolver: SemanticStepResolver;
   private readonly observationService: ObservationService;
+  private readonly pageAssetBaselineCache = new Map<string, Promise<Buffer | undefined>>();
   private readonly aiDiagnosisClient?: AiDiagnosisClient;
   private readonly createAiDiagnosisClient: (config: Extract<AiDiagnosisConfig, { enabled: true }>) => AiDiagnosisClient;
 
@@ -582,9 +584,9 @@ export class GraphRunService {
         };
         return observation;
       },
-      detectNode: async (observation) => {
+      detectNode: async (observation, options) => {
         const preferredNodeId = observation.id ? preferredNodeIdByObservationId.get(observation.id) : undefined;
-        return this.matchBusinessNode(observation, graphVersion, observation.platform, preferredNodeId);
+        return this.matchBusinessNode(observation, graphVersion, observation.platform, preferredNodeId, options);
       },
       performAction: async (action, step) => {
         const stepResult = ensureGraphStepResult(runId, step, stepResultsByPlanStepId);
@@ -1540,7 +1542,7 @@ export class GraphRunService {
     const started = Date.now();
     while (Date.now() - started <= 3000) {
       latestObservation = await input.graphDriver.observe(input.gridStep, "precondition");
-      latestMatch = await input.graphDriver.detectNode(latestObservation);
+      latestMatch = await input.graphDriver.detectNode(latestObservation, { allowGlobalFallback: false });
       if (latestMatch.status === "matched" && latestMatch.node?.id === input.gridStep.fromNode.id) {
         break;
       }
@@ -1870,8 +1872,10 @@ export class GraphRunService {
     observation: Observation,
     graphVersion: BusinessGraphVersion,
     platform: "android" | "ios",
-    preferredNodeId?: string
+    preferredNodeId?: string,
+    options: GraphNodeDetectionOptions = {}
   ): Promise<NodeMatchResult> {
+    const allowGlobalFallback = options.allowGlobalFallback ?? true;
     const graphMatch = detectNode(observation, graphVersion, platform);
     if (graphMatch.status === "matched" && (isBlockingStateNode(graphMatch.node) || isLoginRequiredNode(graphMatch.node))) {
       return graphMatch;
@@ -1888,6 +1892,13 @@ export class GraphRunService {
     if (pageMatch.match.status === "matched") {
       return pageMatch.match;
     }
+    if (preferredNodeId && !allowGlobalFallback) {
+      const enrichedGraphMatch = detectNode(pageMatch.observation, graphVersion, platform);
+      if (enrichedGraphMatch.status === "matched" && (isBlockingStateNode(enrichedGraphMatch.node) || isLoginRequiredNode(enrichedGraphMatch.node))) {
+        return enrichedGraphMatch;
+      }
+      return enrichedGraphMatch.status === "matched" && enrichedGraphMatch.node?.id === preferredNodeId ? enrichedGraphMatch : pageMatch.match;
+    }
     if (preferredNodeId) {
       const fallbackPageMatch = await matchCurrentPage({
         graphVersion,
@@ -1903,11 +1914,19 @@ export class GraphRunService {
   }
 
   private async readPageAssetBaselineArtifact(artifactId: string): Promise<Buffer | undefined> {
-    const artifact = this.storage.getArtifact(artifactId);
-    if (!artifact) {
-      return undefined;
+    const cached = this.pageAssetBaselineCache.get(artifactId);
+    if (cached) {
+      return cached;
     }
-    return readFile(artifactFilePath(artifact.path)).catch(() => undefined);
+    const loaded = (async () => {
+      const artifact = this.storage.getArtifact(artifactId);
+      if (!artifact) {
+        return undefined;
+      }
+      return readFile(artifactFilePath(artifact.path)).catch(() => undefined);
+    })();
+    this.pageAssetBaselineCache.set(artifactId, loaded);
+    return loaded;
   }
 
   private createRunConfig(

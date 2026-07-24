@@ -5,7 +5,8 @@ import {
   type FreeCompositionPageAbilityAsset,
   type FreeCompositionPageAsset,
   type FreeCompositionPageTaskAsset,
-  type FreeCompositionPageTransitionAsset
+  type FreeCompositionPageTransitionAsset,
+  type ResolveFreeCompositionInput
 } from "./free-composition.js";
 import {
   createFreeCompositionSession,
@@ -35,6 +36,9 @@ export class FreeCompositionSessionRegistry {
     pageTransitions?: FreeCompositionPageTransitionAsset[];
     pageAssets?: FreeCompositionPageAsset[];
     pageAbilities?: FreeCompositionPageAbilityAsset[];
+    currentPageDetectionAttempted?: ResolveFreeCompositionInput["currentPageDetectionAttempted"];
+    currentPage?: ResolveFreeCompositionInput["currentPage"];
+    currentPageDetectionFailure?: ResolveFreeCompositionInput["currentPageDetectionFailure"];
   }): FreeCompositionSession {
     const resolution = resolveFreeComposition(input.prompt, {
       appId: input.appId,
@@ -44,7 +48,10 @@ export class FreeCompositionSessionRegistry {
       pageTasks: input.pageTasks,
       pageTransitions: input.pageTransitions,
       pageAssets: input.pageAssets,
-      pageAbilities: input.pageAbilities
+      pageAbilities: input.pageAbilities,
+      currentPageDetectionAttempted: input.currentPageDetectionAttempted,
+      currentPage: input.currentPage,
+      currentPageDetectionFailure: input.currentPageDetectionFailure
     });
     return this.save(createFreeCompositionSession({
       appId: input.appId,

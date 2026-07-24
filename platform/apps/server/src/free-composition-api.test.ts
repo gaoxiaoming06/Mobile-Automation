@@ -59,6 +59,59 @@ describe("FreeCompositionSessionRegistry", () => {
     expect(savedCase.id).toBe("case_login");
     expect(savedCase.runMode).toBe("once");
   });
+
+  it("creates a single route candidate from the detected current page", () => {
+    const registry = new FreeCompositionSessionRegistry(() => now);
+    const session = registry.create({
+      appId: "cn.eeo.classin",
+      platform: "android",
+      prompt: "跳转到主页",
+      metaFunctions: [],
+      compositeCases: [],
+      currentPage: {
+        pageModelId: "page-login",
+        pageModelName: "登录"
+      },
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-login", pageModelName: "登录", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-space", pageModelName: "空间", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-login",
+          sourcePageModelName: "登录",
+          targetPageModelId: "page-home",
+          targetPageModelName: "主页",
+          pageElementId: "login-button",
+          pageElementLabel: "登录按钮",
+          pageTransitionId: "edge-login-home",
+          status: "active"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-space",
+          targetPageModelName: "空间",
+          pageElementId: "open-space",
+          pageElementLabel: "打开空间",
+          pageTransitionId: "edge-home-space",
+          status: "active"
+        }
+      ]
+    });
+
+    expect(session.resolution.candidates).toHaveLength(1);
+    expect(session.resolution.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "登录 / 登录按钮 → 主页",
+      composedCandidateIds: ["page_transition:page-login:login-button:page-home"]
+    });
+  });
 });
 
 function metaFunction(): MetaFunction {

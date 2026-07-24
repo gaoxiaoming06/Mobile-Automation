@@ -116,10 +116,42 @@ export async function matchCurrentPage(input: {
   observation: Observation;
   baselineReader?: PageMatcherBaselineReader;
   candidateNodeIds?: string[];
+  prefilterByForegroundTitle?: boolean;
 }): Promise<PageMatcherResult> {
-  const graphVersion = candidateOnlyGraphVersion(pageAssetOnlyGraphVersion(input.graphVersion), input.candidateNodeIds);
-  const observation = await enrichObservationImageRegions(input.observation, graphVersion, input.baselineReader, createVisualMatchCache());
-  const rawMatch = detectNode(observation, graphVersion, observation.platform);
+  const pageAssetGraphVersion = pageAssetOnlyGraphVersion(input.graphVersion);
+  const candidateNodeIds = input.candidateNodeIds ?? (input.prefilterByForegroundTitle ? foregroundTitleCandidateNodeIds(pageAssetGraphVersion, input.observation) : undefined);
+  if (input.candidateNodeIds && input.candidateNodeIds.length === 0) {
+    const match = forceUnknownMatch(detectNode(input.observation, pageAssetGraphVersion, input.observation.platform));
+    return {
+      match,
+      observation: input.observation,
+      diagnostics: buildPageMatcherDiagnostics(match, input.observation)
+    };
+  }
+  if (candidateNodeIds && candidateNodeIds.length > 0) {
+    const narrowedResult = await runPageMatcher({
+      graphVersion: candidateOnlyGraphVersion(pageAssetGraphVersion, candidateNodeIds),
+      observation: input.observation,
+      baselineReader: input.baselineReader
+    });
+    if (narrowedResult.match.status === "matched" || input.candidateNodeIds) {
+      return narrowedResult;
+    }
+  }
+  return runPageMatcher({
+    graphVersion: pageAssetGraphVersion,
+    observation: input.observation,
+    baselineReader: input.baselineReader
+  });
+}
+
+async function runPageMatcher(input: {
+  graphVersion: BusinessGraphVersion;
+  observation: Observation;
+  baselineReader?: PageMatcherBaselineReader;
+}): Promise<PageMatcherResult> {
+  const observation = await enrichObservationImageRegions(input.observation, input.graphVersion, input.baselineReader, createVisualMatchCache());
+  const rawMatch = detectNode(observation, input.graphVersion, observation.platform);
   const match = promoteParentPageLocalStateMatch(rawMatch, observation);
   return {
     match,
@@ -129,14 +161,129 @@ export async function matchCurrentPage(input: {
 }
 
 function candidateOnlyGraphVersion(graphVersion: BusinessGraphVersion, candidateNodeIds: string[] | undefined): BusinessGraphVersion {
-  const ids = new Set((candidateNodeIds ?? []).map((id) => id.trim()).filter(Boolean));
-  if (!ids.size) {
+  if (candidateNodeIds === undefined) {
     return graphVersion;
   }
+  const ids = new Set((candidateNodeIds ?? []).map((id) => id.trim()).filter(Boolean));
   return {
     ...graphVersion,
     nodes: graphVersion.nodes.filter((node) => ids.has(node.id))
   };
+}
+
+function forceUnknownMatch(match: NodeMatchResult): NodeMatchResult {
+  return {
+    ...match,
+    status: "unknown",
+    node: undefined
+  };
+}
+
+function foregroundTitleCandidateNodeIds(graphVersion: BusinessGraphVersion, observation: Observation): string[] | undefined {
+  const foregroundTitle = foregroundPageTitleText(observation);
+  if (!foregroundTitle) {
+    return undefined;
+  }
+  return graphVersion.nodes
+    .filter((node) => node.nodeType === "page" && node.status === "active")
+    .filter((node) => nodeMatchesForegroundTitle(node, foregroundTitle))
+    .map((node) => node.id);
+}
+
+function nodeMatchesForegroundTitle(node: BusinessNode, foregroundTitle: string): boolean {
+  const normalizedTitle = normalizeSignatureText(foregroundTitle);
+  if (!normalizedTitle) {
+    return false;
+  }
+  if (titleMatchesText(normalizedTitle, node.name)) {
+    return true;
+  }
+  return node.matchers.some((matcher) =>
+    isForegroundTitleCandidateMatcher(matcher) &&
+    matcherTextMatchesForegroundTitle(normalizedTitle, safeDecodeURIComponent(matcher.value))
+  );
+}
+
+function isForegroundTitleCandidateMatcher(matcher: StateMatcher): boolean {
+  if (!(matcher.type === "text" || matcher.type === "ocr_text" || matcher.type === "image_region" || matcher.type === "semantic_image_region")) {
+    return false;
+  }
+  if (!matcher.region || isCommonNavigationRegion(matcher.region)) {
+    return false;
+  }
+  return matcher.region.y <= 25 && matcher.region.height <= 25;
+}
+
+function titleMatchesText(normalizedTitle: string, value: string): boolean {
+  const normalizedValue = normalizeSignatureText(value);
+  if (!normalizedValue) {
+    return false;
+  }
+  return normalizedValue === normalizedTitle ||
+    normalizedValue.includes(normalizedTitle) ||
+    (normalizedTitle.includes(normalizedValue) && normalizedValue.length >= 2);
+}
+
+function matcherTextMatchesForegroundTitle(normalizedTitle: string, value: string): boolean {
+  const normalizedValue = normalizeSignatureText(value);
+  if (!normalizedValue) {
+    return false;
+  }
+  return normalizedValue === normalizedTitle ||
+    normalizedValue.includes(normalizedTitle) ||
+    (normalizedTitle.includes(normalizedValue) && normalizedValue.length >= 4);
+}
+
+function foregroundPageTitleText(observation: Observation): string | undefined {
+  return prominentObservationTextCandidates(observation)
+    .filter((candidate) => isLikelyForegroundPageTitle(candidate.text))
+    .sort((left, right) => left.centerY - right.centerY || left.order - right.order)[0]?.text;
+}
+
+function prominentObservationTextCandidates(observation: Observation): Array<{ text: string; centerY: number; order: number }> {
+  const height = observation.resolution?.height;
+  const candidates: Array<{ text: string; centerY: number; order: number }> = [];
+  let order = 0;
+  const push = (text: string | undefined, bounds: { y: number; height: number } | undefined): void => {
+    const normalized = text?.trim();
+    order += 1;
+    if (!normalized || !isProminent(bounds, height)) {
+      return;
+    }
+    candidates.push({
+      text: normalized,
+      centerY: bounds ? bounds.y + bounds.height / 2 : 0,
+      order
+    });
+  };
+  for (const element of observation.uiElements) {
+    if (element.visible === false) {
+      continue;
+    }
+    push(element.text, element.bounds);
+  }
+  for (const text of observation.ocrTexts) {
+    push(text.text, text.region);
+  }
+  return candidates;
+}
+
+function isProminent(bounds: { y: number; height: number } | undefined, screenHeight?: number): boolean {
+  return !screenHeight || !bounds || bounds.y + bounds.height / 2 <= screenHeight * 0.45;
+}
+
+function isLikelyForegroundPageTitle(text: string): boolean {
+  const normalized = text.replace(/\s+/g, "").trim();
+  if (!normalized || normalized.length > 16 || !/[\u4e00-\u9fa5]/.test(normalized)) {
+    return false;
+  }
+  if (/^\d+$/.test(normalized)) {
+    return false;
+  }
+  if (/\d/.test(normalized) && /小时|分钟|今天|明天|昨天|开始|出勤|上课/.test(normalized)) {
+    return false;
+  }
+  return true;
 }
 
 export async function enrichObservationImageRegions(
@@ -150,18 +297,23 @@ export async function enrichObservationImageRegions(
     return observation;
   }
   const existing = observation.imageRegions ?? [];
-  const generated: ObservationImageRegion[] = [];
+  const knownValues = new Set(existing.map((region) => region.value));
+  const uniqueMatchers: StateMatcher[] = [];
   for (const matcher of matchers) {
-    if (!matcher.region || [...existing, ...generated].some((region) => region.value === matcher.value)) {
+    if (!matcher.region || knownValues.has(matcher.value)) {
       continue;
     }
+    knownValues.add(matcher.value);
+    uniqueMatchers.push(matcher);
+  }
+  const generated = await mapWithConcurrency(uniqueMatchers, 4, async (matcher) => {
     const similarity = await imageRegionSimilarity(observation, matcher, baselineReader, visualCache);
-    generated.push({
+    return {
       value: matcher.value,
       region: matcher.region,
       similarity
-    });
-  }
+    };
+  });
   if (!generated.length) {
     return observation;
   }
@@ -169,6 +321,24 @@ export async function enrichObservationImageRegions(
     ...observation,
     imageRegions: [...existing, ...generated]
   };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex]!);
+    }
+  }));
+  return results;
 }
 
 export async function createVisualLocatorTemplate(input: {

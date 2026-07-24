@@ -13,6 +13,7 @@ export type AssetCompositeExecutionItem = {
   metaFunctionId: string;
   metaFunctionName: string;
   metaFunctionStepId: string;
+  metaFunctionStepName?: string;
   kind: CompiledAssetCompositionStep["kind"];
   targetPageModelId: string;
   pageElementId?: string;
@@ -278,6 +279,7 @@ function executionItem(id: string, order: number, iteration: number, step: Compi
     metaFunctionId: step.metaFunctionId,
     metaFunctionName: step.metaFunctionName,
     metaFunctionStepId: step.metaFunctionStepId,
+    metaFunctionStepName: step.metaFunctionStepName,
     kind: step.kind,
     targetPageModelId: step.targetPageModelId,
     pageElementId: step.pageElementId,

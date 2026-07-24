@@ -1,12 +1,29 @@
-import type { ActionPolicy, BusinessGraphVersion, BusinessNode, OperationEdge, StateMatcher } from "@mobile-automation/graph-core";
+import type { ActionPolicy, BusinessGraphVersion, BusinessNode, GraphTargetApp, OperationEdge, StateMatcher } from "@mobile-automation/graph-core";
 import { createId, type ActionStep, type StepExpectation } from "@mobile-automation/shared";
 import type { Storage } from "./storage.js";
 
 export const classInAndroidGraphAppId = "classin-android";
-export const classInAndroidGraphName = "ClassIn Android 业务图谱";
+export const classInAndroidGraphName = "ClassIn 产品资产库";
 export const classInTeacherCreateLessonLegacyGraphAppId = "classin-android-teacher-create-lesson";
 export const classInCreateLessonTargetNodeKey = "classin.teacher.lesson.create";
 export const classInTeacherCreateLessonGraphRevision = "classin_android_graph:v8";
+
+export function classInProductTargetApp(): GraphTargetApp {
+  return {
+    productId: "classin",
+    productName: "ClassIn",
+    androidPackageName: "cn.eeo.classin",
+    profiles: [
+      {
+        id: "classin-android-primary",
+        platform: "android",
+        displayName: "ClassIn Android",
+        androidPackageName: "cn.eeo.classin",
+        isPrimary: true
+      }
+    ]
+  };
+}
 
 type BuiltinGraphSeedResult = {
   created: number;
@@ -43,9 +60,7 @@ function resolveCanonicalClassInGraph(storage: Storage): ReturnType<Storage["get
     storage.updateBusinessGraphProfile(canonical.id, {
       appId: classInAndroidGraphAppId,
       name: classInAndroidGraphName,
-      targetApp: {
-        androidPackageName: "cn.eeo.classin"
-      },
+      targetApp: classInProductTargetApp(),
       platformScope: "android"
     });
     return storage.getBusinessGraph(canonical.id) ?? canonical;
@@ -55,9 +70,7 @@ function resolveCanonicalClassInGraph(storage: Storage): ReturnType<Storage["get
     storage.updateBusinessGraphProfile(legacy.id, {
       appId: classInAndroidGraphAppId,
       name: classInAndroidGraphName,
-      targetApp: {
-        androidPackageName: "cn.eeo.classin"
-      },
+      targetApp: classInProductTargetApp(),
       platformScope: "android"
     });
     return storage.getBusinessGraph(legacy.id) ?? legacy;
@@ -80,9 +93,7 @@ function seedClassInTeacherCreateLessonGraph(storage: Storage, existingGraphId?:
     (existingGraphId ? storage.getBusinessGraph(existingGraphId) : undefined) ??
     storage.createBusinessGraph({
       appId: classInAndroidGraphAppId,
-      targetApp: {
-        androidPackageName: "cn.eeo.classin"
-      },
+      targetApp: classInProductTargetApp(),
       platformScope: "android",
       name: classInAndroidGraphName,
       status: "draft"
@@ -90,9 +101,7 @@ function seedClassInTeacherCreateLessonGraph(storage: Storage, existingGraphId?:
   storage.updateBusinessGraphProfile(graph.id, {
     appId: classInAndroidGraphAppId,
     name: classInAndroidGraphName,
-    targetApp: {
-      androidPackageName: "cn.eeo.classin"
-    },
+    targetApp: classInProductTargetApp(),
     platformScope: "android"
   });
   const version = storage.createBusinessGraphVersion({

@@ -364,9 +364,10 @@ describe("free composition sessions", () => {
     expect(selected.generatedMetaFunctions?.[0]).toMatchObject({
       name: "主页 / 创建公开课 → 新建公开课",
       steps: [
-        { kind: "reach_page", targetPageModelId: "page-home" },
+        { kind: "reach_page", name: "确认当前在主页", targetPageModelId: "page-home" },
         {
           kind: "invoke_capability",
+          name: "点击「创建公开课」并进入新建公开课",
           sourcePageModelId: "page-home",
           pageElementId: "create-public",
           targetPageModelId: "page-public"
@@ -374,10 +375,67 @@ describe("free composition sessions", () => {
       ]
     });
     expect(preview.plan.status).toBe("ready");
-    expect(preview.plan.steps.map((step) => [step.kind, step.targetPageModelId, step.pageElementId])).toEqual([
-      ["reach_page", "page-home", undefined],
-      ["invoke_capability", "page-public", "create-public"]
+    expect(preview.plan.steps.map((step) => [step.metaFunctionStepName, step.kind, step.targetPageModelId, step.pageElementId])).toEqual([
+      ["确认当前在主页", "reach_page", "page-home", undefined],
+      ["点击「创建公开课」并进入新建公开课", "invoke_capability", "page-public", "create-public"]
     ]);
+  });
+
+  it("requires className before previewing a parameterized class-detail transition", () => {
+    const resolution = resolveFreeComposition("跳转到班级详情", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-class-detail",
+          targetPageModelName: "班级详情",
+          pageElementId: "class-grid",
+          pageElementLabel: "班级列表",
+          pageTransitionId: "edge-home-class-detail",
+          pageTransitionName: "主页 -> 班级详情",
+          parameterKeys: ["className"],
+          status: "active"
+        }
+      ]
+    });
+    const session = createFreeCompositionSession({
+      appId: "cn.eeo.classin",
+      platform: "android",
+      prompt: "跳转到班级详情",
+      resolution,
+      now
+    });
+
+    const selected = selectFreeCompositionCandidate({
+      session,
+      candidateId: "page_transition:page-home:class-grid:page-class-detail",
+      metaFunctions: [],
+      compositeCases: [],
+      now
+    });
+    const preview = previewFreeCompositionSession({
+      session: selected,
+      metaFunctions: [],
+      parameterDataRecords: [],
+      graphVersion: classDetailTransitionGraphVersion(),
+      now
+    });
+
+    expect(selected.generatedMetaFunctions?.[0]?.parameters).toEqual([
+      { key: "className", type: "string", required: true }
+    ]);
+    expect(preview.plan.status).toBe("needs_parameters");
+    expect(preview.session.status).toBe("awaiting_parameters");
+    expect(preview.plan.issues).toContainEqual(expect.objectContaining({
+      code: "MISSING_REQUIRED_PARAMETER",
+      assetId: "className"
+    }));
   });
 
   it("wraps a selected built-in app launch as a temporary system step", () => {
@@ -580,6 +638,53 @@ describe("free composition sessions", () => {
     });
   });
 
+  it("does not allow executing a target-satisfied no-op plan", () => {
+    const resolution = resolveFreeComposition("跳转到主页", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      currentPage: {
+        pageModelId: "page-home",
+        pageModelName: "主页"
+      },
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" }
+      ]
+    });
+    const session = createFreeCompositionSession({
+      appId: "cn.eeo.classin",
+      platform: "android",
+      prompt: "跳转到主页",
+      resolution,
+      now
+    });
+    const selected = selectFreeCompositionCandidate({
+      session,
+      candidateId: resolution.candidates[0]!.id,
+      metaFunctions: [],
+      compositeCases: [],
+      now
+    });
+    const preview = previewFreeCompositionSession({
+      session: selected,
+      metaFunctions: [],
+      parameterDataRecords: [],
+      graphVersion: emptyGraphVersion(),
+      now
+    });
+
+    expect(preview.plan.status).toBe("ready");
+    expect(preview.plan.steps).toHaveLength(0);
+    expect(preview.session.status).toBe("passed");
+    expect(() =>
+      assertFreeCompositionExecutionAllowed(preview.session, {
+        confirmed: true,
+        riskConfirmed: false
+      })
+    ).toThrow("当前目标已满足，无需执行。");
+  });
+
   it("turns an explicit ordered multi-step request into one temporary composite case", () => {
     const enterClass = metaFunction({
       id: "meta-enter-class",
@@ -765,6 +870,28 @@ function transitionGraphVersion(): BusinessGraphVersion {
         assetRecordingPageTasks: []
       }),
       pageNode("page-public", "新建公开课", {
+        assetRecordingPageTasks: []
+      })
+    ],
+    edges: []
+  };
+}
+
+function classDetailTransitionGraphVersion(): BusinessGraphVersion {
+  return {
+    id: "graph-version-class-detail-transition",
+    graphId: "graph",
+    version: 1,
+    status: "active",
+    sourceSummary: [],
+    createdAt: now,
+    nodes: [
+      pageNode("page-home", "主页", {
+        assetRecordingPageElements: [{ id: "class-grid", label: "班级列表" }],
+        assetRecordingPageTransitions: [{ id: "edge-home-class-detail", elementId: "class-grid", targetNodeId: "page-class-detail", outcomeType: "navigate", params: { itemText: "{{className}}" } }],
+        assetRecordingPageTasks: []
+      }),
+      pageNode("page-class-detail", "班级详情", {
         assetRecordingPageTasks: []
       })
     ],

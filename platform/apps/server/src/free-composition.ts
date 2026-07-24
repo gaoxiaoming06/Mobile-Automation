@@ -37,6 +37,8 @@ export type FreeCompositionCandidate = {
   pageTransitionId?: string;
   systemAction?: "launch_app";
   composedCandidateIds?: string[];
+  composedCandidates?: FreeCompositionCandidate[];
+  requiresExecution?: boolean;
 };
 
 export type FreeCompositionIntent = {
@@ -63,6 +65,16 @@ export type ResolveFreeCompositionInput = {
   pageTransitions?: FreeCompositionPageTransitionAsset[];
   pageAssets?: FreeCompositionPageAsset[];
   pageAbilities?: FreeCompositionPageAbilityAsset[];
+  currentPageDetectionAttempted?: boolean;
+  currentPage?: {
+    pageModelId: string;
+    pageModelName?: string;
+  };
+  currentPageDetectionFailure?: {
+    reason: "outside_app";
+    expectedAppId?: string;
+    actualAppId?: string;
+  };
 };
 
 export type FreeCompositionPageTaskAsset = {
@@ -87,6 +99,7 @@ export type FreeCompositionPageTransitionAsset = {
   pageElementLabel: string;
   pageTransitionId: string;
   pageTransitionName?: string;
+  parameterKeys?: string[];
   status?: string;
 };
 
@@ -200,6 +213,34 @@ export function resolveFreeComposition(
   ]
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name, "zh-CN"));
+  const currentRouteFlow = buildCurrentPageRouteCandidate(intent.prompt, input, baseCandidates);
+  if (currentRouteFlow) {
+    return {
+      status: "ready",
+      intent,
+      candidates: [currentRouteFlow],
+      message: currentRouteFlow.requiresExecution === false
+        ? "当前设备已在目标页面，无需执行。"
+        : "已根据当前设备页面规划到目标页面的唯一执行流程。确认参数后生成执行计划。"
+    };
+  }
+  const blockedTargetPage = currentPageDetectionBlockedTargetPage(intent.prompt, input);
+  if (blockedTargetPage) {
+    if (input.currentPageDetectionFailure?.reason === "outside_app") {
+      return {
+        status: "missing_assets",
+        intent,
+        candidates: [],
+        message: `当前设备不在目标 App 内，无法从当前页规划到目标页“${blockedTargetPage.pageModelName}”。请先启动目标 App 后重试。`
+      };
+    }
+    return {
+      status: "missing_assets",
+      intent,
+      candidates: [],
+      message: `未能稳定识别当前设备页面，无法从当前页规划到目标页“${blockedTargetPage.pageModelName}”。请先回到已录入页面、关闭当前前景页，或补充当前页面资产后重试。`
+    };
+  }
   const generatedFlow = buildGeneratedFlowCandidate(intent.prompt, baseCandidates);
   const candidates = generatedFlow ? [generatedFlow, ...baseCandidates] : baseCandidates;
 
@@ -229,6 +270,13 @@ export function resolveFreeComposition(
       ? "已按需求生成临时执行流程。确认参数后生成执行计划。"
       : "已找到可执行候选。请选择候选并确认参数后生成执行计划。"
   };
+}
+
+function currentPageDetectionBlockedTargetPage(prompt: string, input: ResolveFreeCompositionInput): FreeCompositionPageAsset | undefined {
+  if (!input.currentPageDetectionAttempted || input.currentPage?.pageModelId || !isTargetPageNavigationIntent(prompt)) {
+    return undefined;
+  }
+  return bestTargetPageForPrompt(prompt, input);
 }
 
 function buildPageTransitionCandidate(pageTransition: FreeCompositionPageTransitionAsset, prompt: string): FreeCompositionCandidate {
@@ -275,7 +323,7 @@ function buildPageTransitionCandidate(pageTransition: FreeCompositionPageTransit
     platform: pageTransition.platform,
     name: `${pageTransition.sourcePageModelName} / ${pageTransition.pageElementLabel} → ${pageTransition.targetPageModelName}`,
     description: pageTransition.pageTransitionName,
-    parameterKeys: [],
+    parameterKeys: uniqueStrings(pageTransition.parameterKeys ?? []),
     score,
     matchedTerms: [...new Set(matchedTerms.filter(Boolean))],
     sourcePageModelId: pageTransition.sourcePageModelId,
@@ -531,6 +579,118 @@ function buildGeneratedFlowCandidate(prompt: string, candidates: FreeComposition
     matchedTerms: uniqueStrings(ordered.flatMap((item) => item.matchedTerms)),
     composedCandidateIds: ordered.map((item) => item.id)
   };
+}
+
+function buildCurrentPageRouteCandidate(
+  prompt: string,
+  input: ResolveFreeCompositionInput,
+  baseCandidates: FreeCompositionCandidate[]
+): FreeCompositionCandidate | undefined {
+  if (!input.currentPage?.pageModelId || !isTargetPageNavigationIntent(prompt)) {
+    return undefined;
+  }
+  const targetPage = bestTargetPageForPrompt(prompt, input);
+  if (!targetPage) {
+    return undefined;
+  }
+  if (targetPage.pageModelId === input.currentPage.pageModelId) {
+    return {
+      id: `generated_flow:current_page:${targetPage.pageModelId}`,
+      kind: "generated_flow",
+      appId: input.appId,
+      platform: input.platform,
+      name: `当前已在${targetPage.pageModelName}`,
+      description: `当前设备已识别在目标页“${targetPage.pageModelName}”，无需额外跳转。`,
+      parameterKeys: [],
+      score: 240,
+      matchedTerms: [targetPage.pageModelName],
+      pageModelId: targetPage.pageModelId,
+      pageModelName: targetPage.pageModelName,
+      targetPageModelId: targetPage.pageModelId,
+      targetPageModelName: targetPage.pageModelName,
+      composedCandidateIds: [],
+      composedCandidates: [],
+      requiresExecution: false
+    };
+  }
+  const path = shortestPageTransitionPath(input.currentPage.pageModelId, targetPage.pageModelId, input);
+  if (!path.length) {
+    return undefined;
+  }
+  const composedCandidates = path.map((transition) => {
+    const candidateId = pageTransitionCandidateId(transition.sourcePageModelId, transition.pageElementId, transition.targetPageModelId);
+    return baseCandidates.find((candidate) => candidate.id === candidateId) ?? buildPageTransitionCandidate(transition, prompt);
+  });
+  return {
+    id: "generated_flow:" + composedCandidates.map((item) => item.id).join(">"),
+    kind: "generated_flow",
+    appId: input.appId,
+    platform: input.platform,
+    name: composedCandidates.map((item) => item.name).join(" → "),
+    description: `由当前页“${input.currentPage.pageModelName ?? input.currentPage.pageModelId}”到目标页“${targetPage.pageModelName}”自动规划的临时流程。`,
+    parameterProfileId: composedCandidates.find((item) => item.parameterProfileId)?.parameterProfileId,
+    parameterKeys: uniqueStrings(composedCandidates.flatMap((item) => item.parameterKeys)).sort(),
+    score: composedCandidates.reduce((sum, item) => sum + item.score, 120),
+    matchedTerms: uniqueStrings([targetPage.pageModelName, ...composedCandidates.flatMap((item) => item.matchedTerms)]),
+    composedCandidateIds: composedCandidates.map((item) => item.id),
+    composedCandidates
+  };
+}
+
+function bestTargetPageForPrompt(prompt: string, input: ResolveFreeCompositionInput): FreeCompositionPageAsset | undefined {
+  return (input.pageAssets ?? [])
+    .filter((page) => page.appId === input.appId && page.platform === input.platform && page.status !== "deprecated")
+    .map((page) => ({ page, score: targetPageScore(prompt, page.pageModelName) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.page.pageModelName.localeCompare(right.page.pageModelName, "zh-CN"))[0]?.page;
+}
+
+function targetPageScore(prompt: string, pageModelName: string): number {
+  const normalizedPrompt = normalize(prompt);
+  const normalizedPageName = normalize(pageModelName);
+  if (!normalizedPageName) {
+    return 0;
+  }
+  if (normalizedPrompt.includes(normalizedPageName)) {
+    return 100;
+  }
+  return textMatchScore(prompt, pageModelName);
+}
+
+function shortestPageTransitionPath(
+  sourcePageModelId: string,
+  targetPageModelId: string,
+  input: ResolveFreeCompositionInput
+): FreeCompositionPageTransitionAsset[] {
+  const transitions = (input.pageTransitions ?? [])
+    .filter((transition) =>
+      transition.appId === input.appId &&
+      transition.platform === input.platform &&
+      transition.status !== "deprecated"
+    )
+    .sort((left, right) => (left.pageTransitionName ?? left.pageElementLabel).localeCompare(right.pageTransitionName ?? right.pageElementLabel, "zh-CN"));
+  const queue: Array<{ pageModelId: string; path: FreeCompositionPageTransitionAsset[] }> = [{ pageModelId: sourcePageModelId, path: [] }];
+  const visited = new Set<string>([sourcePageModelId]);
+  while (queue.length) {
+    const current = queue.shift()!;
+    for (const transition of transitions.filter((item) => item.sourcePageModelId === current.pageModelId)) {
+      if (visited.has(transition.targetPageModelId)) {
+        continue;
+      }
+      const path = [...current.path, transition];
+      if (transition.targetPageModelId === targetPageModelId) {
+        return path;
+      }
+      visited.add(transition.targetPageModelId);
+      queue.push({ pageModelId: transition.targetPageModelId, path });
+    }
+  }
+  return [];
+}
+
+function isTargetPageNavigationIntent(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  return /跳转到|跳到|进入|打开|前往|去到|到.+页/.test(normalized);
 }
 
 function orderedPromptSegments(prompt: string): string[] {

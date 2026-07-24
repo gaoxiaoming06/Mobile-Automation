@@ -569,6 +569,38 @@ describe("graph runner", () => {
     expect(result.failure).toEqual(expect.objectContaining({ code: "TO_NODE_NOT_REACHED" }));
   });
 
+  it("uses expected-node detection while polling and only enables global detection for final transition diagnostics", async () => {
+    const basePlan = planTo("home");
+    const executionPlan = {
+      ...basePlan,
+      steps: basePlan.steps.map((step) => ({
+        ...step,
+        failurePolicy: {
+          retryCount: 1,
+          recoverTo: "replan" as const
+        }
+      }))
+    };
+    const driver = new MockGraphDriver(["root", "settings", "profile"], { advanceOnStateTransitionObserve: true });
+
+    await new GraphRunner({
+      executionPlan,
+      driver,
+      idFactory: fixedIdFactory(),
+      now: fixedNow()
+    }).run();
+
+    expect(driver.detectRequests.map((request) => ({
+      phase: request.phase,
+      allowGlobalFallback: request.options?.allowGlobalFallback
+    }))).toEqual([
+      { phase: "precondition", allowGlobalFallback: false },
+      { phase: "state_transition", allowGlobalFallback: false },
+      { phase: "state_transition", allowGlobalFallback: false },
+      { phase: "state_transition", allowGlobalFallback: true }
+    ]);
+  });
+
   it("fails when a default system guard fails", async () => {
     const executionPlan = planTo("home");
     const driver = new MockGraphDriver(["root", "home"], {
@@ -834,6 +866,7 @@ function fixedNow(): () => string {
 class MockGraphDriver {
   readonly actions: ActionStep[] = [];
   readonly evaluatedExpectations: unknown[] = [];
+  readonly detectRequests: Array<{ phase?: string; options?: { allowGlobalFallback?: boolean } }> = [];
   private observeIndex = 0;
 
   constructor(
@@ -864,14 +897,19 @@ class MockGraphDriver {
       platform: "android",
       capturedAt: "2026-06-11T00:00:00.000Z",
       raw: {
-        nodeId
+        nodeId,
+        phase
       },
       uiElements: [],
       ocrTexts: []
     };
   }
 
-  async detectNode(observation: Observation): Promise<NodeMatchResult> {
+  async detectNode(observation: Observation, options?: { allowGlobalFallback?: boolean }): Promise<NodeMatchResult> {
+    this.detectRequests.push({
+      phase: String(observation.raw?.phase ?? ""),
+      options
+    });
     if (this.options.detectDelayMs) {
       await new Promise((resolve) => setTimeout(resolve, this.options.detectDelayMs));
     }

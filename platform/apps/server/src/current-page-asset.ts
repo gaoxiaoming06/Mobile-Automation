@@ -47,6 +47,23 @@ type ConfirmedPageAssetStorage = CurrentPageAssetStorage & {
 export type PageAssetBaselineWriter = (relativePath: string, bytes: Buffer) => Promise<ArtifactRef>;
 export type PageAssetBaselineReader = PageMatcherBaselineReader;
 
+export type CurrentPageCollectionOptionsInput = {
+  includeOcr?: boolean;
+  includeUiTree?: boolean;
+};
+
+export function readCurrentPageCollectionOptions(input: CurrentPageCollectionOptionsInput): {
+  includeOcr: boolean;
+  includeUiTree: boolean;
+  includeScreenshot: true;
+} {
+  return {
+    includeOcr: input.includeOcr ?? true,
+    includeUiTree: input.includeUiTree === true,
+    includeScreenshot: true
+  };
+}
+
 export type CurrentPageArtifactWriter = {
   writeLog(runId: string, name: string, content: string): Promise<ArtifactRef>;
 };
@@ -87,10 +104,11 @@ export async function identifyOrCreateCurrentPageDraft(input: {
   baselineReader?: PageAssetBaselineReader;
 }): Promise<CurrentPageAssetResult> {
   const pageMatch = input.assetOnly
-    ? await matchCurrentPage({
+      ? await matchCurrentPage({
         graphVersion: input.graphVersion,
         observation: input.observation,
-        baselineReader: input.baselineReader
+        baselineReader: input.baselineReader,
+        prefilterByForegroundTitle: true
       })
     : undefined;
   const graphVersion = input.assetOnly ? undefined : input.graphVersion;
@@ -257,7 +275,7 @@ function buildConfirmedPageAssetInputSync(input: {
   };
 }): Omit<BusinessNode, "id"> {
   const candidate = buildRuntimeUnknownNodeCandidate(input.graphVersionId, input.observation, input.match);
-  const metadata = enrichScreenshotRegionMetadata(input.draft.metadata, input.observation);
+  const metadata = enrichVisualSampleMetadata(enrichScreenshotRegionMetadata(input.draft.metadata, input.observation), input.observation);
   const explicitMatchers = confirmedMatchersFromMetadata(metadata, input.observation.platform);
   if (!explicitMatchers?.length) {
     throw new Error("Page asset requires confirmed matching evidence before it can be saved.");
@@ -282,6 +300,50 @@ function buildConfirmedPageAssetInputSync(input: {
 
 function readAssetKind(metadata: Record<string, unknown> | undefined): "page" | "overlay" {
   return metadata?.assetKind === "overlay" ? "overlay" : "page";
+}
+
+function enrichVisualSampleMetadata(metadata: Record<string, unknown> | undefined, observation: Observation): Record<string, unknown> {
+  const sample = visualSampleFromObservation(observation);
+  const existing = readVisualSamples(metadata?.visualSamples);
+  return {
+    ...(metadata ?? {}),
+    visualSamples: mergeVisualSamples(existing, sample)
+  };
+}
+
+function visualSampleFromObservation(observation: Observation): Record<string, unknown> {
+  return stripUndefinedRecord({
+    id: observation.id ? `sample-${observation.id}` : undefined,
+    platform: observation.platform,
+    appPackageName: observation.platform === "android" ? observation.packageName : undefined,
+    iosBundleId: observation.platform === "ios" ? observation.bundleId : undefined,
+    capturedAt: observation.capturedAt,
+    resolution: observation.resolution,
+    orientation: observation.orientation,
+    screenshotArtifactId: observation.screenshot?.artifactId,
+    ocrSummary: uniqueStrings(observation.ocrTexts.map((item) => item.text)).slice(0, 12),
+    source: "asset-recording"
+  });
+}
+
+function readVisualSamples(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item));
+}
+
+function mergeVisualSamples(existing: Record<string, unknown>[], sample: Record<string, unknown>): Record<string, unknown>[] {
+  const sampleKey = visualSampleKey(sample);
+  return [...existing.filter((item) => visualSampleKey(item) !== sampleKey), sample];
+}
+
+function visualSampleKey(sample: Record<string, unknown>): string {
+  return [sample.platform, sample.appPackageName, sample.iosBundleId, sample.capturedAt].map((item) => String(item ?? "")).join("|");
+}
+
+function stripUndefinedRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
 
 function mergeOverlayTags(tags: string[]): string[] {

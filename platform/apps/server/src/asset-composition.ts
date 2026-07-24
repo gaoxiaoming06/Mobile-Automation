@@ -65,7 +65,7 @@ export type AssetCompositionCatalog = {
     id: string;
     name: string;
     elements: Array<{ id: string; label: string }>;
-    transitions: Array<{ id: string; elementId?: string; targetPageModelId?: string; targetPageName?: string }>;
+    transitions: Array<{ id: string; elementId?: string; targetPageModelId?: string; targetPageName?: string; parameterKeys: string[] }>;
     tasks: Array<{ id: string; name: string; status?: string; parameterKeys: string[] }>;
   }>;
 };
@@ -76,18 +76,22 @@ export function assetCompositionCatalog(graphVersion: BusinessGraphVersion): Ass
     graphVersionId: graphVersion.id,
     pages: graphVersion.nodes
       .filter((node) => node.status === "active" && node.nodeType === "page" && node.metadata?.assetRecordingConfirmed === true)
-      .map((node) => ({
-        id: node.id,
-        name: node.name,
-        elements: pageElements(node).map((item) => ({ id: item.id, label: item.label ?? item.id })),
-        transitions: pageTransitions(graphVersion, node).map((item) => ({
-          id: item.id,
-          elementId: item.elementId,
-          targetPageModelId: item.targetNodeId,
-          targetPageName: item.targetNodeId ? nodeById.get(item.targetNodeId)?.name : undefined
-        })),
-        tasks: pageTasks(node).map((item) => ({ id: item.id, name: item.name ?? item.id, status: item.status, parameterKeys: item.parameterKeys }))
-      }))
+      .map((node) => {
+        const elements = pageElements(node, graphVersion);
+        return {
+          id: node.id,
+          name: node.name,
+          elements: elements.map((item) => ({ id: item.id, label: item.label ?? item.id })),
+          transitions: pageTransitions(graphVersion, node, elements).map((item) => ({
+            id: item.id,
+            elementId: item.elementId,
+            targetPageModelId: item.targetNodeId,
+            targetPageName: item.targetNodeId ? nodeById.get(item.targetNodeId)?.name : undefined,
+            parameterKeys: item.parameterKeys
+          })),
+          tasks: pageTasks(node).map((item) => ({ id: item.id, name: item.name ?? item.id, status: item.status, parameterKeys: item.parameterKeys }))
+        };
+      })
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"))
   };
 }
@@ -262,18 +266,32 @@ function resolveMetaFunctionStep(input: {
     if (metaStep.targetPageModelId && !targetNode) {
       input.issues.push(issueForStep("TARGET_PAGE_NOT_FOUND", `能力目标页面不存在：${metaStep.targetPageModelId}`, input, metaStep.targetPageModelId));
     }
-    const pageElement = sourceNode ? pageElements(sourceNode).find((item) => item.id === metaStep.pageElementId) : undefined;
+    const sourceElements = sourceNode ? pageElements(sourceNode, input.graphVersion) : [];
+    const pageElement = sourceElements.find((item) => item.id === metaStep.pageElementId);
     if (sourceNode && !pageElement) {
       input.issues.push(issueForStep("PAGE_ELEMENT_NOT_FOUND", `页面 ${sourceNode.name} 找不到能力 ${metaStep.pageElementId}`, input, metaStep.pageElementId));
     }
     const transition = sourceNode
-      ? pageTransitions(input.graphVersion, sourceNode).find((item) => item.elementId === metaStep.pageElementId && (!metaStep.targetPageModelId || item.targetNodeId === metaStep.targetPageModelId))
+      ? pageTransitions(input.graphVersion, sourceNode, sourceElements).find((item) => item.elementId === metaStep.pageElementId && (!metaStep.targetPageModelId || item.targetNodeId === metaStep.targetPageModelId))
       : undefined;
     if (sourceNode && pageElement && !transition) {
       input.issues.push(issueForStep("PAGE_TRANSITION_NOT_FOUND", `能力 ${metaStep.pageElementId} 没有可执行连接边。`, input, metaStep.pageElementId));
     }
     if (!sourceNode || !pageElement || !transition || !metaStep.targetPageModelId || !targetNode) {
       return undefined;
+    }
+    for (const parameterKey of transition.parameterKeys) {
+      input.requiredParameters.add(parameterKey);
+      if (!hasRuntimeParam(input.runtimeParams, parameterKey)) {
+        pushMissingRequiredParameterIssue(input.issues, {
+          ...issueForStep(
+            "MISSING_REQUIRED_PARAMETER",
+            `页面连接 ${sourceNode.name} -> ${targetNode.name} 缺少必需参数 ${parameterKey}。`,
+            input,
+            parameterKey
+          )
+        });
+      }
     }
     return {
       ...common,
@@ -335,9 +353,9 @@ function normalizeEnabledSteps<T extends { order: number; enabled: boolean }>(st
 }
 
 type PageElementSummary = { id: string; label?: string };
-type PageTransitionSummary = { id: string; elementId?: string; targetNodeId?: string };
+type PageTransitionSummary = { id: string; elementId?: string; targetNodeId?: string; parameterKeys: string[] };
 
-function pageElements(node: BusinessNode): PageElementSummary[] {
+function pageElements(node: BusinessNode, graphVersion?: BusinessGraphVersion): PageElementSummary[] {
   const values = [node.metadata?.assetRecordingPageElements, node.metadata?.assetRecordingManualElements];
   const byId = new Map<string, { id: string; label?: string }>();
   for (const value of values) {
@@ -353,15 +371,34 @@ function pageElements(node: BusinessNode): PageElementSummary[] {
       }
     }
   }
+  if (graphVersion) {
+    const baseElements = [...byId.values()];
+    for (const edge of graphVersion.edges.filter((item) =>
+      item.status === "active" &&
+      item.fromNodeId === node.id &&
+      graphVersion.nodes.some((target) => target.id === item.toNodeId && target.status === "active")
+    )) {
+      const elementId = operationEdgeElementId(edge, baseElements) ?? operationEdgeSyntheticElementId(edge);
+      if (elementId && !byId.has(elementId)) {
+        byId.set(elementId, {
+          id: elementId,
+          label: operationEdgeElementLabel(edge) ?? elementId
+        });
+      }
+    }
+  }
   return [...byId.values()];
 }
 
-function pageTransitions(graphVersion: BusinessGraphVersion, node: BusinessNode): PageTransitionSummary[] {
+function pageTransitions(graphVersion: BusinessGraphVersion, node: BusinessNode, elements: PageElementSummary[] = pageElements(node, graphVersion)): PageTransitionSummary[] {
   const legacyValue = node.metadata?.assetRecordingPageTransitions;
   const legacy = Array.isArray(legacyValue)
-    ? legacyValue.filter(isRecord).filter((item): item is { id: string; elementId?: string; targetNodeId?: string } => typeof item.id === "string")
+    ? legacyValue.filter(isRecord).flatMap((item) =>
+      typeof item.id === "string"
+        ? [{ id: item.id, elementId: stringRecordValue(item, "elementId"), targetNodeId: stringRecordValue(item, "targetNodeId"), parameterKeys: runtimeParameterKeysFromAsset(item) }]
+        : []
+    )
     : [];
-  const elements = pageElements(node);
   const manualValue = node.metadata?.assetRecordingManualElements;
   const manual = Array.isArray(manualValue)
     ? manualValue.filter(isRecord).flatMap((item) => {
@@ -377,17 +414,102 @@ function pageTransitions(graphVersion: BusinessGraphVersion, node: BusinessNode)
         candidate.fromNodeId === node.id &&
         candidate.toNodeId === item.targetNodeId
       );
-      return edge ? [{ id: edge.id, elementId: item.id, targetNodeId: item.targetNodeId }] : [];
+      return edge ? [{ id: edge.id, elementId: item.id, targetNodeId: item.targetNodeId, parameterKeys: runtimeParameterKeysFromAsset(item) }] : [];
     })
     : [];
   const graphEdges = graphVersion.edges.flatMap((edge) => {
     if (edge.status !== "active" || edge.fromNodeId !== node.id || !graphVersion.nodes.some((target) => target.id === edge.toNodeId && target.status === "active")) {
       return [];
     }
-    const elementId = operationEdgeElementId(edge, elements);
-    return elementId ? [{ id: edge.id, elementId, targetNodeId: edge.toNodeId }] : [];
+    const elementId = operationEdgeElementId(edge, elements) ?? operationEdgeSyntheticElementId(edge);
+    return elementId ? [{ id: edge.id, elementId, targetNodeId: edge.toNodeId, parameterKeys: operationEdgeParameterKeys(edge) }] : [];
   });
-  return [...new Map([...legacy, ...manual, ...graphEdges].map((item) => [item.id, item])).values()];
+  return mergePageTransitions([...legacy, ...manual, ...graphEdges]);
+}
+
+function operationEdgeSyntheticElementId(edge: OperationEdge): string | undefined {
+  return edge.actionPolicies.some((policy) => policy.action.enabled !== false)
+    ? `edge_action:${edge.id}`
+    : undefined;
+}
+
+function operationEdgeElementLabel(edge: OperationEdge): string | undefined {
+  const labels = edge.actionPolicies.flatMap((policy) => [
+    stringRecordValue(policy.action.params, "elementLabel"),
+    stringRecordValue(policy.action.params, "targetText"),
+    normalizeActionTitle(policy.action.title)
+  ]);
+  return labels.find((label): label is string => Boolean(label)) ?? edge.intent?.trim() ?? edge.name.trim();
+}
+
+function operationEdgeParameterKeys(edge: OperationEdge): string[] {
+  return runtimeParameterKeysFromAsset(edge.actionPolicies.map((policy) => policy.action.params));
+}
+
+function mergePageTransitions(values: PageTransitionSummary[]): PageTransitionSummary[] {
+  const byId = new Map<string, PageTransitionSummary>();
+  for (const value of values) {
+    const existing = byId.get(value.id);
+    byId.set(value.id, existing
+      ? {
+        ...existing,
+        elementId: existing.elementId ?? value.elementId,
+        targetNodeId: existing.targetNodeId ?? value.targetNodeId,
+        parameterKeys: uniqueStrings([...existing.parameterKeys, ...value.parameterKeys])
+      }
+      : {
+        ...value,
+        parameterKeys: uniqueStrings(value.parameterKeys)
+      });
+  }
+  return [...byId.values()];
+}
+
+function runtimeParameterKeysFromAsset(value: unknown): string[] {
+  const keys = new Set<string>();
+  collectRuntimeParameterKeys(value, keys);
+  return [...keys].sort();
+}
+
+function collectRuntimeParameterKeys(value: unknown, keys: Set<string>): void {
+  if (typeof value === "string") {
+    for (const match of value.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)) {
+      if (match[1]) {
+        keys.add(match[1].trim());
+      }
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectRuntimeParameterKeys(item, keys);
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  const parameterMapping = value.parameterMapping;
+  if (isRecord(parameterMapping)) {
+    for (const key of Object.keys(parameterMapping)) {
+      if (key.trim()) {
+        keys.add(key.trim());
+      }
+    }
+  }
+  const itemIdentity = value.itemIdentity;
+  const itemIdentityParam = stringRecordValue(itemIdentity, "param");
+  if (itemIdentityParam) {
+    keys.add(itemIdentityParam);
+  }
+  for (const item of Object.values(value)) {
+    collectRuntimeParameterKeys(item, keys);
+  }
+}
+
+function normalizeActionTitle(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/^点击[:：]\s*/u, "");
+  return normalized || undefined;
 }
 
 function operationEdgeElementId(edge: OperationEdge, elements: PageElementSummary[]): string | undefined {
@@ -485,6 +607,10 @@ function pageTaskParameterKeys(value: unknown): string[] {
     .flatMap((step) => [step.valueParamKey, step.desiredStateParamKey])
     .filter((key): key is string => typeof key === "string" && key.trim().length > 0)
     .map((key) => key.trim()))].sort();
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort();
 }
 
 function pushMissingRequiredParameterIssue(issues: AssetCompositionIssue[], issue: AssetCompositionIssue): void {

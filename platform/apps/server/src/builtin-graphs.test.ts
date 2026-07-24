@@ -37,9 +37,18 @@ describe("builtin business graphs", () => {
       expect.objectContaining({
         appId: classInAndroidGraphAppId,
         name: classInAndroidGraphName,
-        targetApp: {
-          androidPackageName: "cn.eeo.classin"
-        }
+        targetApp: expect.objectContaining({
+          androidPackageName: "cn.eeo.classin",
+          productId: "classin",
+          productName: "ClassIn",
+          profiles: expect.arrayContaining([
+            expect.objectContaining({
+              platform: "android",
+              androidPackageName: "cn.eeo.classin",
+              isPrimary: true
+            })
+          ])
+        })
       })
     );
     expect(storage.createBusinessNode).toHaveBeenCalledTimes(12);

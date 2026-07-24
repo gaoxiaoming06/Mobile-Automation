@@ -1,4 +1,4 @@
-import { Play, RefreshCw, Search, Send } from "lucide-react";
+import { Database, Play, RefreshCw, Search, Send } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AndroidAppMonitorConfig, ParameterProfile, Platform, RunMode } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api";
@@ -16,6 +16,8 @@ type FreeCompositionCandidate = {
   matchedTerms: string[];
   systemAction?: "launch_app";
   composedCandidateIds?: string[];
+  composedCandidates?: FreeCompositionCandidate[];
+  requiresExecution?: boolean;
 };
 
 type FreeCompositionIntent = {
@@ -47,8 +49,8 @@ type CompositeExecution = {
   totalItems: number;
   completedItems: number;
   failedItems: number;
-  currentItem?: { metaFunctionName: string; kind: string };
-  items: Array<{ id: string; metaFunctionName: string; kind: string; status: string; error?: string }>;
+  currentItem?: { metaFunctionName: string; metaFunctionStepName?: string; kind: string };
+  items: Array<{ id: string; metaFunctionName: string; metaFunctionStepName?: string; kind: string; status: string; error?: string }>;
 };
 
 type FreeCompositionSession = {
@@ -83,6 +85,16 @@ type FreeCompositionPanelProps = {
   androidAppMonitorEnabled?: boolean;
   onAndroidAppMonitorEnabledChange?: (enabled: boolean) => void;
   androidAppMonitorForPackage?: (packageName: string) => AndroidAppMonitorConfig | undefined;
+  onBack?: () => void | Promise<void>;
+  onLaunchApp?: (packageName: string) => void | Promise<void>;
+  onOpenAssetRecording?: () => void;
+};
+
+export type FreeCompositionAnalyzeRequestBody = {
+  appId: string;
+  platform: "android";
+  prompt: string;
+  deviceSerial?: string;
 };
 
 export function FreeCompositionPanel({
@@ -94,7 +106,10 @@ export function FreeCompositionPanel({
   androidAppMonitor,
   androidAppMonitorEnabled,
   onAndroidAppMonitorEnabledChange,
-  androidAppMonitorForPackage
+  androidAppMonitorForPackage,
+  onBack,
+  onLaunchApp,
+  onOpenAssetRecording
 }: FreeCompositionPanelProps) {
   const initialSession = initialData?.sessions[0];
   const initialCandidate = initialSession?.resolution.candidates[0];
@@ -118,13 +133,16 @@ export function FreeCompositionPanel({
   const activeCandidateId = selectedCandidateId || selectedSession?.selectedCandidateId || selectedSession?.resolution.candidates[0]?.id || "";
   const activeCandidate = selectedSession?.resolution.candidates.find((candidate) => candidate.id === activeCandidateId) ?? selectedSession?.resolution.candidates[0];
   const activeProfileId = selectedProfileId || selectedSession?.parameterProfileId || activeCandidate?.parameterProfileId || "";
+  const targetSatisfied = selectedSession ? freeCompositionTargetSatisfied(selectedSession, activeCandidate) : false;
   const hasRisk = Boolean(selectedSession?.resolution.intent.riskTerms.length);
   const conversationMissingKeys = selectedSession ? missingParameterKeysForSession(selectedSession, activeCandidate) : [];
   const replyingToMissingParameters = conversationMissingKeys.length > 0 && selectedSession?.resolution.status !== "missing_assets";
   const conversationMessages = selectedSession ? conversationMessagesForSession(selectedSession, activeCandidate, profiles) : [];
-  const flowSelectLabel = activeCandidate?.kind === "generated_flow" ? "执行流程" : "候选流程";
+  const flowSelectLabel = targetSatisfied ? "当前状态" : activeCandidate?.kind === "generated_flow" ? "执行流程" : "候选流程";
   const activeAndroidAppMonitor = androidAppMonitorForPackage?.(appId) ?? androidAppMonitor;
   const activeAndroidAppMonitorEnabled = androidAppMonitorEnabled ?? Boolean(activeAndroidAppMonitor);
+  const currentPageBlocker = selectedSession ? currentPageRecognitionBlocker(selectedSession) : undefined;
+  const activeAppId = (selectedSession?.appId || appId).trim();
 
   useEffect(() => {
     if (!selectedSession?.executionId || selectedSession.status !== "running") {
@@ -171,13 +189,13 @@ export function FreeCompositionPanel({
       const response = await apiFetchJson<{ session: FreeCompositionSession }>("/api/free-composition/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appId: appId.trim(), platform: "android", prompt: prompt.trim() })
+        body: JSON.stringify(freeCompositionAnalyzeRequestBody({ appId, prompt, selectedSerial }))
       });
       updateSession(response.session);
       applySelectedSession(response.session);
       setRiskConfirmed(false);
       setPrompt("");
-      setMessage(response.session.resolution.message);
+      setMessage(freeCompositionSessionDisplayMessage(response.session));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -188,6 +206,10 @@ export function FreeCompositionPanel({
   async function generatePlan() {
     if (!selectedSession || !activeCandidateId) {
       setMessage("请先分析需求并选择候选流程");
+      return;
+    }
+    if (targetSatisfied) {
+      setMessage("当前目标已满足，无需生成计划。");
       return;
     }
     setBusy(true);
@@ -266,6 +288,10 @@ export function FreeCompositionPanel({
       setMessage(!selectedSerial ? "请先选择执行设备" : "请先生成AI资产用例计划");
       return;
     }
+    if (targetSatisfied) {
+      setMessage("当前目标已满足，无需执行。");
+      return;
+    }
     setBusy(true);
     try {
       const response = await apiFetchJson<{ session: FreeCompositionSession; execution: CompositeExecution; plan: CompositePlan }>(`/api/free-composition/sessions/${encodeURIComponent(selectedSession.id)}/execute`, {
@@ -341,31 +367,48 @@ export function FreeCompositionPanel({
         <div className="composition-editor-form free-composition-plan free-composition-execution-panel">
           {selectedSession ? <>
             <section className={`composition-plan free-composition-status-summary ${selectedSession.resolution.status === "missing_assets" ? "blocked" : "ready"}`}>
-              <strong>{selectedSession.resolution.message}</strong>
-              <span>{runModeLabel(selectedSession.resolution.intent.runMode, selectedSession.resolution.intent.repeatCount)}</span>
-              {selectedSession.resolution.intent.riskTerms.length ? <span>风险操作：{selectedSession.resolution.intent.riskTerms.join("、")}</span> : null}
+              <strong>{currentPageBlocker?.message ?? selectedSession.resolution.message}</strong>
+              {!currentPageBlocker ? <span>{runModeLabel(selectedSession.resolution.intent.runMode, selectedSession.resolution.intent.repeatCount)}</span> : null}
+              {!currentPageBlocker && selectedSession.resolution.intent.riskTerms.length ? <span>风险操作：{selectedSession.resolution.intent.riskTerms.join("、")}</span> : null}
             </section>
 
-            <div className="free-composition-controls">
-              <label>{flowSelectLabel}<select value={activeCandidateId} onChange={(event) => selectCandidate(event.target.value)}>
-                {selectedSession.resolution.candidates.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidateKindLabel(candidate.kind)} · {candidate.name}</option>)}
-              </select></label>
-              {hasRisk ? <label className="checkbox-field"><input type="checkbox" checked={riskConfirmed} onChange={(event) => setRiskConfirmed(event.target.checked)} />确认执行发布/提交等风险操作</label> : null}
-            </div>
-            <AppMonitorExecutionToggle
-              enabled={activeAndroidAppMonitorEnabled}
-              packageName={appId}
-              onChange={onAndroidAppMonitorEnabledChange}
-            />
+            {currentPageBlocker ? (
+              <div className="composition-run-actions free-composition-action-bar free-composition-blocker-actions">
+                {currentPageBlocker.kind === "outside_app" ? (
+                  <button className="primary-button" type="button" disabled={!selectedSerial || selectedDeviceBusy || busy || !activeAppId || !onLaunchApp} onClick={() => void onLaunchApp?.(activeAppId)}>启动app</button>
+                ) : null}
+                <button className="secondary-button" type="button" disabled={!selectedSerial || selectedDeviceBusy || busy || !onBack} onClick={() => void onBack?.()}>返回上一页</button>
+                <button className={currentPageBlocker.kind === "outside_app" ? "secondary-button" : "primary-button"} type="button" disabled={busy || !onOpenAssetRecording} onClick={onOpenAssetRecording}><Database size={15} />去录制新资产</button>
+              </div>
+            ) : targetSatisfied ? (
+              <div className="free-composition-controls">
+                <div className="composition-plan ready">
+                  <strong>目标已满足</strong>
+                  <span>{activeCandidate?.name ?? selectedSession.resolution.message}</span>
+                </div>
+              </div>
+            ) : <>
+              <div className="free-composition-controls">
+                <label>{flowSelectLabel}<select value={activeCandidateId} onChange={(event) => selectCandidate(event.target.value)}>
+                  {selectedSession.resolution.candidates.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidateKindLabel(candidate.kind)} · {candidate.name}</option>)}
+                </select></label>
+                {hasRisk ? <label className="checkbox-field"><input type="checkbox" checked={riskConfirmed} onChange={(event) => setRiskConfirmed(event.target.checked)} />确认执行发布/提交等风险操作</label> : null}
+              </div>
+              <AppMonitorExecutionToggle
+                enabled={activeAndroidAppMonitorEnabled}
+                packageName={appId}
+                onChange={onAndroidAppMonitorEnabledChange}
+              />
 
-            <div className="composition-run-actions free-composition-action-bar">
-              <button className="secondary-button" type="button" disabled={!activeCandidateId || busy} onClick={() => void generatePlan()}>生成计划</button>
-              <button className="primary-button" type="button" disabled={!selectedSession.plan || selectedSession.plan.status !== "ready" || !selectedSerial || selectedDeviceBusy || busy || selectedSession.status === "running"} onClick={() => void executePlan()}><Play size={15} />开始执行</button>
-            </div>
+              <div className="composition-run-actions free-composition-action-bar">
+                <button className="secondary-button" type="button" disabled={!activeCandidateId || busy} onClick={() => void generatePlan()}>生成计划</button>
+                <button className="primary-button" type="button" disabled={!selectedSession.plan || selectedSession.plan.status !== "ready" || !selectedSerial || selectedDeviceBusy || busy || selectedSession.status === "running"} onClick={() => void executePlan()}><Play size={15} />开始执行</button>
+              </div>
+            </>}
 
             <div className="free-composition-result-stack">
               {selectedSession.plan ? <PlanView plan={selectedSession.plan} /> : null}
-              {selectedSession.execution ? <ExecutionView execution={selectedSession.execution} /> : null}
+              {!targetSatisfied && selectedSession.execution ? <ExecutionView execution={selectedSession.execution} /> : null}
             </div>
           </> : <div className="empty">输入自然语言测试目标后开始。</div>}
         </div>
@@ -410,8 +453,15 @@ function AppMonitorExecutionToggle({
 function PlanView({ plan }: { plan: CompositePlan }) {
   const runtimeParamSummary = runtimeParamsSummary(plan.runtimeParams);
   const missingPrompt = missingParameterPrompt(plan);
+  const title = plan.status === "ready" && plan.steps.length === 0
+    ? "目标已满足 · 无需资产步骤"
+    : plan.status === "ready"
+      ? `预检通过 · ${plan.steps.length} 个资产步骤`
+      : plan.status === "needs_parameters"
+        ? "需要补充参数"
+        : "预检未通过";
   return <div className={`composition-plan ${plan.status}`}>
-    <strong>{plan.status === "ready" ? `预检通过 · ${plan.steps.length} 个资产步骤` : plan.status === "needs_parameters" ? "需要补充参数" : "预检未通过"}</strong>
+    <strong>{title}</strong>
     {missingPrompt ? <span>{missingPrompt}</span> : null}
     {plan.requiredParameters.length ? <span>需要参数：{plan.requiredParameters.join("、")}</span> : null}
     {runtimeParamSummary ? <span>本次参数：{runtimeParamSummary}</span> : null}
@@ -420,7 +470,69 @@ function PlanView({ plan }: { plan: CompositePlan }) {
 }
 
 function ExecutionView({ execution }: { execution: CompositeExecution }) {
-  return <div className="composition-execution"><div className="panel-head"><strong>{execution.status} · {execution.completedItems}/{execution.totalItems}</strong><a href={`/api/asset-composition/executions/${encodeURIComponent(execution.id)}/report`} target="_blank" rel="noreferrer">打开报告</a></div>{execution.currentItem ? <p>当前：{execution.currentItem.metaFunctionName} · {execution.currentItem.kind}</p> : null}<div className="composition-execution-list">{execution.items.map((item) => <div key={item.id} className={item.status}><strong>{item.metaFunctionName}</strong><span>{item.kind} · {item.status}{item.error ? ` · ${item.error}` : ""}</span></div>)}</div></div>;
+  return <div className="composition-execution">
+    <div className="panel-head"><strong>{executionStatusLabel(execution.status)} · {execution.completedItems}/{execution.totalItems}</strong><a href={`/api/asset-composition/executions/${encodeURIComponent(execution.id)}/report`} target="_blank" rel="noreferrer">打开报告</a></div>
+    {execution.currentItem ? <p>当前：{executionItemTitle(execution.currentItem)} · {executionKindLabel(execution.currentItem.kind)}</p> : null}
+    <div className="composition-execution-list">{execution.items.map((item) => <div key={item.id} className={item.status}>
+      <strong>{executionItemTitle(item)}</strong>
+      <span>{item.metaFunctionName} · {executionKindLabel(item.kind)} · {executionStatusLabel(item.status)}{item.error ? ` · ${item.error}` : ""}</span>
+    </div>)}</div>
+  </div>;
+}
+
+function executionItemTitle(item: { metaFunctionName: string; metaFunctionStepName?: string; kind: string }): string {
+  const explicitName = item.metaFunctionStepName?.trim();
+  if (explicitName) {
+    return explicitName;
+  }
+  return inferredExecutionItemTitle(item) ?? item.metaFunctionName;
+}
+
+function executionKindLabel(kind: string): string {
+  const labels: Record<string, string> = {
+    reach_page: "确认页面",
+    invoke_capability: "执行页面能力",
+    run_page_task: "执行页面任务",
+    verify_page: "验证页面",
+    system_action: "系统动作"
+  };
+  return labels[kind] ?? kind;
+}
+
+function executionStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    pending: "待执行",
+    running: "执行中",
+    passed: "已通过",
+    failed: "失败",
+    skipped: "已跳过",
+    stopped: "已停止"
+  };
+  return labels[status] ?? status;
+}
+
+function inferredExecutionItemTitle(item: { metaFunctionName: string; kind: string }): string | undefined {
+  const transition = item.metaFunctionName.match(/^(.+?)\s*\/\s*(.+?)\s*→\s*(.+)$/u);
+  if (transition) {
+    const [, sourcePage, action, targetPage] = transition;
+    if (item.kind === "reach_page") {
+      return `确认当前在${sourcePage}`;
+    }
+    if (item.kind === "invoke_capability") {
+      return `点击「${action}」并进入${targetPage}`;
+    }
+  }
+  const pageTask = item.metaFunctionName.match(/^(.+?)\s*\/\s*(.+)$/u);
+  if (pageTask) {
+    const [, pageName, taskName] = pageTask;
+    if (item.kind === "reach_page") {
+      return `确认当前在${pageName}`;
+    }
+    if (item.kind === "run_page_task") {
+      return `执行「${taskName}」`;
+    }
+  }
+  return undefined;
 }
 
 function runModeLabel(runMode: RunMode, repeatCount: number): string {
@@ -506,6 +618,13 @@ function redactedRuntimeValue(key: string, value: string): string {
   return key.toLowerCase().includes("password") || key.includes("密码") ? "***" : value;
 }
 
+function freeCompositionTargetSatisfied(
+  session: FreeCompositionSession,
+  candidate: FreeCompositionCandidate | undefined
+): boolean {
+  return candidate?.requiresExecution === false || Boolean(session.plan?.status === "ready" && session.plan.steps.length === 0);
+}
+
 function conversationMessagesForSession(
   session: FreeCompositionSession,
   candidate: FreeCompositionCandidate | undefined,
@@ -515,6 +634,10 @@ function conversationMessagesForSession(
     { role: "user", text: session.prompt }
   ];
   if (session.resolution.status === "missing_assets") {
+    messages.push({ role: "assistant", text: currentPageRecognitionBlockerMessage(session) ?? session.resolution.message });
+    return messages;
+  }
+  if (freeCompositionTargetSatisfied(session, candidate)) {
     messages.push({ role: "assistant", text: session.resolution.message });
     return messages;
   }
@@ -557,6 +680,43 @@ function knownRuntimeParamsForSession(session: FreeCompositionSession): Record<s
   };
 }
 
+type FreeCompositionResolutionMessage = {
+  resolution: Pick<FreeCompositionResolution, "status" | "message">;
+};
+
+export function freeCompositionSessionDisplayMessage(session: FreeCompositionResolutionMessage): string {
+  return currentPageRecognitionBlockerMessage(session) ?? session.resolution.message;
+}
+
+type CurrentPageRecognitionBlocker = {
+  kind: "unknown_page" | "outside_app";
+  message: string;
+};
+
+function currentPageRecognitionBlocker(session: FreeCompositionResolutionMessage): CurrentPageRecognitionBlocker | undefined {
+  const message = currentPageRecognitionBlockerMessage(session);
+  if (!message) {
+    return undefined;
+  }
+  return {
+    kind: session.resolution.message.includes("不在目标 App 内") ? "outside_app" : "unknown_page",
+    message
+  };
+}
+
+function currentPageRecognitionBlockerMessage(session: FreeCompositionResolutionMessage): string | undefined {
+  if (session.resolution.status !== "missing_assets" || !session.resolution.message.includes("无法从当前页规划到目标页")) {
+    return undefined;
+  }
+  return firstSentence(session.resolution.message);
+}
+
+function firstSentence(message: string): string {
+  const trimmed = message.trim();
+  const sentenceEnd = trimmed.indexOf("。");
+  return sentenceEnd >= 0 ? trimmed.slice(0, sentenceEnd + 1) : trimmed;
+}
+
 function followUpQuestion(keys: string[]): string {
   return keys.length === 1
     ? `还需要 ${keys[0]}。直接回复 ${keys[0]} 的值。`
@@ -586,6 +746,20 @@ export function freeCompositionReplyProfileId(reply: string, profiles: Parameter
     return undefined;
   }
   return profiles.find((profile) => requested.includes(profile.name) || profile.name.includes(requested))?.id;
+}
+
+export function freeCompositionAnalyzeRequestBody(input: {
+  appId: string;
+  prompt: string;
+  selectedSerial?: string;
+}): FreeCompositionAnalyzeRequestBody {
+  const deviceSerial = input.selectedSerial?.trim();
+  return {
+    appId: input.appId.trim(),
+    platform: "android",
+    prompt: input.prompt.trim(),
+    ...(deviceSerial ? { deviceSerial } : {})
+  };
 }
 
 function explicitRuntimeOverridesFromReply(reply: string, missingKeys: string[]): Record<string, string> {

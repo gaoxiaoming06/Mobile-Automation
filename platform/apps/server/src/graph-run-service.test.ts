@@ -241,6 +241,157 @@ describe("GraphRunService", () => {
     expect(getArtifactSpy).not.toHaveBeenCalled();
   });
 
+  it("skips full page matching when the runner asks for expected-node detection only", async () => {
+    context = await createContext();
+    const { storage, tempRoot } = context;
+    const driver = new GraphMockDriver(tempRoot);
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new FakeOcrService("加载中"));
+    const unrelatedBaseline = pgm(2, 2, [0, 0, 0, 0]);
+    const relativePath = path.join("baselines", "unrelated.pgm");
+    const absolutePath = path.join(tempRoot, "artifacts", relativePath);
+    await mkdir(path.dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, unrelatedBaseline);
+    storage.addArtifact({
+      id: "artifact-unrelated",
+      type: "screenshot",
+      name: "unrelated.pgm",
+      path: relativePath,
+      url: `/artifacts/${relativePath}`,
+      mimeType: "image/x-portable-graymap",
+      sizeBytes: unrelatedBaseline.byteLength,
+      createdAt: "2026-06-11T00:00:00.000Z"
+    });
+    const target = {
+      ...node("version-1", "target", "目标页", [{ ...matcher("ocr_text", "目标页", 3), critical: true }], [], ["page-asset", "asset-recording"]),
+      id: "node-target"
+    } as BusinessNode;
+    target.metadata = { assetRecordingConfirmed: true };
+    const unrelated = {
+      ...node(
+        "version-1",
+        "unrelated",
+        "无关页",
+        [
+          {
+            ...matcher("image_region", "screenshot-region:unrelated:%E6%97%A0%E5%85%B3", 9),
+            critical: true,
+            threshold: 0.9,
+            region: { x: 0, y: 0, width: 100, height: 100 },
+            source: { sourceType: "manual_edit", artifactId: "artifact-unrelated" }
+          }
+        ],
+        [],
+        ["page-asset", "asset-recording"]
+      ),
+      id: "node-unrelated"
+    } as BusinessNode;
+    unrelated.metadata = { assetRecordingConfirmed: true };
+    const getArtifactSpy = vi.spyOn(storage, "getArtifact");
+
+    const match = await (service as any).matchBusinessNode(
+      {
+        id: "observation-loading",
+        platform: "android",
+        capturedAt: "2026-06-11T00:00:00.000Z",
+        packageName: "com.demo",
+        activityName: "com.demo.LoadingActivity",
+        componentName: "com.demo/com.demo.LoadingActivity",
+        resolution: { width: 2, height: 2 },
+        uiElements: [{ text: "加载中", visible: true, enabled: true }],
+        ocrTexts: [{ text: "加载中", source: "ocr" }],
+        raw: { screenshotBase64: Buffer.from("not-target").toString("base64") }
+      },
+      {
+        id: "version-1",
+        graphId: "graph-1",
+        version: 1,
+        sourceSummary: [],
+        status: "active",
+        nodes: [target, unrelated],
+        edges: [],
+        createdAt: "2026-06-11T00:00:00.000Z"
+      },
+      "android",
+      target.id,
+      { allowGlobalFallback: false }
+    );
+
+    expect(match.status).toBe("unknown");
+    expect(getArtifactSpy).not.toHaveBeenCalled();
+  });
+
+  it("caches page asset baseline artifacts across repeated node matches", async () => {
+    context = await createContext();
+    const { storage, tempRoot } = context;
+    const driver = new GraphMockDriver(tempRoot);
+    const { GraphRunService } = await import("./graph-run-service.js");
+    const service = new GraphRunService(storage, driver, new FakeOcrService("目标页"));
+    const baseline = pgm(2, 2, [0, 0, 0, 0]);
+    const relativePath = path.join("baselines", "target.pgm");
+    const absolutePath = path.join(tempRoot, "artifacts", relativePath);
+    await mkdir(path.dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, baseline);
+    storage.addArtifact({
+      id: "artifact-target",
+      type: "screenshot",
+      name: "target.pgm",
+      path: relativePath,
+      url: `/artifacts/${relativePath}`,
+      mimeType: "image/x-portable-graymap",
+      sizeBytes: baseline.byteLength,
+      createdAt: "2026-06-11T00:00:00.000Z"
+    });
+    const target = {
+      ...node(
+        "version-1",
+        "target",
+        "目标页",
+        [
+          {
+            ...matcher("image_region", "screenshot-region:target:%E7%9B%AE%E6%A0%87%E9%A1%B5", 9),
+            critical: true,
+            threshold: 0.9,
+            region: { x: 0, y: 0, width: 100, height: 100 },
+            source: { sourceType: "manual_edit", artifactId: "artifact-target" }
+          }
+        ],
+        [],
+        ["page-asset", "asset-recording"]
+      ),
+      id: "node-target"
+    } as BusinessNode;
+    target.metadata = { assetRecordingConfirmed: true };
+    const graphVersion = {
+      id: "version-1",
+      graphId: "graph-1",
+      version: 1,
+      sourceSummary: [],
+      status: "active",
+      nodes: [target],
+      edges: [],
+      createdAt: "2026-06-11T00:00:00.000Z"
+    };
+    const observation = {
+      id: "observation-target",
+      platform: "android",
+      capturedAt: "2026-06-11T00:00:00.000Z",
+      packageName: "com.demo",
+      activityName: "com.demo.TargetActivity",
+      componentName: "com.demo/com.demo.TargetActivity",
+      resolution: { width: 2, height: 2 },
+      uiElements: [],
+      ocrTexts: [],
+      raw: { screenshotBase64: baseline.toString("base64") }
+    };
+    const getArtifactSpy = vi.spyOn(storage, "getArtifact");
+
+    await (service as any).matchBusinessNode(observation, graphVersion, "android", target.id, { allowGlobalFallback: false });
+    await (service as any).matchBusinessNode({ ...observation, id: "observation-target-2" }, graphVersion, "android", target.id, { allowGlobalFallback: false });
+
+    expect(getArtifactSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("executes a target-node route on a real driver adapter and writes legacy run evidence", async () => {
     context = await createContext();
     const { storage } = context;

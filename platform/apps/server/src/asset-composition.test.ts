@@ -12,7 +12,7 @@ describe("compileAssetCompositeCase", () => {
         id: "page-home",
         name: "主页",
         elements: [expect.objectContaining({ id: "class-grid", label: "班级列表" })],
-        transitions: [expect.objectContaining({ id: "transition-home-detail", elementId: "class-grid", targetPageModelId: "page-detail" })]
+        transitions: [expect.objectContaining({ id: "transition-home-detail", elementId: "class-grid", targetPageModelId: "page-detail", parameterKeys: ["className"] })]
       }),
       expect.objectContaining({
         id: "page-create",
@@ -169,6 +169,85 @@ describe("compileAssetCompositeCase", () => {
     }));
   });
 
+  it("catalogs active operation edges whose action policy is the only executable locator", () => {
+    const version = graphVersion();
+    version.nodes = [
+      pageNode("page-todo", "待办", {}),
+      pageNode("page-home", "主页", {})
+    ];
+    version.edges = [
+      {
+        id: "edge-tab-todo-home",
+        graphVersionId: version.id,
+        fromNodeId: "page-todo",
+        toNodeId: "page-home",
+        key: "todo.home",
+        name: "待办 -> 主页",
+        intent: "底部 Tab 切回主页",
+        status: "active",
+        source: "manual_edit",
+        preconditions: [],
+        actionPolicies: [
+          {
+            id: "policy-tab-home",
+            priority: 1,
+            fallback: false,
+            reliabilityHint: "high",
+            action: {
+              id: "tap-home-tab",
+              order: 1,
+              type: "tap_on_image",
+              enabled: true,
+              title: "点击：切回主页",
+              params: {
+                elementLabel: "切回主页",
+                targetText: "主页",
+                locator: "image-region:0,90.34,16.67,9.66"
+              },
+              createdAt: nowIso()
+            }
+          }
+        ],
+        expectations: [],
+        platformScope: "android"
+      }
+    ];
+    const meta: MetaFunction = {
+      id: "meta-todo-home",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      name: "待办回主页",
+      parameters: [],
+      steps: [
+        { id: "back-home", order: 1, kind: "invoke_capability", sourcePageModelId: "page-todo", pageElementId: "edge_action:edge-tab-todo-home", targetPageModelId: "page-home", enabled: true }
+      ],
+      status: "active",
+      version: 1,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+
+    expect(assetCompositionCatalog(version).pages.find((page) => page.id === "page-todo")).toEqual(
+      expect.objectContaining({
+        elements: [expect.objectContaining({ id: "edge_action:edge-tab-todo-home", label: "切回主页" })],
+        transitions: [expect.objectContaining({ id: "edge-tab-todo-home", elementId: "edge_action:edge-tab-todo-home", targetPageModelId: "page-home" })]
+      })
+    );
+
+    const result = compileAssetCompositeCase({
+      compositeCase: compositeCase([meta.id]),
+      metaFunctions: [meta],
+      graphVersion: version
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.steps[0]).toEqual(expect.objectContaining({
+      pageElementId: "edge_action:edge-tab-todo-home",
+      pageTransitionId: "edge-tab-todo-home",
+      targetPageModelId: "page-home"
+    }));
+  });
+
   it("compiles meta functions into current active asset references and runtime parameters", () => {
     const result = compileAssetCompositeCase({
       compositeCase: compositeCase(["meta-enter", "meta-create"]),
@@ -191,6 +270,37 @@ describe("compileAssetCompositeCase", () => {
       ["创建课堂但不发布", "verify_page", "page-create", undefined]
     ]);
     expect(result.steps[1]).toEqual(expect.objectContaining({ pageElementId: "class-grid", pageTransitionId: "transition-home-detail" }));
+  });
+
+  it("blocks a parameterized page transition when its runtime target is missing", () => {
+    const result = compileAssetCompositeCase({
+      compositeCase: compositeCase(["meta-open-class-without-param"]),
+      metaFunctions: [
+        {
+          id: "meta-open-class-without-param",
+          appId: "cn.eeo.classin",
+          platform: "android",
+          name: "打开班级详情",
+          parameters: [],
+          steps: [
+            { id: "open-class", order: 1, kind: "invoke_capability", sourcePageModelId: "page-home", pageElementId: "class-grid", targetPageModelId: "page-detail", enabled: true }
+          ],
+          status: "active",
+          version: 1,
+          createdAt: nowIso(),
+          updatedAt: nowIso()
+        }
+      ],
+      graphVersion: graphVersion()
+    });
+
+    expect(result.status).toBe("needs_parameters");
+    expect(result.requiredParameters).toContain("className");
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "MISSING_REQUIRED_PARAMETER",
+      assetId: "className",
+      message: "页面连接 主页 -> 班级详情 缺少必需参数 className。"
+    }));
   });
 
   it("compiles launch-app system steps without requiring page assets", () => {
@@ -309,7 +419,7 @@ function graphVersion(): BusinessGraphVersion {
     nodes: [
       pageNode("page-home", "主页", {
         assetRecordingPageElements: [{ id: "class-grid", label: "班级列表" }],
-        assetRecordingPageTransitions: [{ id: "transition-home-detail", elementId: "class-grid", targetNodeId: "page-detail", outcomeType: "navigate" }]
+        assetRecordingPageTransitions: [{ id: "transition-home-detail", elementId: "class-grid", targetNodeId: "page-detail", outcomeType: "navigate", params: { itemText: "{{className}}" } }]
       }),
       pageNode("page-detail", "班级详情", {
         assetRecordingPageTransitions: [{ id: "transition-detail-create", elementId: "create-lesson", targetNodeId: "page-create", outcomeType: "navigate" }]

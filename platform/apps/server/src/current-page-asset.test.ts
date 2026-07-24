@@ -5,7 +5,25 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ArtifactRef } from "@mobile-automation/shared";
 import type { BusinessGraphVersion, BusinessNode, Observation } from "@mobile-automation/graph-core";
-import { buildConfirmedPageAssetInput, createConfirmedPageAssetFromCandidate, identifyOrCreateCurrentPageDraft } from "./current-page-asset.js";
+import { buildConfirmedPageAssetInput, createConfirmedPageAssetFromCandidate, identifyOrCreateCurrentPageDraft, readCurrentPageCollectionOptions } from "./current-page-asset.js";
+
+describe("readCurrentPageCollectionOptions", () => {
+  it("collects current page assets through the fast visual path by default", () => {
+    expect(readCurrentPageCollectionOptions({})).toEqual({
+      includeOcr: true,
+      includeUiTree: false,
+      includeScreenshot: true
+    });
+  });
+
+  it("keeps UI tree as an explicit low-priority fallback", () => {
+    expect(readCurrentPageCollectionOptions({ includeUiTree: true, includeOcr: false })).toEqual({
+      includeOcr: false,
+      includeUiTree: true,
+      includeScreenshot: true
+    });
+  });
+});
 
 describe("identifyOrCreateCurrentPageDraft", () => {
   it("returns matched when the current page matches an active graph node", async () => {
@@ -248,6 +266,133 @@ describe("identifyOrCreateCurrentPageDraft", () => {
     );
   });
 
+  it("falls back to visual identity when the foreground title has no page asset candidate", async () => {
+    const baseline = Buffer.from("same-current-page");
+    const renamedPage = node({
+      id: "node-renamed-page",
+      key: "classin.renamed.page",
+      name: "人工维护后的页面名",
+      tags: ["page-asset", "asset-recording"],
+      status: "active",
+      matchers: [{ id: "matcher-package", type: "package", value: "cn.eeo.classin", weight: 1 }],
+      metadata: {
+        assetRecordingConfirmed: true,
+        screenshotRegions: [
+          {
+            id: "region-stable-identity",
+            label: "稳定身份区域",
+            x: 10,
+            y: 5,
+            width: 25,
+            height: 8,
+            signature: "screenshot-region:region-stable-identity:%E7%A8%B3%E5%AE%9A%E5%8C%BA%E5%9F%9F",
+            baselineArtifactId: "artifact-stable-identity"
+          }
+        ]
+      }
+    });
+    let baselineReadCount = 0;
+
+    const result = await identifyOrCreateCurrentPageDraft({
+      graphVersion: graph([renamedPage]),
+      observation: observation({
+        resourceId: "cn.eeo.classin:id/activity_list",
+        text: "全部课堂活动",
+        packageName: "cn.eeo.classin",
+        resolution: { width: 1080, height: 2340 },
+        screenshotBase64: baseline.toString("base64")
+      }),
+      storage: new MemoryCurrentPageStorage([renamedPage]),
+      assetOnly: true,
+      baselineReader: async (artifactId) => {
+        baselineReadCount += 1;
+        return artifactId === "artifact-stable-identity" ? baseline : undefined;
+      }
+    });
+
+    expect(result.status).toBe("matched");
+    expect(result.match.node?.id).toBe(renamedPage.id);
+    expect(result.observation.imageRegions?.length).toBeGreaterThan(0);
+    expect(baselineReadCount).toBeGreaterThan(0);
+  });
+
+  it("does not pull bottom navigation text into the foreground title fast path", async () => {
+    const messageBaseline = Buffer.from("same-message-page");
+    const homeBaseline = Buffer.from("different-home-page");
+    const message = node({
+      id: "node-message",
+      key: "classin.message",
+      name: "消息",
+      tags: ["page-asset", "asset-recording"],
+      status: "active",
+      matchers: [{ id: "matcher-package-message", type: "package", value: "cn.eeo.classin", weight: 1 }],
+      metadata: {
+        assetRecordingConfirmed: true,
+        screenshotRegions: [
+          {
+            id: "region-message-title",
+            label: "消息标题",
+            x: 10,
+            y: 5,
+            width: 25,
+            height: 8,
+            signature: "screenshot-region:region-message-title:%E6%B6%88%E6%81%AF",
+            baselineArtifactId: "artifact-message"
+          }
+        ]
+      }
+    });
+    const home = node({
+      id: "node-home",
+      key: "classin.home",
+      name: "主页",
+      tags: ["page-asset", "asset-recording"],
+      status: "active",
+      matchers: [
+        { id: "matcher-package-home", type: "package", value: "cn.eeo.classin", weight: 1 },
+        { id: "matcher-bottom-message", type: "ocr_text", value: "消息", weight: 2, critical: true, region: { x: 20, y: 92, width: 10, height: 5 } }
+      ],
+      metadata: {
+        assetRecordingConfirmed: true,
+        screenshotRegions: [
+          {
+            id: "region-home-title",
+            label: "主页标题",
+            x: 10,
+            y: 5,
+            width: 25,
+            height: 8,
+            signature: "screenshot-region:region-home-title:%E4%B8%BB%E9%A1%B5",
+            baselineArtifactId: "artifact-home"
+          }
+        ]
+      }
+    });
+    const baselineReads: string[] = [];
+
+    const result = await identifyOrCreateCurrentPageDraft({
+      graphVersion: graph([home, message]),
+      observation: observation({
+        resourceId: "cn.eeo.classin:id/message",
+        text: "消息",
+        packageName: "cn.eeo.classin",
+        resolution: { width: 1080, height: 2340 },
+        screenshotBase64: messageBaseline.toString("base64")
+      }),
+      storage: new MemoryCurrentPageStorage([home, message]),
+      assetOnly: true,
+      baselineReader: async (artifactId) => {
+        baselineReads.push(artifactId);
+        return artifactId === "artifact-message" ? messageBaseline : homeBaseline;
+      }
+    });
+
+    expect(result.status).toBe("matched");
+    expect(result.match.node?.id).toBe(message.id);
+    expect(baselineReads).toContain("artifact-message");
+    expect(baselineReads).not.toContain("artifact-home");
+  });
+
   it("keeps a local popup menu attached to the matched parent page asset", async () => {
     const home = node({
       id: "node-home",
@@ -456,6 +601,47 @@ describe("identifyOrCreateCurrentPageDraft", () => {
           id: "region-more-menu",
           signature: expect.stringContaining(encodeURIComponent("添加好友")),
           evidenceTexts: expect.arrayContaining(["添加好友"])
+        })
+      ])
+    );
+  });
+
+  it("records visual sample metadata for the shared page asset", () => {
+    const storage = new MemoryCurrentPageStorage([]);
+    const node = createConfirmedPageAssetFromCandidate({
+      graphVersionId: "version-1",
+      observation: observation({
+        resourceId: "cn.eeo.classin:id/login",
+        text: "登录",
+        extraTexts: ["手机号", "密码"],
+        packageName: "cn.eeo.classin",
+        activityName: ".LoginActivity",
+        ocrTexts: [
+          { text: "手机号", region: { x: 120, y: 480, width: 220, height: 52 } },
+          { text: "密码", region: { x: 120, y: 560, width: 180, height: 52 } },
+          { text: "登录", region: { x: 120, y: 680, width: 840, height: 80 } }
+        ],
+        resolution: { width: 1080, height: 2400 }
+      }),
+      storage,
+      draft: {
+        key: "classin.login",
+        name: "登录页",
+        tags: ["page-asset", "asset-recording"],
+        metadata: {
+          confirmedOcrTexts: ["手机号", "密码", "登录"]
+        }
+      }
+    });
+
+    expect(node.metadata?.visualSamples).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: "android",
+          appPackageName: "cn.eeo.classin",
+          capturedAt: "2026-06-14T10:00:00.000Z",
+          resolution: { width: 1080, height: 2400 },
+          ocrSummary: ["手机号", "密码", "登录"]
         })
       ])
     );

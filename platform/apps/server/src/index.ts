@@ -47,7 +47,8 @@ import { AutomationRunner, DeviceBusyError } from "./automation-runner.js";
 import { artifactFilePath, artifactRoot, artifactSendFileOptions, artifactUrl } from "./artifacts.js";
 import { seedBuiltinCases } from "./builtin-cases.js";
 import { seedBuiltinGraphs } from "./builtin-graphs.js";
-import { buildConfirmedPageAssetInput, identifyOrCreateCurrentPageDraft } from "./current-page-asset.js";
+import { graphTargetMismatchMessage, isObservationInAssetGraphTarget } from "./asset-graph-workspace.js";
+import { buildConfirmedPageAssetInput, identifyOrCreateCurrentPageDraft, readCurrentPageCollectionOptions } from "./current-page-asset.js";
 import { buildGraphAssetGovernanceSummary, selectAutoPromotableGraphAssets } from "./graph-assets.js";
 import { buildNodeTestResult, collectGraphStepRecords, isGraphRun as isGraphRunResult, readStepGraphMetadata, type GraphStepResultItem, type NodeTestResult } from "./graph-node-test-result.js";
 import { pageAbilityRouteGapIssues, withPageAbilityEdges } from "./page-ability-edges.js";
@@ -169,6 +170,7 @@ import { listSourceScanDirectories, listSourceScanRoots, pickSourceScanDirectory
 import { findNearestTextCandidate } from "./semantic-locator.js";
 import { assetCompositionCatalog, compileAssetCompositeCase, missingRequiredParameterKeysFromIssues } from "./asset-composition.js";
 import { AssetCompositeExecutionManager, renderAssetCompositeExecutionReportHtml, type AssetCompositeExecution } from "./asset-composite-execution.js";
+import { freeCompositionCurrentPageDetectionFailure, resolveFreeCompositionCurrentPage } from "./free-composition-current-page.js";
 import { FreeCompositionSessionRegistry } from "./free-composition-api.js";
 import type {
   FreeCompositionPageAbilityAsset,
@@ -176,7 +178,7 @@ import type {
   FreeCompositionPageTaskAsset,
   FreeCompositionPageTransitionAsset
 } from "./free-composition.js";
-import { assertFreeCompositionExecutionAllowed, type FreeCompositionSession } from "./free-composition-session.js";
+import { assertFreeCompositionExecutionAllowed, freeCompositionSessionRequiresExecution, type FreeCompositionSession } from "./free-composition-session.js";
 import {
   findElementAtPointFromCandidates,
   hasStableLocator,
@@ -465,16 +467,20 @@ app.get("/api/free-composition/sessions/:id", (req, res) => {
   res.json({ session: enrichFreeCompositionSession(session) });
 });
 
-app.post("/api/free-composition/sessions", (req, res) => {
+app.post("/api/free-composition/sessions", async (req, res) => {
   try {
     const body = recordBody(req.body);
     const appId = requiredString(body.appId, "appId");
     const platform = requiredPlatform(body.platform);
     const prompt = requiredString(body.prompt, "prompt");
+    const deviceSerial = stringOrUndefined(body.deviceSerial);
     const graphVersion = findAssetPatrolGraphVersion(appId);
     const freeCompositionAssets = graphVersion
       ? freeCompositionAssetsFromGraph(graphVersion, appId, platform)
       : { pageTasks: [], pageTransitions: [], pageAssets: [], pageAbilities: [] };
+    const currentPageDetection = graphVersion && deviceSerial
+      ? await detectFreeCompositionCurrentPage(graphVersion, appId, platform, deviceSerial)
+      : undefined;
     const session = freeCompositionSessions.create({
       appId,
       platform,
@@ -484,7 +490,10 @@ app.post("/api/free-composition/sessions", (req, res) => {
       pageTasks: freeCompositionAssets.pageTasks,
       pageTransitions: freeCompositionAssets.pageTransitions,
       pageAssets: freeCompositionAssets.pageAssets,
-      pageAbilities: freeCompositionAssets.pageAbilities
+      pageAbilities: freeCompositionAssets.pageAbilities,
+      currentPageDetectionAttempted: Boolean(graphVersion && deviceSerial),
+      currentPage: currentPageDetection?.currentPage,
+      currentPageDetectionFailure: currentPageDetection?.currentPageDetectionFailure
     });
     res.status(201).json({ session: enrichFreeCompositionSession(session) });
   } catch (error) {
@@ -542,6 +551,10 @@ app.post("/api/free-composition/sessions/:id/execute", (req, res) => {
     const session = freeCompositionSessions.get(req.params.id);
     if (!session) {
       res.status(404).json({ error: "AI资产用例会话不存在。" });
+      return;
+    }
+    if (!freeCompositionSessionRequiresExecution(session)) {
+      res.status(409).json({ error: "当前目标已满足，无需执行。", plan: session.plan });
       return;
     }
     assertFreeCompositionExecutionAllowed(session, {
@@ -914,19 +927,19 @@ app.post("/api/graphs/:versionId/current-page", async (req, res) => {
       deviceSerial?: string;
       observation?: Parameters<typeof identifyOrCreateCurrentPageDraft>[0]["observation"];
       includeOcr?: boolean;
+      includeUiTree?: boolean;
       assetOnly?: boolean;
     };
     const observation =
       body.observation ??
       (body.deviceSerial
-        ? await observationService.collect(body.deviceSerial, {
-            includeOcr: body.includeOcr ?? true,
-            includeUiTree: true,
-            includeScreenshot: true
-          })
+        ? await observationService.collect(body.deviceSerial, readCurrentPageCollectionOptions(body))
         : undefined);
     if (!observation) {
       res.status(400).json({ error: "observation or deviceSerial is required" });
+      return;
+    }
+    if (sendAssetGraphTargetMismatch(res, graphVersion, observation)) {
       return;
     }
     const result = await identifyOrCreateCurrentPageDraft({
@@ -1362,6 +1375,9 @@ app.post("/api/graphs/:versionId/assets/nodes/:nodeId/promote", async (req, res)
       match?: Parameters<typeof buildConfirmedPageAssetInput>[0]["match"];
     };
     const draft = readPageAssetDraftRequest(req.body);
+    if (body.observation && sendAssetGraphTargetMismatch(res, graphVersion, body.observation)) {
+      return;
+    }
     const nodeInput = body.observation
       ? await buildConfirmedPageAssetInput({
           graphVersionId: graphVersion.id,
@@ -1418,6 +1434,9 @@ app.post("/api/graphs/:versionId/assets/nodes", async (req, res) => {
     };
     if (!body.observation) {
       res.status(400).json({ error: "observation is required" });
+      return;
+    }
+    if (sendAssetGraphTargetMismatch(res, graphVersion, body.observation)) {
       return;
     }
     const draft = readPageAssetDraftRequest(req.body);
@@ -1547,6 +1566,13 @@ app.post("/api/graphs/:versionId/assets/page-elements/validate", async (req, res
     }
     const body = readManualPageElementRequest(req.body);
     const observation = await resolvePageElementQualityObservation(req.body);
+    if (!observation) {
+      res.status(400).json({ error: "observation or deviceSerial is required" });
+      return;
+    }
+    if (sendAssetGraphTargetMismatch(res, graphVersion, observation)) {
+      return;
+    }
     const sourceNode = storage.findBusinessNodeById(graphVersion.id, body.sourceNodeId);
     const region = parsePercentRegionFromLocator(body.locator);
     const quality = validatePageElementAssetQuality({
@@ -2765,6 +2791,20 @@ function sendError(res: express.Response, error: unknown): void {
   res.status(500).json({ error: message });
 }
 
+function sendAssetGraphTargetMismatch(res: express.Response, graphVersion: BusinessGraphVersion, observation: Observation): boolean {
+  const graph = storage.getBusinessGraph(graphVersion.graphId);
+  if (!graph) {
+    res.status(404).json({ error: "Business graph not found" });
+    return true;
+  }
+  const message = graphTargetMismatchMessage(graph, observation);
+  if (!message) {
+    return false;
+  }
+  res.status(409).json({ error: message });
+  return true;
+}
+
 function sendKnownError(res: express.Response, error: unknown): boolean {
   if (error instanceof DeviceBusyError) {
     res.status(409).json({
@@ -3877,16 +3917,7 @@ async function recoverAssetDrivenStartPage(input: {
 }
 
 function isObservationInTargetApp(observation: Observation, targetApp: GraphTargetApp | undefined): boolean {
-  if (!targetApp?.androidPackageName && !targetApp?.iosBundleId) {
-    return true;
-  }
-  if (observation.platform === "android" && targetApp.androidPackageName) {
-    return observation.packageName === targetApp.androidPackageName;
-  }
-  if (observation.platform === "ios" && targetApp.iosBundleId) {
-    return observation.bundleId === targetApp.iosBundleId;
-  }
-  return true;
+  return isObservationInAssetGraphTarget(observation, targetApp);
 }
 
 async function handleAssetDrivenRuntimeInterceptors(deviceSerial: string, packageName: string): Promise<void> {
@@ -5314,6 +5345,23 @@ function enrichFreeCompositionSession(session: FreeCompositionSession): FreeComp
   };
 }
 
+async function detectFreeCompositionCurrentPage(
+  graphVersion: BusinessGraphVersion,
+  appId: string,
+  platform: Platform,
+  deviceSerial: string
+): Promise<{
+  currentPage?: Awaited<ReturnType<typeof resolveFreeCompositionCurrentPage>>;
+  currentPageDetectionFailure?: ReturnType<typeof freeCompositionCurrentPageDetectionFailure>;
+}> {
+  const observation = await observationService.collect(deviceSerial, readCurrentPageCollectionOptions({ includeOcr: true }));
+  const currentPage = await resolveFreeCompositionCurrentPage(graphVersion, appId, platform, observation, readPageAssetBaselineArtifact);
+  return {
+    currentPage,
+    currentPageDetectionFailure: currentPage ? undefined : freeCompositionCurrentPageDetectionFailure(observation, appId, platform)
+  };
+}
+
 function freeCompositionAssetsFromGraph(
   graphVersion: BusinessGraphVersion,
   appId: string,
@@ -5362,7 +5410,8 @@ function freeCompositionAssetsFromGraph(
             pageElementId: transition.elementId!,
             pageElementLabel: element?.label ?? transition.elementId!,
             pageTransitionId: transition.id,
-            pageTransitionName: `${page.name} -> ${transition.targetPageName}`
+            pageTransitionName: `${page.name} -> ${transition.targetPageName}`,
+            parameterKeys: transition.parameterKeys
           };
         })
     ),

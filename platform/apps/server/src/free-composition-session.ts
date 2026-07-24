@@ -131,6 +131,9 @@ export function assertFreeCompositionExecutionAllowed(
     riskConfirmed: boolean;
   }
 ): void {
+  if (!freeCompositionSessionRequiresExecution(session)) {
+    throw new Error("当前目标已满足，无需执行。");
+  }
   if (!session.compositeCase) {
     throw new Error("请先选择一个已存在的元功能或组合用例。");
   }
@@ -243,8 +246,9 @@ function temporaryCompositeCaseForCandidate(
 ): { compositeCase: AssetCompositeCase; generatedMetaFunctions?: MetaFunction[] } {
   const intent = session.resolution.intent;
   if (candidate.kind === "generated_flow") {
+    const embeddedCandidatesById = new Map((candidate.composedCandidates ?? []).map((item) => [item.id, item]));
     const composedCandidates = (candidate.composedCandidateIds ?? []).map((candidateId) =>
-      session.resolution.candidates.find((item) => item.id === candidateId)
+      embeddedCandidatesById.get(candidateId) ?? session.resolution.candidates.find((item) => item.id === candidateId)
     );
     if (composedCandidates.some((item) => !item)) {
       throw new Error("生成流程引用的候选不完整，请重新分析需求。");
@@ -531,12 +535,13 @@ function temporaryMetaFunctionForPageTransition(
     platform: session.platform,
     name: `${candidate.sourcePageModelName} / ${candidate.pageElementLabel} → ${candidate.targetPageModelName}`,
     description: "由AI资产用例临时包装的页面连接，不会保存为正式元功能。",
-    parameters: [],
+    parameters: candidate.parameterKeys.map((key) => ({ key, type: "string", required: true })),
     steps: [
       {
         id: "free_composition_reach_source_" + session.id + idSuffix,
         order: 1,
         enabled: true,
+        name: `确认当前在${candidate.sourcePageModelName}`,
         kind: "reach_page",
         targetPageModelId: candidate.sourcePageModelId
       },
@@ -544,6 +549,7 @@ function temporaryMetaFunctionForPageTransition(
         id: "free_composition_invoke_transition_" + session.id + idSuffix,
         order: 2,
         enabled: true,
+        name: `点击「${candidate.pageElementLabel}」并进入${candidate.targetPageModelName}`,
         kind: "invoke_capability",
         sourcePageModelId: candidate.sourcePageModelId,
         pageElementId: candidate.pageElementId,
@@ -579,6 +585,7 @@ function temporaryMetaFunctionForPageTask(
         id: "free_composition_reach_page_" + session.id + idSuffix,
         order: 1,
         enabled: true,
+        name: `确认当前在${candidate.pageModelName}`,
         kind: "reach_page",
         targetPageModelId: candidate.pageModelId
       },
@@ -586,6 +593,7 @@ function temporaryMetaFunctionForPageTask(
         id: "free_composition_run_page_task_" + session.id + idSuffix,
         order: 2,
         enabled: true,
+        name: `执行「${candidate.pageTaskName}」`,
         kind: "run_page_task",
         pageModelId: candidate.pageModelId,
         pageTaskId: candidate.pageTaskId
@@ -613,12 +621,20 @@ function freeCompositionStatusForExecution(status: AssetCompositeExecutionStatus
 
 function freeCompositionStatusForPlan(plan: AssetCompositeExecutionPlan): FreeCompositionSessionStatus {
   if (plan.status === "ready") {
-    return "awaiting_confirmation";
+    return plan.steps.length === 0 ? "passed" : "awaiting_confirmation";
   }
   if (plan.status === "needs_parameters") {
     return "awaiting_parameters";
   }
   return "blocked";
+}
+
+export function freeCompositionSessionRequiresExecution(session: FreeCompositionSession): boolean {
+  const selectedCandidate = session.resolution.candidates.find((candidate) => candidate.id === session.selectedCandidateId);
+  if (selectedCandidate?.requiresExecution === false) {
+    return false;
+  }
+  return !(session.plan?.status === "ready" && session.plan.steps.length === 0);
 }
 
 function stringifyRuntimeOverrides(values: Record<string, string | number | boolean> | undefined): Record<string, string> | undefined {

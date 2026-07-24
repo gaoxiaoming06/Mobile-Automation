@@ -300,9 +300,13 @@ export type GraphExpectationEvaluationInput = {
   nodeMatch?: NodeMatchResult;
 };
 
+export type GraphNodeDetectionOptions = {
+  allowGlobalFallback?: boolean;
+};
+
 export type GraphRunnerDriver = {
   observe(step: ExecutionPlanStep, phase: "precondition" | "state_transition" | "expectation" | "system_guard"): Promise<Observation>;
-  detectNode(observation: Observation): Promise<NodeMatchResult>;
+  detectNode(observation: Observation, options?: GraphNodeDetectionOptions): Promise<NodeMatchResult>;
   performAction(action: ActionStep, step: ExecutionPlanStep): Promise<void>;
   evaluateExpectation(input: GraphExpectationEvaluationInput): Promise<StepExpectationResult>;
 };
@@ -503,7 +507,7 @@ export class GraphRunner {
     }
 
     const before = await this.options.driver.observe(step, "precondition");
-    const beforeMatch = await this.options.driver.detectNode(before);
+    const beforeMatch = await this.options.driver.detectNode(before, { allowGlobalFallback: false });
     base.observations.before = before;
     base.nodeMatches.before = beforeMatch;
     if (beforeMatch.status !== "matched" || beforeMatch.node?.id !== step.fromNode.id) {
@@ -593,7 +597,7 @@ export class GraphRunner {
     }
     const waitPolicy = transitionWaitPolicyFor(step);
     let after = await this.options.driver.observe(step, "state_transition");
-    let afterMatch = await this.options.driver.detectNode(after);
+    let afterMatch = await this.options.driver.detectNode(after, { allowGlobalFallback: false });
     let transitionAttempt = 0;
     const startedWaitingAt = Date.now();
     const timeWindowMaxAttempts = Math.max(1, Math.ceil(waitPolicy.timeoutMs / Math.max(1, waitPolicy.pollIntervalMs)));
@@ -627,7 +631,10 @@ export class GraphRunner {
       transitionAttempt += 1;
       await delay(waitPolicy.pollIntervalMs);
       after = await this.options.driver.observe(step, "state_transition");
-      afterMatch = await this.options.driver.detectNode(after);
+      afterMatch = await this.options.driver.detectNode(after, { allowGlobalFallback: false });
+    }
+    if (afterMatch.status !== "matched" || afterMatch.node?.id !== step.toNode.id) {
+      afterMatch = await this.options.driver.detectNode(after, { allowGlobalFallback: true });
     }
     base.observations.after = after;
     base.nodeMatches.after = afterMatch;

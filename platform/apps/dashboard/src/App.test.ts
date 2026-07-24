@@ -52,6 +52,8 @@ import {
   stabilityRunProgressSummary,
   shouldAutoSyncAssetPatrolRuntimeParams,
   shouldRestoreAssetDrivenExecution,
+  resolveAssetRecordingGraphVersionId,
+  selectAssetGraphVersionId,
   validateAssetPageElementDraftForSave,
   workspaceStyleForNav
 } from "./App.js";
@@ -70,6 +72,116 @@ class MemoryStorage {
 }
 
 describe("App shell", () => {
+  it("selects the writable product asset graph that has a matching Android profile", () => {
+    const graphVersionId = selectAssetGraphVersionId(
+      [
+        {
+          status: "active",
+          platformScope: "mobile-both",
+          appId: "classin",
+          name: "ClassIn 产品资产库",
+          targetApp: {
+            productId: "classin",
+            productName: "ClassIn",
+            profiles: [
+              {
+                id: "classin-android-primary",
+                platform: "android",
+                displayName: "ClassIn Android",
+                androidPackageName: "cn.eeo.classin",
+                isPrimary: true
+              },
+              {
+                id: "classin-ios-primary",
+                platform: "ios",
+                displayName: "ClassIn iOS",
+                iosBundleId: "com.eeo.classin"
+              }
+            ]
+          },
+          activeVersion: { id: "classin-product-v1", status: "active" }
+        }
+      ],
+      "android",
+      { androidPackageName: "cn.eeo.classin" }
+    );
+
+    expect(graphVersionId).toBe("classin-product-v1");
+  });
+
+  it("keeps legacy targetApp packages usable as an Android primary profile", () => {
+    const graphVersionId = selectAssetGraphVersionId(
+      [
+        {
+          status: "active",
+          platformScope: "android",
+          targetApp: { androidPackageName: "cn.eeo.classin" },
+          activeVersion: { id: "classin-legacy-v1", status: "active" }
+        }
+      ],
+      "android",
+      { androidPackageName: "cn.eeo.classin" }
+    );
+
+    expect(graphVersionId).toBe("classin-legacy-v1");
+  });
+
+  it("does not fall back to an unrelated product asset graph when the current package is known", () => {
+    const graphVersionId = selectAssetGraphVersionId(
+      [
+        {
+          status: "active",
+          platformScope: "mobile-both",
+          targetApp: {
+            productId: "classin",
+            profiles: [{ id: "classin-android-primary", platform: "android", androidPackageName: "cn.eeo.classin" }]
+          },
+          activeVersion: { id: "classin-v1", status: "active" }
+        }
+      ],
+      "android",
+      { androidPackageName: "com.demo.notes" }
+    );
+
+    expect(graphVersionId).toBeUndefined();
+  });
+
+  it("retries asset recording graph resolution before treating a transient foreground profile as unbound", async () => {
+    const observations = [
+      {
+        platform: "android" as const,
+        capturedAt: "2026-07-24T09:00:00.000Z",
+        packageName: "com.android.systemui",
+        uiElements: [],
+        ocrTexts: []
+      },
+      {
+        platform: "android" as const,
+        capturedAt: "2026-07-24T09:00:00.250Z",
+        packageName: "cn.eeo.classin",
+        uiElements: [],
+        ocrTexts: []
+      }
+    ];
+    const requestedProfiles: Array<string | undefined> = [];
+
+    const result = await resolveAssetRecordingGraphVersionId({
+      platform: "android",
+      observe: async () => observations.shift(),
+      fetchWritableGraphVersionId: async (_platform, targetProfile) => {
+        requestedProfiles.push(targetProfile?.androidPackageName);
+        return targetProfile?.androidPackageName === "cn.eeo.classin" ? "classin-v1" : undefined;
+      },
+      retryDelayMs: 0
+    });
+
+    expect(result).toEqual({
+      graphVersionId: "classin-v1",
+      targetProfile: { androidPackageName: "cn.eeo.classin" }
+    });
+    expect(requestedProfiles).toEqual(["com.android.systemui", "cn.eeo.classin"]);
+  });
+
   it("starts from device management and hides legacy case, experiment, and device detail navigation entries", () => {
     const markup = renderToStaticMarkup(React.createElement(App));
 

@@ -40,11 +40,11 @@ describe("AssetCompositeExecutionManager", () => {
 
     const completed = manager.getExecution(execution.id)!;
     expect(completed.status).toBe("passed");
-    expect(completed.items.map((item) => [item.metaFunctionName, item.kind, item.status])).toEqual([
-      ["进入指定班级", "reach_page", "passed"],
-      ["进入指定班级", "invoke_capability", "passed"],
-      ["创建课堂但不发布", "run_page_task", "passed"],
-      ["创建课堂但不发布", "verify_page", "passed"]
+    expect(completed.items.map((item) => [item.metaFunctionName, item.metaFunctionStepName, item.kind, item.status])).toEqual([
+      ["进入指定班级", "确认当前在主页", "reach_page", "passed"],
+      ["进入指定班级", "点击「班级卡片」并进入班级详情", "invoke_capability", "passed"],
+      ["创建课堂但不发布", "填写课堂表单", "run_page_task", "passed"],
+      ["创建课堂但不发布", "确认停留在创建页", "verify_page", "passed"]
     ]);
     expect(requests[1]).toEqual(expect.objectContaining({ startNodeId: "page-home", targetNodeId: "page-detail" }));
     expect(requests[2]).toEqual(expect.objectContaining({
@@ -195,10 +195,10 @@ function executionPlan(): AssetCompositeExecutionPlan {
     requiredParameters: ["className"],
     issues: [],
     steps: [
-      { ...common, id: "compiled-1", order: 1, metaFunctionId: "meta-enter", metaFunctionName: "进入指定班级", metaFunctionStepId: "reach-home", kind: "reach_page", targetPageModelId: "page-home" },
-      { ...common, id: "compiled-2", order: 2, metaFunctionId: "meta-enter", metaFunctionName: "进入指定班级", metaFunctionStepId: "open-class", kind: "invoke_capability", sourcePageModelId: "page-home", targetPageModelId: "page-detail", pageElementId: "class-grid", pageTransitionId: "transition-home-detail" },
-      { ...common, id: "compiled-3", order: 3, metaFunctionId: "meta-create", metaFunctionName: "创建课堂但不发布", metaFunctionStepId: "fill-form", kind: "run_page_task", targetPageModelId: "page-create", pageTaskId: "task-fill-lesson" },
-      { ...common, id: "compiled-4", order: 4, metaFunctionId: "meta-create", metaFunctionName: "创建课堂但不发布", metaFunctionStepId: "verify", kind: "verify_page", targetPageModelId: "page-create" }
+      { ...common, id: "compiled-1", order: 1, metaFunctionId: "meta-enter", metaFunctionName: "进入指定班级", metaFunctionStepId: "reach-home", metaFunctionStepName: "确认当前在主页", kind: "reach_page", targetPageModelId: "page-home" },
+      { ...common, id: "compiled-2", order: 2, metaFunctionId: "meta-enter", metaFunctionName: "进入指定班级", metaFunctionStepId: "open-class", metaFunctionStepName: "点击「班级卡片」并进入班级详情", kind: "invoke_capability", sourcePageModelId: "page-home", targetPageModelId: "page-detail", pageElementId: "class-grid", pageTransitionId: "transition-home-detail" },
+      { ...common, id: "compiled-3", order: 3, metaFunctionId: "meta-create", metaFunctionName: "创建课堂但不发布", metaFunctionStepId: "fill-form", metaFunctionStepName: "填写课堂表单", kind: "run_page_task", targetPageModelId: "page-create", pageTaskId: "task-fill-lesson" },
+      { ...common, id: "compiled-4", order: 4, metaFunctionId: "meta-create", metaFunctionName: "创建课堂但不发布", metaFunctionStepId: "verify", metaFunctionStepName: "确认停留在创建页", kind: "verify_page", targetPageModelId: "page-create" }
     ]
   };
 }
