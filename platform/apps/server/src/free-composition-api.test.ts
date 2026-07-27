@@ -60,12 +60,12 @@ describe("FreeCompositionSessionRegistry", () => {
     expect(savedCase.runMode).toBe("once");
   });
 
-  it("creates a single route candidate from the detected current page", () => {
+  it("creates a single fixed route candidate instead of using the detected current page", () => {
     const registry = new FreeCompositionSessionRegistry(() => now);
     const session = registry.create({
       appId: "cn.eeo.classin",
       platform: "android",
-      prompt: "跳转到主页",
+      prompt: "跳转到空间",
       metaFunctions: [],
       compositeCases: [],
       currentPage: {
@@ -108,8 +108,34 @@ describe("FreeCompositionSessionRegistry", () => {
     expect(session.resolution.candidates).toHaveLength(1);
     expect(session.resolution.candidates[0]).toMatchObject({
       kind: "generated_flow",
-      name: "登录 / 登录按钮 → 主页",
-      composedCandidateIds: ["page_transition:page-login:login-button:page-home"]
+      name: "主页 / 打开空间 → 空间",
+      composedCandidateIds: ["page_transition:page-home:open-space:page-space"]
+    });
+  });
+
+  it("stores AI planner hints on newly created sessions", () => {
+    const registry = new FreeCompositionSessionRegistry(() => now);
+    const session = registry.create({
+      appId: "cn.eeo.classin",
+      platform: "android",
+      prompt: "帮我换成老师账号 12133333302",
+      metaFunctions: [
+        { ...metaFunction(), id: "meta_logout", name: "退出登录", parameters: [] },
+        metaFunction()
+      ],
+      compositeCases: [],
+      aiPlanner: {
+        status: "used",
+        orderedAssetNames: ["退出登录", "账号密码登录"],
+        runtimeOverrides: { phone: "12133333302" }
+      }
+    } as Parameters<FreeCompositionSessionRegistry["create"]>[0]);
+
+    expect(session.resolution.aiPlanner).toMatchObject({ status: "used" });
+    expect(session.resolution.intent.runtimeOverrides).toMatchObject({ phone: "12133333302" });
+    expect(session.resolution.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      composedCandidateIds: ["meta_logout", "meta_login"]
     });
   });
 });

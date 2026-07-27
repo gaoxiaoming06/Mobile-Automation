@@ -46,9 +46,9 @@ describe("AssetCompositeExecutionManager", () => {
       ["创建课堂但不发布", "填写课堂表单", "run_page_task", "passed"],
       ["创建课堂但不发布", "确认停留在创建页", "verify_page", "passed"]
     ]);
-    expect(requests[1]).toEqual(expect.objectContaining({ startNodeId: "page-home", targetNodeId: "page-detail" }));
+    expect(requests[1]).toEqual(expect.objectContaining({ targetNodeId: "page-detail" }));
+    expect(requests[1]).not.toHaveProperty("startNodeId");
     expect(requests[2]).toEqual(expect.objectContaining({
-      startNodeId: "page-create",
       targetNodeId: "page-create",
       overlay: expect.objectContaining({ targetTaskId: "task-fill-lesson", runtimeParams: { className: "班级四十二号", lessonName: "自动化课堂" } }),
       executionContext: expect.objectContaining({
@@ -61,6 +61,7 @@ describe("AssetCompositeExecutionManager", () => {
       }),
       androidAppMonitor
     }));
+    expect(requests[2]).not.toHaveProperty("startNodeId");
     expect(renderAssetCompositeExecutionReportHtml(completed)).toContain("创建课堂但不发布");
     expect(renderAssetCompositeExecutionReportHtml(completed)).toContain("task-fill-lesson");
   });

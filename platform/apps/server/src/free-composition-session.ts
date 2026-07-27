@@ -106,9 +106,10 @@ export function selectFreeCompositionCandidate(
     ...input.session.resolution,
     intent: {
       ...input.session.resolution.intent,
-      riskTerms: riskTermsInText(
-        [input.session.prompt, candidate.name, candidate.description ?? ""].join("\\n")
-      )
+      riskTerms: [...new Set([
+        ...input.session.resolution.intent.riskTerms,
+        ...riskTermsForSelectedCandidate(candidate, input.session.resolution.candidates)
+      ])]
     }
   };
 
@@ -122,6 +123,39 @@ export function selectFreeCompositionCandidate(
     updatedAt: now,
     status: "awaiting_confirmation"
   };
+}
+
+function riskTermsForSelectedCandidate(
+  candidate: FreeCompositionCandidate,
+  candidates: FreeCompositionCandidate[]
+): string[] {
+  const riskText = executableCandidatesForRisk(candidate, candidates)
+    .flatMap((item) => [item.name, item.description ?? "", item.pageTaskName ?? ""])
+    .join("\n");
+  return riskTermsInText(riskText);
+}
+
+function executableCandidatesForRisk(
+  candidate: FreeCompositionCandidate,
+  candidates: FreeCompositionCandidate[],
+  visited = new Set<string>()
+): FreeCompositionCandidate[] {
+  if (visited.has(candidate.id)) {
+    return [];
+  }
+  visited.add(candidate.id);
+  if (candidate.kind === "composite_case" || candidate.kind === "meta_function" || candidate.kind === "page_task") {
+    return [candidate];
+  }
+  if (candidate.kind !== "generated_flow") {
+    return [];
+  }
+  const byId = new Map(candidates.map((item) => [item.id, item]));
+  const components = candidate.composedCandidates ?? (candidate.composedCandidateIds ?? []).flatMap((id) => {
+    const component = byId.get(id);
+    return component ? [component] : [];
+  });
+  return components.flatMap((component) => executableCandidatesForRisk(component, candidates, visited));
 }
 
 export function assertFreeCompositionExecutionAllowed(

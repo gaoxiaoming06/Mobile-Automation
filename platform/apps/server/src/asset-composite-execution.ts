@@ -51,7 +51,6 @@ export type AssetCompositeGraphRunRequest = {
   deviceSerial: string;
   graphVersionId: string;
   targetNodeId: string;
-  startNodeId?: string;
   startStrategy: "keep_current";
   startAppScope: "current_device";
   executionProfile: "fast_visual";
@@ -304,16 +303,10 @@ function graphRunRequest(
   step: CompiledAssetCompositionStep,
   androidAppMonitor?: RunConfig["androidAppMonitor"]
 ): AssetCompositeGraphRunRequest {
-  const startNodeId = step.kind === "invoke_capability"
-    ? step.sourcePageModelId
-    : step.kind === "run_page_task" || step.kind === "verify_page"
-      ? step.targetPageModelId
-      : undefined;
   return {
     deviceSerial: execution.deviceSerial,
     graphVersionId: execution.graphVersionId,
     targetNodeId: step.targetPageModelId,
-    ...(startNodeId ? { startNodeId } : {}),
     startStrategy: "keep_current",
     startAppScope: "current_device",
     executionProfile: "fast_visual",

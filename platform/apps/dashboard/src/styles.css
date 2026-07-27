@@ -815,6 +815,30 @@ button:disabled {
   background: #eef5ff;
 }
 
+.free-composition-profile-actions {
+  max-width: 92%;
+  display: grid;
+  gap: 6px;
+}
+
+.free-composition-profile-actions > span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.free-composition-profile-actions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.free-composition-profile-actions button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .free-composition-input-block {
   display: grid;
   gap: 10px;

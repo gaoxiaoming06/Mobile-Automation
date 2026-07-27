@@ -39,6 +39,7 @@ export class FreeCompositionSessionRegistry {
     currentPageDetectionAttempted?: ResolveFreeCompositionInput["currentPageDetectionAttempted"];
     currentPage?: ResolveFreeCompositionInput["currentPage"];
     currentPageDetectionFailure?: ResolveFreeCompositionInput["currentPageDetectionFailure"];
+    aiPlanner?: ResolveFreeCompositionInput["aiPlanner"];
   }): FreeCompositionSession {
     const resolution = resolveFreeComposition(input.prompt, {
       appId: input.appId,
@@ -51,7 +52,8 @@ export class FreeCompositionSessionRegistry {
       pageAbilities: input.pageAbilities,
       currentPageDetectionAttempted: input.currentPageDetectionAttempted,
       currentPage: input.currentPage,
-      currentPageDetectionFailure: input.currentPageDetectionFailure
+      currentPageDetectionFailure: input.currentPageDetectionFailure,
+      aiPlanner: input.aiPlanner
     });
     return this.save(createFreeCompositionSession({
       appId: input.appId,

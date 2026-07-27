@@ -33,6 +33,10 @@ type FreeCompositionResolution = {
   intent: FreeCompositionIntent;
   candidates: FreeCompositionCandidate[];
   message: string;
+  aiPlanner?: {
+    status: "used" | "fallback";
+    errorMessage?: string;
+  };
 };
 
 type CompositePlan = {
@@ -133,15 +137,21 @@ export function FreeCompositionPanel({
   const activeCandidateId = selectedCandidateId || selectedSession?.selectedCandidateId || selectedSession?.resolution.candidates[0]?.id || "";
   const activeCandidate = selectedSession?.resolution.candidates.find((candidate) => candidate.id === activeCandidateId) ?? selectedSession?.resolution.candidates[0];
   const activeProfileId = selectedProfileId || selectedSession?.parameterProfileId || activeCandidate?.parameterProfileId || "";
+  const planMatchesActiveCandidate = Boolean(selectedSession?.plan && selectedSession.selectedCandidateId === activeCandidateId);
   const targetSatisfied = selectedSession ? freeCompositionTargetSatisfied(selectedSession, activeCandidate) : false;
   const hasRisk = Boolean(selectedSession?.resolution.intent.riskTerms.length);
   const conversationMissingKeys = selectedSession ? missingParameterKeysForSession(selectedSession, activeCandidate) : [];
   const replyingToMissingParameters = conversationMissingKeys.length > 0 && selectedSession?.resolution.status !== "missing_assets";
-  const conversationMessages = selectedSession ? conversationMessagesForSession(selectedSession, activeCandidate, profiles) : [];
+  const conversationMessages = selectedSession ? conversationMessagesForSession(selectedSession, activeCandidate) : [];
+  const availableProfiles = replyingToMissingParameters ? profiles.filter((profile) => profile.status === "active") : [];
   const flowSelectLabel = targetSatisfied ? "当前状态" : activeCandidate?.kind === "generated_flow" ? "执行流程" : "候选流程";
   const activeAndroidAppMonitor = androidAppMonitorForPackage?.(appId) ?? androidAppMonitor;
   const activeAndroidAppMonitorEnabled = androidAppMonitorEnabled ?? Boolean(activeAndroidAppMonitor);
   const currentPageBlocker = selectedSession ? currentPageRecognitionBlocker(selectedSession) : undefined;
+  const isMissingAssets = selectedSession?.resolution.status === "missing_assets";
+  const selectedRunModeSummary = selectedSession
+    ? runModeSummaryLabel(selectedSession.resolution.intent.runMode, selectedSession.resolution.intent.repeatCount)
+    : undefined;
   const activeAppId = (selectedSession?.appId || appId).trim();
 
   useEffect(() => {
@@ -179,9 +189,9 @@ export function FreeCompositionPanel({
     }
   }
 
-  async function analyzePrompt() {
-    if (!appId.trim() || !prompt.trim()) {
-      setMessage(!appId.trim() ? "请输入 App 包名" : "请输入要测试的流程");
+  async function analyzePrompt(input: { appId: string; prompt: string } = { appId, prompt }) {
+    if (!input.appId.trim() || !input.prompt.trim()) {
+      setMessage(!input.appId.trim() ? "请输入 App 包名" : "请输入要测试的流程");
       return;
     }
     setBusy(true);
@@ -189,7 +199,7 @@ export function FreeCompositionPanel({
       const response = await apiFetchJson<{ session: FreeCompositionSession }>("/api/free-composition/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(freeCompositionAnalyzeRequestBody({ appId, prompt, selectedSerial }))
+        body: JSON.stringify(freeCompositionAnalyzeRequestBody({ appId: input.appId, prompt: input.prompt, selectedSerial }))
       });
       updateSession(response.session);
       applySelectedSession(response.session);
@@ -203,19 +213,20 @@ export function FreeCompositionPanel({
     }
   }
 
-  async function generatePlan() {
-    if (!selectedSession || !activeCandidateId) {
+  async function prepareCandidate(candidateId: string) {
+    if (!selectedSession || !candidateId) {
       setMessage("请先分析需求并选择候选流程");
       return;
     }
     if (targetSatisfied) {
-      setMessage("当前目标已满足，无需生成计划。");
+      setMessage("当前目标已满足，无需准备执行计划。");
       return;
     }
+    setSelectedCandidateId(candidateId);
     setBusy(true);
     try {
       const body = {
-        candidateId: activeCandidateId,
+        candidateId,
         ...(activeProfileId ? { parameterProfileId: activeProfileId } : {})
       };
       const response = await apiFetchJson<{ session: FreeCompositionSession; plan: CompositePlan }>(`/api/free-composition/sessions/${encodeURIComponent(selectedSession.id)}/selection`, {
@@ -250,7 +261,7 @@ export function FreeCompositionPanel({
     }
     const reply = prompt.trim();
     if (!reply) {
-      setMessage("请直接回复缺少的参数值，或回复“使用参数集：名称”。");
+      setMessage(availableProfiles.length ? "请选择参数集，或直接填写缺少的参数值。" : "请直接填写缺少的参数值。");
       return;
     }
     const missingKeys = conversationMissingKeys.length ? conversationMissingKeys : missingParameterKeysForSession(selectedSession, activeCandidate);
@@ -259,6 +270,28 @@ export function FreeCompositionPanel({
       ...knownRuntimeParamsForSession(selectedSession),
       ...freeCompositionReplyRuntimeOverrides(reply, missingKeys)
     };
+    await submitMissingParameters({
+      profileId: profileId ?? activeProfileId,
+      runtimeOverrides
+    });
+  }
+
+  async function useParameterProfile(profileId: string) {
+    if (!selectedSession) {
+      setMessage("请先选择AI资产用例会话");
+      return;
+    }
+    await submitMissingParameters({
+      profileId,
+      runtimeOverrides: knownRuntimeParamsForSession(selectedSession)
+    });
+  }
+
+  async function submitMissingParameters(input: { profileId?: string; runtimeOverrides: Record<string, string> }) {
+    if (!selectedSession || !activeCandidateId) {
+      setMessage("请先选择AI资产用例会话");
+      return;
+    }
     setBusy(true);
     try {
       const response = await apiFetchJson<{ session: FreeCompositionSession; plan: CompositePlan }>(`/api/free-composition/sessions/${encodeURIComponent(selectedSession.id)}/selection`, {
@@ -266,14 +299,14 @@ export function FreeCompositionPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           candidateId: activeCandidateId,
-          ...(profileId ? { parameterProfileId: profileId } : activeProfileId ? { parameterProfileId: activeProfileId } : {}),
-          runtimeOverrides: nonEmptyRuntimeOverrides(runtimeOverrides)
+          ...(input.profileId ? { parameterProfileId: input.profileId } : {}),
+          runtimeOverrides: nonEmptyRuntimeOverrides(input.runtimeOverrides)
         })
       });
       updateSession(response.session);
       setSelectedSessionId(response.session.id);
       setSelectedCandidateId(response.session.selectedCandidateId ?? "");
-      setSelectedProfileId(response.session.parameterProfileId ?? profileId ?? "");
+      setSelectedProfileId(response.session.parameterProfileId ?? input.profileId ?? "");
       setPrompt("");
       setMessage(messageForPlan(response.plan, "AI资产用例计划"));
     } catch (error) {
@@ -320,7 +353,7 @@ export function FreeCompositionPanel({
   }
 
   function selectCandidate(candidateId: string) {
-    setSelectedCandidateId(candidateId);
+    void prepareCandidate(candidateId);
   }
 
   return (
@@ -346,6 +379,18 @@ export function FreeCompositionPanel({
                   <p>{message.text}</p>
                 </div>
               ))}
+              {availableProfiles.length ? (
+                <div className="free-composition-profile-actions" aria-label="可用参数集">
+                  <span>参数集</span>
+                  <div>
+                    {availableProfiles.map((profile) => (
+                      <button className="secondary-button" type="button" key={profile.id} disabled={busy} onClick={() => void useParameterProfile(profile.id)}>
+                        <Database size={14} />使用{profile.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
           <div className="free-composition-input-block">
@@ -356,10 +401,13 @@ export function FreeCompositionPanel({
             <button className="primary-button" type="button" onClick={() => void sendMessage()} disabled={busy}>{replyingToMissingParameters ? <Send size={15} /> : <Search size={15} />}{replyingToMissingParameters ? "发送回复" : "分析需求"}</button>
           </div>
           <div className="composition-asset-list free-composition-session-list free-composition-session-feed">
-            {sessions.map((session) => <button type="button" className={session.id === selectedSession?.id ? "selected" : ""} key={session.id} onClick={() => { applySelectedSession(session); setRiskConfirmed(session.riskConfirmed === true); }}>
-              <strong>{session.prompt}</strong>
-              <span>{sessionStatusLabel(session.status)} · {runModeLabel(session.resolution.intent.runMode, session.resolution.intent.repeatCount)}</span>
-            </button>)}
+            {sessions.map((session) => {
+              const runMode = runModeSummaryLabel(session.resolution.intent.runMode, session.resolution.intent.repeatCount);
+              return <button type="button" className={session.id === selectedSession?.id ? "selected" : ""} key={session.id} onClick={() => { applySelectedSession(session); setRiskConfirmed(session.riskConfirmed === true); }}>
+                <strong>{session.prompt}</strong>
+                <span>{[sessionStatusLabel(session.status), runMode].filter(Boolean).join(" · ")}</span>
+              </button>;
+            })}
             {!sessions.length ? <div className="empty">暂无AI资产用例会话</div> : null}
           </div>
         </aside>
@@ -368,17 +416,18 @@ export function FreeCompositionPanel({
           {selectedSession ? <>
             <section className={`composition-plan free-composition-status-summary ${selectedSession.resolution.status === "missing_assets" ? "blocked" : "ready"}`}>
               <strong>{currentPageBlocker?.message ?? selectedSession.resolution.message}</strong>
-              {!currentPageBlocker ? <span>{runModeLabel(selectedSession.resolution.intent.runMode, selectedSession.resolution.intent.repeatCount)}</span> : null}
+              {!currentPageBlocker && selectedRunModeSummary ? <span>{selectedRunModeSummary}</span> : null}
               {!currentPageBlocker && selectedSession.resolution.intent.riskTerms.length ? <span>风险操作：{selectedSession.resolution.intent.riskTerms.join("、")}</span> : null}
             </section>
 
-            {currentPageBlocker ? (
+            {isMissingAssets ? (
               <div className="composition-run-actions free-composition-action-bar free-composition-blocker-actions">
-                {currentPageBlocker.kind === "outside_app" ? (
+                {currentPageBlocker?.kind === "outside_app" ? (
                   <button className="primary-button" type="button" disabled={!selectedSerial || selectedDeviceBusy || busy || !activeAppId || !onLaunchApp} onClick={() => void onLaunchApp?.(activeAppId)}>启动app</button>
                 ) : null}
-                <button className="secondary-button" type="button" disabled={!selectedSerial || selectedDeviceBusy || busy || !onBack} onClick={() => void onBack?.()}>返回上一页</button>
-                <button className={currentPageBlocker.kind === "outside_app" ? "secondary-button" : "primary-button"} type="button" disabled={busy || !onOpenAssetRecording} onClick={onOpenAssetRecording}><Database size={15} />去录制新资产</button>
+                {currentPageBlocker ? <button className="secondary-button" type="button" disabled={!selectedSerial || selectedDeviceBusy || busy || !onBack} onClick={() => void onBack?.()}>返回上一页</button> : null}
+                <button className={currentPageBlocker?.kind === "outside_app" ? "secondary-button" : "primary-button"} type="button" disabled={busy || !onOpenAssetRecording} onClick={onOpenAssetRecording}><Database size={15} />{currentPageBlocker ? "去录制新资产" : "去录制资产"}</button>
+                <button className="secondary-button" type="button" disabled={busy} onClick={() => void analyzePrompt({ appId: selectedSession.appId, prompt: selectedSession.prompt })}><RefreshCw size={15} />重新分析</button>
               </div>
             ) : targetSatisfied ? (
               <div className="free-composition-controls">
@@ -401,8 +450,7 @@ export function FreeCompositionPanel({
               />
 
               <div className="composition-run-actions free-composition-action-bar">
-                <button className="secondary-button" type="button" disabled={!activeCandidateId || busy} onClick={() => void generatePlan()}>生成计划</button>
-                <button className="primary-button" type="button" disabled={!selectedSession.plan || selectedSession.plan.status !== "ready" || !selectedSerial || selectedDeviceBusy || busy || selectedSession.status === "running"} onClick={() => void executePlan()}><Play size={15} />开始执行</button>
+                <button className="primary-button" type="button" disabled={!planMatchesActiveCandidate || selectedSession.plan?.status !== "ready" || !selectedSerial || selectedDeviceBusy || busy || selectedSession.status === "running"} onClick={() => void executePlan()}><Play size={15} />开始执行</button>
               </div>
             </>}
 
@@ -535,14 +583,14 @@ function inferredExecutionItemTitle(item: { metaFunctionName: string; kind: stri
   return undefined;
 }
 
-function runModeLabel(runMode: RunMode, repeatCount: number): string {
+function runModeSummaryLabel(runMode: RunMode, repeatCount: number): string | undefined {
   if (runMode === "loop_until_stop") {
     return "持续循环";
   }
   if (runMode === "repeat_n") {
     return `循环 ${repeatCount} 次`;
   }
-  return "单次执行";
+  return undefined;
 }
 
 function candidateKindLabel(kind: FreeCompositionCandidate["kind"]): string {
@@ -627,8 +675,7 @@ function freeCompositionTargetSatisfied(
 
 function conversationMessagesForSession(
   session: FreeCompositionSession,
-  candidate: FreeCompositionCandidate | undefined,
-  profiles: ParameterProfile[]
+  candidate: FreeCompositionCandidate | undefined
 ): Array<{ role: "user" | "assistant"; text: string }> {
   const messages: Array<{ role: "user" | "assistant"; text: string }> = [
     { role: "user", text: session.prompt }
@@ -644,10 +691,9 @@ function conversationMessagesForSession(
   const missing = missingParameterKeysForSession(session, candidate);
   if (missing.length) {
     const knownSummary = runtimeParamsSummary(knownRuntimeParamsForSession(session));
-    const profileHint = profiles.length ? `也可以回复“使用参数集：${profiles[0]!.name}”。` : "";
     messages.push({
       role: "assistant",
-      text: [knownSummary ? `我已识别 ${knownSummary}。` : "", followUpQuestion(missing), profileHint].filter(Boolean).join("")
+      text: [knownSummary ? `我已识别 ${knownSummary}。` : "", followUpQuestion(missing)].filter(Boolean).join("")
     });
     return messages;
   }

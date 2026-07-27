@@ -64,6 +64,26 @@ describe("resolveFreeComposition", () => {
     expect(result.candidates[0]).toMatchObject({ id: "case_login", kind: "composite_case" });
   });
 
+  it("parses a trailing count as repeat intent for natural test requests", () => {
+    const result = resolveFreeComposition("测试进入新建课堂8次", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [
+        metaFunction({
+          id: "meta-new-lesson",
+          name: "进入新建课堂",
+          description: "从班级详情进入新建课堂页面",
+          parameters: []
+        })
+      ],
+      compositeCases: []
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.intent).toMatchObject({ runMode: "repeat_n", repeatCount: 8 });
+    expect(result.candidates[0]).toMatchObject({ id: "meta-new-lesson" });
+  });
+
   it("asks for clarification when a generic course-creation request matches distinct flows", () => {
     const result = resolveFreeComposition("帮我测试一下建课", {
       appId: "cn.eeo.classin",
@@ -176,8 +196,8 @@ describe("resolveFreeComposition", () => {
     });
   });
 
-  it("plans a single generated route from the current page to the requested target page", () => {
-    const result = resolveFreeComposition("跳转到主页", {
+  it("plans a fixed route from the stable start page instead of the detected current page", () => {
+    const result = resolveFreeComposition("跳转到空间", {
       appId: "cn.eeo.classin",
       platform: "android",
       metaFunctions: [],
@@ -239,20 +259,290 @@ describe("resolveFreeComposition", () => {
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0]).toMatchObject({
       kind: "generated_flow",
-      name: "登录 / 登录按钮 → 主页",
-      composedCandidateIds: ["page_transition:page-login:login-button:page-home"]
+      name: "主页 / 打开空间 → 空间",
+      composedCandidateIds: ["page_transition:page-home:open-space:page-space"]
     });
   });
 
-  it("returns a single no-op flow when the current page is already the requested target page", () => {
-    const result = resolveFreeComposition("跳转到主页", {
+  it("keeps a page-entry request on the fixed route even when AI selects a creation asset", () => {
+    const result = resolveFreeComposition("测试进入新建课堂8次", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [
+        metaFunction({
+          id: "meta-create-lesson-without-publish",
+          name: "创建课堂但不发布",
+          description: "填写课堂表单后创建课堂但不发布",
+          parameters: [
+            { key: "lessonName", type: "string" as const, required: true },
+            { key: "duration", type: "number" as const, required: true },
+            { key: "aiContentSummary", type: "string" as const, required: false }
+          ]
+        })
+      ],
+      compositeCases: [],
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-class-detail", pageModelName: "班级详情", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-activity-type", pageModelName: "发布活动类型选择页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-new-lesson", pageModelName: "新建课堂", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-class-detail",
+          targetPageModelName: "班级详情",
+          pageElementId: "class-list",
+          pageElementLabel: "班级列表",
+          pageTransitionId: "edge-home-class-detail",
+          pageTransitionName: "主页 -> 班级详情",
+          parameterKeys: ["className"],
+          status: "active"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-class-detail",
+          sourcePageModelName: "班级详情",
+          targetPageModelId: "page-activity-type",
+          targetPageModelName: "发布活动类型选择页",
+          pageElementId: "publish-activity",
+          pageElementLabel: "发布活动",
+          pageTransitionId: "edge-class-detail-activity-type",
+          pageTransitionName: "班级详情 -> 发布活动类型选择页",
+          status: "active"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-activity-type",
+          sourcePageModelName: "发布活动类型选择页",
+          targetPageModelId: "page-new-lesson",
+          targetPageModelName: "新建课堂",
+          pageElementId: "new-lesson",
+          pageElementLabel: "新建课堂",
+          pageTransitionId: "edge-activity-type-new-lesson",
+          pageTransitionName: "发布活动类型选择页 -> 新建课堂",
+          status: "active"
+        }
+      ],
+      pageTasks: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-new-lesson",
+          pageModelName: "新建课堂",
+          pageTaskId: "fill-new-lesson-form",
+          pageTaskName: "填写新建课堂表单（不发布）",
+          parameterKeys: ["lessonName", "duration", "aiContentSummary"],
+          status: "active"
+        }
+      ],
+      aiPlanner: {
+        status: "used",
+        normalizedPrompt: "重复8次进入新建课堂页面进行测试",
+        orderedAssetIds: ["meta-create-lesson-without-publish"],
+        orderedAssetNames: ["创建课堂但不发布"],
+        targetPageName: "新建课堂",
+        runMode: "repeat_n",
+        repeatCount: 8,
+        summary: "理解为调用“创建课堂但不发布”资产，重复8次进入新建课堂页面。"
+      }
+    } as Parameters<typeof resolveFreeComposition>[1]);
+
+    expect(result.status).toBe("ready");
+    expect(result.intent).toMatchObject({ runMode: "repeat_n", repeatCount: 8 });
+    expect(result.intent.riskTerms).not.toContain("发布");
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "主页 / 班级列表 → 班级详情 → 班级详情 / 发布活动 → 发布活动类型选择页 → 发布活动类型选择页 / 新建课堂 → 新建课堂",
+      composedCandidateIds: [
+        "page_transition:page-home:class-list:page-class-detail",
+        "page_transition:page-class-detail:publish-activity:page-activity-type",
+        "page_transition:page-activity-type:new-lesson:page-new-lesson"
+      ],
+      parameterKeys: ["className"]
+    });
+  });
+
+  it("does not treat an action-like target page name as a page task when repeat wording has spaces", () => {
+    const result = resolveFreeComposition("测试进入新建课堂 循环2次", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-new-lesson", pageModelName: "新建课堂", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-new-lesson",
+          targetPageModelName: "新建课堂",
+          pageElementId: "new-lesson",
+          pageElementLabel: "新建课堂",
+          pageTransitionId: "edge-home-new-lesson",
+          status: "active"
+        }
+      ],
+      pageTasks: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-new-lesson",
+          pageModelName: "新建课堂",
+          pageTaskId: "fill-new-lesson-form",
+          pageTaskName: "填写新建课堂表单（不发布）",
+          parameterKeys: ["lessonName", "duration"],
+          status: "active"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.intent).toMatchObject({ runMode: "repeat_n", repeatCount: 2 });
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "主页 / 新建课堂 → 新建课堂",
+      composedCandidateIds: ["page_transition:page-home:new-lesson:page-new-lesson"],
+      parameterKeys: []
+    });
+  });
+
+  it("treats action-like page names as navigation targets when no action is requested", () => {
+    const result = resolveFreeComposition("测试进入支付页3次", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [
+        metaFunction({
+          id: "meta-pay-order",
+          name: "支付订单",
+          description: "提交订单支付",
+          parameters: [{ key: "orderId", type: "string" as const, required: true }]
+        })
+      ],
+      compositeCases: [],
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-payment", pageModelName: "支付页", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-payment",
+          targetPageModelName: "支付页",
+          pageElementId: "payment-entry",
+          pageElementLabel: "支付入口",
+          pageTransitionId: "edge-home-payment",
+          pageTransitionName: "主页 -> 支付页",
+          status: "active"
+        }
+      ],
+      pageTasks: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-payment",
+          pageModelName: "支付页",
+          pageTaskId: "submit-payment",
+          pageTaskName: "提交支付",
+          parameterKeys: ["orderId"],
+          status: "active"
+        }
+      ],
+      aiPlanner: {
+        status: "used",
+        normalizedPrompt: "重复3次进入支付页进行测试",
+        orderedAssetIds: ["meta-pay-order"],
+        orderedAssetNames: ["支付订单"],
+        targetPageName: "支付页",
+        runMode: "repeat_n",
+        repeatCount: 3,
+        riskTerms: ["支付"],
+        summary: "进入支付页进行测试。"
+      }
+    } as Parameters<typeof resolveFreeComposition>[1]);
+
+    expect(result.status).toBe("ready");
+    expect(result.intent.riskTerms).not.toContain("支付");
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "主页 / 支付入口 → 支付页",
+      composedCandidateIds: ["page_transition:page-home:payment-entry:page-payment"],
+      parameterKeys: []
+    });
+  });
+
+  it("keeps explicit page actions after navigation as an executable task flow", () => {
+    const result = resolveFreeComposition("进入新建课堂并填写表单", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-new-lesson", pageModelName: "新建课堂", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-new-lesson",
+          targetPageModelName: "新建课堂",
+          pageElementId: "new-lesson",
+          pageElementLabel: "新建课堂",
+          pageTransitionId: "edge-home-new-lesson",
+          pageTransitionName: "主页 -> 新建课堂",
+          status: "active"
+        }
+      ],
+      pageTasks: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-new-lesson",
+          pageModelName: "新建课堂",
+          pageTaskId: "fill-form",
+          pageTaskName: "填写表单",
+          parameterKeys: ["lessonName"],
+          status: "active"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "主页 / 新建课堂 → 新建课堂 → 新建课堂 / 填写表单",
+      composedCandidateIds: [
+        "page_transition:page-home:new-lesson:page-new-lesson",
+        "page_task:page-new-lesson:fill-form"
+      ],
+      parameterKeys: ["lessonName"]
+    });
+  });
+
+  it("does not turn the plan into a current-page no-op when the device is already on the target page", () => {
+    const result = resolveFreeComposition("跳转到空间", {
       appId: "cn.eeo.classin",
       platform: "android",
       metaFunctions: [],
       compositeCases: [],
       currentPage: {
-        pageModelId: "page-home",
-        pageModelName: "主页"
+        pageModelId: "page-space",
+        pageModelName: "空间"
       },
       pageAssets: [
         { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
@@ -276,19 +566,16 @@ describe("resolveFreeComposition", () => {
     });
 
     expect(result.status).toBe("ready");
-    expect(result.message).toBe("当前设备已在目标页面，无需执行。");
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0]).toMatchObject({
       kind: "generated_flow",
-      name: "当前已在主页",
-      pageModelId: "page-home",
-      composedCandidateIds: [],
-      requiresExecution: false
+      name: "主页 / 打开空间 → 空间",
+      composedCandidateIds: ["page_transition:page-home:open-space:page-space"]
     });
   });
 
-  it("does not offer routes from arbitrary pages when device current page detection failed", () => {
-    const result = resolveFreeComposition("跳转到主页", {
+  it("still plans the fixed route when device current page detection failed", () => {
+    const result = resolveFreeComposition("跳转到空间", {
       appId: "cn.eeo.classin",
       platform: "android",
       metaFunctions: [],
@@ -296,46 +583,34 @@ describe("resolveFreeComposition", () => {
       currentPageDetectionAttempted: true,
       pageAssets: [
         { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
-        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-login", pageModelName: "登录", status: "active" },
-        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-schedule", pageModelName: "课程表", status: "active" }
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-space", pageModelName: "空间", status: "active" }
       ],
       pageTransitions: [
         {
           appId: "cn.eeo.classin",
           platform: "android",
-          sourcePageModelId: "page-login",
-          sourcePageModelName: "登录",
-          targetPageModelId: "page-home",
-          targetPageModelName: "主页",
-          pageElementId: "login-button",
-          pageElementLabel: "登录按钮",
-          pageTransitionId: "edge-login-home",
-          pageTransitionName: "登录 -> 主页",
-          status: "active"
-        },
-        {
-          appId: "cn.eeo.classin",
-          platform: "android",
-          sourcePageModelId: "page-schedule",
-          sourcePageModelName: "课程表",
-          targetPageModelId: "page-home",
-          targetPageModelName: "主页",
-          pageElementId: "open-home",
-          pageElementLabel: "切回主页",
-          pageTransitionId: "edge-schedule-home",
-          pageTransitionName: "课程表 -> 主页",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-space",
+          targetPageModelName: "空间",
+          pageElementId: "open-space",
+          pageElementLabel: "打开空间",
+          pageTransitionId: "edge-home-space",
+          pageTransitionName: "主页 -> 空间",
           status: "active"
         }
       ]
     });
 
-    expect(result.status).toBe("missing_assets");
-    expect(result.candidates).toEqual([]);
-    expect(result.message).toContain("未能稳定识别当前设备页面");
+    expect(result.status).toBe("ready");
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "主页 / 打开空间 → 空间"
+    });
   });
 
-  it("explains route planning blockers differently when the device is outside the target app", () => {
-    const result = resolveFreeComposition("跳转到主页", {
+  it("still plans the fixed route when the device is outside the target app during analysis", () => {
+    const result = resolveFreeComposition("跳转到空间", {
       appId: "cn.eeo.classin",
       platform: "android",
       metaFunctions: [],
@@ -347,14 +622,31 @@ describe("resolveFreeComposition", () => {
         actualAppId: "com.android.launcher"
       },
       pageAssets: [
-        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" }
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-space", pageModelName: "空间", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-space",
+          targetPageModelName: "空间",
+          pageElementId: "open-space",
+          pageElementLabel: "打开空间",
+          pageTransitionId: "edge-home-space",
+          pageTransitionName: "主页 -> 空间",
+          status: "active"
+        }
       ]
     });
 
-    expect(result.status).toBe("missing_assets");
-    expect(result.candidates).toEqual([]);
-    expect(result.message).toContain("当前设备不在目标 App 内");
-    expect(result.message).toContain("请先启动目标 App 后重试");
+    expect(result.status).toBe("ready");
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "主页 / 打开空间 → 空间"
+    });
   });
 
   it("carries required runtime parameters from a current-page transition route", () => {
@@ -502,6 +794,95 @@ describe("resolveFreeComposition", () => {
       ],
       parameterKeys: ["className", "password", "phone"]
     });
+  });
+
+  it("uses AI planner hints to turn conversational account switching into a bounded asset flow", () => {
+    const result = resolveFreeComposition("帮我换成老师账号 12133333302", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [
+        metaFunction({
+          id: "meta_logout",
+          name: "退出登录",
+          description: "从当前账号退出到登录页",
+          parameters: []
+        }),
+        metaFunction()
+      ],
+      compositeCases: [],
+      aiPlanner: {
+        status: "used",
+        orderedAssetNames: ["退出登录", "账号密码登录"],
+        runtimeOverrides: { phone: "12133333302" },
+        summary: "用户希望切换账号，需先退出再登录。"
+      }
+    } as Parameters<typeof resolveFreeComposition>[1]);
+
+    expect(result.status).toBe("ready");
+    expect(result.intent.runtimeOverrides).toMatchObject({ phone: "12133333302" });
+    expect(result.aiPlanner).toMatchObject({ status: "used" });
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "退出登录 → 账号密码登录",
+      composedCandidateIds: ["meta_logout", "meta_login"],
+      parameterKeys: ["password", "phone"]
+    });
+  });
+
+  it("uses AI planner repeat hints when the prompt wording is not covered by deterministic parsing", () => {
+    const result = resolveFreeComposition("把这条新建课堂流程跑八遍", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [
+        metaFunction({
+          id: "meta-new-lesson",
+          name: "进入新建课堂",
+          description: "从班级详情进入新建课堂页面",
+          parameters: []
+        })
+      ],
+      compositeCases: [],
+      aiPlanner: {
+        status: "used",
+        normalizedPrompt: "测试进入新建课堂8次",
+        orderedAssetNames: ["进入新建课堂"],
+        runMode: "repeat_n",
+        repeatCount: 8
+      }
+    } as Parameters<typeof resolveFreeComposition>[1]);
+
+    expect(result.status).toBe("ready");
+    expect(result.intent).toMatchObject({ runMode: "repeat_n", repeatCount: 8 });
+    expect(result.aiPlanner).toMatchObject({ status: "used", repeatCount: 8 });
+  });
+
+  it("blocks execution when AI understood requirements that the system cannot support", () => {
+    const result = resolveFreeComposition("测试进入新建课堂8次，每次之间等待10分钟", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [
+        metaFunction({
+          id: "meta-new-lesson",
+          name: "进入新建课堂",
+          description: "从班级详情进入新建课堂页面",
+          parameters: []
+        })
+      ],
+      compositeCases: [],
+      aiPlanner: {
+        status: "used",
+        normalizedPrompt: "测试进入新建课堂8次，每次之间等待10分钟",
+        orderedAssetNames: ["进入新建课堂"],
+        runMode: "repeat_n",
+        repeatCount: 8,
+        unsupportedRequirements: ["步骤间隔等待"]
+      }
+    } as Parameters<typeof resolveFreeComposition>[1]);
+
+    expect(result.status).toBe("missing_assets");
+    expect(result.candidates).toEqual([]);
+    expect(result.message).toContain("AI已理解：测试进入新建课堂8次，每次之间等待10分钟");
+    expect(result.message).toContain("系统暂不支持：步骤间隔等待");
   });
 
   it("extracts high-risk intents without treating them as execution approval", () => {

@@ -11,6 +11,42 @@ import {
 } from "./FreeCompositionPanel.js";
 
 describe("FreeCompositionPanel", () => {
+  it("hides internal planning metadata and the default one-time mode", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(FreeCompositionPanel, {
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        defaultAppId: "cn.eeo.classin",
+        setMessage: vi.fn(),
+        initialData: {
+          sessions: [
+            {
+              id: "free_composition_once",
+              appId: "cn.eeo.classin",
+              platform: "android",
+              prompt: "打开扫一扫",
+              createdAt: "2026-07-18T00:00:00.000Z",
+              updatedAt: "2026-07-18T00:00:00.000Z",
+              status: "awaiting_confirmation",
+              resolution: {
+                status: "ready",
+                message: "已生成可执行流程。",
+                intent: { prompt: "打开扫一扫", runMode: "once", repeatCount: 1, riskTerms: [] },
+                candidates: [],
+                aiPlanner: { status: "used" }
+              }
+            }
+          ],
+          profiles: []
+        }
+      })
+    );
+
+    expect(markup).not.toContain("单次执行");
+    expect(markup).not.toContain("AI理解 · 系统校验");
+    expect(markup).not.toContain("规则解析 · 系统校验");
+  });
+
   it("renders the natural-language plan flow with candidate, profile, and execution controls", () => {
     const markup = renderToStaticMarkup(
       React.createElement(FreeCompositionPanel, {
@@ -75,7 +111,7 @@ describe("FreeCompositionPanel", () => {
     expect(markup).toContain("测试登录，循环 3 次");
     expect(markup).toContain("登录巡检");
     expect(markup).toContain("教师账号");
-    expect(markup).toContain("生成计划");
+    expect(markup).not.toContain("生成计划");
   });
 
   it("renders free composition as a two-pane workbench with a compact result stack", () => {
@@ -153,6 +189,9 @@ describe("FreeCompositionPanel", () => {
     expect(markup).toContain("free-composition-session-feed");
     expect(markup).toContain("确认当前在主页");
     expect(markup).toContain("点击「打开成长」并进入成长");
+    expect(markup).toContain("循环 5 次");
+    expect(markup).not.toContain("生成计划");
+    expect(markup).toContain("开始执行");
   });
 
   it("includes android app monitor config when building execution requests", () => {
@@ -359,6 +398,9 @@ describe("FreeCompositionPanel", () => {
     expect(markup).toContain("我已识别 phone=12133333302");
     expect(markup).toContain("还需要 password");
     expect(markup).toContain("直接回复 password 的值");
+    expect(markup).toContain("free-composition-profile-actions");
+    expect(markup).toContain(">使用教师组合测试参数</button>");
+    expect(markup).not.toContain("回复“使用参数集");
     expect(markup).toContain("phone");
     expect(markup).toContain("12133333302");
     expect(markup).toContain("password");
@@ -563,6 +605,49 @@ describe("FreeCompositionPanel", () => {
     expect(markup).not.toContain("请先回到已录入页面");
     expect(markup).not.toContain("候选流程");
     expect(markup).not.toContain("生成计划");
+    expect(markup).not.toContain("开始执行");
+  });
+
+  it("guides generic missing-asset requests to asset recording", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(FreeCompositionPanel, {
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        defaultAppId: "cn.eeo.classin",
+        setMessage: vi.fn(),
+        onOpenAssetRecording: vi.fn(),
+        initialData: {
+          sessions: [
+            {
+              id: "free_composition_missing_route",
+              appId: "cn.eeo.classin",
+              platform: "android",
+              prompt: "打开扫一扫",
+              createdAt: "2026-07-18T00:00:00.000Z",
+              updatedAt: "2026-07-18T00:00:00.000Z",
+              status: "blocked",
+              resolution: {
+                status: "missing_assets",
+                message: "已找到页面资产“扫一扫”，但没有找到可执行到该页面的 active 连接边、页面任务、元功能或组合用例。",
+                intent: {
+                  prompt: "打开扫一扫",
+                  runMode: "once",
+                  repeatCount: 1,
+                  riskTerms: []
+                },
+                candidates: []
+              }
+            }
+          ],
+          profiles: []
+        }
+      })
+    );
+
+    expect(markup).toContain("去录制资产");
+    expect(markup).toContain("重新分析");
+    expect(markup).not.toContain("候选流程");
+    expect(markup).not.toContain("App 进程监控");
     expect(markup).not.toContain("开始执行");
   });
 

@@ -49,11 +49,33 @@ export type FreeCompositionIntent = {
   runtimeOverrides: Record<string, string>;
 };
 
+export type FreeCompositionAiPlannerHints = {
+  status: "used" | "fallback";
+  normalizedPrompt?: string;
+  targetPageName?: string;
+  orderedAssetNames?: string[];
+  orderedAssetIds?: string[];
+  runtimeOverrides?: Record<string, string>;
+  runMode?: RunMode;
+  repeatCount?: number;
+  unsupportedRequirements?: string[];
+  missingParams?: string[];
+  riskTerms?: string[];
+  clarification?: string;
+  summary?: string;
+  confidence?: number;
+  channel?: "codex" | "openai-compatible";
+  model?: string;
+  warnings?: string[];
+  errorMessage?: string;
+};
+
 export type FreeCompositionResolution = {
   status: "ready" | "needs_clarification" | "missing_assets";
   intent: FreeCompositionIntent;
   candidates: FreeCompositionCandidate[];
   message: string;
+  aiPlanner?: FreeCompositionAiPlannerHints;
 };
 
 export type ResolveFreeCompositionInput = {
@@ -75,6 +97,7 @@ export type ResolveFreeCompositionInput = {
     expectedAppId?: string;
     actualAppId?: string;
   };
+  aiPlanner?: FreeCompositionAiPlannerHints;
 };
 
 export type FreeCompositionPageTaskAsset = {
@@ -124,6 +147,30 @@ export type FreeCompositionPageAbilityAsset = {
 };
 
 const RISK_TERMS = ["发布", "提交", "删除", "退出登录", "注销", "支付"] as const;
+const NON_NAVIGATION_ACTION_TERMS = [
+  "填写",
+  "填入",
+  "输入",
+  "选择",
+  "勾选",
+  "点击",
+  "点一下",
+  "发起",
+  "创建",
+  "新建",
+  "发布",
+  "提交",
+  "保存",
+  "完成",
+  "确认",
+  "支付",
+  "删除",
+  "退出登录",
+  "注销",
+  "登录",
+  "登出"
+] as const;
+const ACTION_LIKE_PAGE_NAME_TERMS = new Set<string>(["创建", "新建", "发布", "提交", "支付", "登录"]);
 
 const INTENT_TERMS: Array<{ pattern: RegExp; terms: string[] }> = [
   { pattern: /登录|登陆|账号/, terms: ["登录", "账号"] },
@@ -135,31 +182,105 @@ const INTENT_TERMS: Array<{ pattern: RegExp; terms: string[] }> = [
   { pattern: /搜索/, terms: ["搜索"] }
 ];
 
-export function parseFreeCompositionIntent(prompt: string): FreeCompositionIntent {
+export function parseFreeCompositionIntent(prompt: string, aiPlanner?: FreeCompositionAiPlannerHints): FreeCompositionIntent {
   const normalized = normalize(prompt);
-  const repeatMatch = normalized.match(/(?:循环|重复|执行)(\d{1,4})次/);
-  const repeatCount = repeatMatch ? clampRepeatCount(Number(repeatMatch[1])) : 1;
-  const loopUntilStopped = /一直循环|持续循环|直到停止|无限循环/.test(normalized);
+  const repeatCountFromPrompt = repeatCountFromNormalizedPrompt(normalized);
+  const aiRunMode = aiPlanner?.status === "used" ? aiPlanner.runMode : undefined;
+  const repeatCountFromAi = aiRunMode === "repeat_n" ? aiPlanner?.repeatCount : undefined;
+  const repeatCount = repeatCountFromPrompt
+    ? clampRepeatCount(repeatCountFromPrompt)
+    : repeatCountFromAi
+      ? clampRepeatCount(repeatCountFromAi)
+      : 1;
+  const loopUntilStopped = /一直循环|持续循环|直到停止|无限循环/.test(normalized) || aiRunMode === "loop_until_stop";
 
   return {
     prompt: prompt.trim(),
-    runMode: loopUntilStopped ? "loop_until_stop" : repeatMatch ? "repeat_n" : "once",
+    runMode: loopUntilStopped ? "loop_until_stop" : repeatCountFromPrompt || repeatCountFromAi ? "repeat_n" : "once",
     repeatCount: loopUntilStopped ? 1 : repeatCount,
-    riskTerms: riskTermsInText(prompt),
-    runtimeOverrides: extractRuntimeOverridesFromPrompt(prompt)
+    riskTerms: uniqueStrings([
+      ...riskTermsInText(prompt),
+      ...groundedAiRiskTerms(prompt, aiPlanner),
+      ...riskTermsInText(aiPlanner?.normalizedPrompt ?? "")
+    ]),
+    runtimeOverrides: {
+      ...extractRuntimeOverridesFromPrompt(prompt),
+      ...normalizedAiRuntimeOverrides(aiPlanner?.runtimeOverrides)
+    }
   };
+}
+
+function repeatCountFromNormalizedPrompt(normalizedPrompt: string): number | undefined {
+  const explicitRepeatMatch = normalizedPrompt.match(/(?:循环|重复|执行|跑)(\d{1,4})次/);
+  if (explicitRepeatMatch?.[1]) {
+    return Number(explicitRepeatMatch[1]);
+  }
+
+  const trailingCountMatch = normalizedPrompt.match(/(\d{1,4})次$/);
+  if (!trailingCountMatch?.[1]) {
+    return undefined;
+  }
+  const countIndex = trailingCountMatch.index ?? -1;
+  if (countIndex > 0 && normalizedPrompt[countIndex - 1] === "第") {
+    return undefined;
+  }
+  const actionText = normalizedPrompt.slice(0, countIndex);
+  if (!/(测试|测|验证|进入|打开|跳转|创建|新建|登录|发布|执行|跑|用例|流程)/.test(actionText)) {
+    return undefined;
+  }
+  return Number(trailingCountMatch[1]);
 }
 
 export function riskTermsInText(text: string): string[] {
   const normalized = normalize(text);
-  return RISK_TERMS.filter((term) => normalized.includes(term));
+  return RISK_TERMS.filter((term) => containsAffirmativeRiskTerm(normalized, term));
+}
+
+function groundedAiRiskTerms(prompt: string, aiPlanner: FreeCompositionAiPlannerHints | undefined): string[] {
+  if (aiPlanner?.status !== "used") {
+    return [];
+  }
+  const groundingText = normalize([prompt, aiPlanner.normalizedPrompt].filter(Boolean).join("\n"));
+  return uniqueStrings(aiPlanner.riskTerms ?? []).filter((term) => containsAffirmativeRiskTerm(groundingText, term));
+}
+
+function containsAffirmativeRiskTerm(text: string, term: string): boolean {
+  let index = text.indexOf(term);
+  while (index >= 0) {
+    if (
+      !hasNegatedRiskPrefix(text.slice(Math.max(0, index - 12), index)) &&
+      !hasPageReferenceRiskSuffix(text.slice(index + term.length, index + term.length + 12))
+    ) {
+      return true;
+    }
+    index = text.indexOf(term, index + term.length);
+  }
+  return false;
+}
+
+function hasNegatedRiskPrefix(prefix: string): boolean {
+  return /(?:不|别|勿|未|非|无须|无需|不用|不要|不会|不需要|禁止)(?:进行|执行|去|再|直接)?$/.test(prefix);
+}
+
+function hasPageReferenceRiskSuffix(suffix: string): boolean {
+  return /^(?:页|页面|入口|中心|列表|详情|设置|管理|记录|类型|选择|[\u4e00-\u9fa5]{0,8}(?:页|页面|入口|中心|列表|详情|设置|管理|记录))/.test(suffix);
 }
 
 export function resolveFreeComposition(
   prompt: string,
   input: ResolveFreeCompositionInput
 ): FreeCompositionResolution {
-  const intent = parseFreeCompositionIntent(prompt);
+  const matchingPrompt = promptWithAiPlannerHints(prompt, input.aiPlanner);
+  const intent = parseFreeCompositionIntent(prompt, input.aiPlanner);
+  const unsupportedRequirements = unsupportedRequirementsFromAiPlanner(input.aiPlanner);
+  if (unsupportedRequirements.length) {
+    return withAiPlanner({
+      status: "missing_assets",
+      intent,
+      candidates: [],
+      message: unsupportedRequirementsMessage(prompt, input.aiPlanner, unsupportedRequirements)
+    }, input.aiPlanner);
+  }
   const activeMetaFunctions = input.metaFunctions.filter(
     (metaFunction) =>
       metaFunction.appId === input.appId &&
@@ -167,7 +288,7 @@ export function resolveFreeComposition(
       metaFunction.status === "active"
   );
   const metaFunctionsById = new Map(activeMetaFunctions.map((item) => [item.id, item]));
-  const systemActionCandidate = buildSystemActionCandidate(intent.prompt, input);
+  const systemActionCandidate = buildSystemActionCandidate(matchingPrompt, input);
   const baseCandidates = [
     ...(systemActionCandidate ? [systemActionCandidate] : []),
     ...input.compositeCases
@@ -185,7 +306,7 @@ export function resolveFreeComposition(
             .filter((step) => step.enabled)
             .flatMap((step) => metaFunctionsById.get(step.metaFunctionId)?.parameters ?? [])
             .map((parameter) => parameter.key),
-          intent.prompt
+          matchingPrompt
         )
       ),
     ...activeMetaFunctions.map((metaFunction) =>
@@ -193,7 +314,7 @@ export function resolveFreeComposition(
         metaFunction,
         "meta_function",
         metaFunction.parameters.map((parameter) => parameter.key),
-        intent.prompt
+        matchingPrompt
       )
     ),
     ...(input.pageTasks ?? [])
@@ -202,81 +323,176 @@ export function resolveFreeComposition(
         pageTask.platform === input.platform &&
         pageTask.status !== "deprecated"
       )
-      .map((pageTask) => buildPageTaskCandidate(pageTask, intent.prompt)),
+      .map((pageTask) => buildPageTaskCandidate(pageTask, matchingPrompt)),
     ...(input.pageTransitions ?? [])
       .filter((pageTransition) =>
         pageTransition.appId === input.appId &&
         pageTransition.platform === input.platform &&
         pageTransition.status !== "deprecated"
       )
-      .map((pageTransition) => buildPageTransitionCandidate(pageTransition, intent.prompt))
+      .map((pageTransition) => buildPageTransitionCandidate(pageTransition, matchingPrompt))
   ]
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name, "zh-CN"));
-  const currentRouteFlow = buildCurrentPageRouteCandidate(intent.prompt, input, baseCandidates);
-  if (currentRouteFlow) {
-    return {
+  const fixedRouteFlow = buildFixedStartRouteCandidate(matchingPrompt, input, baseCandidates);
+  if (fixedRouteFlow && shouldPreferFixedRouteForPageEntry(prompt, input.aiPlanner, fixedRouteFlow)) {
+    return withAiPlanner({
       status: "ready",
       intent,
-      candidates: [currentRouteFlow],
-      message: currentRouteFlow.requiresExecution === false
-        ? "当前设备已在目标页面，无需执行。"
-        : "已根据当前设备页面规划到目标页面的唯一执行流程。确认参数后生成执行计划。"
-    };
+      candidates: [fixedRouteFlow],
+      message: "已按固定流程线规划执行路径。执行时会根据当前设备页面动态接入流程线。"
+    }, input.aiPlanner);
   }
-  const blockedTargetPage = currentPageDetectionBlockedTargetPage(intent.prompt, input);
-  if (blockedTargetPage) {
-    if (input.currentPageDetectionFailure?.reason === "outside_app") {
-      return {
-        status: "missing_assets",
+  const fixedRouteWithActionFlow = fixedRouteFlow
+    ? buildFixedRouteWithExplicitActionCandidate(prompt, fixedRouteFlow, baseCandidates)
+    : undefined;
+  const generatedFlow =
+    fixedRouteWithActionFlow ??
+    buildAiGeneratedFlowCandidate(input.aiPlanner, baseCandidates) ??
+    buildGeneratedFlowCandidate(matchingPrompt, baseCandidates);
+  if (!generatedFlow) {
+    if (fixedRouteFlow) {
+      return withAiPlanner({
+        status: "ready",
         intent,
-        candidates: [],
-        message: `当前设备不在目标 App 内，无法从当前页规划到目标页“${blockedTargetPage.pageModelName}”。请先启动目标 App 后重试。`
-      };
+        candidates: [fixedRouteFlow],
+        message: "已按固定流程线规划执行路径。执行时会根据当前设备页面动态接入流程线。"
+      }, input.aiPlanner);
     }
-    return {
-      status: "missing_assets",
-      intent,
-      candidates: [],
-      message: `未能稳定识别当前设备页面，无法从当前页规划到目标页“${blockedTargetPage.pageModelName}”。请先回到已录入页面、关闭当前前景页，或补充当前页面资产后重试。`
-    };
   }
-  const generatedFlow = buildGeneratedFlowCandidate(intent.prompt, baseCandidates);
   const candidates = generatedFlow ? [generatedFlow, ...baseCandidates] : baseCandidates;
 
   if (candidates.length === 0) {
-    return {
+    return withAiPlanner({
       status: "missing_assets",
       intent,
       candidates: [],
-      message: missingAssetsMessage(intent.prompt, input)
-    };
+      message: missingAssetsMessage(matchingPrompt, input)
+    }, input.aiPlanner);
   }
 
-  if (!generatedFlow && requiresClarification(intent.prompt, candidates)) {
-    return {
+  if (!generatedFlow && requiresClarification(matchingPrompt, candidates)) {
+    return withAiPlanner({
       status: "needs_clarification",
       intent,
       candidates,
-      message: "找到多个可能的流程，请选择你想执行的资产后再生成计划。"
-    };
+      message: "找到多个可能的流程，请选择你想执行的流程。"
+    }, input.aiPlanner);
   }
 
-  return {
+  return withAiPlanner({
     status: "ready",
     intent,
     candidates,
     message: generatedFlow
-      ? "已按需求生成临时执行流程。确认参数后生成执行计划。"
-      : "已找到可执行候选。请选择候选并确认参数后生成执行计划。"
+      ? "已按需求生成临时执行流程。"
+      : "已找到可执行候选，请选择要执行的流程。"
+  }, input.aiPlanner);
+}
+
+function withAiPlanner(resolution: FreeCompositionResolution, aiPlanner: FreeCompositionAiPlannerHints | undefined): FreeCompositionResolution {
+  return aiPlanner ? { ...resolution, aiPlanner } : resolution;
+}
+
+function unsupportedRequirementsFromAiPlanner(aiPlanner: FreeCompositionAiPlannerHints | undefined): string[] {
+  if (aiPlanner?.status !== "used") {
+    return [];
+  }
+  return uniqueStrings(aiPlanner.unsupportedRequirements ?? []);
+}
+
+function unsupportedRequirementsMessage(
+  prompt: string,
+  aiPlanner: FreeCompositionAiPlannerHints | undefined,
+  unsupportedRequirements: string[]
+): string {
+  const understood = aiPlanner?.normalizedPrompt?.trim() || aiPlanner?.summary?.trim() || prompt.trim();
+  return `AI已理解：${understood}。系统暂不支持：${unsupportedRequirements.join("、")}。请调整需求，或先补齐对应系统能力后重试。`;
+}
+
+function promptWithAiPlannerHints(prompt: string, aiPlanner: FreeCompositionAiPlannerHints | undefined): string {
+  if (!aiPlanner || aiPlanner.status !== "used") {
+    return prompt;
+  }
+  const hintLines = [
+    prompt,
+    aiPlanner.normalizedPrompt,
+    aiPlanner.targetPageName ? `目标页面：${aiPlanner.targetPageName}` : "",
+    aiPlanner.runMode === "repeat_n" && aiPlanner.repeatCount ? `重复执行${aiPlanner.repeatCount}次` : "",
+    aiPlanner.runMode === "loop_until_stop" ? "持续循环直到停止" : "",
+    orderedAssetHint(aiPlanner.orderedAssetNames),
+    runtimeOverrideHint(aiPlanner.runtimeOverrides)
+  ].filter((line): line is string => Boolean(line?.trim()));
+  return hintLines.join("\n");
+}
+
+function orderedAssetHint(names: string[] | undefined): string {
+  const ordered = uniqueStrings(names ?? []);
+  if (!ordered.length) {
+    return "";
+  }
+  return ordered.map((name, index) => `${index === 0 ? "先" : "然后"}${name}`).join(" ");
+}
+
+function runtimeOverrideHint(overrides: Record<string, string> | undefined): string {
+  const entries = Object.entries(normalizedAiRuntimeOverrides(overrides));
+  return entries.map(([key, value]) => `${key}=${value}`).join(" ");
+}
+
+function normalizedAiRuntimeOverrides(overrides: Record<string, string> | undefined): Record<string, string> {
+  if (!overrides) {
+    return {};
+  }
+  return Object.fromEntries(Object.entries(overrides)
+    .map(([key, value]) => [key.trim(), typeof value === "string" ? value.trim() : ""] as const)
+    .filter(([key, value]) => key && value));
+}
+
+function buildAiGeneratedFlowCandidate(
+  aiPlanner: FreeCompositionAiPlannerHints | undefined,
+  candidates: FreeCompositionCandidate[]
+): FreeCompositionCandidate | undefined {
+  if (!aiPlanner || aiPlanner.status !== "used") {
+    return undefined;
+  }
+  const orderedCandidates = candidatesForAiOrderedAssets(aiPlanner, candidates);
+  if (orderedCandidates.length < 2) {
+    return undefined;
+  }
+  return {
+    id: "generated_flow:" + orderedCandidates.map((item) => item.id).join(">"),
+    kind: "generated_flow",
+    appId: orderedCandidates[0]!.appId,
+    platform: orderedCandidates[0]!.platform,
+    name: orderedCandidates.map((item) => item.name).join(" → "),
+    description: "由 AI 理解自然语言后，经系统资产校验生成的临时流程，不会保存为正式资产。",
+    parameterProfileId: orderedCandidates.find((item) => item.parameterProfileId)?.parameterProfileId,
+    parameterKeys: uniqueStrings(orderedCandidates.flatMap((item) => item.parameterKeys)).sort(),
+    score: orderedCandidates.reduce((sum, item) => sum + item.score, 180),
+    matchedTerms: uniqueStrings(orderedCandidates.flatMap((item) => item.matchedTerms)),
+    composedCandidateIds: orderedCandidates.map((item) => item.id)
   };
 }
 
-function currentPageDetectionBlockedTargetPage(prompt: string, input: ResolveFreeCompositionInput): FreeCompositionPageAsset | undefined {
-  if (!input.currentPageDetectionAttempted || input.currentPage?.pageModelId || !isTargetPageNavigationIntent(prompt)) {
-    return undefined;
+function candidatesForAiOrderedAssets(
+  aiPlanner: FreeCompositionAiPlannerHints,
+  candidates: FreeCompositionCandidate[]
+): FreeCompositionCandidate[] {
+  const selected: FreeCompositionCandidate[] = [];
+  const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  for (const id of uniqueStrings(aiPlanner.orderedAssetIds ?? [])) {
+    const candidate = byId.get(id);
+    if (candidate && !selected.some((item) => item.id === candidate.id)) {
+      selected.push(candidate);
+    }
   }
-  return bestTargetPageForPrompt(prompt, input);
+  for (const name of uniqueStrings(aiPlanner.orderedAssetNames ?? [])) {
+    const candidate = candidates.find((item) => item.name === name);
+    if (candidate && !selected.some((item) => item.id === candidate.id)) {
+      selected.push(candidate);
+    }
+  }
+  return selected;
 }
 
 function buildPageTransitionCandidate(pageTransition: FreeCompositionPageTransitionAsset, prompt: string): FreeCompositionCandidate {
@@ -581,31 +797,35 @@ function buildGeneratedFlowCandidate(prompt: string, candidates: FreeComposition
   };
 }
 
-function buildCurrentPageRouteCandidate(
+function buildFixedStartRouteCandidate(
   prompt: string,
   input: ResolveFreeCompositionInput,
   baseCandidates: FreeCompositionCandidate[]
 ): FreeCompositionCandidate | undefined {
-  if (!input.currentPage?.pageModelId || !isTargetPageNavigationIntent(prompt)) {
+  if (!isTargetPageNavigationIntent(prompt)) {
     return undefined;
   }
   const targetPage = bestTargetPageForPrompt(prompt, input);
   if (!targetPage) {
     return undefined;
   }
-  if (targetPage.pageModelId === input.currentPage.pageModelId) {
+  const startPage = bestFixedStartPage(input, targetPage.pageModelId);
+  if (!startPage) {
+    return undefined;
+  }
+  if (targetPage.pageModelId === startPage.pageModelId) {
     return {
-      id: `generated_flow:current_page:${targetPage.pageModelId}`,
+      id: `generated_flow:fixed_start:${targetPage.pageModelId}`,
       kind: "generated_flow",
       appId: input.appId,
       platform: input.platform,
-      name: `当前已在${targetPage.pageModelName}`,
-      description: `当前设备已识别在目标页“${targetPage.pageModelName}”，无需额外跳转。`,
+      name: `固定起点已是${targetPage.pageModelName}`,
+      description: `目标页“${targetPage.pageModelName}”就是固定流程起点，无需额外资产步骤。`,
       parameterKeys: [],
       score: 240,
       matchedTerms: [targetPage.pageModelName],
-      pageModelId: targetPage.pageModelId,
-      pageModelName: targetPage.pageModelName,
+      pageModelId: startPage.pageModelId,
+      pageModelName: startPage.pageModelName,
       targetPageModelId: targetPage.pageModelId,
       targetPageModelName: targetPage.pageModelName,
       composedCandidateIds: [],
@@ -613,7 +833,7 @@ function buildCurrentPageRouteCandidate(
       requiresExecution: false
     };
   }
-  const path = shortestPageTransitionPath(input.currentPage.pageModelId, targetPage.pageModelId, input);
+  const path = shortestPageTransitionPath(startPage.pageModelId, targetPage.pageModelId, input);
   if (!path.length) {
     return undefined;
   }
@@ -627,7 +847,7 @@ function buildCurrentPageRouteCandidate(
     appId: input.appId,
     platform: input.platform,
     name: composedCandidates.map((item) => item.name).join(" → "),
-    description: `由当前页“${input.currentPage.pageModelName ?? input.currentPage.pageModelId}”到目标页“${targetPage.pageModelName}”自动规划的临时流程。`,
+    description: `由固定流程起点“${startPage.pageModelName}”到目标页“${targetPage.pageModelName}”规划的临时流程。执行时会根据设备当前页面动态接入流程线。`,
     parameterProfileId: composedCandidates.find((item) => item.parameterProfileId)?.parameterProfileId,
     parameterKeys: uniqueStrings(composedCandidates.flatMap((item) => item.parameterKeys)).sort(),
     score: composedCandidates.reduce((sum, item) => sum + item.score, 120),
@@ -635,6 +855,208 @@ function buildCurrentPageRouteCandidate(
     composedCandidateIds: composedCandidates.map((item) => item.id),
     composedCandidates
   };
+}
+
+function shouldPreferFixedRouteForPageEntry(
+  prompt: string,
+  aiPlanner: FreeCompositionAiPlannerHints | undefined,
+  fixedRouteFlow: FreeCompositionCandidate
+): boolean {
+  const targetPageName = fixedRouteFlow.targetPageModelName ?? aiPlanner?.targetPageName ?? fixedRouteFlow.pageModelName ?? "";
+  const navigationIntentText = [
+    prompt,
+    aiPlanner?.status === "used" ? aiPlanner.normalizedPrompt : "",
+    targetPageName ? `进入${targetPageName}` : ""
+  ].filter((line): line is string => Boolean(line?.trim())).join("\n");
+  if (!isTargetPageNavigationIntent(navigationIntentText)) {
+    return false;
+  }
+  return !containsExplicitNonNavigationAction(prompt, targetPageName);
+}
+
+function buildFixedRouteWithExplicitActionCandidate(
+  prompt: string,
+  fixedRouteFlow: FreeCompositionCandidate,
+  candidates: FreeCompositionCandidate[]
+): FreeCompositionCandidate | undefined {
+  const targetPageName = fixedRouteFlow.targetPageModelName ?? fixedRouteFlow.pageModelName ?? "";
+  if (!containsExplicitNonNavigationAction(prompt, targetPageName)) {
+    return undefined;
+  }
+  const routeCandidates = composedCandidatesForFlow(fixedRouteFlow, candidates);
+  const usedIds = new Set(routeCandidates.map((candidate) => candidate.id));
+  const actionCandidate = bestExplicitPageActionCandidate(
+    prompt,
+    targetPageName,
+    fixedRouteFlow.targetPageModelId ?? fixedRouteFlow.pageModelId,
+    candidates,
+    usedIds
+  );
+  if (!actionCandidate) {
+    return undefined;
+  }
+  const ordered = uniqueCandidates([...routeCandidates, actionCandidate]);
+  return {
+    id: "generated_flow:" + ordered.map((item) => item.id).join(">"),
+    kind: "generated_flow",
+    appId: fixedRouteFlow.appId,
+    platform: fixedRouteFlow.platform,
+    name: ordered.map((item) => item.name).join(" → "),
+    description: `由固定流程线进入“${targetPageName}”后接续用户明确要求的页面动作。`,
+    parameterProfileId: ordered.find((item) => item.parameterProfileId)?.parameterProfileId,
+    parameterKeys: uniqueStrings(ordered.flatMap((item) => item.parameterKeys)).sort(),
+    score: fixedRouteFlow.score + actionCandidate.score + 80,
+    matchedTerms: uniqueStrings([...fixedRouteFlow.matchedTerms, ...actionCandidate.matchedTerms]),
+    targetPageModelId: fixedRouteFlow.targetPageModelId,
+    targetPageModelName: fixedRouteFlow.targetPageModelName,
+    composedCandidateIds: ordered.map((item) => item.id),
+    composedCandidates: ordered
+  };
+}
+
+function composedCandidatesForFlow(
+  flow: FreeCompositionCandidate,
+  candidates: FreeCompositionCandidate[]
+): FreeCompositionCandidate[] {
+  if (flow.composedCandidates) {
+    return flow.composedCandidates;
+  }
+  const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  return (flow.composedCandidateIds ?? []).flatMap((id) => {
+    const candidate = byId.get(id);
+    return candidate ? [candidate] : [];
+  });
+}
+
+function bestExplicitPageActionCandidate(
+  prompt: string,
+  targetPageName: string,
+  targetPageModelId: string | undefined,
+  candidates: FreeCompositionCandidate[],
+  usedIds: Set<string>
+): FreeCompositionCandidate | undefined {
+  return candidates
+    .filter((candidate) => !usedIds.has(candidate.id))
+    .map((candidate) => ({
+      candidate,
+      score: explicitPageActionScore(candidate, prompt, targetPageName, targetPageModelId)
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) =>
+      right.score - left.score ||
+      candidateKindPriority(left.candidate.kind) - candidateKindPriority(right.candidate.kind) ||
+      left.candidate.name.localeCompare(right.candidate.name, "zh-CN")
+    )[0]?.candidate;
+}
+
+function explicitPageActionScore(
+  candidate: FreeCompositionCandidate,
+  prompt: string,
+  targetPageName: string,
+  targetPageModelId: string | undefined
+): number {
+  if (!isExecutableActionCandidate(candidate)) {
+    return 0;
+  }
+  const actionTerms = explicitActionTerms(actionTextWithoutNavigationTarget(prompt, targetPageName));
+  if (!actionTerms.length) {
+    return 0;
+  }
+  const candidateText = normalize([
+    candidate.name,
+    candidate.description,
+    candidate.pageTaskName,
+    candidate.pageModelName
+  ].filter(Boolean).join(""));
+  const actionTermScore = actionTerms.some((term) => candidateText.includes(term)) ? 100 : 0;
+  if (!actionTermScore) {
+    return 0;
+  }
+  let score = actionTermScore + candidateScoreForText(candidate, prompt);
+  if (candidate.kind === "page_task") {
+    if (targetPageModelId && candidate.pageModelId !== targetPageModelId) {
+      return 0;
+    }
+    score += 120;
+  }
+  return score;
+}
+
+function isExecutableActionCandidate(candidate: FreeCompositionCandidate): boolean {
+  return candidate.kind === "page_task" || candidate.kind === "meta_function" || candidate.kind === "composite_case";
+}
+
+function containsExplicitNonNavigationAction(prompt: string, targetPageName: string): boolean {
+  return explicitActionTerms(actionTextWithoutNavigationTarget(prompt, targetPageName)).length > 0;
+}
+
+function actionTextWithoutNavigationTarget(prompt: string, targetPageName: string): string {
+  const normalizedTargetPageName = normalize(targetPageName);
+  return normalizedTargetPageName
+    ? normalize(prompt).replaceAll(normalizedTargetPageName, "")
+    : normalize(prompt);
+}
+
+function explicitActionTerms(text: string): string[] {
+  return NON_NAVIGATION_ACTION_TERMS.filter((term) => containsExplicitActionTerm(text, term));
+}
+
+function containsExplicitActionTerm(text: string, term: string): boolean {
+  let index = text.indexOf(term);
+  while (index >= 0) {
+    if (!isNavigationTargetTerm(text, term, index)) {
+      return true;
+    }
+    index = text.indexOf(term, index + term.length);
+  }
+  return false;
+}
+
+function isNavigationTargetTerm(text: string, term: string, index: number): boolean {
+  if (!ACTION_LIKE_PAGE_NAME_TERMS.has(term)) {
+    return false;
+  }
+  const prefix = text.slice(Math.max(0, index - 12), index);
+  const suffix = text.slice(index + term.length, index + term.length + 12);
+  return /(?:测试|验证|测)?(?:进入|打开|跳转到|跳到|前往|去到|到)$/.test(prefix) &&
+    /^(?:页|页面|入口|中心|列表|详情|设置|管理|记录|类型|选择页|活动|课堂|公开课|作业|测验|资料|录播课|课程|方案|信息|班级|账号)/.test(suffix);
+}
+
+function uniqueCandidates(candidates: FreeCompositionCandidate[]): FreeCompositionCandidate[] {
+  return candidates.filter((item, index, array) => array.findIndex((candidate) => candidate.id === item.id) === index);
+}
+
+function bestFixedStartPage(input: ResolveFreeCompositionInput, targetPageModelId: string): FreeCompositionPageAsset | undefined {
+  const pages = (input.pageAssets ?? [])
+    .filter((page) => page.appId === input.appId && page.platform === input.platform && page.status !== "deprecated");
+  const scoredPages = pages
+    .map((page) => ({
+      page,
+      score: fixedStartPageScore(page)
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.page.pageModelName.localeCompare(right.page.pageModelName, "zh-CN"));
+  for (const item of scoredPages) {
+    if (item.page.pageModelId === targetPageModelId || shortestPageTransitionPath(item.page.pageModelId, targetPageModelId, input).length) {
+      return item.page;
+    }
+  }
+  return undefined;
+}
+
+function fixedStartPageScore(page: FreeCompositionPageAsset): number {
+  const normalizedName = normalize(page.pageModelName);
+  const normalizedId = normalize(page.pageModelId);
+  if (/^(主页|首页|首页tab|主页面)$/.test(normalizedName)) {
+    return 120;
+  }
+  if (normalizedName.includes("主页") || normalizedName.includes("首页")) {
+    return 100;
+  }
+  if (/(^|[-_:])(home|main|root)([-_:]|$)/i.test(page.pageModelId) || /page(home|main|root)/.test(normalizedId)) {
+    return 80;
+  }
+  return 0;
 }
 
 function bestTargetPageForPrompt(prompt: string, input: ResolveFreeCompositionInput): FreeCompositionPageAsset | undefined {

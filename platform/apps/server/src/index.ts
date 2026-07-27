@@ -148,6 +148,7 @@ import {
   type AiDiagnosisSettingsUpdateInput
 } from "./ai-diagnosis.js";
 import { AiPageDraftError, generateAiPageDraft } from "./ai-page-draft.js";
+import { planFreeCompositionWithAiFallback } from "./free-composition-ai-planner.js";
 import {
   StabilityExplorer,
   StabilityExplorerDeviceBusyError,
@@ -170,7 +171,6 @@ import { listSourceScanDirectories, listSourceScanRoots, pickSourceScanDirectory
 import { findNearestTextCandidate } from "./semantic-locator.js";
 import { assetCompositionCatalog, compileAssetCompositeCase, missingRequiredParameterKeysFromIssues } from "./asset-composition.js";
 import { AssetCompositeExecutionManager, renderAssetCompositeExecutionReportHtml, type AssetCompositeExecution } from "./asset-composite-execution.js";
-import { freeCompositionCurrentPageDetectionFailure, resolveFreeCompositionCurrentPage } from "./free-composition-current-page.js";
 import { FreeCompositionSessionRegistry } from "./free-composition-api.js";
 import type {
   FreeCompositionPageAbilityAsset,
@@ -473,28 +473,49 @@ app.post("/api/free-composition/sessions", async (req, res) => {
     const appId = requiredString(body.appId, "appId");
     const platform = requiredPlatform(body.platform);
     const prompt = requiredString(body.prompt, "prompt");
-    const deviceSerial = stringOrUndefined(body.deviceSerial);
     const graphVersion = findAssetPatrolGraphVersion(appId);
     const freeCompositionAssets = graphVersion
       ? freeCompositionAssetsFromGraph(graphVersion, appId, platform)
       : { pageTasks: [], pageTransitions: [], pageAssets: [], pageAbilities: [] };
-    const currentPageDetection = graphVersion && deviceSerial
-      ? await detectFreeCompositionCurrentPage(graphVersion, appId, platform, deviceSerial)
-      : undefined;
-    const session = freeCompositionSessions.create({
+    const freeCompositionInput = {
       appId,
       platform,
-      prompt,
       metaFunctions: storage.listMetaFunctions({ appId, platform }),
       compositeCases: storage.listAssetCompositeCases({ appId, platform }),
       pageTasks: freeCompositionAssets.pageTasks,
       pageTransitions: freeCompositionAssets.pageTransitions,
       pageAssets: freeCompositionAssets.pageAssets,
-      pageAbilities: freeCompositionAssets.pageAbilities,
-      currentPageDetectionAttempted: Boolean(graphVersion && deviceSerial),
-      currentPage: currentPageDetection?.currentPage,
-      currentPageDetectionFailure: currentPageDetection?.currentPageDetectionFailure
+      pageAbilities: freeCompositionAssets.pageAbilities
+    };
+    const aiPlanner = await planFreeCompositionWithAiFallback({
+      config: resolveAiDiagnosisConfig(process.env, storage.getAiDiagnosisSettings()),
+      prompt,
+      input: freeCompositionInput
     });
+    let session = freeCompositionSessions.create({
+      ...freeCompositionInput,
+      prompt,
+      aiPlanner
+    });
+    const automaticCandidate = session.resolution.status === "ready"
+      ? session.resolution.candidates.find((candidate) => candidate.requiresExecution !== false)
+      : undefined;
+    const previewGraphVersion = graphVersion ?? (automaticCandidate?.kind === "system_action" ? emptyFreeCompositionGraphVersion(appId) : undefined);
+    if (automaticCandidate && previewGraphVersion) {
+      const automaticProfile = automaticCandidate.parameterProfileId
+        ? storage.getParameterProfile(automaticCandidate.parameterProfileId)
+        : undefined;
+      session = freeCompositionSessions.selectAndPreview({
+        sessionId: session.id,
+        candidateId: automaticCandidate.id,
+        parameterProfileId: automaticProfile?.id,
+        metaFunctions: freeCompositionInput.metaFunctions,
+        compositeCases: freeCompositionInput.compositeCases,
+        parameterProfile: automaticProfile,
+        parameterDataRecords: storage.listParameterDataRecords({ appId, platform }),
+        graphVersion: previewGraphVersion
+      }).session;
+    }
     res.status(201).json({ session: enrichFreeCompositionSession(session) });
   } catch (error) {
     sendError(res, error);
@@ -5342,23 +5363,6 @@ function enrichFreeCompositionSession(session: FreeCompositionSession): FreeComp
   return {
     ...synced,
     ...(execution ? { execution } : {})
-  };
-}
-
-async function detectFreeCompositionCurrentPage(
-  graphVersion: BusinessGraphVersion,
-  appId: string,
-  platform: Platform,
-  deviceSerial: string
-): Promise<{
-  currentPage?: Awaited<ReturnType<typeof resolveFreeCompositionCurrentPage>>;
-  currentPageDetectionFailure?: ReturnType<typeof freeCompositionCurrentPageDetectionFailure>;
-}> {
-  const observation = await observationService.collect(deviceSerial, readCurrentPageCollectionOptions({ includeOcr: true }));
-  const currentPage = await resolveFreeCompositionCurrentPage(graphVersion, appId, platform, observation, readPageAssetBaselineArtifact);
-  return {
-    currentPage,
-    currentPageDetectionFailure: currentPage ? undefined : freeCompositionCurrentPageDetectionFailure(observation, appId, platform)
   };
 }
 

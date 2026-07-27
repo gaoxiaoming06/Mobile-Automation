@@ -183,6 +183,67 @@ describe("free composition sessions", () => {
     ).not.toThrow();
   });
 
+  it("does not turn navigation labels inside a generated route into risk operations after selection", () => {
+    const resolution = resolveFreeComposition("测试进入新建课堂 循环2次", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-activity-type", pageModelName: "发布活动类型选择页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-new-lesson", pageModelName: "新建课堂", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-activity-type",
+          targetPageModelName: "发布活动类型选择页",
+          pageElementId: "publish-activity",
+          pageElementLabel: "发布活动",
+          pageTransitionId: "edge-home-activity-type",
+          pageTransitionName: "主页 -> 发布活动类型选择页",
+          status: "active"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-activity-type",
+          sourcePageModelName: "发布活动类型选择页",
+          targetPageModelId: "page-new-lesson",
+          targetPageModelName: "新建课堂",
+          pageElementId: "new-lesson",
+          pageElementLabel: "新建课堂",
+          pageTransitionId: "edge-activity-type-new-lesson",
+          pageTransitionName: "发布活动类型选择页 -> 新建课堂",
+          status: "active"
+        }
+      ]
+    });
+    const session = createFreeCompositionSession({
+      appId: "cn.eeo.classin",
+      platform: "android",
+      prompt: "测试进入新建课堂 循环2次",
+      resolution,
+      now
+    });
+
+    expect(session.resolution.intent.riskTerms).toEqual([]);
+
+    const selected = selectFreeCompositionCandidate({
+      session,
+      candidateId: resolution.candidates[0]!.id,
+      metaFunctions: [],
+      compositeCases: [],
+      now
+    });
+
+    expect(selected.resolution.intent.riskTerms).toEqual([]);
+  });
+
   it("previews a selected temporary case through the existing composition compiler", () => {
     const login = metaFunction({
       steps: [
