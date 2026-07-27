@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   FreeCompositionPanel,
+  freeCompositionAssetRecordingIntent,
   freeCompositionAnalyzeRequestBody,
   freeCompositionExecuteRequestBody,
   freeCompositionReplyProfileId,
@@ -649,6 +650,75 @@ describe("FreeCompositionPanel", () => {
     expect(markup).not.toContain("候选流程");
     expect(markup).not.toContain("App 进程监控");
     expect(markup).not.toContain("开始执行");
+  });
+
+  it("builds a compound navigation recording intent for missing scan routes", () => {
+    expect(
+      freeCompositionAssetRecordingIntent({
+        id: "free_composition_missing_scan",
+        appId: "cn.eeo.classin",
+        platform: "android",
+        prompt: "打开扫一扫",
+        createdAt: "2026-07-18T00:00:00.000Z",
+        updatedAt: "2026-07-18T00:00:00.000Z",
+        status: "blocked",
+        resolution: {
+          status: "missing_assets",
+          message: "已找到页面资产“扫一扫”，但没有找到可执行到该页面的 active 连接边、页面任务、元功能或组合用例。",
+          recordingIntent: {
+            kind: "compound_navigation",
+            sourcePageModelId: "page-home",
+            sourcePageName: "主页",
+            targetPageModelId: "page-scan",
+            targetPageName: "扫一扫",
+            triggerLabel: "右上更多/加号",
+            waitText: "扫一扫",
+            tapText: "扫一扫"
+          },
+          intent: {
+            prompt: "打开扫一扫",
+            runMode: "once",
+            repeatCount: 1,
+            riskTerms: []
+          },
+          candidates: []
+        }
+      })
+    ).toEqual({
+      kind: "compound_navigation",
+      sourcePageModelId: "page-home",
+      sourcePageName: "主页",
+      targetPageModelId: "page-scan",
+      targetPageName: "扫一扫",
+      triggerLabel: "右上更多/加号",
+      waitText: "扫一扫",
+      tapText: "扫一扫"
+    });
+  });
+
+  it("does not guess a source page for missing routes without structured recording context", () => {
+    expect(
+      freeCompositionAssetRecordingIntent({
+        id: "free_composition_missing_scan",
+        appId: "cn.eeo.classin",
+        platform: "android",
+        prompt: "打开扫一扫",
+        createdAt: "2026-07-18T00:00:00.000Z",
+        updatedAt: "2026-07-18T00:00:00.000Z",
+        status: "blocked",
+        resolution: {
+          status: "missing_assets",
+          message: "已找到页面资产“扫一扫”，但没有找到可执行到该页面的 active 连接边、页面任务、元功能或组合用例。",
+          intent: {
+            prompt: "打开扫一扫",
+            runMode: "once",
+            repeatCount: 1,
+            riskTerms: []
+          },
+          candidates: []
+        }
+      })
+    ).toBeUndefined();
   });
 
   it("renders outside-app blockers with a launch app action", () => {

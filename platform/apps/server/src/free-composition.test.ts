@@ -719,6 +719,105 @@ describe("resolveFreeComposition", () => {
     expect(result.message).toContain("已找到页面资产“新建公开课”");
     expect(result.message).toContain("入口能力“主页 / 创建公开课”");
     expect(result.message).toContain("没有找到绑定到该页面的 active 连接边");
+    expect(result.recordingIntent).toBeUndefined();
+  });
+
+  it("carries the source page from a known target ability when recording a missing edge", () => {
+    const result = resolveFreeComposition("打开扫一扫", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      pageAssets: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-home",
+          pageModelName: "主页"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-scan",
+          pageModelName: "扫一扫"
+        }
+      ],
+      pageAbilities: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-home",
+          pageModelName: "主页",
+          pageElementId: "more-menu",
+          pageElementLabel: "右上更多/加号",
+          targetPageModelId: "page-scan",
+          targetPageModelName: "扫一扫"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("missing_assets");
+    expect(result.recordingIntent).toEqual({
+      kind: "compound_navigation",
+      sourcePageModelId: "page-home",
+      sourcePageName: "主页",
+      targetPageModelId: "page-scan",
+      targetPageName: "扫一扫",
+      triggerLabel: "右上更多/加号",
+      waitText: "扫一扫",
+      tapText: "扫一扫"
+    });
+  });
+
+  it("does not assume home as the source page for missing non-home routes", () => {
+    const result = resolveFreeComposition("打开课程详情", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      pageAssets: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-home",
+          pageModelName: "主页"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-class-detail",
+          pageModelName: "班级详情"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-course-detail",
+          pageModelName: "课程详情"
+        }
+      ],
+      pageAbilities: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-class-detail",
+          pageModelName: "班级详情",
+          pageElementId: "course-card",
+          pageElementLabel: "课程卡片",
+          targetPageModelId: "page-course-detail",
+          targetPageModelName: "课程详情"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("missing_assets");
+    expect(result.recordingIntent).toEqual({
+      kind: "navigation",
+      sourcePageModelId: "page-class-detail",
+      sourcePageName: "班级详情",
+      targetPageModelId: "page-course-detail",
+      targetPageName: "课程详情",
+      triggerLabel: "课程卡片"
+    });
   });
 
   it("extracts explicit runtime parameter values from natural-language input", () => {

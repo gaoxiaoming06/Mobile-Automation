@@ -2730,6 +2730,26 @@ button:disabled {
   font-size: 12px;
 }
 
+.asset-recording-intent-banner {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  padding: 9px 10px;
+}
+
+.asset-recording-intent-banner strong {
+  color: #1e3a8a;
+  font-size: 13px;
+}
+
+.asset-recording-intent-banner span,
+.asset-recording-intent-banner small {
+  color: #475569;
+  font-size: 12px;
+}
+
 .asset-manual-action-frame {
   position: relative;
   width: 100%;
@@ -3853,6 +3873,17 @@ button:disabled {
 
 .asset-operation-target {
   grid-column: 1 / -1;
+}
+
+.asset-form-error {
+  grid-column: 1 / -1;
+  border: 1px solid #fecaca;
+  border-radius: 7px;
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .asset-element-actions button {

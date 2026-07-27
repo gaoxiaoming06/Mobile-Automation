@@ -634,6 +634,80 @@ describe("persistManualPageTransitionAsset", () => {
     );
   });
 
+  it("persists top bar icon compound transitions as runtime semantic taps", () => {
+    const storage = new MemoryPageTransitionStorage();
+    const source = pageNode({ id: "node-home", key: "classin.teacher.classes", name: "主页" });
+    const target = pageNode({ id: "node-scan", key: "runtime.unknown.scan", name: "扫一扫" });
+    storage.nodes.push(source, target);
+
+    const result = persistManualPageTransitionAsset({
+      graphVersionId: "version-1",
+      storage,
+      sourceNodeId: source.id,
+      targetNodeId: target.id,
+      actionKind: "tap",
+      locator: "top-bar-icon:add",
+      locatorKind: "top_bar_icon_locator",
+      semanticArea: "top",
+      coordinateSpace: "runtime",
+      elementLabel: "打开更多菜单并选择扫一扫",
+      availability: "visible",
+      platformScope: "android",
+      outcomeType: "compound_navigation",
+      targetLabel: "扫一扫",
+      structuralLocator: {
+        kind: "top_bar_icon",
+        role: "add",
+        slot: "right",
+        orderFromRight: 1
+      },
+      visualLocator: {
+        strategy: "top_bar_icon_shape",
+        role: "add",
+        slot: "right",
+        orderFromRight: 1,
+        candidates: [
+          { source: "manual_top_bar_icon", label: "打开更多菜单并选择扫一扫", role: "add", slot: "right", score: 0.85, region: { x: 78, y: 0, width: 20, height: 12 }, semanticArea: "top" }
+        ]
+      },
+      compoundSteps: [
+        {
+          actionKind: "wait",
+          locator: "text:扫一扫",
+          elementLabel: "等待扫一扫菜单出现",
+          waitTimeoutMs: 3000
+        },
+        {
+          actionKind: "tap",
+          locator: "text:扫一扫",
+          elementLabel: "点击扫一扫"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("created");
+    expect(storage.edges[0].actionPolicies[0].action).toEqual(
+      expect.objectContaining({
+        type: "tap_on_image",
+        params: expect.objectContaining({
+          locator: "top-bar-icon:add",
+          locatorKind: "top_bar_icon_locator",
+          visualLocator: expect.objectContaining({ strategy: "top_bar_icon_shape" }),
+          compoundSteps: [
+            expect.objectContaining({
+              type: "wait_until_state",
+              params: expect.objectContaining({ text: "扫一扫" })
+            }),
+            expect.objectContaining({
+              type: "tap_on_text",
+              params: expect.objectContaining({ text: "扫一扫" })
+            })
+          ]
+        })
+      })
+    );
+  });
+
   it("keeps multiple compound menu transitions from the same trigger when menu choices differ", () => {
     const storage = new MemoryPageTransitionStorage();
     const source = pageNode({ id: "node-home", key: "classin.home", name: "主页" });

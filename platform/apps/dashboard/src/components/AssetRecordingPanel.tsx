@@ -1,5 +1,5 @@
 import { DatabaseZap, Save, Sparkles } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, PointerEvent, ReactNode } from "react";
 import { AI_LOCATOR_KIND_LABELS, aiElementSuggestionToDraft, type AiElementSuggestion } from "../ai-page-draft-merge";
 
@@ -278,6 +278,48 @@ export type AssetRecordingCompoundStepDraft = {
   timeoutMs?: number;
 };
 
+type AssetRecordingIntentBase = {
+  sourcePageModelId?: string;
+  sourcePageName?: string;
+  targetPageModelId?: string;
+  targetPageName: string;
+  targetNodeId?: string;
+  triggerLabel?: string;
+};
+
+export type AssetRecordingIntent =
+  | (AssetRecordingIntentBase & {
+      kind: "navigation";
+    })
+  | (AssetRecordingIntentBase & {
+      kind: "compound_navigation";
+      waitText?: string;
+      tapText?: string;
+      timeoutMs?: number;
+    });
+
+export function normalizeAssetRecordingIntent(value: unknown): AssetRecordingIntent | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const intent = value as Record<string, unknown>;
+  if ((intent.kind !== "navigation" && intent.kind !== "compound_navigation") || typeof intent.targetPageName !== "string" || !intent.targetPageName.trim()) {
+    return undefined;
+  }
+  return {
+    kind: intent.kind,
+    targetPageName: intent.targetPageName,
+    ...(typeof intent.sourcePageModelId === "string" && intent.sourcePageModelId.trim() ? { sourcePageModelId: intent.sourcePageModelId } : {}),
+    ...(typeof intent.sourcePageName === "string" && intent.sourcePageName.trim() ? { sourcePageName: intent.sourcePageName } : {}),
+    ...(typeof intent.targetPageModelId === "string" && intent.targetPageModelId.trim() ? { targetPageModelId: intent.targetPageModelId } : {}),
+    ...(typeof intent.targetNodeId === "string" && intent.targetNodeId.trim() ? { targetNodeId: intent.targetNodeId } : {}),
+    ...(typeof intent.triggerLabel === "string" && intent.triggerLabel.trim() ? { triggerLabel: intent.triggerLabel } : {}),
+    ...(intent.kind === "compound_navigation" && typeof intent.waitText === "string" && intent.waitText.trim() ? { waitText: intent.waitText } : {}),
+    ...(intent.kind === "compound_navigation" && typeof intent.tapText === "string" && intent.tapText.trim() ? { tapText: intent.tapText } : {}),
+    ...(intent.kind === "compound_navigation" && typeof intent.timeoutMs === "number" && Number.isFinite(intent.timeoutMs) ? { timeoutMs: intent.timeoutMs } : {})
+  };
+}
+
 export type AssetRecordingScreenshotRegion = {
   id: string;
   label: string;
@@ -352,6 +394,7 @@ export type AssetRecordingPanelProps = {
   aiIdentifying?: boolean;
   onSaveCurrentPageAsset: (mode: "create" | "update") => void | Promise<void>;
   onSavePageElement?: (draft: AssetRecordingPageElementDraft) => boolean | void | Promise<boolean | void>;
+  pageElementSaveError?: string;
   onDeletePageElement?: (element: AssetRecordingPageElement) => void | Promise<void>;
   onSavePageTask?: (draft: AssetRecordingPageTaskDraft) => void | Promise<void>;
   onDeletePageTask?: (task: AssetRecordingPageTask) => void | Promise<void>;
@@ -359,6 +402,8 @@ export type AssetRecordingPanelProps = {
   onPreviewAutoExplore?: (options: { maxDepth: number; maxCandidates: number; maxActions: number }) => void | Promise<void>;
   onRunAutoExplore?: (options: { maxDepth: number; maxCandidates: number; maxActions: number }) => void | Promise<void>;
   onResizePointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
+  recordingIntent?: AssetRecordingIntent;
+  onRecordingIntentConsumed?: () => void;
 };
 
 type AssetDetailTab = "workbench" | "match" | "actions" | "transitions" | "tasks" | "explorer";
@@ -397,6 +442,15 @@ type ManualElementSeed = {
   targetText?: string;
   locatorKind?: AssetRecordingLocatorKind;
 };
+type ManualRecordingSeed = {
+  abilityType: AssetRecordingAbilityType;
+  actionKind: ManualActionKind;
+  outcomeType: AssetRecordingElementOutcomeType;
+  targetQuery: string;
+  locatorKind: AssetRecordingLocatorKind;
+  semanticArea: VisualSemanticArea;
+  elementSeed?: ManualElementSeed;
+};
 type PercentPoint = { x: number; y: number };
 type RegionResizeHandle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 type EditableRegionOperation =
@@ -410,6 +464,126 @@ const semanticAreaOptions: Array<{ value: VisualSemanticArea; label: string }> =
   { value: "bottom", label: "底部固定区域" },
   { value: "unknown", label: "未知区域" }
 ];
+
+const defaultCompoundNavigationTriggerLabel = "右上更多/加号";
+
+function manualRecordingSeedFromIntent(intent?: AssetRecordingIntent): ManualRecordingSeed {
+  if (!intent) {
+    return {
+      abilityType: "fixed_tap",
+      actionKind: "tap",
+      outcomeType: "navigate",
+      targetQuery: "",
+      locatorKind: "visual_locator",
+      semanticArea: "content"
+    };
+  }
+  if (intent.kind === "navigation") {
+    return {
+      abilityType: "fixed_tap",
+      actionKind: "tap",
+      outcomeType: "navigate",
+      targetQuery: intent.targetPageName,
+      locatorKind: "visual_locator",
+      semanticArea: "content",
+      elementSeed: {
+        label: intent.triggerLabel ?? "入口",
+        locatorKind: "visual_locator"
+      }
+    };
+  }
+  return {
+    abilityType: "fixed_tap",
+    actionKind: "tap",
+    outcomeType: "compound_navigation",
+    targetQuery: intent.targetPageName,
+    locatorKind: "top_bar_icon_locator",
+    semanticArea: "top",
+    elementSeed: {
+      label: intent.triggerLabel ?? defaultCompoundNavigationTriggerLabel,
+      locatorKind: "top_bar_icon_locator"
+    }
+  };
+}
+
+type CompoundNavigationDefaults = {
+  waitText?: string;
+  tapText?: string;
+  timeoutMs?: number;
+};
+
+function compoundStepDefaultsFromIntent(intent: Extract<AssetRecordingIntent, { kind: "compound_navigation" }>): CompoundNavigationDefaults {
+  return {
+    waitText: intent.waitText ?? intent.targetPageName,
+    tapText: intent.tapText ?? intent.targetPageName,
+    timeoutMs: intent.timeoutMs ?? 3000
+  };
+}
+
+function compoundOutcomeLabel(intent?: AssetRecordingIntent): string {
+  return intent?.kind === "compound_navigation" ? `打开更多菜单并选择${intent.targetPageName}` : "";
+}
+
+function findSavedAssetForIntentTarget(savedAssets: AssetRecordingSavedAsset[], intent: AssetRecordingIntent): AssetRecordingSavedAsset | undefined {
+  const targetNodeId = intent.targetNodeId ?? intent.targetPageModelId;
+  if (targetNodeId) {
+    const asset = savedAssets.find((item) => item.id === targetNodeId);
+    if (asset) {
+      return asset;
+    }
+  }
+  const targetName = normalizeAssetName(intent.targetPageName);
+  return savedAssets.find((asset) => normalizeAssetName(asset.name) === targetName || normalizeAssetName(asset.key).includes(targetName));
+}
+
+function recordingIntentTriggerLabel(intent: AssetRecordingIntent): string {
+  return intent.triggerLabel ?? (intent.kind === "compound_navigation" ? defaultCompoundNavigationTriggerLabel : "入口");
+}
+
+function recordingIntentOutcomeLabel(intent?: AssetRecordingIntent): string {
+  if (!intent) {
+    return "";
+  }
+  if (intent.kind === "compound_navigation") {
+    return compoundOutcomeLabel(intent);
+  }
+  return intent.triggerLabel ? `点击${intent.triggerLabel}进入${intent.targetPageName}` : `进入${intent.targetPageName}`;
+}
+
+function intentTargetNodeId(intent?: AssetRecordingIntent): string | undefined {
+  return intent?.targetNodeId ?? intent?.targetPageModelId;
+}
+
+function normalizeAssetName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function pageMatchesRecordingSource(page: AssetRecordingCurrentPage, expectedSourceName?: string, expectedSourceId?: string): boolean {
+  const expectedId = expectedSourceId?.trim();
+  if (expectedId) {
+    const idCandidates = [page.nodeId, page.targetRef, page.matchedAssetKey]
+      .filter((value): value is string => Boolean(value?.trim()));
+    if (idCandidates.includes(expectedId)) {
+      return true;
+    }
+  }
+  if (!expectedSourceName?.trim()) {
+    return !expectedId;
+  }
+  const expected = normalizePageAlias(expectedSourceName);
+  const candidates = [page.pageName, page.visualPageName, page.matchedAssetName, page.matchedAssetKey, page.targetRef]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .map(normalizePageAlias);
+  return candidates.some((candidate) => candidate === expected);
+}
+
+function normalizePageAlias(value: string): string {
+  const normalized = normalizeAssetName(value);
+  if (normalized === "首页" || normalized === "home" || normalized.endsWith(".home")) {
+    return "主页";
+  }
+  return normalized;
+}
 
 export type ApplyEditedEvidenceValueInput = {
   item: AssetEvidenceItem;
@@ -433,15 +607,21 @@ export function AssetRecordingPanel({
   aiIdentifying = false,
   onSaveCurrentPageAsset,
   onSavePageElement,
+  pageElementSaveError,
   onDeletePageElement,
   onSavePageTask,
   onDeletePageTask,
   autoExploreReport,
   onPreviewAutoExplore,
   onRunAutoExplore,
-  onResizePointerDown
+  onResizePointerDown,
+  recordingIntent,
+  onRecordingIntentConsumed
 }: AssetRecordingPanelProps) {
   const page = currentPage ?? { status: "idle" as const };
+  const activeRecordingIntent = normalizeAssetRecordingIntent(recordingIntent);
+  const compoundRecordingIntent = activeRecordingIntent?.kind === "compound_navigation" ? activeRecordingIntent : undefined;
+  const initialRecordingSeed = manualRecordingSeedFromIntent(activeRecordingIntent);
   const elements = page.elements ?? [];
   const transitions = page.transitions ?? [];
   const tasks = page.tasks ?? [];
@@ -450,7 +630,7 @@ export function AssetRecordingPanel({
   const screenshotRegions = page.screenshotRegions ?? [];
   const [regionStart, setRegionStart] = useState<{ x: number; y: number }>();
   const [draftRegion, setDraftRegion] = useState<AssetRecordingScreenshotRegion>();
-  const [activeDetailTab, setActiveDetailTab] = useState<AssetDetailTab>(initialDetailTab);
+  const [activeDetailTab, setActiveDetailTab] = useState<AssetDetailTab>(activeRecordingIntent ? "actions" : initialDetailTab);
   const visibleDetailTab = activeDetailTab === "workbench" ? "match" : activeDetailTab;
   const [isRenamingPage, setIsRenamingPage] = useState(false);
   const [draftPageName, setDraftPageName] = useState("");
@@ -458,17 +638,17 @@ export function AssetRecordingPanel({
   const [draftEvidenceValue, setDraftEvidenceValue] = useState("");
   const [hiddenCandidateEvidenceKeys, setHiddenCandidateEvidenceKeys] = useState<string[]>([]);
   const [screenshotNaturalSize, setScreenshotNaturalSize] = useState<{ width: number; height: number }>();
-  const [manualAbilityType, setManualAbilityType] = useState<AssetRecordingAbilityType>("fixed_tap");
-  const [manualActionKind, setManualActionKind] = useState<ManualActionKind>("tap");
-  const [manualOutcomeType, setManualOutcomeType] = useState<AssetRecordingElementOutcomeType>("navigate");
-  const [manualTargetQuery, setManualTargetQuery] = useState("");
-  const [manualLocatorKind, setManualLocatorKind] = useState<AssetRecordingLocatorKind>("visual_locator");
-  const [manualSemanticAreaOverride, setManualSemanticAreaOverride] = useState<VisualSemanticArea>("content");
-  const [manualElementSeed, setManualElementSeed] = useState<ManualElementSeed>();
+  const [manualAbilityType, setManualAbilityType] = useState<AssetRecordingAbilityType>(initialRecordingSeed.abilityType);
+  const [manualActionKind, setManualActionKind] = useState<ManualActionKind>(initialRecordingSeed.actionKind);
+  const [manualOutcomeType, setManualOutcomeType] = useState<AssetRecordingElementOutcomeType>(initialRecordingSeed.outcomeType);
+  const [manualTargetQuery, setManualTargetQuery] = useState(initialRecordingSeed.targetQuery);
+  const [manualLocatorKind, setManualLocatorKind] = useState<AssetRecordingLocatorKind>(initialRecordingSeed.locatorKind);
+  const [manualSemanticAreaOverride, setManualSemanticAreaOverride] = useState<VisualSemanticArea>(initialRecordingSeed.semanticArea);
+  const [manualElementSeed, setManualElementSeed] = useState<ManualElementSeed | undefined>(initialRecordingSeed.elementSeed);
   const [manualActionEdit, setManualActionEdit] = useState<EditableRegionOperation>();
   const [manualActionRegion, setManualActionRegion] = useState<AssetRecordingScreenshotRegion>();
   const [manualActionNaturalSize, setManualActionNaturalSize] = useState<{ width: number; height: number }>();
-  const [isAddingPageElement, setIsAddingPageElement] = useState(false);
+  const [isAddingPageElement, setIsAddingPageElement] = useState(Boolean(activeRecordingIntent));
   const [editingPageElement, setEditingPageElement] = useState<AssetRecordingPageElement>();
   const [isAddingPageTask, setIsAddingPageTask] = useState(false);
   const [editingPageTask, setEditingPageTask] = useState<AssetRecordingPageTask>();
@@ -479,9 +659,23 @@ export function AssetRecordingPanel({
   const hasSavedAsset = savedAssets.some((asset) => asset.id === page.nodeId || asset.key === page.targetRef);
   const saveMode: "create" | "update" = hasSavedAsset ? "update" : "create";
   const canSave = page.status !== "idle" && page.status !== "error";
-  const showPageElementForm = isAddingPageElement || Boolean(editingPageElement);
-  const showPageTaskForm = isAddingPageTask || Boolean(editingPageTask);
   const title = page.pageName || page.visualPageName || "未知页面";
+  const expectedRecordingSourceName = activeRecordingIntent?.sourcePageName?.trim();
+  const expectedRecordingSourceId = activeRecordingIntent?.sourcePageModelId?.trim();
+  const expectedRecordingSourceLabel = expectedRecordingSourceName || expectedRecordingSourceId;
+  const recordingIntentSourceMatched = !activeRecordingIntent || pageMatchesRecordingSource(page, expectedRecordingSourceName, expectedRecordingSourceId);
+  const recordingIntentSourceBlocker = activeRecordingIntent && expectedRecordingSourceLabel && !recordingIntentSourceMatched
+    ? {
+        expectedSourceName: expectedRecordingSourceLabel,
+        actualSourceName: title,
+        targetPageName: activeRecordingIntent.targetPageName,
+        actionText: activeRecordingIntent.kind === "compound_navigation"
+          ? `${recordingIntentTriggerLabel(activeRecordingIntent)} → ${activeRecordingIntent.tapText ?? activeRecordingIntent.targetPageName}`
+          : recordingIntentTriggerLabel(activeRecordingIntent)
+      }
+    : undefined;
+  const showPageElementForm = (isAddingPageElement && !recordingIntentSourceBlocker) || Boolean(editingPageElement);
+  const showPageTaskForm = isAddingPageTask || Boolean(editingPageTask);
   const matchedAssetName = page.matchedAssetName;
   const scoreLabel = page.status === "draft_candidate" || !page.nodeId ? "待建立基准" : `匹配度 ${formatScore(page.matchScore)}`;
   const scoreTitle = page.status === "draft_candidate" || !page.nodeId ? "当前页面还没有保存为页面资产，保存后才会建立可复用的页面匹配基准。" : "当前页面采集信号和页面识别规则的加权匹配度，不是截图相似度。";
@@ -501,11 +695,35 @@ export function AssetRecordingPanel({
   const candidateEvidenceGroups = groupCandidateEvidence(candidateEvidence);
   const manualOutcomeFields = operationOutcomeFields(manualOutcomeType);
   const filteredManualTargetAssets = savedAssets.filter((asset) => matchesTargetAsset(asset, manualTargetQuery)).slice(0, 20);
+  const intentTargetAsset = activeRecordingIntent ? findSavedAssetForIntentTarget(savedAssets, activeRecordingIntent) : undefined;
+  const selectedManualTargetNodeId = editingPageElement?.targetNodeId ?? intentTargetNodeId(activeRecordingIntent) ?? intentTargetAsset?.id ?? "";
   const autoExploreOptions = {
     maxDepth: autoExploreDepth,
     maxCandidates: autoExploreMaxCandidates,
     maxActions: autoExploreMaxCandidates
   };
+
+  useEffect(() => {
+    if (!activeRecordingIntent) {
+      return;
+    }
+    applyManualRecordingSeed(manualRecordingSeedFromIntent(activeRecordingIntent));
+    setEditingPageElement(undefined);
+    setManualActionRegion(undefined);
+    setManualActionEdit(undefined);
+    setIsAddingPageElement(recordingIntentSourceMatched);
+    setActiveDetailTab("actions");
+  }, [activeRecordingIntent, recordingIntentSourceMatched]);
+
+  function applyManualRecordingSeed(seed: ManualRecordingSeed) {
+    setManualAbilityType(seed.abilityType);
+    setManualActionKind(seed.actionKind);
+    setManualOutcomeType(seed.outcomeType);
+    setManualTargetQuery(seed.targetQuery);
+    setManualLocatorKind(seed.locatorKind);
+    setManualSemanticAreaOverride(seed.semanticArea);
+    setManualElementSeed(seed.elementSeed);
+  }
 
   function startScreenshotRegion(event: PointerEvent<HTMLDivElement>) {
     if (!page.screenshotUrl) {
@@ -761,6 +979,7 @@ export function AssetRecordingPanel({
     setManualActionEdit(undefined);
     setManualSemanticAreaOverride("content");
     setIsAddingPageElement(false);
+    onRecordingIntentConsumed?.();
   }
 
   function startAddPageTask() {
@@ -797,6 +1016,8 @@ export function AssetRecordingPanel({
     const manualRegionRequired = locatorKindNeedsMarkedRegion(manualLocatorKind, manualAbilityType);
     const manualSemanticArea = manualActionRegion?.semanticArea ??
       (manualActionRegion ? semanticAreaForRegion(manualActionRegion) : manualSemanticAreaOverride);
+    const compoundDefaults = compoundRecordingIntent && !editingPageElement ? compoundStepDefaultsFromIntent(compoundRecordingIntent) : undefined;
+    const recordingIntentTitle = activeRecordingIntent?.sourcePageName ?? activeRecordingIntent?.sourcePageModelId ?? title;
     return (
       <div className="asset-manual-action-card">
         <div className="asset-manual-action-head">
@@ -807,6 +1028,17 @@ export function AssetRecordingPanel({
             取消
           </button>
         </div>
+        {activeRecordingIntent && !editingPageElement ? (
+          <div className="asset-recording-intent-banner">
+            <strong>录入缺失入口：{recordingIntentTitle} → {activeRecordingIntent.targetPageName}</strong>
+            {activeRecordingIntent.kind === "compound_navigation" ? (
+              <span>先在当前页面点{recordingIntentTriggerLabel(activeRecordingIntent)}，再点菜单里的“{activeRecordingIntent.tapText ?? activeRecordingIntent.targetPageName}”。</span>
+            ) : (
+              <span>在当前页面录入“{recordingIntentTriggerLabel(activeRecordingIntent)}”的跳转能力，目标是“{activeRecordingIntent.targetPageName}”。</span>
+            )}
+            <small>保存后系统会派生从{recordingIntentTitle}到{activeRecordingIntent.targetPageName}的连接边。</small>
+          </div>
+        ) : null}
         <div className="asset-manual-action-layout">
           <div className="asset-manual-action-region-pane">
             {page.screenshotUrl ? (
@@ -920,8 +1152,8 @@ export function AssetRecordingPanel({
                 </select>
               </label>
               <label>
-                动作名称
-                <input name="elementLabel" placeholder="例如：搜索按钮 / 列表区域" defaultValue={editingPageElement?.label ?? manualElementSeed?.label ?? manualActionLabel(manualActionKind)} />
+                元素名称
+                <input name="elementLabel" placeholder="例如：右上加号菜单 / 搜索按钮 / 列表区域" defaultValue={editingPageElement?.label ?? manualElementSeed?.label ?? manualActionLabel(manualActionKind)} />
               </label>
               <label>
                 执行识别文字
@@ -984,7 +1216,7 @@ export function AssetRecordingPanel({
                 <label>
                   {manualOutcomeFields.targetLabel}
                   <input value={manualTargetQuery} onChange={(event) => setManualTargetQuery(event.target.value)} placeholder={manualOutcomeFields.targetPlaceholder} />
-                  <select className="asset-operation-target-options" name="targetNodeId" defaultValue={editingPageElement?.targetNodeId ?? ""} key={`${editingPageElement?.id ?? "new"}-${manualTargetQuery || "all-targets"}`}>
+                  <select className="asset-operation-target-options" name="targetNodeId" defaultValue={selectedManualTargetNodeId} key={`${editingPageElement?.id ?? "new"}-${manualTargetQuery || "all-targets"}-${selectedManualTargetNodeId || "none"}`}>
                     <option value="">暂不绑定目标页面</option>
                     {filteredManualTargetAssets.map((asset) => (
                       <option value={asset.id} key={asset.id}>{asset.name}</option>
@@ -995,14 +1227,14 @@ export function AssetRecordingPanel({
                 <input name="targetNodeId" type="hidden" value="" />
               )}
               {manualAbilityType === "conditional_tap" ? <ConditionClickEditor /> : null}
-              {manualOutcomeType === "compound_navigation" ? <CompoundNavigationEditor /> : null}
+              {manualOutcomeType === "compound_navigation" ? <CompoundNavigationEditor defaults={compoundDefaults} steps={editingPageElement?.compoundSteps} /> : null}
               <label className="asset-operation-target">
                 {manualOutcomeFields.resultLabel}
-                <input name="targetLabel" placeholder={manualOutcomeFields.resultPlaceholder} defaultValue={editingPageElement?.targetLabel ?? ""} />
+                <input name="targetLabel" placeholder={manualOutcomeFields.resultPlaceholder} defaultValue={editingPageElement?.targetLabel ?? activeRecordingIntent?.targetPageName ?? ""} />
               </label>
               <label className="asset-operation-target">
                 结果说明
-                <input name="outcomeLabel" placeholder="例如：弹出更多菜单 / 进入新建公开课 / 确认后弹窗消失" defaultValue={editingPageElement?.outcomeLabel ?? ""} />
+                <input name="outcomeLabel" placeholder="例如：弹出更多菜单 / 进入新建公开课 / 确认后弹窗消失" defaultValue={editingPageElement?.outcomeLabel ?? recordingIntentOutcomeLabel(activeRecordingIntent)} />
               </label>
               {manualActionKind === "scroll" || manualAbilityType === "grid_candidate" || manualAbilityType === "scroll_candidate" ? (
                 <ScrollContainerEditor
@@ -1016,6 +1248,11 @@ export function AssetRecordingPanel({
                       : { containerKind: "scroll_area", direction: "vertical", targetKind: "ocr_text", afterFoundAction: "verify_visible" })
                   }
                 />
+              ) : null}
+              {pageElementSaveError ? (
+                <div className="asset-form-error" role="alert">
+                  {pageElementSaveError}
+                </div>
               ) : null}
               <button type="submit" disabled={(!manualActionRegion && manualRegionRequired) || !onSavePageElement}>
                 保存可操作元素
@@ -1329,6 +1566,13 @@ export function AssetRecordingPanel({
                     <button className="asset-add-element-button" type="button" disabled={busy} onClick={startAddPageElement}>
                       + 添加可操作元素
                     </button>
+                    {recordingIntentSourceBlocker ? (
+                      <div className="asset-recording-intent-banner asset-recording-intent-blocker">
+                        <strong>需要先到{recordingIntentSourceBlocker.expectedSourceName}再录入{recordingIntentSourceBlocker.targetPageName}入口</strong>
+                        <span>当前识别到：{recordingIntentSourceBlocker.actualSourceName}</span>
+                        <small>回到{recordingIntentSourceBlocker.expectedSourceName}后重新识别，再录入“{recordingIntentSourceBlocker.actionText}”。</small>
+                      </div>
+                    ) : null}
                     {showPageElementForm && !editingPageElement ? renderManualPageElementEditor() : null}
                   </div>
                 ) : null}
@@ -2412,21 +2656,30 @@ function ConditionClickEditor() {
   );
 }
 
-function CompoundNavigationEditor() {
+function CompoundNavigationEditor({
+  defaults,
+  steps
+}: {
+  defaults?: CompoundNavigationDefaults;
+  steps?: AssetRecordingCompoundStepDraft[];
+}) {
+  const waitStep = steps?.find((step) => step.type === "wait_until_state");
+  const tapStep = steps?.find((step) => step.type === "tap_on_text");
+  const defaultTimeoutMs = waitStep?.timeoutMs ?? tapStep?.timeoutMs ?? defaults?.timeoutMs;
   return (
     <fieldset className="asset-scroll-editor">
       <legend>复合步骤</legend>
       <label className="asset-operation-target">
         等待出现
-        <input name="compoundWaitText" placeholder="例如：添加好友" />
+        <input name="compoundWaitText" placeholder="例如：添加好友" defaultValue={waitStep?.text ?? defaults?.waitText ?? ""} />
       </label>
       <label className="asset-operation-target">
         再点击文字
-        <input name="compoundTapText" placeholder="例如：添加好友" />
+        <input name="compoundTapText" placeholder="例如：添加好友" defaultValue={tapStep?.text ?? defaults?.tapText ?? ""} />
       </label>
       <label className="asset-operation-target">
         等待超时 ms
-        <input name="compoundTimeoutMs" type="number" min="200" step="100" placeholder="3000" />
+        <input name="compoundTimeoutMs" type="number" min="200" step="100" placeholder="3000" defaultValue={defaultTimeoutMs ?? ""} />
       </label>
     </fieldset>
   );
@@ -2988,7 +3241,18 @@ export function manualOperationDraftFromForm(
         role,
         slot,
         ...(orderFromRight ? { orderFromRight } : {}),
-        searchRegion: region
+        searchRegion: region,
+        candidates: [
+          {
+            source: "manual_top_bar_icon",
+            label: elementLabel,
+            role,
+            slot,
+            score: 0.85,
+            region,
+            semanticArea: "top"
+          }
+        ]
       },
       ...(outcomeType === "compound_navigation" ? { compoundSteps: readCompoundSteps(input) } : {})
     };

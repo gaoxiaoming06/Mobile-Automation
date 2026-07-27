@@ -70,12 +70,25 @@ export type FreeCompositionAiPlannerHints = {
   errorMessage?: string;
 };
 
+export type FreeCompositionRecordingIntent = {
+  kind: "navigation" | "compound_navigation";
+  sourcePageModelId?: string;
+  sourcePageName?: string;
+  targetPageModelId?: string;
+  targetPageName: string;
+  triggerLabel?: string;
+  waitText?: string;
+  tapText?: string;
+  timeoutMs?: number;
+};
+
 export type FreeCompositionResolution = {
   status: "ready" | "needs_clarification" | "missing_assets";
   intent: FreeCompositionIntent;
   candidates: FreeCompositionCandidate[];
   message: string;
   aiPlanner?: FreeCompositionAiPlannerHints;
+  recordingIntent?: FreeCompositionRecordingIntent;
 };
 
 export type ResolveFreeCompositionInput = {
@@ -363,11 +376,13 @@ export function resolveFreeComposition(
   const candidates = generatedFlow ? [generatedFlow, ...baseCandidates] : baseCandidates;
 
   if (candidates.length === 0) {
+    const recordingIntent = missingAssetsRecordingIntent(matchingPrompt, input);
     return withAiPlanner({
       status: "missing_assets",
       intent,
       candidates: [],
-      message: missingAssetsMessage(matchingPrompt, input)
+      message: missingAssetsMessage(matchingPrompt, input),
+      ...(recordingIntent ? { recordingIntent } : {})
     }, input.aiPlanner);
   }
 
@@ -1208,19 +1223,10 @@ function candidateKindPriority(kind: FreeCompositionCandidateKind): number {
 }
 
 function missingAssetsMessage(prompt: string, input: ResolveFreeCompositionInput): string {
-  const matchingPages = (input.pageAssets ?? [])
-    .filter((page) => page.appId === input.appId && page.platform === input.platform && page.status !== "deprecated")
-    .map((page) => ({ page, score: textMatchScore(prompt, page.pageModelName) }))
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score || left.page.pageModelName.localeCompare(right.page.pageModelName, "zh-CN"));
-  const matchingAbilities = (input.pageAbilities ?? [])
-    .filter((ability) => ability.appId === input.appId && ability.platform === input.platform && ability.status !== "deprecated")
-    .map((ability) => ({ ability, score: textMatchScore(prompt, ability.pageElementLabel) }))
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score || left.ability.pageElementLabel.localeCompare(right.ability.pageElementLabel, "zh-CN"));
+  const matchingPages = matchingPageAssets(prompt, input);
 
   const page = matchingPages[0]?.page;
-  const ability = matchingAbilities[0]?.ability;
+  const ability = matchingPageAbilities(prompt, input, page)[0]?.ability;
   if (page && ability) {
     return `已找到页面资产“${page.pageModelName}”，也找到可能的入口能力“${ability.pageModelName} / ${ability.pageElementLabel}”，但没有找到绑定到该页面的 active 连接边或页面任务。请先在资产录制中确认“${ability.pageElementLabel}”进入“${page.pageModelName}”的连接边，或创建对应元功能。`;
   }
@@ -1231,6 +1237,81 @@ function missingAssetsMessage(prompt: string, input: ResolveFreeCompositionInput
     return `已找到页面能力“${ability.pageModelName} / ${ability.pageElementLabel}”，但没有找到完整目标页面或可执行连接边。请先在资产录制中补齐目标页面和连接边。`;
   }
   return "没有找到可执行候选。请先录入相关页面任务、页面能力，或创建元功能。";
+}
+
+function missingAssetsRecordingIntent(prompt: string, input: ResolveFreeCompositionInput): FreeCompositionRecordingIntent | undefined {
+  const page = matchingPageAssets(prompt, input)[0]?.page;
+  if (!page) {
+    return undefined;
+  }
+  const ability = matchingPageAbilities(prompt, input, page)[0]?.ability;
+  if (!ability || !pageAbilityTargetsPage(ability, page)) {
+    return undefined;
+  }
+  const kind = moreMenuItemName(page.pageModelName) ? "compound_navigation" : "navigation";
+  return {
+    kind,
+    sourcePageModelId: ability.pageModelId,
+    sourcePageName: ability.pageModelName,
+    targetPageModelId: page.pageModelId,
+    targetPageName: page.pageModelName,
+    triggerLabel: ability.pageElementLabel,
+    ...(kind === "compound_navigation"
+      ? {
+          waitText: page.pageModelName,
+          tapText: page.pageModelName
+        }
+      : {})
+  };
+}
+
+function matchingPageAssets(prompt: string, input: ResolveFreeCompositionInput): Array<{ page: FreeCompositionPageAsset; score: number }> {
+  return (input.pageAssets ?? [])
+    .filter((page) => page.appId === input.appId && page.platform === input.platform && page.status !== "deprecated")
+    .map((page) => ({ page, score: textMatchScore(prompt, page.pageModelName) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.page.pageModelName.localeCompare(right.page.pageModelName, "zh-CN"));
+}
+
+function matchingPageAbilities(
+  prompt: string,
+  input: ResolveFreeCompositionInput,
+  targetPage?: FreeCompositionPageAsset
+): Array<{ ability: FreeCompositionPageAbilityAsset; score: number }> {
+  return (input.pageAbilities ?? [])
+    .filter((ability) => ability.appId === input.appId && ability.platform === input.platform && ability.status !== "deprecated")
+    .map((ability) => ({ ability, score: pageAbilityMatchScore(prompt, ability, targetPage) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.ability.pageElementLabel.localeCompare(right.ability.pageElementLabel, "zh-CN"));
+}
+
+function pageAbilityMatchScore(
+  prompt: string,
+  ability: FreeCompositionPageAbilityAsset,
+  targetPage?: FreeCompositionPageAsset
+): number {
+  let score = Math.max(
+    textMatchScore(prompt, ability.pageElementLabel),
+    ability.targetPageModelName ? textMatchScore(prompt, ability.targetPageModelName) : 0
+  );
+  if (targetPage) {
+    if (ability.targetPageModelId === targetPage.pageModelId) {
+      score += 200;
+    } else if (ability.targetPageModelName === targetPage.pageModelName) {
+      score += 160;
+    }
+  }
+  return score;
+}
+
+function pageAbilityTargetsPage(ability: FreeCompositionPageAbilityAsset, targetPage: FreeCompositionPageAsset): boolean {
+  return ability.targetPageModelId === targetPage.pageModelId || ability.targetPageModelName === targetPage.pageModelName;
+}
+
+function moreMenuItemName(value: string): string | undefined {
+  const normalized = normalize(value);
+  const knownMenuItems = ["添加好友", "加入班级", "加入公开课", "扫一扫"];
+  return knownMenuItems.find((item) => normalized.includes(normalize(item)));
 }
 
 function textMatchScore(prompt: string, value: string): number {

@@ -25,9 +25,12 @@ import {
 import { AppNav, type AppNavItemId } from "./components/AppNav";
 import {
   AssetRecordingPanel,
+  normalizeAssetRecordingIntent,
   type AssetRecordingAutoExploreReport,
+  type AssetRecordingCompoundStepDraft,
   type AssetRecordingCurrentPage,
   type AssetRecordingDynamicMask,
+  type AssetRecordingIntent,
   type AssetRecordingLocatorKind,
   type AssetRecordingOperationTransitionDraft,
   type AssetRecordingPageElementDraft,
@@ -572,7 +575,7 @@ export function assetOperationTransitionRequestBody(
     targetLabel: draft.targetLabel,
     platformScope: context.platformScope,
     ...(draft.tapPointPercent ? { tapPointPercent: draft.tapPointPercent } : {}),
-    ...(draft.compoundSteps?.length ? { compoundSteps: draft.compoundSteps } : {}),
+    ...(draft.compoundSteps?.length ? { compoundSteps: compoundStepsRequestBody(draft.compoundSteps) } : {}),
     ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {}),
     ...(draft.locatorKind ? { locatorKind: draft.locatorKind } : {}),
     ...(draft.dynamicMasks?.length ? { dynamicMasks: draft.dynamicMasks } : {}),
@@ -606,7 +609,7 @@ export function assetPageElementRequestBody(
     targetLabel: draft.targetLabel,
     ...(draft.tapPointPercent ? { tapPointPercent: draft.tapPointPercent } : {}),
     ...(draft.anchorOffsetPercent ? { anchorOffsetPercent: draft.anchorOffsetPercent } : {}),
-    ...(draft.compoundSteps?.length ? { compoundSteps: draft.compoundSteps } : {}),
+    ...(draft.compoundSteps?.length ? { compoundSteps: compoundStepsRequestBody(draft.compoundSteps) } : {}),
     ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {}),
     ...(draft.quality ? { quality: draft.quality } : {}),
     ...(draft.visualLocator ? { visualLocator: draft.visualLocator } : {}),
@@ -658,6 +661,29 @@ export function validateAssetPageElementDraftForSave(draft: AssetRecordingPageEl
     return "跳转页面类型必须选择已保存的目标页面，否则不会进入路径规划";
   }
   return undefined;
+}
+
+type ManualCompoundStepRequestBody = {
+  actionKind: "wait" | "tap";
+  locator: string;
+  elementLabel: string;
+  semanticArea: "content";
+  coordinateSpace: "runtime";
+  waitTimeoutMs?: number;
+};
+
+function compoundStepsRequestBody(steps: AssetRecordingCompoundStepDraft[] | undefined): ManualCompoundStepRequestBody[] {
+  return (steps ?? []).map((step): ManualCompoundStepRequestBody => {
+    const elementLabel = step.label?.trim() || step.text;
+    return {
+      actionKind: step.type === "wait_until_state" ? "wait" : "tap",
+      locator: `text:${step.text}`,
+      elementLabel,
+      semanticArea: "content",
+      coordinateSpace: "runtime",
+      ...(step.type === "wait_until_state" && step.timeoutMs ? { waitTimeoutMs: step.timeoutMs } : {})
+    };
+  });
 }
 
 export function stabilityExplorerRequestBody(input: {
@@ -1249,6 +1275,8 @@ export function App() {
   const [runtimeInterceptorRules, setRuntimeInterceptorRules] = useState<RuntimeInterceptorRule[]>([]);
   const [assetRecordingGraphVersionId, setAssetRecordingGraphVersionId] = useState("");
   const [assetRecordingPage, setAssetRecordingPage] = useState<AssetRecordingCurrentPage>({ status: "idle" });
+  const [assetRecordingIntent, setAssetRecordingIntent] = useState<AssetRecordingIntent>();
+  const [assetPageElementSaveError, setAssetPageElementSaveError] = useState<string>();
   const [assetAutoExploreReport, setAssetAutoExploreReport] = useState<AssetRecordingAutoExploreReport>();
   const [assetRecordingIdentifying, setAssetRecordingIdentifying] = useState(false);
   const [assetRecordingAiIdentifying, setAssetRecordingAiIdentifying] = useState(false);
@@ -1872,7 +1900,8 @@ export function App() {
     setActiveNavItem("devices");
   }
 
-  function openAssetRecording() {
+  function openAssetRecording(intent?: unknown) {
+    setAssetRecordingIntent(normalizeAssetRecordingIntent(intent));
     setActiveNavItem("assetRecording");
   }
 
@@ -2143,15 +2172,19 @@ export function App() {
     const graphVersionId = assetRecordingPage.graphVersionId;
     const sourceNodeId = draft.sourceNodeId ?? assetRecordingPage.nodeId;
     if (!graphVersionId || !sourceNodeId) {
-      setMessage("当前页面还没有保存为页面资产，请先保存页面后再录入可操作元素");
+      const errorMessage = "当前页面还没有保存为页面资产，请先保存页面后再录入可操作元素";
+      setAssetPageElementSaveError(errorMessage);
+      setMessage(errorMessage);
       return false;
     }
     const validationMessage = validateAssetPageElementDraftForSave(draft);
     if (validationMessage) {
+      setAssetPageElementSaveError(validationMessage);
       setMessage(validationMessage);
       return false;
     }
     try {
+      setAssetPageElementSaveError(undefined);
       setBusy(true);
       const validationBody = assetPageElementRequestBody(draft, {
         sourceNodeId,
@@ -2208,10 +2241,13 @@ export function App() {
           page.elements ?? []
         )
       }));
+      setAssetPageElementSaveError(undefined);
       setMessage(validationJson.quality.status === "needs_review" ? `已保存可操作元素：${draft.elementLabel}（建议复核定位质量）` : `已保存可操作元素：${draft.elementLabel}`);
       return true;
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setAssetPageElementSaveError(errorMessage);
+      setMessage(errorMessage);
       return false;
     } finally {
       setBusy(false);
@@ -2795,6 +2831,7 @@ export function App() {
             aiIdentifying={assetRecordingAiIdentifying}
             onSaveCurrentPageAsset={saveCurrentPageAsset}
             onSavePageElement={saveAssetPageElement}
+            pageElementSaveError={assetPageElementSaveError}
             onDeletePageElement={deleteAssetPageElement}
             onSavePageTask={saveAssetPageTask}
             onDeletePageTask={deleteAssetPageTask}
@@ -2802,6 +2839,8 @@ export function App() {
             onPreviewAutoExplore={previewAutoExplore}
             onRunAutoExplore={runAutoExplore}
             onResizePointerDown={onAssetRecordingResizePointerDown}
+            recordingIntent={assetRecordingIntent}
+            onRecordingIntentConsumed={() => setAssetRecordingIntent(undefined)}
             previewSlot={
               <PreviewPanel
                 key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
@@ -5042,19 +5081,35 @@ function compoundStepsMetadata(value: unknown): NonNullable<NonNullable<AssetRec
       continue;
     }
     const step = item as Record<string, unknown>;
-    const type = step.type === "wait_until_state" || step.type === "tap_on_text" ? step.type : undefined;
-    const text = stringMetadata(step, "text");
+    const actionKind = stringMetadata(step, "actionKind");
+    const locatorText = textFromTextLocator(stringMetadata(step, "locator"));
+    const type = step.type === "wait_until_state" || step.type === "tap_on_text"
+      ? step.type
+      : actionKind === "wait"
+        ? "wait_until_state"
+        : actionKind === "tap" && locatorText
+          ? "tap_on_text"
+          : undefined;
+    const text = stringMetadata(step, "text") ?? locatorText;
     if (!type || !text) {
       continue;
     }
     steps.push({
       type,
       text,
-      label: stringMetadata(step, "label"),
-      timeoutMs: numberMetadata(step.timeoutMs)
+      label: stringMetadata(step, "label") ?? stringMetadata(step, "elementLabel"),
+      timeoutMs: numberMetadata(step.timeoutMs) ?? numberMetadata(step.waitTimeoutMs)
     });
   }
   return steps;
+}
+
+function textFromTextLocator(locator: string | undefined): string | undefined {
+  if (!locator?.startsWith("text:")) {
+    return undefined;
+  }
+  const text = locator.replace(/^text:\s*/, "").trim();
+  return text || undefined;
 }
 
 function summarizeMatcherResults(

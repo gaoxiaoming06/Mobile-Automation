@@ -2,6 +2,7 @@ import { Database, Play, RefreshCw, Search, Send } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AndroidAppMonitorConfig, ParameterProfile, Platform, RunMode } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api";
+import type { AssetRecordingIntent } from "./AssetRecordingPanel";
 
 type FreeCompositionCandidate = {
   id: string;
@@ -33,6 +34,7 @@ type FreeCompositionResolution = {
   intent: FreeCompositionIntent;
   candidates: FreeCompositionCandidate[];
   message: string;
+  recordingIntent?: AssetRecordingIntent;
   aiPlanner?: {
     status: "used" | "fallback";
     errorMessage?: string;
@@ -91,7 +93,7 @@ type FreeCompositionPanelProps = {
   androidAppMonitorForPackage?: (packageName: string) => AndroidAppMonitorConfig | undefined;
   onBack?: () => void | Promise<void>;
   onLaunchApp?: (packageName: string) => void | Promise<void>;
-  onOpenAssetRecording?: () => void;
+  onOpenAssetRecording?: (intent?: AssetRecordingIntent) => void;
 };
 
 export type FreeCompositionAnalyzeRequestBody = {
@@ -426,7 +428,7 @@ export function FreeCompositionPanel({
                   <button className="primary-button" type="button" disabled={!selectedSerial || selectedDeviceBusy || busy || !activeAppId || !onLaunchApp} onClick={() => void onLaunchApp?.(activeAppId)}>启动app</button>
                 ) : null}
                 {currentPageBlocker ? <button className="secondary-button" type="button" disabled={!selectedSerial || selectedDeviceBusy || busy || !onBack} onClick={() => void onBack?.()}>返回上一页</button> : null}
-                <button className={currentPageBlocker?.kind === "outside_app" ? "secondary-button" : "primary-button"} type="button" disabled={busy || !onOpenAssetRecording} onClick={onOpenAssetRecording}><Database size={15} />{currentPageBlocker ? "去录制新资产" : "去录制资产"}</button>
+                <button className={currentPageBlocker?.kind === "outside_app" ? "secondary-button" : "primary-button"} type="button" disabled={busy || !onOpenAssetRecording} onClick={() => onOpenAssetRecording?.(freeCompositionAssetRecordingIntent(selectedSession))}><Database size={15} />{currentPageBlocker ? "去录制新资产" : "去录制资产"}</button>
                 <button className="secondary-button" type="button" disabled={busy} onClick={() => void analyzePrompt({ appId: selectedSession.appId, prompt: selectedSession.prompt })}><RefreshCw size={15} />重新分析</button>
               </div>
             ) : targetSatisfied ? (
@@ -732,6 +734,13 @@ type FreeCompositionResolutionMessage = {
 
 export function freeCompositionSessionDisplayMessage(session: FreeCompositionResolutionMessage): string {
   return currentPageRecognitionBlockerMessage(session) ?? session.resolution.message;
+}
+
+export function freeCompositionAssetRecordingIntent(session: FreeCompositionSession): AssetRecordingIntent | undefined {
+  if (session.resolution.status !== "missing_assets" || currentPageRecognitionBlocker(session)) {
+    return undefined;
+  }
+  return session.resolution.recordingIntent;
 }
 
 type CurrentPageRecognitionBlocker = {

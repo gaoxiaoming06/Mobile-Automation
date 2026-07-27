@@ -857,6 +857,9 @@ function actionTypeForLocator(actionKind: ManualPageTransitionActionKind, locato
   if (locator.startsWith("runtime-locator:")) {
     return "tap_on_image";
   }
+  if (locator.startsWith("top-bar-icon:")) {
+    return "tap_on_image";
+  }
   if (locator.startsWith("image-region:")) {
     return "tap_on_image";
   }

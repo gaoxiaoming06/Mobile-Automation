@@ -78,6 +78,41 @@ describe("compileAssetCompositeCase", () => {
     );
   });
 
+  it("keeps manual navigation target metadata in the catalog before an active edge exists", () => {
+    const version = graphVersion();
+    version.nodes = [
+      pageNode("page-class-detail", "班级详情", {
+        assetRecordingManualElements: [
+          {
+            id: "course-card",
+            label: "课程卡片",
+            locator: "image-region:14,52,72,8",
+            actionKind: "tap",
+            outcomeType: "navigate",
+            targetNodeId: "page-course-detail"
+          }
+        ]
+      }),
+      pageNode("page-course-detail", "课程详情", {})
+    ];
+    version.edges = [];
+
+    expect(assetCompositionCatalog(version).pages.find((page) => page.id === "page-class-detail")).toEqual(
+      expect.objectContaining({
+        elements: [
+          expect.objectContaining({
+            id: "course-card",
+            label: "课程卡片",
+            targetPageModelId: "page-course-detail",
+            targetPageName: "课程详情",
+            outcomeType: "navigate"
+          })
+        ],
+        transitions: []
+      })
+    );
+  });
+
   it("uses active operation edges that were not mirrored into page transition metadata", () => {
     const version = graphVersion();
     version.nodes = [

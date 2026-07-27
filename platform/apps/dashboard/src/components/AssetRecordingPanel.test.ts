@@ -1150,6 +1150,200 @@ describe("AssetRecordingPanel", () => {
     expect(markup).not.toContain("动作方式");
   });
 
+  it("opens a prefilled compound navigation draft from a recording intent", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "device-1",
+        busy: false,
+        initialDetailTab: "match",
+        recordingIntent: {
+          kind: "compound_navigation",
+          sourcePageName: "主页",
+          targetPageName: "扫一扫",
+          triggerLabel: "右上更多/加号",
+          waitText: "扫一扫",
+          tapText: "扫一扫"
+        },
+        currentPage: {
+          status: "matched",
+          graphVersionId: "version-1",
+          nodeId: "node-home",
+          pageName: "主页",
+          savedAssets: [
+            { id: "node-scan", key: "classin.scan", name: "扫一扫", status: "draft", platformScope: "android" }
+          ],
+          elements: [],
+          transitions: []
+        },
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: vi.fn(),
+        onSavePageElement: vi.fn()
+      })
+    );
+
+    expect(markup).toContain("页面能力");
+    expect(markup).toContain("待编辑可操作元素");
+    expect(markup).toContain("录入缺失入口：主页 → 扫一扫");
+    expect(markup).toContain("先在当前页面点右上更多/加号，再点菜单里的“扫一扫”。");
+    expect(markup).toContain("value=\"top_bar_icon_locator\"");
+    expect(markup).toContain("value=\"compound_navigation\" selected=\"\"");
+    expect(markup).toContain("元素名称");
+    expect(markup).not.toContain("动作名称");
+    expect(markup).toContain("value=\"右上更多/加号\"");
+    expect(markup).toContain("value=\"扫一扫\"");
+    expect(markup).toContain("value=\"node-scan\" selected=\"\"");
+    expect(markup).toContain("name=\"compoundWaitText\" value=\"扫一扫\"");
+    expect(markup).toContain("name=\"compoundTapText\" value=\"扫一扫\"");
+    expect(markup).toContain("保存后系统会派生从主页到扫一扫的连接边");
+  });
+
+  it("shows page element save errors inside the manual element editor", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "device-1",
+        busy: false,
+        initialDetailTab: "match",
+        pageElementSaveError: "顶部栏图标缺少参考视觉候选，无法保存。",
+        recordingIntent: {
+          kind: "compound_navigation",
+          sourcePageName: "主页",
+          targetPageName: "扫一扫",
+          triggerLabel: "右上更多/加号",
+          waitText: "扫一扫",
+          tapText: "扫一扫"
+        },
+        currentPage: {
+          status: "matched",
+          graphVersionId: "version-1",
+          nodeId: "node-home",
+          pageName: "主页",
+          savedAssets: [
+            { id: "node-scan", key: "classin.scan", name: "扫一扫", status: "draft", platformScope: "android" }
+          ],
+          elements: [],
+          transitions: []
+        },
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: vi.fn(),
+        onSavePageElement: vi.fn()
+      })
+    );
+
+    expect(markup).toContain("role=\"alert\"");
+    expect(markup).toContain("顶部栏图标缺少参考视觉候选，无法保存。");
+    expect(markup).toContain("保存可操作元素");
+  });
+
+  it("opens a prefilled navigation draft from the source page supplied by the backend", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "device-1",
+        busy: false,
+        initialDetailTab: "match",
+        recordingIntent: {
+          kind: "navigation",
+          sourcePageModelId: "page-class-detail",
+          sourcePageName: "班级详情",
+          targetPageModelId: "page-course-detail",
+          targetPageName: "课程详情",
+          triggerLabel: "课程卡片"
+        },
+        currentPage: {
+          status: "matched",
+          graphVersionId: "version-1",
+          nodeId: "page-class-detail",
+          pageName: "班级详情",
+          savedAssets: [
+            { id: "page-course-detail", key: "class.course.detail", name: "课程详情", status: "draft", platformScope: "android" }
+          ],
+          elements: [],
+          transitions: []
+        },
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: vi.fn(),
+        onSavePageElement: vi.fn()
+      })
+    );
+
+    expect(markup).toContain("待编辑可操作元素");
+    expect(markup).toContain("录入缺失入口：班级详情 → 课程详情");
+    expect(markup).toContain("在当前页面录入“课程卡片”的跳转能力，目标是“课程详情”。");
+    expect(markup).toContain("value=\"visual_locator\"");
+    expect(markup).toContain("value=\"navigate\" selected=\"\"");
+    expect(markup).toContain("value=\"课程卡片\"");
+    expect(markup).toContain("value=\"page-course-detail\" selected=\"\"");
+    expect(markup).not.toContain("name=\"compoundWaitText\"");
+    expect(markup).not.toContain("先在当前页面点课程卡片，再点菜单里的");
+  });
+
+  it("blocks a prefilled compound navigation draft when the current page is not the expected source", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AssetRecordingPanel, {
+        selectedSerial: "device-1",
+        busy: false,
+        recordingIntent: {
+          kind: "compound_navigation",
+          sourcePageName: "主页",
+          targetPageName: "扫一扫",
+          triggerLabel: "右上更多/加号",
+          waitText: "扫一扫",
+          tapText: "扫一扫"
+        },
+        currentPage: {
+          status: "matched",
+          graphVersionId: "version-1",
+          nodeId: "node-class-detail",
+          pageName: "班级详情",
+          savedAssets: [
+            { id: "node-scan", key: "classin.scan", name: "扫一扫", status: "draft", platformScope: "android" }
+          ],
+          elements: [],
+          transitions: []
+        },
+        onPageDraftChange: () => undefined,
+        onIdentifyCurrentPage: () => undefined,
+        onSaveCurrentPageAsset: vi.fn(),
+        onSavePageElement: vi.fn()
+      })
+    );
+
+    expect(markup).toContain("需要先到主页再录入扫一扫入口");
+    expect(markup).toContain("当前识别到：班级详情");
+    expect(markup).toContain("回到主页后重新识别，再录入“右上更多/加号 → 扫一扫”。");
+    expect(markup).not.toContain("待编辑可操作元素");
+    expect(markup).not.toContain("保存后系统会派生从班级详情到扫一扫的连接边");
+  });
+
+  it("ignores malformed recording intents from plain nav clicks", () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(AssetRecordingPanel, {
+          selectedSerial: "device-1",
+          busy: false,
+          recordingIntent: { type: "click", target: {} } as never,
+          currentPage: {
+            status: "matched",
+            graphVersionId: "version-1",
+            nodeId: "node-home",
+            pageName: "主页",
+            savedAssets: [
+              { id: "node-scan", key: "classin.scan", name: "扫一扫", status: "draft", platformScope: "android" }
+            ],
+            elements: [],
+            transitions: []
+          },
+          onPageDraftChange: () => undefined,
+          onIdentifyCurrentPage: () => undefined,
+          onSaveCurrentPageAsset: vi.fn(),
+          onSavePageElement: vi.fn()
+        })
+      )
+    ).not.toThrow();
+  });
+
   it("shows saved manual page elements as the primary editable operation list", () => {
     const markup = renderToStaticMarkup(
       React.createElement(AssetRecordingPanel, {
@@ -1703,11 +1897,77 @@ describe("AssetRecordingPanel", () => {
         }),
         visualLocator: expect.objectContaining({
           strategy: "top_bar_icon_shape",
-          role: "search"
+          role: "search",
+          candidates: [
+            expect.objectContaining({
+              source: "manual_top_bar_icon",
+              role: "search",
+              slot: "right",
+              region: { x: 86, y: 3, width: 8, height: 5, semanticArea: "top" },
+              semanticArea: "top"
+            })
+          ]
         })
       })
     );
     expect(draft.locator).not.toContain("image-region");
+  });
+
+  it("adds visual candidates for default top bar icon page abilities so quality validation can pass", () => {
+    const draft = manualOperationDraftFromForm(
+      {
+        locatorKind: "top_bar_icon_locator",
+        topBarIconRole: "add",
+        topBarIconSlot: "right",
+        topBarIconOrderFromRight: "1",
+        actionKind: "tap",
+        availability: "visible",
+        semanticArea: "top",
+        elementLabel: "打开更多菜单并选择扫一扫",
+        outcomeType: "compound_navigation",
+        targetNodeId: "node-scan",
+        targetLabel: "扫一扫",
+        compoundWaitText: "扫一扫",
+        compoundTapText: "扫一扫",
+        compoundTimeoutMs: "3000"
+      },
+      {
+        sourceNodeId: "node-home"
+      }
+    );
+
+    expect(draft).toEqual(
+      expect.objectContaining({
+        sourceNodeId: "node-home",
+        locator: "top-bar-icon:add",
+        locatorKind: "top_bar_icon_locator",
+        coordinateSpace: "runtime",
+        outcomeType: "compound_navigation",
+        targetNodeId: "node-scan",
+        targetLabel: "扫一扫",
+        compoundSteps: [
+          expect.objectContaining({ type: "wait_until_state", text: "扫一扫" }),
+          expect.objectContaining({ type: "tap_on_text", text: "扫一扫" })
+        ],
+        visualLocator: expect.objectContaining({
+          strategy: "top_bar_icon_shape",
+          role: "add",
+          slot: "right",
+          orderFromRight: 1,
+          searchRegion: { x: 78, y: 0, width: 20, height: 12, semanticArea: "top" },
+          candidates: [
+            expect.objectContaining({
+              source: "manual_top_bar_icon",
+              label: "打开更多菜单并选择扫一扫",
+              role: "add",
+              slot: "right",
+              region: { x: 78, y: 0, width: 20, height: 12, semanticArea: "top" },
+              semanticArea: "top"
+            })
+          ]
+        })
+      })
+    );
   });
 
   it("uses a change description instead of target page selection for local outcomes", () => {

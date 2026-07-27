@@ -2671,6 +2671,34 @@ describe("App shell", () => {
                     targetLabel: "搜索页",
                     outcomeType: "navigate",
                     platformScope: "android"
+                  },
+                  {
+                    id: "manual_element_scan",
+                    label: "打开更多菜单并选择扫一扫",
+                    locator: "top-bar-icon:add",
+                    locatorKind: "top_bar_icon_locator",
+                    semanticArea: "top",
+                    coordinateSpace: "runtime",
+                    action: "tap",
+                    actionKind: "tap",
+                    availability: "visible",
+                    targetNodeId: "node-scan",
+                    targetLabel: "扫一扫",
+                    outcomeType: "compound_navigation",
+                    compoundSteps: [
+                      {
+                        actionKind: "wait",
+                        locator: "text:扫一扫",
+                        elementLabel: "等待扫一扫菜单出现",
+                        waitTimeoutMs: 3000
+                      },
+                      {
+                        actionKind: "tap",
+                        locator: "text:扫一扫",
+                        elementLabel: "点击扫一扫"
+                      }
+                    ],
+                    platformScope: "android"
                   }
                 ]
               }
@@ -2710,6 +2738,37 @@ describe("App shell", () => {
         outcomeLabel: "搜索页",
         targetNodeId: "node-search",
         targetLabel: "搜索页"
+      },
+      {
+        id: "manual_element_scan",
+        label: "打开更多菜单并选择扫一扫",
+        locator: "top-bar-icon:add",
+        locatorKind: "top_bar_icon_locator",
+        semanticArea: "top",
+        coordinateSpace: "runtime",
+        action: "tap",
+        actionKind: "tap",
+        availability: "visible",
+        source: "manual",
+        viewport: { width: 1080, height: 2160 },
+        outcomeType: "compound_navigation",
+        outcomeLabel: "扫一扫",
+        targetNodeId: "node-scan",
+        targetLabel: "扫一扫",
+        compoundSteps: [
+          {
+            type: "wait_until_state",
+            text: "扫一扫",
+            label: "等待扫一扫菜单出现",
+            timeoutMs: 3000
+          },
+          {
+            type: "tap_on_text",
+            text: "扫一扫",
+            label: "点击扫一扫",
+            timeoutMs: undefined
+          }
+        ]
       }
     ]);
   });
@@ -2873,10 +2932,71 @@ describe("App shell", () => {
       tapPointPercent: { x: 20, y: 70 },
       outcomeLabel: "弹出更多菜单后可继续点添加好友",
       compoundSteps: [
-        { type: "wait_until_state", text: "添加好友", label: "等待更多菜单出现", timeoutMs: 1200 },
-        { type: "tap_on_text", text: "添加好友", label: "点击添加好友" }
+        {
+          actionKind: "wait",
+          locator: "text:添加好友",
+          elementLabel: "等待更多菜单出现",
+          semanticArea: "content",
+          coordinateSpace: "runtime",
+          waitTimeoutMs: 1200
+        },
+        {
+          actionKind: "tap",
+          locator: "text:添加好友",
+          elementLabel: "点击添加好友",
+          semanticArea: "content",
+          coordinateSpace: "runtime"
+        }
       ]
     });
+  });
+
+  it("serializes compound steps for manual operation transition requests", () => {
+    expect(
+      assetOperationTransitionRequestBody(
+        {
+          sourceNodeId: "node-home",
+          actionKind: "tap",
+          availability: "visible",
+          outcomeType: "compound_navigation",
+          locator: "top-bar-icon:add",
+          elementLabel: "打开更多菜单并选择扫一扫",
+          targetNodeId: "node-scan",
+          targetLabel: "扫一扫",
+          compoundSteps: [
+            { type: "wait_until_state", text: "扫一扫", label: "等待扫一扫菜单出现", timeoutMs: 3000 },
+            { type: "tap_on_text", text: "扫一扫", label: "点击扫一扫" }
+          ]
+        },
+        {
+          sourceNodeId: "node-home",
+          platformScope: "android"
+        }
+      )
+    ).toEqual(
+      expect.objectContaining({
+        sourceNodeId: "node-home",
+        targetNodeId: "node-scan",
+        outcomeType: "compound_navigation",
+        compoundSteps: [
+          {
+            actionKind: "wait",
+            locator: "text:扫一扫",
+            elementLabel: "等待扫一扫菜单出现",
+            semanticArea: "content",
+            coordinateSpace: "runtime",
+            waitTimeoutMs: 3000
+          },
+          {
+            actionKind: "tap",
+            locator: "text:扫一扫",
+            elementLabel: "点击扫一扫",
+            semanticArea: "content",
+            coordinateSpace: "runtime"
+          }
+        ]
+      })
+    );
   });
 
   it("builds manual page element drafts with a separate tap point", () => {

@@ -5387,6 +5387,8 @@ function freeCompositionAssetsFromGraph(
     pageAbilities: catalog.pages.flatMap((page) =>
       page.elements.map((element) => {
         const transition = page.transitions.find((item) => item.elementId === element.id);
+        const targetPageModelId = transition?.targetPageModelId ?? element.targetPageModelId;
+        const targetPageModelName = transition?.targetPageName ?? element.targetPageName;
         return {
           appId,
           platform,
@@ -5394,8 +5396,8 @@ function freeCompositionAssetsFromGraph(
           pageModelName: page.name,
           pageElementId: element.id,
           pageElementLabel: element.label,
-          ...(transition?.targetPageModelId ? { targetPageModelId: transition.targetPageModelId } : {}),
-          ...(transition?.targetPageName ? { targetPageModelName: transition.targetPageName } : {})
+          ...(targetPageModelId ? { targetPageModelId } : {}),
+          ...(targetPageModelName ? { targetPageModelName } : {})
         };
       })
     ),

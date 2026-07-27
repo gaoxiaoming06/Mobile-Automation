@@ -64,7 +64,7 @@ export type AssetCompositionCatalog = {
   pages: Array<{
     id: string;
     name: string;
-    elements: Array<{ id: string; label: string }>;
+    elements: Array<{ id: string; label: string; targetPageModelId?: string; targetPageName?: string; outcomeType?: string }>;
     transitions: Array<{ id: string; elementId?: string; targetPageModelId?: string; targetPageName?: string; parameterKeys: string[] }>;
     tasks: Array<{ id: string; name: string; status?: string; parameterKeys: string[] }>;
   }>;
@@ -81,7 +81,13 @@ export function assetCompositionCatalog(graphVersion: BusinessGraphVersion): Ass
         return {
           id: node.id,
           name: node.name,
-          elements: elements.map((item) => ({ id: item.id, label: item.label ?? item.id })),
+          elements: elements.map((item) => ({
+            id: item.id,
+            label: item.label ?? item.id,
+            ...(item.targetNodeId ? { targetPageModelId: item.targetNodeId } : {}),
+            ...(item.targetPageName ? { targetPageName: item.targetPageName } : {}),
+            ...(item.outcomeType ? { outcomeType: item.outcomeType } : {})
+          })),
           transitions: pageTransitions(graphVersion, node, elements).map((item) => ({
             id: item.id,
             elementId: item.elementId,
@@ -352,21 +358,29 @@ function normalizeEnabledSteps<T extends { order: number; enabled: boolean }>(st
   return [...steps].filter((item) => item.enabled).sort((left, right) => left.order - right.order);
 }
 
-type PageElementSummary = { id: string; label?: string };
+type PageElementSummary = { id: string; label?: string; targetNodeId?: string; targetPageName?: string; outcomeType?: string };
 type PageTransitionSummary = { id: string; elementId?: string; targetNodeId?: string; parameterKeys: string[] };
 
 function pageElements(node: BusinessNode, graphVersion?: BusinessGraphVersion): PageElementSummary[] {
   const values = [node.metadata?.assetRecordingPageElements, node.metadata?.assetRecordingManualElements];
-  const byId = new Map<string, { id: string; label?: string }>();
+  const byId = new Map<string, PageElementSummary>();
   for (const value of values) {
     if (!Array.isArray(value)) {
       continue;
     }
     for (const item of value.filter(isRecord)) {
       if (typeof item.id === "string") {
+        const targetNodeId = stringRecordValue(item, "targetNodeId");
+        const targetPageName = targetNodeId
+          ? graphVersion?.nodes.find((target) => target.id === targetNodeId)?.name ?? stringRecordValue(item, "targetLabel")
+          : stringRecordValue(item, "targetLabel");
+        const outcomeType = stringRecordValue(item, "outcomeType");
         byId.set(item.id, {
           id: item.id,
-          label: typeof item.label === "string" ? item.label : undefined
+          label: typeof item.label === "string" ? item.label : undefined,
+          ...(targetNodeId ? { targetNodeId } : {}),
+          ...(targetPageName ? { targetPageName } : {}),
+          ...(outcomeType ? { outcomeType } : {})
         });
       }
     }
