@@ -31,7 +31,8 @@ import {
   StepExpectationEvaluator,
   annotateNonBlockingExpectationResults,
   enabledExpectations,
-  shouldFailStepForExpectation
+  shouldFailStepForExpectation,
+  type PageStateExpectationVerifier
 } from "./step-expectations.js";
 import { ConditionalStepExecutor } from "./conditional-step-executor.js";
 import { AndroidAppMonitorRunSupport } from "./android-app-monitor-run-support.js";
@@ -55,6 +56,10 @@ export type RunnerStorage = Pick<
   | "updateRunReport"
 > & {
   listRuntimeInterceptorRules?: Storage["listRuntimeInterceptorRules"];
+};
+
+export type AutomationRunnerOptions = {
+  verifyPageState?: PageStateExpectationVerifier;
 };
 
 export class DeviceBusyError extends Error {
@@ -124,7 +129,8 @@ export class AutomationRunner {
   constructor(
     private readonly storage: RunnerStorage,
     private readonly driver: AutomationDeviceDriver,
-    private readonly ocr: OcrService = createDefaultOcrService()
+    private readonly ocr: OcrService = createDefaultOcrService(),
+    options: AutomationRunnerOptions = {}
   ) {
     this.artifactService = new RunArtifactService(this.storage, this.driver);
     this.expectationEvaluator = new StepExpectationEvaluator({
@@ -137,7 +143,8 @@ export class AutomationRunner {
       captureExpectationScreenshot: (runId, stepResultId, serial, expectationId, attempt) =>
         this.artifactService.captureExpectationScreenshot(runId, stepResultId, serial, expectationId, attempt),
       getForegroundApp: this.driver.getForegroundApp ? (serial) => this.driver.getForegroundApp!(serial) : undefined,
-      dumpUiHierarchy: this.driver.dumpUiHierarchy ? (serial) => this.driver.dumpUiHierarchy!(serial) : undefined
+      dumpUiHierarchy: this.driver.dumpUiHierarchy ? (serial) => this.driver.dumpUiHierarchy!(serial) : undefined,
+      verifyPageState: options.verifyPageState
     });
     this.conditionalStepExecutor = new ConditionalStepExecutor({
       ocr: this.ocr,
@@ -487,7 +494,8 @@ export class AutomationRunner {
       type: step.type,
       status: "running",
       startedAt,
-      artifacts: []
+      artifacts: [],
+      metadata: scriptStepResultMetadata(step.params)
     };
     setActiveStepResultId?.(result.id);
 
@@ -894,6 +902,12 @@ export class AutomationRunner {
 
 function errorToString(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function scriptStepResultMetadata(params: Record<string, unknown>): Record<string, unknown> | undefined {
+  const keys = ["scriptFlowId", "scriptVersion", "scriptStepId", "sourceFlowName", "onPage", "expectPage", "locatorStrategy"];
+  const entries = keys.flatMap((key) => params[key] === undefined ? [] : [[key, params[key]] as const]);
+  return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 function sleep(ms: number): Promise<void> {

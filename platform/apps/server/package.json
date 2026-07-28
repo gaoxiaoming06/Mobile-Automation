@@ -14,6 +14,7 @@
     "@mobile-automation/ios-driver": "workspace:^",
     "@mobile-automation/report-core": "workspace:*",
     "@mobile-automation/runner-core": "workspace:*",
+    "@mobile-automation/script-flow": "workspace:*",
     "@mobile-automation/shared": "workspace:*",
     "@mobile-automation/source-scanner": "workspace:*",
     "@yume-chan/adb": "^2.6.0",

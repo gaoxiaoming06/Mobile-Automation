@@ -837,6 +837,56 @@ describe("AutomationRunner regression flow", () => {
     );
   });
 
+  it("blocks a script action when its required page is not matched", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const requests: Array<{ pageId: string; appId: string }> = [];
+    const runner = new AutomationRunner(storage, driver, undefined, {
+      verifyPageState: async (request) => {
+        requests.push({ pageId: request.pageId, appId: request.appId });
+        return { status: "unknown", reason: "page evidence did not match" };
+      }
+    });
+    const recordedTap = driver.createTapStep(120, 240);
+    const step = withPreconditions({
+      ...recordedTap,
+      params: {
+        ...recordedTap.params,
+        scriptFlowId: "flow-1",
+        scriptStepId: "open-class"
+      }
+    }, [
+      createExpectation("state_is", {
+        appId: "cn.eeo.classin",
+        platform: "android",
+        pageId: "classin.home",
+        timeoutMs: 1
+      })
+    ]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Script page precondition",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(requests).toEqual([{ pageId: "classin.home", appId: "cn.eeo.classin" }]);
+    expect(run.stepResults[0]).toEqual(expect.objectContaining({
+      errorCode: "PRECONDITION_FAILED",
+      metadata: expect.objectContaining({
+        scriptFlowId: "flow-1",
+        scriptStepId: "open-class",
+        preconditions: expect.objectContaining({ status: "failed" })
+      })
+    }));
+  });
+
   it("fails text expectations when OCR text does not match", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();

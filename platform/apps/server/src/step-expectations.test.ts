@@ -70,6 +70,81 @@ describe("step expectation helpers", () => {
 });
 
 describe("StepExpectationEvaluator", () => {
+  it("evaluates state_is through the injected page verifier", async () => {
+    const evaluator = new StepExpectationEvaluator({
+      ocr: new FakeOcrService(""),
+      collectLogs: async () => "",
+      writeLog: async () => artifact("artifact-log", "log"),
+      captureExpectationScreenshot: async () => screenshot("artifact-retry", "retry"),
+      verifyPageState: async (input) => {
+        expect(input).toEqual(expect.objectContaining({
+          serial: "device-1",
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageId: "classin.home",
+          timeoutMs: 1200,
+          screenshot: Buffer.from("after")
+        }));
+        return { status: "matched", pageName: "主页" };
+      }
+    });
+    const results = await evaluator.evaluate({
+      runId: "run-1",
+      serial: "device-1",
+      stepResultId: "step-result-1",
+      step: actionStep([expectation("state_is", {
+        appId: "cn.eeo.classin",
+        platform: "android",
+        pageId: "classin.home",
+        timeoutMs: 1200
+      })]),
+      afterScreenshot: screenshot("artifact-after", "after"),
+      runtimeFailure: false
+    });
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        type: "state_is",
+        status: "passed",
+        expected: "Page classin.home",
+        actual: "主页",
+        evidenceArtifactIds: ["artifact-after"]
+      })
+    ]);
+  });
+
+  it("fails state_is when page evidence is ambiguous", async () => {
+    const evaluator = new StepExpectationEvaluator({
+      ocr: new FakeOcrService(""),
+      collectLogs: async () => "",
+      writeLog: async () => artifact("artifact-log", "log"),
+      captureExpectationScreenshot: async () => screenshot("artifact-retry", "retry"),
+      verifyPageState: async () => ({
+        status: "multiple_candidates",
+        candidateNames: ["主页", "主页变体"],
+        reason: "ambiguous_evidence"
+      })
+    });
+    const results = await evaluator.evaluate({
+      runId: "run-1",
+      serial: "device-1",
+      stepResultId: "step-result-1",
+      step: actionStep([expectation("state_is", {
+        appId: "cn.eeo.classin",
+        platform: "android",
+        pageId: "classin.home"
+      })]),
+      afterScreenshot: screenshot("artifact-after", "after"),
+      runtimeFailure: false
+    });
+
+    expect(results[0]).toEqual(expect.objectContaining({
+      status: "failed",
+      actual: "主页, 主页变体",
+      reason: "ambiguous_evidence"
+    }));
+  });
+
   it("evaluates metric, log, and OCR text expectations with injected dependencies", async () => {
     const logArtifact = artifact("artifact-log", "log");
     const evaluator = new StepExpectationEvaluator({

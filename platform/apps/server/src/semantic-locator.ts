@@ -2781,7 +2781,8 @@ export class SemanticStepResolver {
     deviceSize?: { width: number; height: number };
   }): Promise<SemanticResolutionOutcome> {
     const text = textParam(input.step.params.text);
-    if (!text) {
+    const clearOnly = input.step.params.clearOnly === true;
+    if (!text && !clearOnly) {
       return {
         supported: true,
         resolved: false,
@@ -2828,6 +2829,26 @@ export class SemanticStepResolver {
       }
       if (input.step.params.clearFirst !== false) {
         actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "clear_text" })) ?? actionResult;
+      }
+      if (clearOnly) {
+        return {
+          supported: true,
+          resolved: true,
+          action: { type: "clear_text" },
+          actionResult,
+          message: "Focused manually marked input region and cleared text.",
+          artifacts: focus.artifacts,
+          metadata: {
+            type: "element_input",
+            action: "clear_text",
+            resolvedBy: "image_region",
+            clearOnly: true,
+            region,
+            center: focus.point,
+            focusResolvedBy: focus.resolvedBy,
+            driverChannel: actionResult?.driverChannel
+          }
+        };
       }
       actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "input_text", text })) ?? actionResult;
       const verification = await this.verifyInputText(input, text, {
@@ -2947,7 +2968,29 @@ export class SemanticStepResolver {
       if (input.step.params.clearFirst !== false) {
         actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "clear_text" })) ?? actionResult;
       }
-      actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "input_text", text })) ?? actionResult;
+      if (!clearOnly) {
+        actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "input_text", text })) ?? actionResult;
+      }
+    }
+    if (clearOnly) {
+      return {
+        supported: true,
+        resolved: true,
+        action: { type: "clear_text" },
+        actionResult,
+        message: `Focused ${located.candidate.selector} and cleared text.`,
+        artifacts: [],
+        metadata: {
+          type: "element_input",
+          action: "clear_text",
+          attempts: located.attempts,
+          locator: located.locator,
+          resolvedLocator: locatorFromCandidate(located.candidate),
+          candidate: located.candidate,
+          clearOnly: true,
+          driverChannel: actionResult?.driverChannel
+        }
+      };
     }
     const verification = await this.verifyInputText(input, text, {
       attempt: located.attempts + 1,
@@ -3016,6 +3059,7 @@ export class SemanticStepResolver {
     },
     text: string
   ): Promise<SemanticResolutionOutcome> {
+    const clearOnly = input.step.params.clearOnly === true;
     const semanticArea = readSemanticArea(input.step.params.semanticArea) ?? "content";
     const searchRegion = defaultRuntimeSearchRegion(semanticArea);
     let focus = await this.resolveInputRegionFocusPoint(input, searchRegion);
@@ -3063,6 +3107,30 @@ export class SemanticStepResolver {
     }
     if (input.step.params.clearFirst !== false) {
       actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "clear_text" })) ?? actionResult;
+    }
+    if (clearOnly) {
+      return {
+        supported: true,
+        resolved: true,
+        action: { type: "clear_text" },
+        actionResult,
+        message: "Focused runtime structural input target and cleared text.",
+        artifacts: focus.artifacts,
+        metadata: {
+          type: "element_input",
+          action: "clear_text",
+          resolvedBy: "runtime_structural_locator",
+          clearOnly: true,
+          searchRegion,
+          center: focus.point,
+          focusResolvedBy: focus.resolvedBy,
+          ...(focus.candidate ? { focusLocator: focus.candidate } : {}),
+          ...(focus.uiCandidate ? { focusUiCandidate: focus.uiCandidate } : {}),
+          semanticArea,
+          ...(reveal ? { reveal } : {}),
+          driverChannel: actionResult?.driverChannel
+        }
+      };
     }
     actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "input_text", text })) ?? actionResult;
 

@@ -28,6 +28,23 @@ export type OcrRegion = {
   height: number;
 };
 
+export type PageStateExpectationOutcome = {
+  status: "matched" | "multiple_candidates" | "unknown" | "outside_app" | "capture_failed";
+  pageName?: string;
+  candidateNames?: string[];
+  actualAppId?: string;
+  reason?: string;
+};
+
+export type PageStateExpectationVerifier = (input: {
+  serial: string;
+  appId: string;
+  platform: "android" | "ios" | "harmony" | "flutter";
+  pageId: string;
+  timeoutMs: number;
+  screenshot?: Buffer;
+}) => Promise<PageStateExpectationOutcome>;
+
 type StepExpectationEvaluatorDeps = {
   ocr: OcrService;
   collectLogs: (serial: string, tailLines: number) => Promise<string>;
@@ -43,6 +60,7 @@ type StepExpectationEvaluatorDeps = {
     attempt: number
   ) => Promise<ScreenshotCapture>;
   dumpUiHierarchy?: (serial: string) => Promise<string>;
+  verifyPageState?: PageStateExpectationVerifier;
 };
 
 export class StepExpectationEvaluator {
@@ -129,7 +147,7 @@ export class StepExpectationEvaluator {
       }
 
       if (expectation.type === "state_is") {
-        results.push(this.evaluateUnsupportedStateExpectation(expectation, input.afterScreenshot));
+        results.push(await this.evaluateStateExpectation(expectation, input.serial, input.afterScreenshot));
         continue;
       }
 
@@ -478,12 +496,37 @@ export class StepExpectationEvaluator {
     });
   }
 
-  private evaluateUnsupportedStateExpectation(expectation: StepExpectation, screenshot: ScreenshotCapture | undefined): StepExpectationResult {
+  private async evaluateStateExpectation(
+    expectation: StepExpectation,
+    serial: string,
+    screenshot: ScreenshotCapture | undefined
+  ): Promise<StepExpectationResult> {
+    const appId = stringParam(expectation.params.appId);
+    const pageId = stringParam(expectation.params.pageId ?? expectation.params.nodeId);
+    const platform = pageStatePlatform(expectation.params.platform);
+    if (!this.deps.verifyPageState || !appId || !pageId || !platform) {
+      return this.createExpectationResult(expectation, {
+        status: "unsupported",
+        expected: pageId ? `Page ${pageId}` : stateExpectedDescription(expectation),
+        actual: "Page-state verifier or required page identity fields are unavailable.",
+        reason: "state_is requires verifyPageState, appId, platform, and pageId.",
+        evidenceArtifactIds: screenshot ? [screenshot.artifact.id] : []
+      });
+    }
+    const outcome = await this.deps.verifyPageState({
+      serial,
+      appId,
+      platform,
+      pageId,
+      timeoutMs: expectationTimeoutMs(expectation, 8_000),
+      screenshot: screenshot?.png
+    });
+    const passed = outcome.status === "matched";
     return this.createExpectationResult(expectation, {
-      status: "unsupported",
-      expected: stateExpectedDescription(expectation),
-      actual: "Graph state detection is unavailable in this evaluator.",
-      reason: "state_is is only supported by graph execution, where the active business graph version is available.",
+      status: passed ? "passed" : "failed",
+      expected: `Page ${pageId}`,
+      actual: outcome.pageName ?? outcome.candidateNames?.join(", ") ?? outcome.actualAppId ?? outcome.status,
+      reason: passed ? undefined : outcome.reason ?? outcome.status,
       evidenceArtifactIds: screenshot ? [screenshot.artifact.id] : []
     });
   }
@@ -856,6 +899,10 @@ function compareUiElementVisualOrder(left: ParsedUiElement, right: ParsedUiEleme
 
 function stringParam(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function pageStatePlatform(value: unknown): "android" | "ios" | "harmony" | "flutter" | undefined {
+  return value === "android" || value === "ios" || value === "harmony" || value === "flutter" ? value : undefined;
 }
 
 function readActivityExpectation(params: Record<string, unknown>): string | undefined {

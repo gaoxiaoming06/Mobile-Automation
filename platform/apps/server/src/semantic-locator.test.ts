@@ -931,6 +931,59 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("clears a runtime structural input as one semantic action without typing a placeholder", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "课堂名称 自动化课堂",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: [
+          { text: "课堂名称", confidence: 0.98, x: 80, y: 395, width: 180, height: 30 }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "",
+        clearFirst: true,
+        clearOnly: true,
+        focusDelayMs: 0,
+        locatorKind: "structural_locator",
+        targetText: "课堂名称",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "ocr_or_edittext",
+          text: "课堂名称"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 170, y: 410 },
+      { type: "clear_text" }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: true,
+      metadata: expect.objectContaining({
+        action: "clear_text",
+        clearOnly: true
+      })
+    }));
+  });
+
   it("resolves a dynamic input value from the nearest text above a stable OCR anchor", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({

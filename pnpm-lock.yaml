@@ -78,6 +78,9 @@ importers:
       '@mobile-automation/runner-core':
         specifier: workspace:*
         version: link:../../packages/runner-core
+      '@mobile-automation/script-flow':
+        specifier: workspace:*
+        version: link:../../packages/script-flow
       '@mobile-automation/shared':
         specifier: workspace:*
         version: link:../../packages/shared

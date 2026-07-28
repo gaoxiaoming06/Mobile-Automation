@@ -12,6 +12,7 @@ export type IdentifyPageInput = {
   appId: string;
   platform: PageAssetPlatform;
   observation?: Observation;
+  screenshot?: Buffer;
 };
 
 export type VerifyExpectedPageInput = IdentifyPageInput & {
@@ -76,7 +77,7 @@ export class DefaultPageStateService implements PageStateService {
       if (intervalMs > 0) {
         await delay(intervalMs);
       }
-      latest = await this.verifyExpectedPage({ ...input, observation: undefined });
+      latest = await this.verifyExpectedPage({ ...input, observation: undefined, screenshot: undefined });
     }
     return latest;
   }
@@ -144,7 +145,8 @@ export class DefaultPageStateService implements PageStateService {
       observation = input.observation ?? await this.observations.collect(input.serial, {
         includeScreenshot: true,
         includeOcr: true,
-        includeUiTree: false
+        includeUiTree: false,
+        ...(input.screenshot ? { screenshotOverride: input.screenshot } : {})
       });
     } catch (error) {
       return {
