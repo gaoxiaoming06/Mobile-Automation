@@ -117,6 +117,7 @@ export async function matchCurrentPage(input: {
   baselineReader?: PageMatcherBaselineReader;
   candidateNodeIds?: string[];
   prefilterByForegroundTitle?: boolean;
+  promoteLocalState?: boolean;
 }): Promise<PageMatcherResult> {
   const pageAssetGraphVersion = pageAssetOnlyGraphVersion(input.graphVersion);
   const candidateNodeIds = input.candidateNodeIds ?? (input.prefilterByForegroundTitle ? foregroundTitleCandidateNodeIds(pageAssetGraphVersion, input.observation) : undefined);
@@ -132,7 +133,8 @@ export async function matchCurrentPage(input: {
     const narrowedResult = await runPageMatcher({
       graphVersion: candidateOnlyGraphVersion(pageAssetGraphVersion, candidateNodeIds),
       observation: input.observation,
-      baselineReader: input.baselineReader
+      baselineReader: input.baselineReader,
+      promoteLocalState: input.promoteLocalState
     });
     if (narrowedResult.match.status === "matched" || input.candidateNodeIds) {
       return narrowedResult;
@@ -141,7 +143,8 @@ export async function matchCurrentPage(input: {
   return runPageMatcher({
     graphVersion: pageAssetGraphVersion,
     observation: input.observation,
-    baselineReader: input.baselineReader
+    baselineReader: input.baselineReader,
+    promoteLocalState: input.promoteLocalState
   });
 }
 
@@ -149,10 +152,11 @@ async function runPageMatcher(input: {
   graphVersion: BusinessGraphVersion;
   observation: Observation;
   baselineReader?: PageMatcherBaselineReader;
+  promoteLocalState?: boolean;
 }): Promise<PageMatcherResult> {
   const observation = await enrichObservationImageRegions(input.observation, input.graphVersion, input.baselineReader, createVisualMatchCache());
   const rawMatch = detectNode(observation, input.graphVersion, observation.platform);
-  const match = promoteParentPageLocalStateMatch(rawMatch, observation);
+  const match = input.promoteLocalState === false ? rawMatch : promoteParentPageLocalStateMatch(rawMatch, observation);
   return {
     match,
     observation,

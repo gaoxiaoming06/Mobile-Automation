@@ -1,0 +1,243 @@
+import { describe, expect, it } from "vitest";
+import type { BusinessGraph, BusinessGraphVersion, BusinessNode, Observation, StateMatcher } from "@mobile-automation/graph-core";
+import { StoragePageAssetCatalog } from "./page-asset-catalog.js";
+import { DefaultPageStateService } from "./page-state-service.js";
+
+describe("DefaultPageStateService", () => {
+  it("collects screenshot and OCR without UI tree, then verifies the expected page", async () => {
+    const collector = new QueueObservationCollector([observation("主页")]);
+    const service = serviceFor([page("home", "classin.home", "主页")], collector);
+
+    const result = await service.verifyExpectedPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageId: "home"
+    });
+
+    expect(result.status).toBe("matched");
+    expect(result.page?.id).toBe("home");
+    expect(collector.options).toEqual([{ includeScreenshot: true, includeOcr: true, includeUiTree: false }]);
+  });
+
+  it("returns multiple_candidates when the target shares all stable evidence with another page", async () => {
+    const home = page("home", "classin.home", "主页", "全部班级");
+    const duplicate = page("home-copy", "classin.home.copy", "主页副本", "全部班级");
+    const service = serviceFor([home, duplicate], new QueueObservationCollector([observation("全部班级")]));
+
+    const result = await service.verifyExpectedPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageId: "home"
+    });
+
+    expect(result.status).toBe("multiple_candidates");
+    expect(result.candidates.map((item) => item.id)).toEqual(expect.arrayContaining(["home", "home-copy"]));
+  });
+
+  it("does not scan unrelated pages while verifying a known target", async () => {
+    const home = page("home", "classin.home", "主页");
+    const settings = page("settings", "classin.settings", "设置");
+    const service = serviceFor([home, settings], new QueueObservationCollector([observation("设置")]));
+
+    const result = await service.verifyExpectedPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageId: "home"
+    });
+
+    expect(result.status).toBe("unknown");
+    expect(result.candidates.map((item) => item.id)).not.toContain("settings");
+  });
+
+  it("does not compare platform-specific pages from another platform", async () => {
+    const home = page("home", "classin.home", "主页", "全部班级");
+    const iosDuplicate = {
+      ...page("ios-home", "classin.ios.home", "iOS 主页", "全部班级"),
+      platformScope: "ios" as const
+    };
+    const service = serviceFor([home, iosDuplicate], new QueueObservationCollector([observation("全部班级")]));
+
+    const result = await service.verifyExpectedPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageId: "home"
+    });
+
+    expect(result.status).toBe("matched");
+    expect(result.candidates.map((item) => item.id)).not.toContain("ios-home");
+  });
+
+  it("scans all confirmed pages only during explicit current-page identification", async () => {
+    const home = page("home", "classin.home", "主页");
+    const settings = page("settings", "classin.settings", "设置");
+    const service = serviceFor([home, settings], new QueueObservationCollector([observation("设置")]));
+
+    const result = await service.identifyCurrentPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+
+    expect(result.status).toBe("matched");
+    expect(result.page?.id).toBe("settings");
+  });
+
+  it("distinguishes an app-outside state from an unknown in-app page", async () => {
+    const service = serviceFor(
+      [page("home", "classin.home", "主页")],
+      new QueueObservationCollector([observation("系统桌面", "com.android.launcher")])
+    );
+
+    const result = await service.identifyCurrentPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+
+    expect(result.status).toBe("outside_app");
+    expect(result.actualAppId).toBe("com.android.launcher");
+  });
+
+  it("returns capture_failed for observation or screenshot failures", async () => {
+    const failed = serviceFor([page("home", "classin.home", "主页")], new ThrowingObservationCollector());
+    const missingScreenshot = serviceFor(
+      [page("home", "classin.home", "主页")],
+      new QueueObservationCollector([{ ...observation("主页"), screenshot: undefined, raw: {} }])
+    );
+
+    await expect(failed.identifyCurrentPage({ serial: "device-1", appId: "cn.eeo.classin", platform: "android" }))
+      .resolves.toEqual(expect.objectContaining({ status: "capture_failed", reason: "observation_failed" }));
+    await expect(missingScreenshot.identifyCurrentPage({ serial: "device-1", appId: "cn.eeo.classin", platform: "android" }))
+      .resolves.toEqual(expect.objectContaining({ status: "capture_failed", reason: "screenshot_missing" }));
+  });
+
+  it("waits until the expected page is stable", async () => {
+    const collector = new QueueObservationCollector([observation("加载中"), observation("主页")]);
+    const service = serviceFor([page("home", "classin.home", "主页")], collector);
+
+    const result = await service.waitForExpectedPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageId: "home",
+      timeoutMs: 100,
+      intervalMs: 0
+    });
+
+    expect(result.status).toBe("matched");
+    expect(collector.calls).toBe(2);
+  });
+});
+
+function serviceFor(nodes: BusinessNode[], collector: QueueObservationCollector | ThrowingObservationCollector): DefaultPageStateService {
+  const storage = new MemoryCatalogStorage(graph(nodes));
+  return new DefaultPageStateService(new StoragePageAssetCatalog(storage), collector);
+}
+
+class QueueObservationCollector {
+  calls = 0;
+  options: Array<{ includeScreenshot?: boolean; includeOcr?: boolean; includeUiTree?: boolean }> = [];
+
+  constructor(private readonly observations: Observation[]) {}
+
+  async collect(_serial: string, options: { includeScreenshot?: boolean; includeOcr?: boolean; includeUiTree?: boolean }): Promise<Observation> {
+    this.options.push(options);
+    const observation = this.observations[Math.min(this.calls, this.observations.length - 1)];
+    this.calls += 1;
+    return observation;
+  }
+}
+
+class ThrowingObservationCollector {
+  async collect(): Promise<Observation> {
+    throw new Error("OCR unavailable");
+  }
+}
+
+class MemoryCatalogStorage {
+  private readonly businessGraph: BusinessGraph = {
+    id: "graph",
+    appId: "cn.eeo.classin",
+    platformScope: "mobile-both",
+    name: "ClassIn",
+    status: "active",
+    activeVersionId: "version",
+    createdAt: "2026-07-28T00:00:00.000Z",
+    updatedAt: "2026-07-28T00:00:00.000Z"
+  };
+
+  constructor(private readonly version: BusinessGraphVersion) {}
+
+  listBusinessGraphs(): BusinessGraph[] {
+    return [this.businessGraph];
+  }
+
+  findBusinessGraphByAppId(appId: string): BusinessGraph | undefined {
+    return appId === this.businessGraph.appId ? this.businessGraph : undefined;
+  }
+
+  getActiveBusinessGraphVersion(graphId: string): BusinessGraphVersion | undefined {
+    return graphId === this.businessGraph.id ? this.version : undefined;
+  }
+}
+
+function graph(nodes: BusinessNode[]): BusinessGraphVersion {
+  return {
+    id: "version",
+    graphId: "graph",
+    version: 1,
+    sourceSummary: [],
+    status: "active",
+    nodes,
+    edges: [],
+    createdAt: "2026-07-28T00:00:00.000Z"
+  };
+}
+
+function page(id: string, key: string, name: string, evidence = name): BusinessNode {
+  return {
+    id,
+    graphVersionId: "version",
+    key,
+    name,
+    nodeType: "page",
+    tags: ["page-asset"],
+    status: "active",
+    matchers: [matcher("package", "cn.eeo.classin"), matcher("ocr_text", evidence)],
+    defaultExpectations: [],
+    platformScope: "mobile-both",
+    metadata: { assetRecordingConfirmed: true }
+  };
+}
+
+function matcher(type: StateMatcher["type"], value: string): StateMatcher {
+  return {
+    id: `${type}:${value}`,
+    type,
+    value,
+    weight: type === "package" ? 1 : 3,
+    critical: type !== "package",
+    platformScope: "mobile-both",
+    ...(type === "ocr_text" ? { region: { x: 5, y: 5, width: 80, height: 20 } } : {})
+  };
+}
+
+function observation(text: string, packageName = "cn.eeo.classin"): Observation {
+  return {
+    id: `observation:${text}`,
+    deviceSerial: "device-1",
+    platform: "android",
+    capturedAt: "2026-07-28T00:00:00.000Z",
+    packageName,
+    resolution: { width: 1080, height: 2400 },
+    screenshot: { sizeBytes: 4, width: 1080, height: 2400 },
+    uiElements: [],
+    ocrTexts: [{ text, source: "ocr", region: { x: 50, y: 50, width: 500, height: 120 } }],
+    events: [],
+    raw: { screenshotBase64: Buffer.from("fake").toString("base64") }
+  };
+}
