@@ -619,8 +619,8 @@ describe("App shell", () => {
     expect(DEFAULT_ANDROID_APP_MONITOR_SETTINGS.defaultMode).toBe("asset_and_stability");
     expect(androidAppMonitorDefaultEnabled("asset_and_stability", "asset_patrol")).toBe(true);
     expect(androidAppMonitorDefaultEnabled("asset_and_stability", "stability_exploration")).toBe(true);
-    expect(androidAppMonitorDefaultEnabled("asset_and_stability", "asset_composition")).toBe(false);
-    expect(androidAppMonitorDefaultEnabled("all_runs", "free_composition")).toBe(true);
+    expect(androidAppMonitorDefaultEnabled("asset_and_stability", "script_flow")).toBe(false);
+    expect(androidAppMonitorDefaultEnabled("all_runs", "script_flow")).toBe(true);
     expect(androidAppMonitorDefaultEnabled("off", "stability_exploration")).toBe(false);
   });
 

@@ -1,3 +1,14 @@
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly payload: unknown
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function apiFetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -9,7 +20,11 @@ export async function apiFetchJson<T>(input: RequestInfo | URL, init?: RequestIn
   const text = await response.text();
   const json = parseJsonPayload(text);
   if (!response.ok) {
-    throw new Error(errorMessageFromPayload(json) || response.statusText || `请求失败：${response.status}`);
+    throw new ApiError(
+      errorMessageFromPayload(json) || response.statusText || `请求失败：${response.status}`,
+      response.status,
+      json
+    );
   }
   if (json === undefined) {
     throw new Error("服务返回了空响应，请确认后端服务已正常启动");

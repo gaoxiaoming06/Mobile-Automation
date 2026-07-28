@@ -18,7 +18,6 @@ import {
   type ParameterProfile,
   type Platform,
   type SemanticDeviceActionRequest,
-  type StructuredFlow,
   type TestRun,
   type ToolStatus
 } from "@mobile-automation/shared";
@@ -42,7 +41,7 @@ import { PreviewPanel } from "./components/PreviewPanel";
 import { PageAssetsPanel } from "./components/PageAssetsPanel";
 import { parseRuntimeParams } from "./components/runtime-params";
 import { AssetCompositionPanel } from "./components/AssetCompositionPanel";
-import { FreeCompositionPanel } from "./components/FreeCompositionPanel";
+import { ScriptFlowsPanel } from "./components/ScriptFlowsPanel";
 import type { RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
 import { RunResultsPanel } from "./components/RunResultsPanel";
 import { ToolStatusBar } from "./components/ToolStatusBar";
@@ -116,10 +115,8 @@ export type AndroidAppMonitorDefaultMode = "off" | "asset_and_stability" | "all_
 export type AndroidAppMonitorExecutionKind =
   | "asset_patrol"
   | "stability_exploration"
-  | "asset_composition"
-  | "free_composition"
   | "graph_run"
-  | "flow_run";
+  | "script_flow";
 type AndroidAppMonitorSettingsDraft = Omit<AndroidAppMonitorRequestState, "enabled" | "packageName" | "startStrategy" | "startAppPackageName"> & {
   defaultMode: AndroidAppMonitorDefaultMode;
 };
@@ -1271,7 +1268,6 @@ export function App() {
   const [navCollapsed, setNavCollapsed] = useState(true);
   const [activeNavItem, setActiveNavItem] = useState<NavItemId>("devices");
   const [assetRecordingPreviewWidth, setAssetRecordingPreviewWidth] = useState(560);
-  const [structuredFlows, setStructuredFlows] = useState<StructuredFlow[]>([]);
   const [runtimeInterceptorRules, setRuntimeInterceptorRules] = useState<RuntimeInterceptorRule[]>([]);
   const [assetRecordingGraphVersionId, setAssetRecordingGraphVersionId] = useState("");
   const [assetRecordingPage, setAssetRecordingPage] = useState<AssetRecordingCurrentPage>({ status: "idle" });
@@ -1374,16 +1370,6 @@ export function App() {
     resumeCurrentRun,
     stepCurrentRun
   } = useRunExecution({ selectedSerial, setMessage });
-  const assetCompositionAndroidAppMonitorEnabled = androidAppMonitorEnabledForExecution(
-    androidAppMonitorDraft,
-    "asset_composition",
-    androidAppMonitorExecutionOverrides.asset_composition
-  );
-  const freeCompositionAndroidAppMonitorEnabled = androidAppMonitorEnabledForExecution(
-    androidAppMonitorDraft,
-    "free_composition",
-    androidAppMonitorExecutionOverrides.free_composition
-  );
   const assetPatrolAndroidAppMonitorEnabled = androidAppMonitorEnabledForExecution(
     androidAppMonitorDraft,
     "asset_patrol",
@@ -1439,15 +1425,6 @@ export function App() {
     updateAssetRecordingIdentification("end");
   }
 
-  async function refreshStructuredFlows() {
-    const response = await fetch("/api/structured-flows");
-    const json = (await response.json()) as { flows?: StructuredFlow[]; error?: string };
-    if (!response.ok || !json.flows) {
-      throw new Error(json.error ?? "加载结构化用例失败");
-    }
-    setStructuredFlows(json.flows);
-  }
-
   async function refreshRuntimeInterceptorRules() {
     const response = await fetch("/api/runtime-interceptor-rules?enabledOnly=true");
     const json = (await response.json()) as { rules?: RuntimeInterceptorRule[]; error?: string };
@@ -1488,7 +1465,6 @@ export function App() {
   }
 
   useEffect(() => {
-    refreshStructuredFlows().catch(() => undefined);
     refreshRuntimeInterceptorRules().catch(() => undefined);
   }, []);
 
@@ -1913,12 +1889,12 @@ export function App() {
     setActiveNavItem("assetPatrol");
   }
 
-  function openAssetComposition() {
-    setActiveNavItem("assetComposition");
+  function openScriptFlows() {
+    setActiveNavItem("scriptFlows");
   }
 
-  function openFreeComposition() {
-    setActiveNavItem("freeComposition");
+  function openAiScriptFlows() {
+    setActiveNavItem("aiScriptFlows");
   }
 
   function openParameterCenter() {
@@ -2707,7 +2683,7 @@ export function App() {
   }
 
   const workspaceStyle: PreviewWorkspaceStyle = workspaceStyleForNav(activeNavItem, 0, assetRecordingPreviewWidth);
-  const stabilityPackageOptions = knownStabilityPackages(structuredFlows, runs);
+  const stabilityPackageOptions = knownStabilityPackages(runs);
   const assetPatrolPackageOptions = stabilityPackageOptions;
   const currentStabilityRun =
     (currentRun?.config.runKind === "stability_exploration" ? currentRun : undefined) ??
@@ -2795,8 +2771,8 @@ export function App() {
           openDevices={openDevices}
           openAssetRecording={openAssetRecording}
           openPageAssets={openPageAssets}
-          openAssetComposition={openAssetComposition}
-          openFreeComposition={openFreeComposition}
+          openScriptFlows={openScriptFlows}
+          openAiScriptFlows={openAiScriptFlows}
           openParameterCenter={openParameterCenter}
           openAssetPatrol={openAssetPatrol}
           openStability={openStability}
@@ -2884,35 +2860,23 @@ export function App() {
           />
         )}
 
-        {activeNavItem === "assetComposition" && (
-          <AssetCompositionPanel
+        {activeNavItem === "scriptFlows" && (
+          <ScriptFlowsPanel
+            devices={selectableDevices}
             selectedSerial={selectedSerial}
-            selectedDeviceBusy={selectedDeviceBusy}
-            defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
             setMessage={setMessage}
-            androidAppMonitorEnabled={assetCompositionAndroidAppMonitorEnabled}
-            onAndroidAppMonitorEnabledChange={(enabled) => updateAndroidAppMonitorExecutionOverride("asset_composition", enabled)}
-            androidAppMonitorForPackage={(packageName) =>
-              keepCurrentAndroidAppMonitorForPackage("asset_composition", packageName, androidAppMonitorExecutionOverrides.asset_composition)
-            }
+            onOpenRun={(runId) => {
+              setCurrentRunId(runId);
+              openRuns({ keepCurrentRun: true });
+            }}
           />
         )}
 
-        {activeNavItem === "freeComposition" && (
-          <FreeCompositionPanel
-            selectedSerial={selectedSerial}
-            selectedDeviceBusy={selectedDeviceBusy}
-            defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
-            setMessage={setMessage}
-            androidAppMonitorEnabled={freeCompositionAndroidAppMonitorEnabled}
-            onAndroidAppMonitorEnabledChange={(enabled) => updateAndroidAppMonitorExecutionOverride("free_composition", enabled)}
-            androidAppMonitorForPackage={(packageName) =>
-              keepCurrentAndroidAppMonitorForPackage("free_composition", packageName, androidAppMonitorExecutionOverrides.free_composition)
-            }
-            onBack={() => void runAction({ type: "back" }, false)}
-            onLaunchApp={(packageName) => void runAction({ type: "launch_app", packageName }, false)}
-            onOpenAssetRecording={openAssetRecording}
-          />
+        {activeNavItem === "aiScriptFlows" && (
+          <section className="module-page panel">
+            <h2>AI 生成用例</h2>
+            <p>根据自然语言生成可审查的 ScriptFlow 草稿。</p>
+          </section>
         )}
 
         {activeNavItem === "parameterCenter" && (
@@ -2922,11 +2886,9 @@ export function App() {
             selectedDeviceBusy={selectedDeviceBusy}
             defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
             setMessage={setMessage}
-            androidAppMonitorEnabled={assetCompositionAndroidAppMonitorEnabled}
-            onAndroidAppMonitorEnabledChange={(enabled) => updateAndroidAppMonitorExecutionOverride("asset_composition", enabled)}
-            androidAppMonitorForPackage={(packageName) =>
-              keepCurrentAndroidAppMonitorForPackage("asset_composition", packageName, androidAppMonitorExecutionOverrides.asset_composition)
-            }
+            androidAppMonitorEnabled={false}
+            onAndroidAppMonitorEnabledChange={() => undefined}
+            androidAppMonitorForPackage={() => undefined}
           />
         )}
 
@@ -4296,13 +4258,8 @@ function normalizeText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function knownStabilityPackages(flows: StructuredFlow[], runs: TestRun[]): string[] {
+function knownStabilityPackages(runs: TestRun[]): string[] {
   const packages = new Set<string>();
-  for (const flow of flows) {
-    if (flow.targetApp.androidPackageName) {
-      packages.add(flow.targetApp.androidPackageName);
-    }
-  }
   for (const run of runs) {
     if (run.config.startAppPackageName) {
       packages.add(run.config.startAppPackageName);

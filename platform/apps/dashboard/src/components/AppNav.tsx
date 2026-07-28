@@ -6,14 +6,14 @@ import {
   PanelLeftOpen,
   PlayCircle,
   Radar,
-  Route,
   Settings,
+  Sparkles,
   SlidersHorizontal,
   Smartphone,
   Workflow
 } from "lucide-react";
 
-export type AppNavItemId = "devices" | "assetRecording" | "pageAssets" | "assetComposition" | "freeComposition" | "parameterCenter" | "assetPatrol" | "stability" | "runs" | "settings";
+export type AppNavItemId = "devices" | "assetRecording" | "pageAssets" | "scriptFlows" | "aiScriptFlows" | "parameterCenter" | "assetPatrol" | "stability" | "runs" | "settings";
 
 type AppNavProps = {
   activeNavItem: AppNavItemId;
@@ -22,8 +22,8 @@ type AppNavProps = {
   openDevices: () => void;
   openAssetRecording: () => void;
   openPageAssets: () => void;
-  openAssetComposition: () => void;
-  openFreeComposition: () => void;
+  openScriptFlows: () => void;
+  openAiScriptFlows: () => void;
   openParameterCenter: () => void;
   openAssetPatrol: () => void;
   openStability: () => void;
@@ -38,8 +38,8 @@ export function AppNav({
   openDevices,
   openAssetRecording,
   openPageAssets,
-  openAssetComposition,
-  openFreeComposition,
+  openScriptFlows,
+  openAiScriptFlows,
   openParameterCenter,
   openAssetPatrol,
   openStability,
@@ -65,13 +65,13 @@ export function AppNav({
           <FileText size={18} />
           <span>页面资产库</span>
         </button>
-        <button className={navButtonClass(activeNavItem, "assetComposition")} onClick={openAssetComposition} title="资产用例" type="button">
+        <button className={navButtonClass(activeNavItem, "scriptFlows")} onClick={openScriptFlows} title="脚本用例" type="button">
           <Workflow size={18} />
-          <span>资产用例</span>
+          <span>脚本用例</span>
         </button>
-        <button className={navButtonClass(activeNavItem, "freeComposition")} onClick={openFreeComposition} title="AI资产用例" type="button">
-          <Route size={18} />
-          <span>AI资产用例</span>
+        <button className={navButtonClass(activeNavItem, "aiScriptFlows")} onClick={openAiScriptFlows} title="AI 生成用例" type="button">
+          <Sparkles size={18} />
+          <span>AI 生成用例</span>
         </button>
         <button className={navButtonClass(activeNavItem, "parameterCenter")} onClick={openParameterCenter} title="参数中心" type="button">
           <SlidersHorizontal size={18} />
