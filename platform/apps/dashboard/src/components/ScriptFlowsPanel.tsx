@@ -35,15 +35,17 @@ type ScriptFlowsPanelProps = {
   devices: Array<{ serial: string; name?: string }>;
   selectedSerial: string;
   initialFlows?: ScriptFlow[];
+  initialSourceYaml?: string;
+  onInitialSourceConsumed?: () => void;
   setMessage: (message: string) => void;
   onOpenRun: (runId: string) => void;
 };
 
-export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, setMessage, onOpenRun }: ScriptFlowsPanelProps) {
+export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initialSourceYaml, onInitialSourceConsumed, setMessage, onOpenRun }: ScriptFlowsPanelProps) {
   const [flows, setFlows] = useState<ScriptFlow[]>(initialFlows ?? []);
   const [selectedId, setSelectedId] = useState(initialFlows?.[0]?.id ?? "");
   const selected = flows.find((flow) => flow.id === selectedId);
-  const [sourceYaml, setSourceYaml] = useState(selected?.sourceYaml ?? newScriptTemplate());
+  const [sourceYaml, setSourceYaml] = useState(initialSourceYaml ?? selected?.sourceYaml ?? newScriptTemplate());
   const [status, setStatus] = useState<ScriptFlow["status"]>(selected?.status ?? "draft");
   const [document, setDocument] = useState<ScriptDocumentView | undefined>(() => readDocument(selected?.parsed));
   const [issues, setIssues] = useState<Array<{ path: string; message: string }>>([]);
@@ -58,6 +60,10 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, setMes
   useEffect(() => {
     if (initialFlows) return;
     void refreshFlows();
+  }, []);
+
+  useEffect(() => {
+    if (initialSourceYaml) onInitialSourceConsumed?.();
   }, []);
 
   useEffect(() => {

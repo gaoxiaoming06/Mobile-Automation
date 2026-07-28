@@ -8477,6 +8477,101 @@ button:disabled {
 .script-run-status strong[data-status="failed"] { color: #b42318; }
 .script-run-status strong[data-status="running"] { color: #1f63d3; }
 
+.ai-script-module {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: #f4f7fb;
+}
+
+.ai-script-header {
+  min-height: 74px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #d5dde8;
+  background: #ffffff;
+}
+
+.ai-script-header h2,
+.ai-script-header p,
+.ai-script-result h3,
+.ai-script-result p {
+  margin: 0;
+}
+
+.ai-script-header h2 { font-size: 20px; }
+.ai-script-header p,
+.ai-script-result header p { margin-top: 3px; color: #66758b; font-size: 12px; }
+
+.ai-script-layout {
+  display: grid;
+  min-height: calc(100vh - 166px);
+  grid-template-columns: minmax(360px, 0.8fr) minmax(520px, 1.2fr);
+  gap: 1px;
+  background: #d5dde8;
+}
+
+.ai-script-request,
+.ai-script-result {
+  min-width: 0;
+  padding: 18px;
+  background: #ffffff;
+}
+
+.ai-script-request {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ai-script-prompt {
+  display: grid;
+  min-height: 300px;
+  gap: 7px;
+}
+
+.ai-script-prompt span { color: #475569; font-size: 13px; font-weight: 650; }
+.ai-script-prompt textarea { min-height: 280px; resize: vertical; }
+.ai-script-generate { min-height: 42px; }
+
+.ai-script-result {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ai-script-result > header {
+  display: flex;
+  min-height: 54px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-script-result > header span {
+  color: #65748a;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ai-script-result pre {
+  min-height: 360px;
+  max-height: calc(100vh - 360px);
+  margin: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  border-radius: 6px;
+  background: #161b22;
+  color: #e6edf3;
+  font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre;
+}
+
+.ai-script-result > button { align-self: flex-end; min-height: 38px; }
+.ai-script-assumptions,
+.ai-script-clarification { padding: 12px 14px; border: 1px solid #d7dfeb; border-radius: 6px; background: #f8fafc; }
+.ai-script-assumptions p,
+.ai-script-clarification p { margin-top: 5px; color: #526176; font-size: 12px; }
+
 @media (max-width: 1280px) {
   .script-flows-workbench {
     grid-template-columns: 190px minmax(360px, 1fr) 320px;
@@ -8488,6 +8583,11 @@ button:disabled {
 }
 
 @media (max-width: 900px) {
+  .ai-script-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
   .script-flows-header {
     align-items: flex-start;
     flex-direction: column;

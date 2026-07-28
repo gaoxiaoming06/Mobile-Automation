@@ -5,6 +5,7 @@ export {
   type ScriptFlowValidationIssue
 } from "./parser.js";
 export { ScriptFlowCompileError, compileScriptFlow } from "./compiler.js";
+export { serializeScriptFlow } from "./serializer.js";
 export type {
   CompileScriptFlowOptions,
   ScriptExecutableAction,

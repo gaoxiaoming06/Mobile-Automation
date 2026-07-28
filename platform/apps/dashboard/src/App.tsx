@@ -42,6 +42,7 @@ import { PageAssetsPanel } from "./components/PageAssetsPanel";
 import { parseRuntimeParams } from "./components/runtime-params";
 import { AssetCompositionPanel } from "./components/AssetCompositionPanel";
 import { ScriptFlowsPanel } from "./components/ScriptFlowsPanel";
+import { AiScriptFlowsPanel } from "./components/AiScriptFlowsPanel";
 import type { RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
 import { RunResultsPanel } from "./components/RunResultsPanel";
 import { ToolStatusBar } from "./components/ToolStatusBar";
@@ -1267,6 +1268,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(true);
   const [activeNavItem, setActiveNavItem] = useState<NavItemId>("devices");
+  const [pendingScriptDraft, setPendingScriptDraft] = useState("");
   const [assetRecordingPreviewWidth, setAssetRecordingPreviewWidth] = useState(560);
   const [runtimeInterceptorRules, setRuntimeInterceptorRules] = useState<RuntimeInterceptorRule[]>([]);
   const [assetRecordingGraphVersionId, setAssetRecordingGraphVersionId] = useState("");
@@ -2864,6 +2866,8 @@ export function App() {
           <ScriptFlowsPanel
             devices={selectableDevices}
             selectedSerial={selectedSerial}
+            initialSourceYaml={pendingScriptDraft || undefined}
+            onInitialSourceConsumed={() => setPendingScriptDraft("")}
             setMessage={setMessage}
             onOpenRun={(runId) => {
               setCurrentRunId(runId);
@@ -2873,10 +2877,14 @@ export function App() {
         )}
 
         {activeNavItem === "aiScriptFlows" && (
-          <section className="module-page panel">
-            <h2>AI 生成用例</h2>
-            <p>根据自然语言生成可审查的 ScriptFlow 草稿。</p>
-          </section>
+          <AiScriptFlowsPanel
+            defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
+            setMessage={setMessage}
+            onUseDraft={(sourceYaml) => {
+              setPendingScriptDraft(sourceYaml);
+              openScriptFlows();
+            }}
+          />
         )}
 
         {activeNavItem === "parameterCenter" && (

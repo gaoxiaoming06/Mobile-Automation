@@ -175,6 +175,8 @@ import { assetCompositionCatalog, compileAssetCompositeCase, missingRequiredPara
 import { AssetCompositeExecutionManager, renderAssetCompositeExecutionReportHtml, type AssetCompositeExecution } from "./asset-composite-execution.js";
 import { FreeCompositionSessionRegistry } from "./free-composition-api.js";
 import { registerScriptFlowRoutes } from "./script-flow-api.js";
+import { registerScriptFlowAiRoutes } from "./script-flow-ai-api.js";
+import { generateScriptFlowDraft } from "./script-flow-ai-planner.js";
 import { pageStateExpectationVerifier, ScriptFlowRunner } from "./script-flow-runner.js";
 import { ScriptTargetResolver } from "./script-target-resolver.js";
 import type {
@@ -263,6 +265,16 @@ app.get("/api/health", (_req, res) => {
 });
 
 registerScriptFlowRoutes(app, { storage, runner: scriptFlowRunner });
+registerScriptFlowAiRoutes(app, {
+  generateDraft: ({ prompt, appId, platform }) => generateScriptFlowDraft({
+    config: resolveAiDiagnosisConfig(process.env, storage.getAiDiagnosisSettings()),
+    prompt,
+    appId,
+    platform,
+    pageCatalog: pageAssetCatalog,
+    flows: storage.listScriptFlows({ appId, platform })
+  })
+});
 
 app.get("/api/asset-composition/parameter-profiles", (req, res) => {
   res.json({ profiles: storage.listParameterProfiles(assetCompositionFilter(req.query)) });
