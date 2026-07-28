@@ -163,6 +163,8 @@ import { ensureRapidOcrSidecar } from "./ocr-sidecar.js";
 import { createDefaultOcrService } from "./ocr.js";
 import { ObservationService } from "./observation-service.js";
 import { matchCurrentPage } from "./page-matcher.js";
+import { StoragePageAssetCatalog } from "./page-asset-catalog.js";
+import { DefaultPageStateService } from "./page-state-service.js";
 import { RuntimeInterceptor, type RuntimeInterceptorRule } from "./runtime-interceptor.js";
 import { resolveRoutePlanStart, routePreviewBlockingIssue, summarizeRoutePlanStartDetection, type StartAppScope } from "./route-plan-preview.js";
 import { persistAssetTransitionCandidate } from "./asset-transition-candidates.js";
@@ -172,6 +174,9 @@ import { findNearestTextCandidate } from "./semantic-locator.js";
 import { assetCompositionCatalog, compileAssetCompositeCase, missingRequiredParameterKeysFromIssues } from "./asset-composition.js";
 import { AssetCompositeExecutionManager, renderAssetCompositeExecutionReportHtml, type AssetCompositeExecution } from "./asset-composite-execution.js";
 import { FreeCompositionSessionRegistry } from "./free-composition-api.js";
+import { registerScriptFlowRoutes } from "./script-flow-api.js";
+import { pageStateExpectationVerifier, ScriptFlowRunner } from "./script-flow-runner.js";
+import { ScriptTargetResolver } from "./script-target-resolver.js";
 import type {
   FreeCompositionPageAbilityAsset,
   FreeCompositionPageAsset,
@@ -198,7 +203,17 @@ const storage = new Storage();
 const driver = new MobileDriver();
 const ocrSidecar = await ensureRapidOcrSidecar();
 const ocr = createDefaultOcrService();
-const runner = new AutomationRunner(storage, driver, ocr);
+const observationService = new ObservationService(driver, ocr);
+const pageAssetCatalog = new StoragePageAssetCatalog(storage);
+const pageStateService = new DefaultPageStateService(pageAssetCatalog, observationService, readPageAssetBaselineArtifact);
+const runner = new AutomationRunner(storage, driver, ocr, {
+  verifyPageState: pageStateExpectationVerifier(pageStateService)
+});
+const scriptFlowRunner = new ScriptFlowRunner({
+  backend: runner,
+  driver,
+  targetResolver: new ScriptTargetResolver(pageAssetCatalog)
+});
 const flowRunner = new StructuredFlowRunner(storage, driver, ocr);
 const graphRunner = new GraphRunService(storage, driver, ocr);
 const stabilityExplorer = new StabilityExplorer(storage, driver, ocr);
@@ -216,7 +231,6 @@ const assetCompositeExecutionManager = new AssetCompositeExecutionManager({
   }
 });
 const freeCompositionSessions = new FreeCompositionSessionRegistry();
-const observationService = new ObservationService(driver, ocr);
 const scrcpyStreamBridge = new ScrcpyStreamBridge();
 const artifactCleanupScheduler = new ArtifactCleanupScheduler(storage);
 const activeAssetDrivenExecutionQueues = new Map<string, { runId: string; sessionId: string; cancelled?: boolean; promise: Promise<void> }>();
@@ -247,6 +261,8 @@ app.get("/api/health", (_req, res) => {
     artifactRoot
   });
 });
+
+registerScriptFlowRoutes(app, { storage, runner: scriptFlowRunner });
 
 app.get("/api/asset-composition/parameter-profiles", (req, res) => {
   res.json({ profiles: storage.listParameterProfiles(assetCompositionFilter(req.query)) });

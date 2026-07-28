@@ -3,7 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildExecutionPlan, planRoute, type ActionPolicy, type StateMatcher } from "@mobile-automation/graph-core";
-import type { ActionStep, ArtifactRef, RunConfig, StepExpectation, StepExpectationResult, StepResult, StructuredFlow } from "@mobile-automation/shared";
+import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
+import type {
+  ActionStep,
+  ArtifactRef,
+  RunConfig,
+  ScriptFlow,
+  ScriptFlowVersion,
+  StepExpectation,
+  StepExpectationResult,
+  StepResult,
+  StructuredFlow
+} from "@mobile-automation/shared";
 import type { AiDiagnosisStoredSettings } from "./ai-diagnosis.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 
@@ -54,6 +65,12 @@ type StorageContext = {
       }
     ): StructuredFlow;
     deleteStructuredFlow(id: string): boolean;
+    createScriptFlow(input: { sourceYaml: string; document: ScriptFlowDocument; status?: ScriptFlow["status"] }): ScriptFlow;
+    listScriptFlows(filter?: { appId?: string; platform?: ScriptFlow["platform"]; status?: ScriptFlow["status"] }): ScriptFlow[];
+    getScriptFlow(id: string): ScriptFlow | undefined;
+    updateScriptFlow(id: string, input: { sourceYaml: string; document: ScriptFlowDocument; status?: ScriptFlow["status"] }): ScriptFlow;
+    listScriptFlowVersions(id: string): ScriptFlowVersion[];
+    deleteScriptFlow(id: string): boolean;
     createRuntimeInterceptorRule(input: Omit<RuntimeInterceptorRule, "id" | "createdAt" | "updatedAt"> & { id?: string }): RuntimeInterceptorRule;
     listRuntimeInterceptorRules(filter?: { enabledOnly?: boolean; platform?: "android" | "ios"; appPackageName?: string; flowId?: string }): RuntimeInterceptorRule[];
     updateRuntimeInterceptorRule(id: string, patch: Partial<Omit<RuntimeInterceptorRule, "id" | "createdAt" | "updatedAt">>): RuntimeInterceptorRule | undefined;
@@ -368,6 +385,65 @@ describe("Storage", () => {
 
     expect(storage.deleteStructuredFlow(created.id)).toBe(true);
     expect(storage.getStructuredFlow(created.id)).toBeUndefined();
+  });
+
+  it("persists validated ScriptFlow YAML with immutable versions", async () => {
+    context = await createStorageContext();
+    const { storage } = context;
+    const firstDocument = scriptFlowDocument("创建课堂", "android");
+    const firstYaml = "version: 1\nname: 创建课堂\napp: { id: cn.eeo.classin, platform: android }\nsteps: []\n";
+
+    const created = storage.createScriptFlow({ sourceYaml: firstYaml, document: firstDocument, status: "draft" });
+
+    expect(created).toEqual(expect.objectContaining({
+      appId: "cn.eeo.classin",
+      platform: "android",
+      name: "创建课堂",
+      sourceYaml: firstYaml,
+      parsed: firstDocument,
+      status: "draft",
+      version: 1
+    }));
+    expect(storage.listScriptFlows({ appId: "cn.eeo.classin", platform: "android" })).toHaveLength(1);
+    expect(storage.getScriptFlow(created.id)).toEqual(created);
+
+    const secondDocument = scriptFlowDocument("创建课堂但不发布", "android");
+    const secondYaml = firstYaml.replace("创建课堂", "创建课堂但不发布");
+    const updated = storage.updateScriptFlow(created.id, {
+      sourceYaml: secondYaml,
+      document: secondDocument,
+      status: "active"
+    });
+
+    expect(updated).toEqual(expect.objectContaining({ version: 2, name: "创建课堂但不发布", status: "active" }));
+    expect(storage.listScriptFlowVersions(created.id)).toEqual([
+      expect.objectContaining({ version: 2, sourceYaml: secondYaml, parsed: secondDocument }),
+      expect.objectContaining({ version: 1, sourceYaml: firstYaml, parsed: firstDocument })
+    ]);
+
+    const historicalRun = storage.createRun({
+      caseName: updated.name,
+      deviceSerial: "device-1",
+      configJson: JSON.stringify(runConfig("device-1")),
+      caseSnapshotJson: JSON.stringify({
+        steps: [],
+        sourceSnapshot: {
+          kind: "script_flow",
+          flowId: updated.id,
+          version: updated.version,
+          sourceYaml: updated.sourceYaml,
+          parsed: updated.parsed
+        }
+      }),
+      steps: []
+    });
+
+    expect(storage.deleteScriptFlow(created.id)).toBe(true);
+    expect(storage.getScriptFlow(created.id)).toBeUndefined();
+    expect(storage.listScriptFlowVersions(created.id)).toEqual([]);
+    expect(storage.getRun(historicalRun.id)).toEqual(expect.objectContaining({
+      sourceSnapshot: expect.objectContaining({ flowId: created.id, version: 2, sourceYaml: secondYaml })
+    }));
   });
 
   it("persists runtime interceptor rules scoped by app and flow", async () => {
@@ -1028,6 +1104,18 @@ function waitStep(id: string, durationMs: number): ActionStep {
     enabled: true,
     params: { durationMs },
     createdAt: "2026-06-09T09:00:00.000Z"
+  };
+}
+
+function scriptFlowDocument(name: string, platform: ScriptFlowDocument["app"]["platform"]): ScriptFlowDocument {
+  return {
+    version: 1,
+    name,
+    app: { id: "cn.eeo.classin", platform },
+    start: { strategy: "keepCurrent" },
+    parameters: {},
+    steps: [],
+    tags: ["teacher"]
   };
 }
 

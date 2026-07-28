@@ -14,6 +14,7 @@ import type {
   StateMatcher
 } from "@mobile-automation/graph-core";
 import type { CandidateEdge, CandidateNode, SourceScanResult } from "@mobile-automation/source-scanner";
+import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
 import {
   createId,
   nowIso,
@@ -27,6 +28,8 @@ import {
   type MetricSample,
   type ParameterDataRecord,
   type ParameterProfile,
+  type ScriptFlow,
+  type ScriptFlowVersion,
   type StepResult,
   type StructuredFlow,
   type StructuredFlowStep,
@@ -92,6 +95,12 @@ type CreateStructuredFlowInput = Omit<StructuredFlow, "id" | "version" | "create
   tags?: string[];
   status?: StructuredFlow["status"];
   steps: StructuredFlowStep[];
+};
+
+export type CreateScriptFlowInput = {
+  sourceYaml: string;
+  document: ScriptFlowDocument;
+  status?: ScriptFlow["status"];
 };
 
 export type CreateParameterProfileInput = Omit<ParameterProfile, "id" | "version" | "createdAt" | "updatedAt" | "status"> & {
@@ -444,6 +453,111 @@ export class Storage {
   deleteStructuredFlow(id: string): boolean {
     const result = this.db.prepare("DELETE FROM structured_flows WHERE id = ?").run(id);
     return result.changes > 0;
+  }
+
+  createScriptFlow(input: CreateScriptFlowInput): ScriptFlow {
+    const now = nowIso();
+    const flow = scriptFlowFromInput(createId("script_flow"), 1, now, now, input);
+    this.db.prepare("BEGIN").run();
+    try {
+      this.db.prepare(
+        `INSERT INTO script_flows
+          (id, app_id, platform, name, description, source_yaml, parsed_json, status, version, tags_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        flow.id,
+        flow.appId,
+        flow.platform,
+        flow.name,
+        flow.description ?? null,
+        flow.sourceYaml,
+        JSON.stringify(flow.parsed),
+        flow.status,
+        flow.version,
+        JSON.stringify(flow.tags),
+        flow.createdAt,
+        flow.updatedAt
+      );
+      this.insertScriptFlowVersion(flow);
+      this.db.prepare("COMMIT").run();
+    } catch (error) {
+      this.db.prepare("ROLLBACK").run();
+      throw error;
+    }
+    return flow;
+  }
+
+  listScriptFlows(filter: { appId?: string; platform?: ScriptFlow["platform"]; status?: ScriptFlow["status"] } = {}): ScriptFlow[] {
+    const clauses: string[] = [];
+    const values: string[] = [];
+    if (filter.appId) {
+      clauses.push("app_id = ?");
+      values.push(filter.appId);
+    }
+    if (filter.platform) {
+      clauses.push("platform = ?");
+      values.push(filter.platform);
+    }
+    if (filter.status) {
+      clauses.push("status = ?");
+      values.push(filter.status);
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db.prepare(`SELECT * FROM script_flows${where} ORDER BY updated_at DESC`).all(...values) as Row[];
+    return rows.map(rowToScriptFlow);
+  }
+
+  getScriptFlow(id: string): ScriptFlow | undefined {
+    const row = this.db.prepare("SELECT * FROM script_flows WHERE id = ?").get(id) as Row | undefined;
+    return row ? rowToScriptFlow(row) : undefined;
+  }
+
+  updateScriptFlow(id: string, input: CreateScriptFlowInput): ScriptFlow {
+    const existing = this.getScriptFlow(id);
+    if (!existing) {
+      throw new Error(`ScriptFlow not found: ${id}`);
+    }
+    const next = scriptFlowFromInput(id, existing.version + 1, existing.createdAt, nowIso(), {
+      ...input,
+      status: input.status ?? existing.status
+    });
+    this.db.prepare("BEGIN").run();
+    try {
+      this.db.prepare(
+        `UPDATE script_flows
+         SET app_id = ?, platform = ?, name = ?, description = ?, source_yaml = ?, parsed_json = ?, status = ?, version = ?, tags_json = ?, updated_at = ?
+         WHERE id = ?`
+      ).run(
+        next.appId,
+        next.platform,
+        next.name,
+        next.description ?? null,
+        next.sourceYaml,
+        JSON.stringify(next.parsed),
+        next.status,
+        next.version,
+        JSON.stringify(next.tags),
+        next.updatedAt,
+        next.id
+      );
+      this.insertScriptFlowVersion(next);
+      this.db.prepare("COMMIT").run();
+    } catch (error) {
+      this.db.prepare("ROLLBACK").run();
+      throw error;
+    }
+    return next;
+  }
+
+  listScriptFlowVersions(flowId: string): ScriptFlowVersion[] {
+    const rows = this.db.prepare(
+      "SELECT * FROM script_flow_versions WHERE flow_id = ? ORDER BY version DESC"
+    ).all(flowId) as Row[];
+    return rows.map(rowToScriptFlowVersion);
+  }
+
+  deleteScriptFlow(id: string): boolean {
+    return this.db.prepare("DELETE FROM script_flows WHERE id = ?").run(id).changes > 0;
   }
 
   createParameterProfile(input: CreateParameterProfileInput): ParameterProfile {
@@ -1272,6 +1386,7 @@ export class Storage {
       )
       .run(id, input.caseId ?? null, input.caseName, input.deviceSerial, "running", input.configJson, input.caseSnapshotJson, now, now);
 
+    const caseSnapshot = JSON.parse(input.caseSnapshotJson) as Record<string, unknown>;
     return {
       id,
       caseId: input.caseId,
@@ -1284,6 +1399,7 @@ export class Storage {
       metrics: [],
       events: [],
       artifacts: [],
+      ...scriptFlowSourceSnapshot(caseSnapshot),
       startedAt: now
     };
   }
@@ -1405,6 +1521,7 @@ export class Storage {
       ...result,
       artifacts: artifacts.filter((artifact) => artifact.stepResultId === result.id)
     }));
+    const caseSnapshot = JSON.parse(String(row.case_snapshot_json)) as Record<string, unknown>;
     return {
       id: String(row.id),
       caseId: stringOrUndefined(row.case_id),
@@ -1412,11 +1529,12 @@ export class Storage {
       deviceSerial: String(row.device_serial),
       status: row.status as TestRun["status"],
       config: JSON.parse(String(row.config_json)),
-      steps: JSON.parse(String(row.case_snapshot_json)).steps ?? [],
+      steps: Array.isArray(caseSnapshot.steps) ? caseSnapshot.steps as ActionStep[] : [],
       stepResults,
       metrics,
       events,
       artifacts,
+      ...scriptFlowSourceSnapshot(caseSnapshot),
       startedAt: String(row.started_at),
       endedAt: stringOrUndefined(row.ended_at),
       reportHtmlPath: stringOrUndefined(row.report_html_path)
@@ -1630,6 +1748,20 @@ export class Storage {
     }
   }
 
+  private insertScriptFlowVersion(flow: ScriptFlow): void {
+    this.db.prepare(
+      `INSERT INTO script_flow_versions (id, flow_id, version, source_yaml, parsed_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(
+      createId("script_flow_version"),
+      flow.id,
+      flow.version,
+      flow.sourceYaml,
+      JSON.stringify(flow.parsed),
+      flow.updatedAt
+    );
+  }
+
   private rowToBusinessGraphVersion(row: Row): BusinessGraphVersion {
     const id = String(row.id);
     return {
@@ -1831,6 +1963,31 @@ export class Storage {
         UNIQUE(flow_id, step_order)
       );
 
+      CREATE TABLE IF NOT EXISTS script_flows (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        source_yaml TEXT NOT NULL,
+        parsed_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        version INTEGER NOT NULL DEFAULT 1,
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS script_flow_versions (
+        id TEXT PRIMARY KEY,
+        flow_id TEXT NOT NULL REFERENCES script_flows(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        source_yaml TEXT NOT NULL,
+        parsed_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(flow_id, version)
+      );
+
       CREATE TABLE IF NOT EXISTS asset_parameter_profiles (
         id TEXT PRIMARY KEY,
         app_id TEXT NOT NULL,
@@ -1989,6 +2146,8 @@ export class Storage {
 
       CREATE INDEX IF NOT EXISTS idx_steps_case_order ON steps(case_id, step_order);
       CREATE INDEX IF NOT EXISTS idx_structured_flows_app ON structured_flows(app_id, platform, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_script_flows_app ON script_flows(app_id, platform, status, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_script_flow_versions_flow ON script_flow_versions(flow_id, version);
       CREATE INDEX IF NOT EXISTS idx_structured_flow_steps_flow_order ON structured_flow_steps(flow_id, step_order);
       CREATE INDEX IF NOT EXISTS idx_asset_parameter_profiles_app ON asset_parameter_profiles(app_id, platform, updated_at);
       CREATE INDEX IF NOT EXISTS idx_asset_parameter_data_records_app_domain ON asset_parameter_data_records(app_id, platform, domain_key, updated_at);
@@ -2367,6 +2526,84 @@ function rowToAssetCompositeCase(row: Row): AssetCompositeCase {
     version: Number(row.version),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)
+  };
+}
+
+function scriptFlowFromInput(
+  id: string,
+  version: number,
+  createdAt: string,
+  updatedAt: string,
+  input: CreateScriptFlowInput
+): ScriptFlow {
+  return {
+    id,
+    appId: input.document.app.id,
+    platform: input.document.app.platform,
+    name: input.document.name,
+    description: input.document.description,
+    sourceYaml: input.sourceYaml,
+    parsed: input.document as unknown as Record<string, unknown>,
+    status: input.status ?? "draft",
+    version,
+    tags: input.document.tags,
+    createdAt,
+    updatedAt
+  };
+}
+
+function rowToScriptFlow(row: Row): ScriptFlow {
+  return {
+    id: String(row.id),
+    appId: String(row.app_id),
+    platform: row.platform as ScriptFlow["platform"],
+    name: String(row.name),
+    description: stringOrUndefined(row.description),
+    sourceYaml: String(row.source_yaml),
+    parsed: JSON.parse(String(row.parsed_json)) as Record<string, unknown>,
+    status: row.status as ScriptFlow["status"],
+    version: Number(row.version),
+    tags: JSON.parse(String(row.tags_json ?? "[]")) as string[],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function rowToScriptFlowVersion(row: Row): ScriptFlowVersion {
+  return {
+    id: String(row.id),
+    flowId: String(row.flow_id),
+    version: Number(row.version),
+    sourceYaml: String(row.source_yaml),
+    parsed: JSON.parse(String(row.parsed_json)) as Record<string, unknown>,
+    createdAt: String(row.created_at)
+  };
+}
+
+function scriptFlowSourceSnapshot(caseSnapshot: Record<string, unknown>): Pick<TestRun, "sourceSnapshot"> {
+  const value = caseSnapshot.sourceSnapshot;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const snapshot = value as Record<string, unknown>;
+  if (
+    snapshot.kind !== "script_flow"
+    || typeof snapshot.flowId !== "string"
+    || typeof snapshot.version !== "number"
+    || !snapshot.parsed
+    || typeof snapshot.parsed !== "object"
+    || Array.isArray(snapshot.parsed)
+  ) {
+    return {};
+  }
+  return {
+    sourceSnapshot: {
+      kind: "script_flow",
+      flowId: snapshot.flowId,
+      version: snapshot.version,
+      ...(typeof snapshot.sourceYaml === "string" ? { sourceYaml: snapshot.sourceYaml } : {}),
+      parsed: snapshot.parsed as Record<string, unknown>
+    }
   };
 }
 

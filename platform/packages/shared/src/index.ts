@@ -290,6 +290,34 @@ export type StructuredFlow = {
   updatedAt: string;
 };
 
+export type ScriptFlowPlatform = "android" | "ios" | "harmony" | "flutter";
+
+export type ScriptFlowStatus = "draft" | "active" | "archived";
+
+export type ScriptFlow = {
+  id: string;
+  appId: string;
+  platform: ScriptFlowPlatform;
+  name: string;
+  description?: string;
+  sourceYaml: string;
+  parsed: Record<string, unknown>;
+  status: ScriptFlowStatus;
+  version: number;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ScriptFlowVersion = {
+  id: string;
+  flowId: string;
+  version: number;
+  sourceYaml: string;
+  parsed: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type AssetParameterValueType = "string" | "number" | "boolean" | "template";
 
 export type AssetParameterValue = {
@@ -705,6 +733,13 @@ export type TestRun = {
   metrics: MetricSample[];
   events: DeviceEvent[];
   artifacts: ArtifactRef[];
+  sourceSnapshot?: {
+    kind: "script_flow";
+    flowId: string;
+    version: number;
+    sourceYaml?: string;
+    parsed: Record<string, unknown>;
+  };
   startedAt: string;
   endedAt?: string;
   reportHtmlPath?: string;

@@ -88,6 +88,7 @@ type StartRunInput = {
   startAppPackageName?: string;
   startSetupScope?: RunConfig["startSetupScope"];
   androidAppMonitor?: RunConfig["androidAppMonitor"];
+  sourceSnapshot?: TestRun["sourceSnapshot"];
 };
 
 type ActiveRun = {
@@ -314,7 +315,7 @@ export class AutomationRunner {
     return runIds.length;
   }
 
-  private resolveCase(input: StartRunInput): TestCase {
+  private resolveCase(input: StartRunInput): TestCase & { sourceSnapshot?: TestRun["sourceSnapshot"] } {
     if (input.caseId) {
       const testCase = this.storage.getCase(input.caseId);
       if (!testCase) {
@@ -332,7 +333,8 @@ export class AutomationRunner {
       version: 1,
       steps: (input.steps ?? []).map((step, index) => ({ ...step, order: index + 1 })),
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      ...(input.sourceSnapshot ? { sourceSnapshot: input.sourceSnapshot } : {})
     };
   }
 

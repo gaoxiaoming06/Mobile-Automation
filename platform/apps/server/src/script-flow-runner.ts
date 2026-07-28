@@ -8,11 +8,10 @@ import {
   type ScriptTarget
 } from "@mobile-automation/script-flow";
 import { nowIso, type ActionStep, type FlowStartStrategy, type RunMode, type TestRun } from "@mobile-automation/shared";
-import { AutomationRunner, type RunnerStorage } from "./automation-runner.js";
 import type { AutomationDeviceDriver } from "./mobile-driver.js";
-import type { OcrService } from "./ocr.js";
-import type { PageAssetCatalog, PageAssetPlatform } from "./page-asset-catalog.js";
+import type { PageAssetPlatform } from "./page-asset-catalog.js";
 import type { PageStateService } from "./page-state-service.js";
+import type { PageStateExpectationVerifier } from "./step-expectations.js";
 import { ScriptTargetResolver } from "./script-target-resolver.js";
 
 export type ScriptFlowBackendStartInput = {
@@ -28,6 +27,7 @@ export type ScriptFlowBackendStartInput = {
   pauseAfterEachStep?: boolean;
   startStrategy?: FlowStartStrategy;
   startAppPackageName?: string;
+  sourceSnapshot?: TestRun["sourceSnapshot"];
 };
 
 export interface ScriptFlowRunBackend {
@@ -37,6 +37,7 @@ export interface ScriptFlowRunBackend {
 export type StartScriptFlowRunInput = {
   flowId: string;
   scriptVersion?: number;
+  sourceYaml?: string;
   flow: ScriptFlowDocument;
   deviceSerial: string;
   parameters?: Record<string, ScriptParameterValue>;
@@ -97,7 +98,14 @@ export class ScriptFlowRunner {
       keepVideoOnSuccess: input.keepVideoOnSuccess,
       pauseAfterEachStep: input.pauseAfterEachStep,
       startStrategy: startStrategy(input.flow),
-      startAppPackageName: input.flow.app.id
+      startAppPackageName: input.flow.app.id,
+      sourceSnapshot: {
+        kind: "script_flow",
+        flowId: input.flowId,
+        version: input.scriptVersion ?? 1,
+        ...(input.sourceYaml ? { sourceYaml: input.sourceYaml } : {}),
+        parsed: input.flow as unknown as Record<string, unknown>
+      }
     });
   }
 
@@ -193,37 +201,24 @@ export class ScriptFlowRunner {
   }
 }
 
-export function createAutomationScriptFlowRunner(input: {
-  storage: RunnerStorage;
-  driver: AutomationDeviceDriver;
-  catalog: PageAssetCatalog;
-  pageState: PageStateService;
-  ocr?: OcrService;
-}): ScriptFlowRunner {
-  const backend = new AutomationRunner(input.storage, input.driver, input.ocr, {
-    verifyPageState: async (request) => {
-      const result = await input.pageState.waitForExpectedPage({
-        serial: request.serial,
-        appId: request.appId,
-        platform: request.platform,
-        pageId: request.pageId,
-        timeoutMs: request.timeoutMs,
-        screenshot: request.screenshot
-      });
-      return {
-        status: result.status,
-        pageName: result.page?.name,
-        candidateNames: result.candidates.map((candidate) => candidate.name),
-        actualAppId: result.actualAppId,
-        reason: result.reason
-      };
-    }
-  });
-  return new ScriptFlowRunner({
-    backend,
-    driver: input.driver,
-    targetResolver: new ScriptTargetResolver(input.catalog)
-  });
+export function pageStateExpectationVerifier(pageState: PageStateService): PageStateExpectationVerifier {
+  return async (request) => {
+    const result = await pageState.waitForExpectedPage({
+      serial: request.serial,
+      appId: request.appId,
+      platform: request.platform,
+      pageId: request.pageId,
+      timeoutMs: request.timeoutMs,
+      screenshot: request.screenshot
+    });
+    return {
+      status: result.status,
+      pageName: result.page?.name,
+      candidateNames: result.candidates.map((candidate) => candidate.name),
+      actualAppId: result.actualAppId,
+      reason: result.reason
+    };
+  };
 }
 
 function pageExpectation(
