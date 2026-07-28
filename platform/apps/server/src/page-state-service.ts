@@ -56,12 +56,12 @@ export class DefaultPageStateService implements PageStateService {
   }
 
   async verifyExpectedPage(input: VerifyExpectedPageInput): Promise<PageStateResult> {
-    const target = this.catalog.getPage(input.pageId);
+    const target = this.catalog.resolvePage(input.pageId, input.appId, input.platform);
     const eligiblePageIds = new Set(this.catalog.listPages(input.appId, input.platform).map((page) => page.id));
     if (!target || target.appId !== input.appId || !eligiblePageIds.has(target.id)) {
       return { status: "unknown", candidates: [], reason: "page_asset_not_found" };
     }
-    const confusable = this.catalog.findConfusablePages(input.pageId)
+    const confusable = this.catalog.findConfusablePages(target.id)
       .filter((page) => page.appId === input.appId && eligiblePageIds.has(page.id))
       .map((page) => this.catalog.getPage(page.id))
       .filter((page): page is PageAsset => Boolean(page));

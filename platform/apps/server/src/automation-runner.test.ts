@@ -16,15 +16,46 @@ import {
   type SemanticDeviceActionRequest,
   type StepExpectation,
   type StepResult,
-  type TestCase,
   type TestRun
 } from "@mobile-automation/shared";
-import { AutomationRunner, DeviceBusyError, type RunnerStorage } from "./automation-runner.js";
+import { AutomationRunner, type RunnerStorage } from "./automation-runner.js";
+import { DeviceExecutionBusyError, DeviceExecutionLease } from "./device-execution-lease.js";
 import type { DeviceEventWatcher, MobileAppMonitorSession, ObservedDeviceEvent } from "./mobile-driver.js";
 import type { OcrInput, OcrResult, OcrService } from "./ocr.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 
 describe("AutomationRunner regression flow", () => {
+  it("persists redacted steps while executing the in-memory runtime steps", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const now = nowIso();
+    const runtimeStep: ActionStep = {
+      id: "password",
+      order: 1,
+      type: "input_text",
+      enabled: true,
+      title: "输入密码",
+      params: { text: "top-secret" },
+      createdAt: now
+    };
+    const persistedStep: ActionStep = { ...runtimeStep, params: { text: "[REDACTED]" } };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Sensitive Flow",
+      steps: [runtimeStep],
+      persistedSteps: [persistedStep],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    await waitForRun(runner, storage, started.id);
+
+    expect(driver.actions).toContainEqual({ type: "input_text", text: "top-secret" });
+    expect(started.steps[0]?.params.text).toBe("[REDACTED]");
+  });
+
   it("replays recorded steps, captures evidence, and skips unsupported video recording", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
@@ -561,9 +592,24 @@ describe("AutomationRunner regression flow", () => {
         stepIntervalMs: 0,
         recordVideo: false
       })
-    ).toThrow(DeviceBusyError);
+    ).toThrow(DeviceExecutionBusyError);
 
     await runner.stop(started.id);
+  });
+
+  it("rejects a script run while stability exploration owns the device", () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    const executionLease = new DeviceExecutionLease();
+    executionLease.acquire(driver.device.serial, "stability-run", "stability_exploration");
+    const runner = new AutomationRunner(storage, driver, undefined, { executionLease });
+
+    expect(() => runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Blocked Flow",
+      steps: [driver.createTapStep(120, 240)],
+      recordVideo: false
+    })).toThrow(DeviceExecutionBusyError);
   });
 
   it("records watched Android crash events and fails the run", async () => {
@@ -1472,16 +1518,14 @@ function subjectPickerHierarchy(): string {
 }
 
 class MemoryRunnerStorage implements RunnerStorage {
-  private readonly cases = new Map<string, TestCase>();
   private readonly runs = new Map<string, TestRun>();
   readonly writes: Array<{ relativePath: string; bytes: Buffer | string }> = [];
   readonly runtimeInterceptorRules: RuntimeInterceptorRule[] = [];
 
-  createRun(input: { caseId?: string; caseName: string; deviceSerial: string; configJson: string; caseSnapshotJson: string; steps: ActionStep[] }): TestRun {
+  createRun(input: { id?: string; caseName: string; deviceSerial: string; configJson: string; runSnapshotJson: string; steps: ActionStep[] }): TestRun {
     const now = new Date().toISOString();
     const run: TestRun = {
-      id: `run-${this.runs.size + 1}`,
-      caseId: input.caseId,
+      id: input.id ?? `run-${this.runs.size + 1}`,
       caseName: input.caseName,
       deviceSerial: input.deviceSerial,
       status: "running",
@@ -1495,10 +1539,6 @@ class MemoryRunnerStorage implements RunnerStorage {
     };
     this.runs.set(run.id, run);
     return run;
-  }
-
-  getCase(id: string): TestCase | undefined {
-    return this.cases.get(id);
   }
 
   getRun(id: string): TestRun | undefined {

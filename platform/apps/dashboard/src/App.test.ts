@@ -5,8 +5,10 @@ import {
   App,
   DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
   actionStrategyForWorkspace,
+  aiModelSettingsRequestBody,
   androidAppMonitorDefaultEnabled,
   assetPageElementRequestBody,
+  pageAssetLibraryInitialization,
   previewWorkspaceKey,
   validateAssetPageElementDraftForSave,
   workspaceStyleForNav
@@ -40,6 +42,14 @@ describe("App shell", () => {
     expect(androidAppMonitorDefaultEnabled("all_runs", "script_flow")).toBe(true);
   });
 
+  it("only submits local Codex preferences from the settings page", () => {
+    expect(aiModelSettingsRequestBody({ enabled: true, model: "gpt-5.4", timeoutMs: 15_000 })).toEqual({
+      enabled: true,
+      model: "gpt-5.4",
+      timeoutMs: 15_000
+    });
+  });
+
   it("persists a public locator without transition or task fields", () => {
     const body = assetPageElementRequestBody({
       sourceNodeId: "page-home",
@@ -65,5 +75,15 @@ describe("App shell", () => {
       locator: "image-region:10,10,0.1,0.1",
       elementLabel: "按钮"
     })).toContain("圈选区域过小");
+  });
+
+  it("builds first-library initialization from the observed foreground app", () => {
+    expect(pageAssetLibraryInitialization("android", { androidPackageName: "cn.eeo.classin" })).toEqual({
+      platform: "android",
+      appId: "cn.eeo.classin",
+      targetIdentifier: "cn.eeo.classin",
+      defaultName: "cn.eeo.classin 页面资产"
+    });
+    expect(pageAssetLibraryInitialization("ios", {})).toBeUndefined();
   });
 });

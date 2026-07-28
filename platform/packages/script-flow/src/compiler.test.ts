@@ -13,10 +13,11 @@ parameters:
 steps:
   - id: open-class
     onPage: home
-    tap: { target: { ocrText: "\${className}", within: class-grid } }
+    tap: { target: { ocrText: "\${className}" } }
     expectPage: class-detail
   - id: select-duration
     onPage: lesson-create
+    risk: interaction
     selectText:
       target: { pageElement: duration-picker }
       value: "\${duration}"
@@ -32,7 +33,7 @@ steps:
       action: "tap",
       onPage: "home",
       expectPage: "class-detail",
-      input: { target: { ocrText: "班级四十二号", within: "class-grid" } }
+      input: { target: { ocrText: "班级四十二号" } }
     });
     expect(plan.steps[1]).toMatchObject({
       order: 2,
@@ -110,6 +111,51 @@ steps:
     });
   });
 
+  it("preserves number and boolean values in runFlow parameter bindings", () => {
+    const child = parseScriptFlow(`
+version: 1
+name: configure child
+app: { id: cn.eeo.classin, platform: android }
+parameters:
+  duration: { type: number, required: true }
+  enabled: { type: boolean, required: true }
+steps:
+  - id: conditional-duration
+    when:
+      parameter: enabled
+      equals: true
+      steps:
+        - id: duration
+          selectText:
+            target: { ocrText: 课堂时长 }
+            value: "\${duration}"
+`);
+    const parent = parseScriptFlow(`
+version: 1
+name: configure parent
+app: { id: cn.eeo.classin, platform: android }
+parameters:
+  duration: { type: number, default: 30 }
+  enabled: { type: boolean, default: true }
+steps:
+  - id: child
+    runFlow: configure-child
+    with:
+      duration: "\${duration}"
+      enabled: "\${enabled}"
+`);
+
+    const plan = compileScriptFlow(parent, {
+      resolveFlow: (id) => id === "configure-child" ? child : undefined
+    });
+
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0]).toMatchObject({
+      id: "child.conditional-duration.duration",
+      input: { value: "30" }
+    });
+  });
+
   it("rejects recursive runFlow references", () => {
     const recursive = parseScriptFlow(`
 version: 1
@@ -150,14 +196,39 @@ steps:
   - id: publish
     tap: { target: { ocrText: 发布 } }
   - id: delete
-    tap: { target: { semantic: 删除当前课堂 } }
+    tap: { target: { ocrText: 删除当前课堂 } }
   - id: safe
     tap: { target: { ocrText: 返回 } }
 `);
 
     const plan = compileScriptFlow(flow);
 
-    expect(plan.steps.map((step) => step.risk)).toEqual(["publish", "delete", "none"]);
-    expect(plan.requiredRiskConfirmations).toEqual(["publish", "delete"]);
+    expect(plan.steps.map((step) => step.risk)).toEqual(["publish", "delete", "interaction"]);
+    expect(plan.riskConfirmations).toEqual([
+      { stepId: "publish", risk: "publish" },
+      { stepId: "delete", risk: "delete" },
+      { stepId: "safe", risk: "interaction" }
+    ]);
+  });
+
+  it("binds explicit pageElement risk confirmation to its exact step", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: publish once
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: publish-lesson
+    name: 发布课堂
+    onPage: lesson-create
+    risk: publish
+    tap: { target: { pageElement: publish-button } }
+`);
+
+    const plan = compileScriptFlow(flow);
+
+    expect(plan.steps[0].risk).toBe("publish");
+    expect(plan.riskConfirmations).toEqual([
+      { stepId: "publish-lesson", risk: "publish", stepName: "发布课堂" }
+    ]);
   });
 });

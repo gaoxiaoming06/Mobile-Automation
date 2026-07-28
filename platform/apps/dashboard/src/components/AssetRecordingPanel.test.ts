@@ -102,9 +102,30 @@ describe("AssetRecordingPanel", () => {
 
     expect(markup).toContain("页面匹配");
     expect(markup).toContain("公共定位器");
+    expect(markup).toContain("重新识别当前页");
     expect(markup).not.toContain("连接边");
     expect(markup).not.toContain("页面任务");
     expect(markup).not.toContain("自动探索");
+  });
+
+  it("shows first-library initialization instead of page editing controls", () => {
+    const markup = renderToStaticMarkup(React.createElement(AssetRecordingPanel, {
+      ...commonProps,
+      currentPage: { status: "error", message: "当前 App 尚未创建页面资产库" },
+      libraryInitialization: {
+        platform: "android",
+        targetIdentifier: "cn.eeo.classin",
+        defaultName: "ClassIn 页面资产"
+      },
+      onInitializePageAssetLibrary: vi.fn()
+    }));
+
+    expect(markup).toContain("初始化页面资产库");
+    expect(markup).toContain("cn.eeo.classin");
+    expect(markup).toContain("ClassIn 页面资产");
+    expect(markup).toContain("创建并识别当前页");
+    expect(markup).not.toContain("页面匹配");
+    expect(markup).not.toContain("公共定位器");
   });
 
   it("shows reusable locators without navigation outcomes", () => {

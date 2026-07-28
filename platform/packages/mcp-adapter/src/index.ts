@@ -38,6 +38,12 @@ export type ScriptFlowRunResult = {
   failureEvidence: ArtifactRef[];
 };
 
+export type ScriptFlowPreviewResult = {
+  planDigest: string;
+  plan: Record<string, unknown>;
+  dependencies: Array<{ flowId: string; version: number; sourceHash: string }>;
+};
+
 const defaultServerUrl = "http://localhost:4010";
 
 export class MobileAutomationMcpAdapter {
@@ -97,16 +103,30 @@ export class MobileAutomationMcpAdapter {
     return payload.draft;
   }
 
+  async previewScriptFlow(input: {
+    flowId: string;
+    expectedVersion: number;
+    parameters?: Record<string, string | number | boolean>;
+  }): Promise<ScriptFlowPreviewResult> {
+    return this.request<ScriptFlowPreviewResult>(
+      "POST",
+      `/api/script-flows/${encodeURIComponent(input.flowId)}/preview`,
+      compactObject({ expectedVersion: input.expectedVersion, parameters: input.parameters })
+    );
+  }
+
   async runScriptFlow(input: {
     flowId: string;
+    expectedVersion: number;
+    planDigest: string;
     deviceSerial: string;
     parameters?: Record<string, string | number | boolean>;
-    confirmedRisks?: string[];
+    confirmedRiskSteps?: string[];
   }): Promise<ScriptFlowRunResult> {
     const payload = await this.request<{ run: TestRun }>(
       "POST",
       `/api/script-flows/${encodeURIComponent(input.flowId)}/runs`,
-      compactObject({ deviceSerial: input.deviceSerial, parameters: input.parameters, confirmedRisks: input.confirmedRisks })
+      compactObject({ expectedVersion: input.expectedVersion, planDigest: input.planDigest, deviceSerial: input.deviceSerial, parameters: input.parameters, confirmedRiskSteps: input.confirmedRiskSteps })
     );
     return runResult(this.serverUrl, payload.run);
   }

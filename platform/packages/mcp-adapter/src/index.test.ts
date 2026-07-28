@@ -37,6 +37,8 @@ describe("ScriptFlow MCP REST adapter", () => {
       serverUrl: "http://server.test",
       fetch: fakeFetch(requests, {
         "POST /api/script-flow-drafts/generate": { draft: { status: "ready", sourceYaml: "version: 1" } },
+        "GET /api/script-flows/flow-1": { flow: { id: "flow-1", version: 3 } },
+        "POST /api/script-flows/flow-1/preview": { planDigest: "a".repeat(64), plan: { steps: [], riskConfirmations: [] }, dependencies: [] },
         "POST /api/script-flows/flow-1/runs": {
           run: {
             id: "run-1",
@@ -62,7 +64,10 @@ describe("ScriptFlow MCP REST adapter", () => {
     await expect(adapter.generateScriptFlow({ prompt: "打开主页", appId: "cn.eeo.classin", platform: "android" })).resolves.toEqual(
       { status: "ready", sourceYaml: "version: 1" }
     );
-    await expect(adapter.runScriptFlow({ flowId: "flow-1", deviceSerial: "device-1" })).resolves.toEqual(
+    await expect(adapter.previewScriptFlow({ flowId: "flow-1", expectedVersion: 3 })).resolves.toEqual(
+      expect.objectContaining({ planDigest: "a".repeat(64) })
+    );
+    await expect(adapter.runScriptFlow({ flowId: "flow-1", expectedVersion: 3, planDigest: "a".repeat(64), deviceSerial: "device-1" })).resolves.toEqual(
       expect.objectContaining({ runId: "run-1", status: "running" })
     );
     await expect(adapter.getRun({ runId: "run-1" })).resolves.toEqual(
@@ -74,6 +79,7 @@ describe("ScriptFlow MCP REST adapter", () => {
     );
     expect(requests).toEqual([
       "POST /api/script-flow-drafts/generate",
+      "POST /api/script-flows/flow-1/preview",
       "POST /api/script-flows/flow-1/runs",
       "GET /api/runs/run-1"
     ]);

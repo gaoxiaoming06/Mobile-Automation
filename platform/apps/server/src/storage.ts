@@ -21,7 +21,6 @@ import {
   type ScriptFlow,
   type ScriptFlowVersion,
   type StepResult,
-  type TestCase,
   type TestRun
 } from "@mobile-automation/shared";
 import { artifactRoot, dataRoot } from "./artifacts.js";
@@ -38,6 +37,12 @@ type CreateBusinessGraphInput = {
   platformScope: PlatformScope;
   name: string;
   status?: BusinessGraph["status"];
+};
+
+export type CreatePageAssetLibraryInput = {
+  appId: string;
+  name: string;
+  targetApp: GraphTargetApp;
 };
 
 type UpdateBusinessGraphProfileInput = {
@@ -104,155 +109,6 @@ export class Storage {
   async ensureDirs(): Promise<void> {
     await mkdir(dataRoot, { recursive: true });
     await mkdir(artifactRoot, { recursive: true });
-  }
-
-  createCase(input: { name: string; description?: string; steps: ActionStep[]; targetApp?: TestCase["targetApp"]; tags?: string[] }): TestCase {
-    const id = createId("case");
-    const now = nowIso();
-    const testCase: TestCase = {
-      id,
-      name: input.name,
-      description: input.description,
-      platformScope: "android",
-      targetApp: input.targetApp,
-      tags: input.tags ?? [],
-      version: 1,
-      steps: input.steps.map((step, index) => ({ ...step, order: index + 1 })),
-      createdAt: now,
-      updatedAt: now
-    };
-
-    const tx = this.db.prepare("BEGIN");
-    tx.run();
-    try {
-      this.db
-        .prepare(
-          `INSERT INTO test_cases (id, name, description, platform_scope, target_app_json, tags_json, version, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          id,
-          testCase.name,
-          testCase.description ?? null,
-          testCase.platformScope,
-          JSON.stringify(testCase.targetApp ?? {}),
-          JSON.stringify(testCase.tags),
-          testCase.version,
-          now,
-          now
-        );
-
-      const insertStep = this.db.prepare(
-        `INSERT INTO steps
-          (id, case_id, step_order, type, enabled, title, note, params_json, timing_json, coordinate_json, preconditions_json, expectations_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      );
-      for (const step of testCase.steps) {
-        insertStep.run(
-          step.id,
-          id,
-          step.order,
-          step.type,
-          step.enabled ? 1 : 0,
-          step.title ?? null,
-          step.note ?? null,
-          JSON.stringify(step.params ?? {}),
-          JSON.stringify(step.timing ?? {}),
-          JSON.stringify(step.coordinate ?? {}),
-          JSON.stringify(step.preconditions ?? []),
-          JSON.stringify(step.expectations ?? []),
-          step.createdAt,
-          now
-        );
-      }
-      this.db.prepare("COMMIT").run();
-    } catch (error) {
-      this.db.prepare("ROLLBACK").run();
-      throw error;
-    }
-
-    return testCase;
-  }
-
-  listCases(): TestCase[] {
-    const rows = this.db.prepare("SELECT * FROM test_cases ORDER BY updated_at DESC").all() as Row[];
-    return rows.map((row) => this.rowToCase(row, true));
-  }
-
-  findCaseByName(name: string): TestCase | undefined {
-    const row = this.db.prepare("SELECT * FROM test_cases WHERE name = ? ORDER BY updated_at DESC LIMIT 1").get(name) as Row | undefined;
-    if (!row) {
-      return undefined;
-    }
-    return this.rowToCase(row, true);
-  }
-
-  getCase(id: string): TestCase | undefined {
-    const row = this.db.prepare("SELECT * FROM test_cases WHERE id = ?").get(id) as Row | undefined;
-    if (!row) {
-      return undefined;
-    }
-    return this.rowToCase(row, true);
-  }
-
-  updateCase(id: string, input: { name: string; description?: string; steps: ActionStep[]; targetApp?: TestCase["targetApp"]; tags?: string[] }): TestCase {
-    const existing = this.getCase(id);
-    if (!existing) {
-      throw new Error(`Test case not found: ${id}`);
-    }
-    const now = nowIso();
-    const next: TestCase = {
-      ...existing,
-      name: input.name,
-      description: input.description,
-      targetApp: input.targetApp ?? existing.targetApp,
-      tags: input.tags ?? existing.tags,
-      version: existing.version + 1,
-      steps: input.steps.map((step, index) => ({ ...step, order: index + 1 })),
-      updatedAt: now
-    };
-
-    this.db.prepare("BEGIN").run();
-    try {
-      this.db
-        .prepare("UPDATE test_cases SET name = ?, description = ?, target_app_json = ?, tags_json = ?, version = ?, updated_at = ? WHERE id = ?")
-        .run(next.name, next.description ?? null, JSON.stringify(next.targetApp ?? {}), JSON.stringify(next.tags), next.version, now, id);
-      this.db.prepare("DELETE FROM steps WHERE case_id = ?").run(id);
-      const insertStep = this.db.prepare(
-        `INSERT INTO steps
-          (id, case_id, step_order, type, enabled, title, note, params_json, timing_json, coordinate_json, preconditions_json, expectations_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      );
-      for (const step of next.steps) {
-        insertStep.run(
-          step.id,
-          id,
-          step.order,
-          step.type,
-          step.enabled ? 1 : 0,
-          step.title ?? null,
-          step.note ?? null,
-          JSON.stringify(step.params ?? {}),
-          JSON.stringify(step.timing ?? {}),
-          JSON.stringify(step.coordinate ?? {}),
-          JSON.stringify(step.preconditions ?? []),
-          JSON.stringify(step.expectations ?? []),
-          step.createdAt,
-          now
-        );
-      }
-      this.db.prepare("COMMIT").run();
-    } catch (error) {
-      this.db.prepare("ROLLBACK").run();
-      throw error;
-    }
-
-    return next;
-  }
-
-  deleteCase(id: string): boolean {
-    const result = this.db.prepare("DELETE FROM test_cases WHERE id = ?").run(id);
-    return result.changes > 0;
   }
 
   createScriptFlow(input: CreateScriptFlowInput): ScriptFlow {
@@ -492,6 +348,32 @@ export class Storage {
     return graph;
   }
 
+  createPageAssetLibrary(input: CreatePageAssetLibraryInput): BusinessGraph {
+    const graphId = createId("graph");
+    const versionId = createId("graph_version");
+    const now = nowIso();
+    this.db.prepare("BEGIN").run();
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO business_graphs (id, app_id, target_app_json, platform_scope, name, status, active_version_id, created_at, updated_at)
+           VALUES (?, ?, ?, 'mobile-both', ?, 'active', ?, ?, ?)`
+        )
+        .run(graphId, input.appId, JSON.stringify(input.targetApp), input.name, versionId, now, now);
+      this.db
+        .prepare(
+          `INSERT INTO business_graph_versions (id, graph_id, version, source_summary_json, status, created_at)
+           VALUES (?, ?, 1, ?, 'active', ?)`
+        )
+        .run(versionId, graphId, JSON.stringify(["页面资产库初始化"]), now);
+      this.db.prepare("COMMIT").run();
+    } catch (error) {
+      this.db.prepare("ROLLBACK").run();
+      throw error;
+    }
+    return this.getBusinessGraph(graphId) as BusinessGraph;
+  }
+
   listBusinessGraphs(): BusinessGraph[] {
     const rows = this.db.prepare("SELECT * FROM business_graphs ORDER BY updated_at DESC").all() as Row[];
     return rows.map(graphFromRow);
@@ -721,20 +603,19 @@ export class Storage {
   }
 
 
-  createRun(input: { caseId?: string; caseName: string; deviceSerial: string; configJson: string; caseSnapshotJson: string; steps: ActionStep[] }): TestRun {
-    const id = createId("run");
+  createRun(input: { id?: string; caseName: string; deviceSerial: string; configJson: string; runSnapshotJson: string; steps: ActionStep[] }): TestRun {
+    const id = input.id ?? createId("run");
     const now = nowIso();
     this.db
       .prepare(
-        `INSERT INTO runs (id, case_id, case_name, device_serial, status, config_json, case_snapshot_json, started_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO runs (id, case_name, device_serial, status, config_json, run_snapshot_json, started_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(id, input.caseId ?? null, input.caseName, input.deviceSerial, "running", input.configJson, input.caseSnapshotJson, now, now);
+      .run(id, input.caseName, input.deviceSerial, "running", input.configJson, input.runSnapshotJson, now, now);
 
-    const caseSnapshot = JSON.parse(input.caseSnapshotJson) as Record<string, unknown>;
+    const runSnapshot = JSON.parse(input.runSnapshotJson) as Record<string, unknown>;
     return {
       id,
-      caseId: input.caseId,
       caseName: input.caseName,
       deviceSerial: input.deviceSerial,
       status: "running",
@@ -744,7 +625,7 @@ export class Storage {
       metrics: [],
       events: [],
       artifacts: [],
-      ...scriptFlowSourceSnapshot(caseSnapshot),
+      ...scriptFlowSourceSnapshot(runSnapshot),
       startedAt: now
     };
   }
@@ -866,20 +747,19 @@ export class Storage {
       ...result,
       artifacts: artifacts.filter((artifact) => artifact.stepResultId === result.id)
     }));
-    const caseSnapshot = JSON.parse(String(row.case_snapshot_json)) as Record<string, unknown>;
+    const runSnapshot = JSON.parse(String(row.run_snapshot_json)) as Record<string, unknown>;
     return {
       id: String(row.id),
-      caseId: stringOrUndefined(row.case_id),
       caseName: String(row.case_name),
       deviceSerial: String(row.device_serial),
       status: row.status as TestRun["status"],
       config: JSON.parse(String(row.config_json)),
-      steps: Array.isArray(caseSnapshot.steps) ? caseSnapshot.steps as ActionStep[] : [],
+      steps: Array.isArray(runSnapshot.steps) ? runSnapshot.steps as ActionStep[] : [],
       stepResults,
       metrics,
       events,
       artifacts,
-      ...scriptFlowSourceSnapshot(caseSnapshot),
+      ...scriptFlowSourceSnapshot(runSnapshot),
       startedAt: String(row.started_at),
       endedAt: stringOrUndefined(row.ended_at),
       reportHtmlPath: stringOrUndefined(row.report_html_path)
@@ -991,41 +871,6 @@ export class Storage {
     }));
   }
 
-  private rowToCase(row: Row, includeSteps: boolean): TestCase {
-    const id = String(row.id);
-    return {
-      id,
-      name: String(row.name),
-      description: stringOrUndefined(row.description),
-      platformScope: row.platform_scope as TestCase["platformScope"],
-      targetApp: JSON.parse(String(row.target_app_json)),
-      tags: JSON.parse(String(row.tags_json)),
-      version: Number(row.version),
-      steps: includeSteps ? this.getSteps(id) : [],
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at)
-    };
-  }
-
-  private getSteps(caseId: string): ActionStep[] {
-    const rows = this.db.prepare("SELECT * FROM steps WHERE case_id = ? ORDER BY step_order ASC").all(caseId) as Row[];
-    return rows.map((row) => ({
-      id: String(row.id),
-      order: Number(row.step_order),
-      type: row.type as ActionStep["type"],
-      enabled: Boolean(row.enabled),
-      title: stringOrUndefined(row.title),
-      note: stringOrUndefined(row.note),
-      params: JSON.parse(String(row.params_json)),
-      timing: JSON.parse(String(row.timing_json)),
-      coordinate: JSON.parse(String(row.coordinate_json)),
-      preconditions: JSON.parse(String(row.preconditions_json ?? "[]")),
-      expectations: JSON.parse(String(row.expectations_json ?? "[]")),
-      createdAt: String(row.created_at)
-    }));
-  }
-
-
   private insertScriptFlowVersion(flow: ScriptFlow): void {
     this.db.prepare(
       `INSERT INTO script_flow_versions (id, flow_id, version, source_yaml, parsed_json, created_at)
@@ -1105,38 +950,8 @@ export class Storage {
 
 
   private init(): void {
+    this.deleteLegacyCaseSchema();
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS test_cases (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        platform_scope TEXT NOT NULL,
-        target_app_json TEXT NOT NULL DEFAULT '{}',
-        tags_json TEXT NOT NULL DEFAULT '[]',
-        version INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS steps (
-        id TEXT PRIMARY KEY,
-        case_id TEXT NOT NULL REFERENCES test_cases(id) ON DELETE CASCADE,
-        step_order INTEGER NOT NULL,
-        type TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        title TEXT,
-        note TEXT,
-        params_json TEXT NOT NULL DEFAULT '{}',
-        timing_json TEXT NOT NULL DEFAULT '{}',
-        coordinate_json TEXT NOT NULL DEFAULT '{}',
-        preconditions_json TEXT NOT NULL DEFAULT '[]',
-        expectations_json TEXT NOT NULL DEFAULT '[]',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE(case_id, step_order)
-      );
-
-
       CREATE TABLE IF NOT EXISTS script_flows (
         id TEXT PRIMARY KEY,
         app_id TEXT NOT NULL,
@@ -1165,12 +980,11 @@ export class Storage {
 
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
-        case_id TEXT REFERENCES test_cases(id) ON DELETE SET NULL,
         case_name TEXT NOT NULL,
         device_serial TEXT NOT NULL,
         status TEXT NOT NULL,
         config_json TEXT NOT NULL,
-        case_snapshot_json TEXT NOT NULL,
+        run_snapshot_json TEXT NOT NULL,
         started_at TEXT NOT NULL,
         ended_at TEXT,
         report_html_path TEXT,
@@ -1258,7 +1072,6 @@ export class Storage {
         updated_at TEXT NOT NULL
       );
 
-      CREATE INDEX IF NOT EXISTS idx_steps_case_order ON steps(case_id, step_order);
       CREATE INDEX IF NOT EXISTS idx_script_flows_app ON script_flows(app_id, platform, status, updated_at);
       CREATE INDEX IF NOT EXISTS idx_script_flow_versions_flow ON script_flow_versions(flow_id, version);
       CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
@@ -1324,6 +1137,41 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_graph_versions_graph ON business_graph_versions(graph_id, version);
       CREATE INDEX IF NOT EXISTS idx_business_nodes_version ON business_nodes(graph_version_id, status);
     `);
+    this.sanitizeAiModelSettings();
+  }
+
+  private sanitizeAiModelSettings(): void {
+    const row = this.db.prepare("SELECT value_json FROM app_settings WHERE setting_key = ?").get(AI_MODEL_SETTINGS_KEY) as Row | undefined;
+    if (!row) return;
+    const normalized = normalizeAiModelSettings(parseJsonObject(String(row.value_json)));
+    const valueJson = JSON.stringify(stripUndefined({ ...normalized, updatedAt: undefined }));
+    if (valueJson !== String(row.value_json)) {
+      this.db.prepare("UPDATE app_settings SET value_json = ? WHERE setting_key = ?").run(valueJson, AI_MODEL_SETTINGS_KEY);
+    }
+  }
+
+  private deleteLegacyCaseSchema(): void {
+    const legacyTable = this.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('test_cases', 'steps') LIMIT 1"
+    ).get() as Row | undefined;
+    const runsTable = this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runs'").get() as Row | undefined;
+    const legacyRunColumns = runsTable
+      ? (this.db.prepare("PRAGMA table_info(runs)").all() as Row[]).some((row) => row.name === "case_id" || row.name === "case_snapshot_json")
+      : false;
+    if (!legacyTable && !legacyRunColumns) {
+      return;
+    }
+    this.db.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE IF EXISTS artifacts;
+      DROP TABLE IF EXISTS metric_samples;
+      DROP TABLE IF EXISTS device_events;
+      DROP TABLE IF EXISTS step_results;
+      DROP TABLE IF EXISTS runs;
+      DROP TABLE IF EXISTS steps;
+      DROP TABLE IF EXISTS test_cases;
+      PRAGMA foreign_keys = ON;
+    `);
   }
 }
 
@@ -1383,8 +1231,6 @@ function runtimeInterceptorRuleMatchesFilter(rule: RuntimeInterceptorRule, filte
 function normalizeAiModelSettings(input: Record<string, unknown>): AiModelStoredSettings {
   return stripUndefined({
     enabled: Boolean(input.enabled),
-    baseURL: nonEmptyString(input.baseURL),
-    apiKey: nonEmptyString(input.apiKey),
     model: nonEmptyString(input.model),
     timeoutMs: positiveInteger(input.timeoutMs),
     updatedAt: nonEmptyString(input.updatedAt)
@@ -1452,8 +1298,8 @@ function rowToScriptFlowVersion(row: Row): ScriptFlowVersion {
   };
 }
 
-function scriptFlowSourceSnapshot(caseSnapshot: Record<string, unknown>): Pick<TestRun, "sourceSnapshot"> {
-  const value = caseSnapshot.sourceSnapshot;
+function scriptFlowSourceSnapshot(runSnapshot: Record<string, unknown>): Pick<TestRun, "sourceSnapshot"> {
+  const value = runSnapshot.sourceSnapshot;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
@@ -1462,6 +1308,8 @@ function scriptFlowSourceSnapshot(caseSnapshot: Record<string, unknown>): Pick<T
     snapshot.kind !== "script_flow"
     || typeof snapshot.flowId !== "string"
     || typeof snapshot.version !== "number"
+    || typeof snapshot.planDigest !== "string"
+    || !Array.isArray(snapshot.dependencies)
     || !snapshot.parsed
     || typeof snapshot.parsed !== "object"
     || Array.isArray(snapshot.parsed)
@@ -1473,6 +1321,8 @@ function scriptFlowSourceSnapshot(caseSnapshot: Record<string, unknown>): Pick<T
       kind: "script_flow",
       flowId: snapshot.flowId,
       version: snapshot.version,
+      planDigest: snapshot.planDigest,
+      dependencies: snapshot.dependencies as NonNullable<TestRun["sourceSnapshot"]>["dependencies"],
       ...(typeof snapshot.sourceYaml === "string" ? { sourceYaml: snapshot.sourceYaml } : {}),
       parsed: snapshot.parsed as Record<string, unknown>
     }

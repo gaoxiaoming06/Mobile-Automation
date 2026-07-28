@@ -1,16 +1,17 @@
 import type express from "express";
+import { createHash } from "node:crypto";
 import {
   ScriptFlowCompileError,
   ScriptFlowValidationError,
   compileScriptFlow,
   parseScriptFlow,
   type ScriptFlowDocument,
-  type ScriptParameterValue,
-  type ScriptStepRisk
+  type ScriptParameterValue
 } from "@mobile-automation/script-flow";
 import type { ScriptFlow } from "@mobile-automation/shared";
 import type { Storage } from "./storage.js";
 import { readAndroidAppMonitorConfig } from "./android-app-monitor-request.js";
+import { DeviceExecutionBusyError } from "./device-execution-lease.js";
 import type { ScriptFlowRunner, StartScriptFlowRunInput } from "./script-flow-runner.js";
 
 export type ScriptFlowApiStorage = Pick<
@@ -93,14 +94,17 @@ export function registerScriptFlowRoutes(
   app.post("/api/script-flows/:id/preview", (req, res) => {
     try {
       const flow = requireFlow(deps.storage, req.params.id);
-      const body = strictBody(req.body, ["parameters"]);
+      const body = strictBody(req.body, ["expectedVersion", "parameters"]);
+      assertExpectedVersion(flow, body.expectedVersion);
       const document = parseScriptFlow(flow.sourceYaml);
       const parameters = readParameters(body.parameters);
-      const plan = compileScriptFlow(document, {
-        parameters,
-        resolveFlow: flowResolver(deps.storage)
+      const compiled = compileSnapshot(deps.storage, flow, document, parameters);
+      res.json({
+        flow,
+        plan: compiled.plan,
+        planDigest: compiled.planDigest,
+        dependencies: compiled.dependencies.map(publicDependency)
       });
-      res.json({ flow, plan });
     } catch (error) {
       sendScriptFlowError(res, error);
     }
@@ -115,8 +119,10 @@ export function registerScriptFlowRoutes(
       }
       const body = strictBody(req.body, [
         "deviceSerial",
+        "expectedVersion",
+        "planDigest",
         "parameters",
-        "confirmedRisks",
+        "confirmedRiskSteps",
         "mode",
         "repeatCount",
         "stepIntervalMs",
@@ -126,17 +132,25 @@ export function registerScriptFlowRoutes(
         "pauseAfterEachStep",
         "androidAppMonitor"
       ]);
+      assertExpectedVersion(flow, body.expectedVersion);
       const document = parseScriptFlow(flow.sourceYaml);
+      const parameters = readParameters(body.parameters);
+      const compiled = compileSnapshot(deps.storage, flow, document, parameters);
+      if (requiredPlanDigest(body.planDigest) !== compiled.planDigest) {
+        throw new ScriptFlowApiError(409, "Execution plan changed; preview again");
+      }
       const input: StartScriptFlowRunInput = {
         flowId: flow.id,
         scriptVersion: flow.version,
+        planDigest: compiled.planDigest,
+        dependencies: compiled.dependencies,
         sourceYaml: flow.sourceYaml,
         flow: document,
         deviceSerial: requiredString(body.deviceSerial, "deviceSerial"),
-        parameters: readParameters(body.parameters),
-        confirmedRisks: readConfirmedRisks(body.confirmedRisks),
+        parameters,
+        confirmedRiskSteps: readConfirmedRiskSteps(body.confirmedRiskSteps),
         androidAppMonitor: readAndroidAppMonitorConfig(body.androidAppMonitor),
-        resolveFlow: flowResolver(deps.storage),
+        resolveFlow: compiled.resolveFlow,
         ...runOptions(body)
       };
       const run = await deps.runner.start(input);
@@ -197,6 +211,22 @@ function requiredString(value: unknown, field: string): string {
   return value.trim();
 }
 
+function requiredPlanDigest(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) {
+    throw new ScriptFlowApiError(400, "planDigest must be a SHA-256 digest from preview");
+  }
+  return value;
+}
+
+function assertExpectedVersion(flow: ScriptFlow, value: unknown): void {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new ScriptFlowApiError(400, "expectedVersion must be a positive integer");
+  }
+  if (flow.version !== value) {
+    throw new ScriptFlowApiError(409, "ScriptFlow version changed; reload before continuing");
+  }
+}
+
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -249,14 +279,14 @@ function readParameters(value: unknown): Record<string, ScriptParameterValue> {
   return result;
 }
 
-function readConfirmedRisks(value: unknown): ScriptStepRisk[] {
+function readConfirmedRiskSteps(value: unknown): string[] {
   if (value === undefined) {
     return [];
   }
-  if (!Array.isArray(value) || value.some((item) => !["submit", "publish", "delete", "payment"].includes(String(item)))) {
-    throw new ScriptFlowApiError(400, "confirmedRisks contains an invalid risk");
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim())) {
+    throw new ScriptFlowApiError(400, "confirmedRiskSteps must be a string array");
   }
-  return value as ScriptStepRisk[];
+  return [...new Set(value as string[])];
 }
 
 function runOptions(body: Record<string, unknown>): Partial<StartScriptFlowRunInput> {
@@ -296,11 +326,93 @@ function optionalBoolean<K extends "stopOnFailure" | "recordVideo" | "keepVideoO
   return { [key]: value } as Pick<StartScriptFlowRunInput, K>;
 }
 
-function flowResolver(storage: ScriptFlowApiStorage): (id: string) => ScriptFlowDocument | undefined {
-  return (id) => {
-    const flow = storage.getScriptFlow(id);
-    return flow ? parseScriptFlow(flow.sourceYaml) : undefined;
-  };
+export type ScriptFlowDependencySnapshot = {
+  flowId: string;
+  version: number;
+  sourceHash: string;
+  sourceYaml: string;
+  parsed: Record<string, unknown>;
+};
+
+function compileSnapshot(
+  storage: ScriptFlowApiStorage,
+  root: ScriptFlow,
+  document: ScriptFlowDocument,
+  parameters: Record<string, ScriptParameterValue>
+): {
+  plan: ReturnType<typeof compileScriptFlow>;
+  planDigest: string;
+  dependencies: ScriptFlowDependencySnapshot[];
+  resolveFlow: (id: string) => ScriptFlowDocument | undefined;
+} {
+  const documents = new Map<string, ScriptFlowDocument>();
+  const dependencies = new Map<string, ScriptFlowDependencySnapshot>();
+  collectDependencies(storage, document.steps, documents, dependencies);
+  const orderedDependencies = [...dependencies.values()].sort((left, right) => left.flowId.localeCompare(right.flowId));
+  const resolveFlow = (id: string) => documents.get(id);
+  const plan = compileScriptFlow(document, { parameters, resolveFlow });
+  const planDigest = sha256(canonicalJson({
+    root: { flowId: root.id, version: root.version, sourceHash: sha256(root.sourceYaml) },
+    dependencies: orderedDependencies.map(publicDependency),
+    plan
+  }));
+  return { plan, planDigest, dependencies: orderedDependencies, resolveFlow };
+}
+
+function collectDependencies(
+  storage: ScriptFlowApiStorage,
+  steps: ScriptFlowDocument["steps"],
+  documents: Map<string, ScriptFlowDocument>,
+  dependencies: Map<string, ScriptFlowDependencySnapshot>
+): void {
+  for (const step of steps) {
+    if ("repeat" in step) {
+      collectDependencies(storage, step.repeat.steps, documents, dependencies);
+      continue;
+    }
+    if ("when" in step) {
+      collectDependencies(storage, step.when.steps, documents, dependencies);
+      continue;
+    }
+    if (!("runFlow" in step) || dependencies.has(step.runFlow)) {
+      continue;
+    }
+    const flow = storage.getScriptFlow(step.runFlow);
+    if (!flow || flow.status === "archived") {
+      throw new ScriptFlowCompileError(`runFlow not found: ${step.runFlow}`);
+    }
+    const child = parseScriptFlow(flow.sourceYaml);
+    documents.set(flow.id, child);
+    dependencies.set(flow.id, {
+      flowId: flow.id,
+      version: flow.version,
+      sourceHash: sha256(flow.sourceYaml),
+      sourceYaml: flow.sourceYaml,
+      parsed: child as unknown as Record<string, unknown>
+    });
+    collectDependencies(storage, child.steps, documents, dependencies);
+  }
+}
+
+function publicDependency(dependency: ScriptFlowDependencySnapshot): Pick<ScriptFlowDependencySnapshot, "flowId" | "version" | "sourceHash"> {
+  return { flowId: dependency.flowId, version: dependency.version, sourceHash: dependency.sourceHash };
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function requireFlow(storage: ScriptFlowApiStorage, id: string): ScriptFlow {
@@ -322,6 +434,15 @@ function sendScriptFlowError(res: express.Response, error: unknown): void {
   }
   if (error instanceof ScriptFlowCompileError) {
     res.status(400).json({ error: error.message });
+    return;
+  }
+  if (error instanceof DeviceExecutionBusyError) {
+    res.status(409).json({
+      error: "设备正在执行其他任务，请等待当前执行结束或先停止当前执行。",
+      activeRunId: error.activeRunId,
+      deviceSerial: error.deviceSerial,
+      activeKind: error.activeKind
+    });
     return;
   }
   res.status(500).json({ error: error instanceof Error ? error.message : String(error) });

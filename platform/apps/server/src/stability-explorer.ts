@@ -9,7 +9,7 @@ import {
   type MetricSample,
   type RunConfig,
   type StepResult,
-  type TestCase,
+  type RuntimeFlow,
   type TestRun
 } from "@mobile-automation/shared";
 import type { Observation } from "@mobile-automation/graph-core";
@@ -19,6 +19,7 @@ import { ObservationService } from "./observation-service.js";
 import { RuntimeInterceptor, type RuntimeInterceptorRecord, type RuntimeInterceptorRule } from "./runtime-interceptor.js";
 import { RunArtifactService, type RunArtifactStorage } from "./run-artifact-service.js";
 import { artifactUrl, runArtifactPath } from "./artifacts.js";
+import { DeviceExecutionBusyError, DeviceExecutionLease } from "./device-execution-lease.js";
 
 export type StabilityExplorerStrategy = "conservative" | "balanced" | "aggressive";
 export type StabilityExplorerStartMode = "launch_app" | "current_state" | "restart_app";
@@ -69,7 +70,7 @@ export type StabilityCandidate = {
 };
 
 export type StabilityExplorerStorage = RunArtifactStorage & {
-  createRun(input: { caseId?: string; caseName: string; deviceSerial: string; configJson: string; caseSnapshotJson: string; steps: ActionStep[] }): TestRun;
+  createRun(input: { id?: string; caseName: string; deviceSerial: string; configJson: string; runSnapshotJson: string; steps: ActionStep[] }): TestRun;
   updateRunStatus(runId: string, status: TestRun["status"], endedAt?: string): void;
   addStepResult(result: StepResult): void;
   addMetricSample(sample: MetricSample): void;
@@ -94,16 +95,6 @@ const defaultPostActionDelayMs = 350;
 const postActionPollIntervalMs = 300;
 const postActionMaxWaitMs = 5000;
 
-export class StabilityExplorerDeviceBusyError extends Error {
-  constructor(
-    readonly deviceSerial: string,
-    readonly activeRunId: string
-  ) {
-    super(`Device ${deviceSerial} is already running stability exploration ${activeRunId}`);
-    this.name = "StabilityExplorerDeviceBusyError";
-  }
-}
-
 export class StabilityExplorer {
   private readonly activeRuns = new Map<string, ActiveStabilityRun>();
   private readonly observationService: ObservationService;
@@ -112,7 +103,8 @@ export class StabilityExplorer {
   constructor(
     private readonly storage: StabilityExplorerStorage,
     private readonly driver: AutomationDeviceDriver,
-    ocr: OcrService = createDefaultOcrService()
+    ocr: OcrService = createDefaultOcrService(),
+    private readonly executionLease: DeviceExecutionLease = new DeviceExecutionLease()
   ) {
     this.observationService = new ObservationService(driver, ocr);
     this.artifactService = new RunArtifactService(storage, driver);
@@ -122,7 +114,7 @@ export class StabilityExplorer {
     const config = normalizeStabilityExplorerConfig(input);
     const existing = this.getActiveRunForDevice(input.deviceSerial) ?? this.getStoredActiveRunForDevice(input.deviceSerial);
     if (existing) {
-      throw new StabilityExplorerDeviceBusyError(input.deviceSerial, existing.runId);
+      throw new DeviceExecutionBusyError(input.deviceSerial, existing.runId, "stability_exploration");
     }
 
     const runConfig: RunConfig = {
@@ -140,7 +132,7 @@ export class StabilityExplorer {
       stabilityExploration: config
     };
     const steps = buildPlaceholderSteps(config.maxActions);
-    const testCase: TestCase = {
+    const testCase: RuntimeFlow = {
       id: createId("stability_case"),
       name: `稳定性探索：${config.packageName}`,
       platformScope: "android",
@@ -151,16 +143,26 @@ export class StabilityExplorer {
       createdAt: nowIso(),
       updatedAt: nowIso()
     };
-    const run = this.storage.createRun({
-      caseName: testCase.name,
-      deviceSerial: input.deviceSerial,
-      configJson: JSON.stringify(runConfig),
-      caseSnapshotJson: JSON.stringify(testCase),
-      steps
-    });
+    const runId = createId("run");
+    this.executionLease.acquire(input.deviceSerial, runId, "stability_exploration");
+    let run: TestRun;
+    try {
+      run = this.storage.createRun({
+        id: runId,
+        caseName: testCase.name,
+        deviceSerial: input.deviceSerial,
+        configJson: JSON.stringify(runConfig),
+        runSnapshotJson: JSON.stringify(testCase),
+        steps
+      });
+    } catch (error) {
+      this.executionLease.release(input.deviceSerial, runId);
+      throw error;
+    }
     const controller = new AbortController();
     const promise = this.execute(run.id, input.deviceSerial, config, controller).finally(() => {
       this.activeRuns.delete(run.id);
+      this.executionLease.release(input.deviceSerial, run.id);
     });
     this.activeRuns.set(run.id, {
       promise,

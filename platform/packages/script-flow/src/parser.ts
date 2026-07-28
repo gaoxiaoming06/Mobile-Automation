@@ -8,6 +8,7 @@ import type {
   ScriptParameterType,
   ScriptParameterValue,
   ScriptStep,
+  ScriptStepRisk,
   ScriptTarget
 } from "./types.js";
 
@@ -24,7 +25,7 @@ export class ScriptFlowValidationError extends Error {
 }
 
 const rootFields = new Set(["version", "name", "description", "app", "start", "parameters", "steps", "tags"]);
-const stepBaseFields = new Set(["id", "name", "onPage", "expectPage", "timeoutMs", "with"]);
+const stepBaseFields = new Set(["id", "name", "onPage", "expectPage", "timeoutMs", "risk", "with"]);
 const actionFields = [
   "launchApp",
   "tap",
@@ -39,7 +40,7 @@ const actionFields = [
   "repeat",
   "when"
 ] as const;
-const targetFields = new Set(["ocrText", "semantic", "pageElement", "visualTemplate", "within"]);
+const targetFields = new Set(["ocrText", "pageElement"]);
 const parameterReferencePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 export function parseScriptFlow(source: string): ScriptFlowDocument {
@@ -138,6 +139,9 @@ function readParameters(value: unknown, issues: ScriptFlowValidationIssue[]): Re
     const parameterType = isParameterType(type) ? type : "string";
     const defaultValue = readParameterDefault(definition.default, parameterType, `${path}.default`, issues);
     const options = readParameterOptions(definition.options, `${path}.options`, issues);
+    if (definition.sensitive === true && definition.default !== undefined) {
+      issues.push({ path: `${path}.default`, message: "Sensitive parameter cannot define a default" });
+    }
     result[key] = {
       type: parameterType,
       ...optionalStringProperty(definition.label, `${path}.label`, "label", issues),
@@ -219,17 +223,25 @@ function readStep(value: unknown, path: string, issues: ScriptFlowValidationIssu
   const onPage = optionalString(step.onPage, `${path}.onPage`, issues);
   const expectPage = optionalString(step.expectPage, `${path}.expectPage`, issues);
   const timeoutMs = optionalPositiveNumber(step.timeoutMs, `${path}.timeoutMs`, issues);
+  const risk = readRisk(step.risk, `${path}.risk`, issues);
   const actions = actionFields.filter((field) => step[field] !== undefined);
   if (actions.length !== 1) {
     issues.push({ path, message: "Each step must contain exactly one action" });
   }
   const action = actions[0] ?? "assertPage";
+  if ((action === "tap" || action === "selectText") && step.risk === "none") {
+    issues.push({ path: `${path}.risk`, message: `${action} steps cannot declare risk none` });
+  }
+  if (risk && (action === "runFlow" || action === "repeat" || action === "when")) {
+    issues.push({ path: `${path}.risk`, message: "Risk can only be declared on executable steps" });
+  }
   const base = {
     id,
     ...(name ? { name } : {}),
     ...(onPage ? { onPage } : {}),
     ...(expectPage ? { expectPage } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {})
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(risk ? { risk } : {})
   };
 
   switch (action) {
@@ -262,6 +274,17 @@ function readStep(value: unknown, path: string, issues: ScriptFlowValidationIssu
     case "when":
       return { ...base, when: readWhen(step.when, `${path}.when`, issues) };
   }
+}
+
+function readRisk(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Exclude<ScriptStepRisk, "none"> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "interaction" || value === "submit" || value === "publish" || value === "delete" || value === "payment") {
+    return value;
+  }
+  issues.push({ path, message: "Risk must be interaction, submit, publish, delete, or payment" });
+  return undefined;
 }
 
 function readLaunchApp(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { appId?: string } {
@@ -368,13 +391,10 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
   }
   const result: ScriptTarget = {
     ...optionalStringProperty(target.ocrText, `${path}.ocrText`, "ocrText", issues),
-    ...optionalStringProperty(target.semantic, `${path}.semantic`, "semantic", issues),
-    ...optionalStringProperty(target.pageElement, `${path}.pageElement`, "pageElement", issues),
-    ...optionalStringProperty(target.visualTemplate, `${path}.visualTemplate`, "visualTemplate", issues),
-    ...optionalStringProperty(target.within, `${path}.within`, "within", issues)
+    ...optionalStringProperty(target.pageElement, `${path}.pageElement`, "pageElement", issues)
   };
-  if (!result.ocrText && !result.semantic && !result.pageElement && !result.visualTemplate) {
-    issues.push({ path, message: "Target requires ocrText, semantic, pageElement, or visualTemplate" });
+  if ([result.ocrText, result.pageElement].filter(Boolean).length !== 1) {
+    issues.push({ path, message: "Target requires exactly one of ocrText or pageElement" });
   }
   return result;
 }

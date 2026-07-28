@@ -21,7 +21,7 @@ import {
   type StepExpectation,
   type StepExpectationResult,
   type StepResult,
-  type TestCase,
+  type RuntimeFlow,
   type TestRun
 } from "@mobile-automation/shared";
 import type { AutomationDeviceDriver, DeviceEventWatcher, MobileVideoRecording, ObservedDeviceEvent } from "./mobile-driver.js";
@@ -40,11 +40,11 @@ import { ObservationService } from "./observation-service.js";
 import { RunArtifactService } from "./run-artifact-service.js";
 import { RuntimeInterceptor, type RuntimeInterceptorRecord } from "./runtime-interceptor.js";
 import { SemanticStepResolver } from "./semantic-locator.js";
+import { DeviceExecutionLease } from "./device-execution-lease.js";
 
 export type RunnerStorage = Pick<
   Storage,
   | "createRun"
-  | "getCase"
   | "getRun"
   | "updateRunStatus"
   | "addDeviceEvent"
@@ -60,23 +60,14 @@ export type RunnerStorage = Pick<
 
 export type AutomationRunnerOptions = {
   verifyPageState?: PageStateExpectationVerifier;
+  executionLease?: DeviceExecutionLease;
 };
-
-export class DeviceBusyError extends Error {
-  constructor(
-    readonly deviceSerial: string,
-    readonly activeRunId: string
-  ) {
-    super(`Device ${deviceSerial} is already running test ${activeRunId}`);
-    this.name = "DeviceBusyError";
-  }
-}
 
 type StartRunInput = {
   deviceSerial: string;
-  caseId?: string;
   caseName?: string;
   steps?: ActionStep[];
+  persistedSteps?: ActionStep[];
   mode?: RunMode;
   repeatCount?: number;
   stepIntervalMs?: number;
@@ -126,6 +117,7 @@ export class AutomationRunner {
   private readonly conditionalStepExecutor: ConditionalStepExecutor;
   private readonly semanticStepResolver: SemanticStepResolver;
   private readonly observationService: ObservationService;
+  private readonly executionLease: DeviceExecutionLease;
 
   constructor(
     private readonly storage: RunnerStorage,
@@ -164,19 +156,14 @@ export class AutomationRunner {
         this.artifactService.captureLocatorScreenshot(runId, stepResultId, serial, stepId, attempt)
     });
     this.observationService = new ObservationService(this.driver, this.ocr);
+    this.executionLease = options.executionLease ?? new DeviceExecutionLease();
   }
 
   start(input: StartRunInput): TestRun {
-    const activeRun = this.getActiveRunForDevice(input.deviceSerial);
-    if (activeRun) {
-      throw new DeviceBusyError(input.deviceSerial, activeRun.runId);
-    }
-
-    const testCase = this.resolveCase(input);
+    const testCase = this.buildRuntimeFlow(input);
     const defaultStartAppPackageName = testCase.targetApp?.androidPackageName;
     const defaultStartStrategy = defaultStartAppPackageName ? "launch_app" : "keep_current";
     const config = normalizeRunConfig({
-      caseId: input.caseId,
       deviceSerial: input.deviceSerial,
       mode: input.mode,
       repeatCount: input.repeatCount ?? 1,
@@ -190,18 +177,27 @@ export class AutomationRunner {
       startSetupScope: input.startSetupScope ?? "before_run",
       androidAppMonitor: input.androidAppMonitor
     });
-    const run = this.storage.createRun({
-      caseId: input.caseId,
-      caseName: testCase.name,
-      deviceSerial: input.deviceSerial,
-      configJson: JSON.stringify(config),
-      caseSnapshotJson: JSON.stringify(testCase),
-      steps: testCase.steps
-    });
+    const runId = createId("run");
+    this.executionLease.acquire(input.deviceSerial, runId, "script_flow");
+    let run: TestRun;
+    try {
+      run = this.storage.createRun({
+        id: runId,
+        caseName: testCase.name,
+        deviceSerial: input.deviceSerial,
+        configJson: JSON.stringify(config),
+        runSnapshotJson: JSON.stringify(persistedCase(testCase, input.persistedSteps)),
+        steps: persistedSteps(input.persistedSteps, testCase.steps)
+      });
+    } catch (error) {
+      this.executionLease.release(input.deviceSerial, runId);
+      throw error;
+    }
 
     const controller = new RunExecutionController();
     const promise = this.execute(run.id, testCase, config, controller).finally(() => {
       this.activeRuns.delete(run.id);
+      this.executionLease.release(input.deviceSerial, run.id);
     });
     this.activeRuns.set(run.id, {
       promise,
@@ -315,15 +311,7 @@ export class AutomationRunner {
     return runIds.length;
   }
 
-  private resolveCase(input: StartRunInput): TestCase & { sourceSnapshot?: TestRun["sourceSnapshot"] } {
-    if (input.caseId) {
-      const testCase = this.storage.getCase(input.caseId);
-      if (!testCase) {
-        throw new Error(`Test case not found: ${input.caseId}`);
-      }
-      return testCase;
-    }
-
+  private buildRuntimeFlow(input: StartRunInput): RuntimeFlow & { sourceSnapshot?: TestRun["sourceSnapshot"] } {
     const now = nowIso();
     return {
       id: createId("adhoc_case"),
@@ -338,7 +326,7 @@ export class AutomationRunner {
     };
   }
 
-  private async execute(runId: string, testCase: TestCase, config: RunConfig, controller: RunExecutionController): Promise<void> {
+  private async execute(runId: string, testCase: RuntimeFlow, config: RunConfig, controller: RunExecutionController): Promise<void> {
     const runStartedAt = new Date();
     let failed = false;
     let stopped = false;
@@ -900,6 +888,17 @@ export class AutomationRunner {
     });
   }
 
+}
+
+function persistedCase(
+  testCase: RuntimeFlow & { sourceSnapshot?: TestRun["sourceSnapshot"] },
+  steps: ActionStep[] | undefined
+): RuntimeFlow & { sourceSnapshot?: TestRun["sourceSnapshot"] } {
+  return steps ? { ...testCase, steps: persistedSteps(steps, testCase.steps) } : testCase;
+}
+
+function persistedSteps(steps: ActionStep[] | undefined, fallback: ActionStep[]): ActionStep[] {
+  return (steps ?? fallback).map((step, index) => ({ ...step, order: index + 1 }));
 }
 
 function errorToString(error: unknown): string {

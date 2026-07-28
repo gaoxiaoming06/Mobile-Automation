@@ -123,11 +123,8 @@ export type PublicAiModelSettings = {
 };
 export type AiModelSettingsDraft = {
   enabled: boolean;
-  baseURL: string;
-  apiKey: string;
   model: string;
   timeoutMs: number;
-  clearApiKey?: boolean;
 };
 
 export const DEFAULT_STABILITY_EXPLORER_START_MODE: StabilityExplorerStartMode = "restart_app";
@@ -225,6 +222,13 @@ type PageAssetTargetApp = {
 type AssetTargetProfileLookup = {
   androidPackageName?: string;
   iosBundleId?: string;
+};
+
+type PageAssetLibraryInitialization = {
+  platform: DeviceInfo["platform"];
+  appId: string;
+  targetIdentifier: string;
+  defaultName: string;
 };
 
 type PageAssetLibraryListItem = {
@@ -526,8 +530,6 @@ export function stabilityRunProgressSummary(run: TestRun | null | undefined) {
 export function aiModelDraftFromSettings(settings: PublicAiModelSettings): AiModelSettingsDraft {
   return {
     enabled: settings.enabled,
-    baseURL: settings.baseURL,
-    apiKey: "",
     model: settings.model,
     timeoutMs: settings.timeoutMs || DEFAULT_AI_MODEL_SETTINGS.timeoutMs
   };
@@ -536,11 +538,8 @@ export function aiModelDraftFromSettings(settings: PublicAiModelSettings): AiMod
 export function aiModelSettingsRequestBody(draft: AiModelSettingsDraft): Record<string, unknown> {
   return {
     enabled: draft.enabled,
-    baseURL: draft.baseURL.trim(),
     model: draft.model.trim(),
-    timeoutMs: draft.timeoutMs,
-    apiKey: draft.apiKey.trim() || undefined,
-    clearApiKey: draft.clearApiKey === true
+    timeoutMs: draft.timeoutMs
   };
 }
 
@@ -596,6 +595,7 @@ export function App() {
   const [runtimeInterceptorRules, setRuntimeInterceptorRules] = useState<RuntimeInterceptorRule[]>([]);
   const [assetRecordingGraphVersionId, setAssetRecordingGraphVersionId] = useState("");
   const [assetRecordingPage, setAssetRecordingPage] = useState<AssetRecordingCurrentPage>({ status: "idle" });
+  const [assetLibraryInitialization, setAssetLibraryInitialization] = useState<PageAssetLibraryInitialization>();
   const [assetPageElementSaveError, setAssetPageElementSaveError] = useState<string>();
   const [assetRecordingIdentifying, setAssetRecordingIdentifying] = useState(false);
   const [assetRecordingAiIdentifying, setAssetRecordingAiIdentifying] = useState(false);
@@ -1090,19 +1090,32 @@ export function App() {
       beginAssetRecordingIdentification();
       const { graphVersionId, targetProfile } = await resolveAssetRecordingGraphVersionId({
         platform: selectedDevice.platform,
-        existingGraphVersionId: assetRecordingGraphVersionId,
         observe: () => fetchAssetForegroundObservation(selectedSerial),
         fetchWritableGraphVersionId
       });
       if (!graphVersionId) {
+        const initialization = pageAssetLibraryInitialization(selectedDevice.platform, targetProfile);
+        setAssetLibraryInitialization(initialization);
         setAssetRecordingPage({
           status: "error",
-          message: targetProfile ? "当前前台 App 尚未绑定产品资产库 Profile，请先绑定后再录入资产" : "未找到可写入的页面资产库版本，请先初始化产品资产库"
+          message: initialization ? "当前 App 尚未创建页面资产库" : "未能识别当前前台 App，无法初始化页面资产库"
         });
-        setMessage(targetProfile ? "当前前台 App 尚未绑定产品资产库 Profile" : "未找到可写入的页面资产库版本");
+        setMessage(initialization ? "请先初始化当前 App 的页面资产库" : "未能识别当前前台 App");
         return;
       }
+      setAssetLibraryInitialization(undefined);
       setAssetRecordingGraphVersionId(graphVersionId);
+      await identifyPageAssetWithVersion(graphVersionId);
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setAssetRecordingPage({ status: "error", message: messageText });
+      setMessage(messageText);
+    } finally {
+      endAssetRecordingIdentification();
+    }
+  }
+
+  async function identifyPageAssetWithVersion(graphVersionId: string) {
       const response = await fetch(`/api/page-assets/${encodeURIComponent(graphVersionId)}/current-page`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1119,6 +1132,35 @@ export function App() {
       const mappedPage = mapCurrentPageAssetResponse(json, graphVersionId);
       setAssetRecordingPage(mappedPage);
       setMessage(pageAssetMessage(json, mappedPage));
+  }
+
+  async function initializePageAssetLibrary(name: string) {
+    if (!assetLibraryInitialization || !selectedSerial) {
+      return;
+    }
+    try {
+      beginAssetRecordingIdentification();
+      const response = await fetch("/api/page-assets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appId: assetLibraryInitialization.appId,
+          name,
+          platform: assetLibraryInitialization.platform,
+          targetIdentifier: assetLibraryInitialization.targetIdentifier
+        })
+      });
+      const json = (await response.json().catch(() => ({}))) as {
+        library?: PageAssetLibraryListItem;
+        error?: string;
+      };
+      const graphVersionId = json.library?.activeVersion?.id;
+      if (!response.ok || !graphVersionId) {
+        throw new Error(json.error ?? "页面资产库初始化失败");
+      }
+      setAssetRecordingGraphVersionId(graphVersionId);
+      setAssetLibraryInitialization(undefined);
+      await identifyPageAssetWithVersion(graphVersionId);
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
       setAssetRecordingPage({ status: "error", message: messageText });
@@ -1562,6 +1604,8 @@ export function App() {
             onSavePageElement={saveAssetPageElement}
             pageElementSaveError={assetPageElementSaveError}
             onDeletePageElement={deleteAssetPageElement}
+            libraryInitialization={assetLibraryInitialization}
+            onInitializePageAssetLibrary={initializePageAssetLibrary}
             onResizePointerDown={onAssetRecordingResizePointerDown}
             previewSlot={
               <PreviewPanel
@@ -1860,18 +1904,16 @@ export function AiModelSettingsPanel({
   onDraftChange,
   onSave
 }: AiModelSettingsPanelProps) {
-  const keyStatus = settings.baseURL.trim().toLowerCase().startsWith("codex://app-server")
-    ? "Codex 本地入口，无需密钥"
-    : settings.apiKeyConfigured
-      ? "已保存密钥，留空保持不变"
-      : "未保存密钥";
+  const providerLabel = settings.source === "environment" && settings.baseURL
+    ? settings.baseURL
+    : "Codex 本机";
   return (
     <div className="panel settings-content-panel">
       <div className="panel-head">
         <div>
           <h2>AI 模型</h2>
           <span className="settings-status-line">
-            {settings.enabled ? "已启用" : "未启用"} · {keyStatus} · {settingsSourceLabel(settings.source)}
+            {settings.enabled ? "已启用" : "未启用"} · {providerLabel} · {settingsSourceLabel(settings.source)}
           </span>
         </div>
         <div className="toolbar-actions">
@@ -1887,21 +1929,8 @@ export function AiModelSettingsPanel({
           启用 AI 页面分析与用例生成
         </label>
         <label>
-          接口地址
-          <input value={draft.baseURL} onChange={(event) => onDraftChange({ baseURL: event.target.value })} placeholder="codex://app-server 或 https://api.example.com/v1" />
-        </label>
-        <label>
           模型名
           <input value={draft.model} onChange={(event) => onDraftChange({ model: event.target.value })} placeholder="gpt-5.4" />
-        </label>
-        <label>
-          API Key
-          <input
-            type="password"
-            value={draft.apiKey}
-            onChange={(event) => onDraftChange({ apiKey: event.target.value })}
-            placeholder={settings.apiKeyConfigured ? "已配置，留空保持不变" : "HTTP 接口需要填写；Codex 可留空"}
-          />
         </label>
         <label>
           超时 ms
@@ -1920,7 +1949,7 @@ export function AiModelSettingsPanel({
 
 function settingsSourceLabel(source: AiModelSettingsSource): string {
   if (source === "stored") {
-    return "设置页";
+    return "本机配置";
   }
   if (source === "environment") {
     return "环境变量";
@@ -2402,15 +2431,11 @@ type AssetRecordingGraphVersionResolution = {
 
 export async function resolveAssetRecordingGraphVersionId(input: {
   platform: DeviceInfo["platform"];
-  existingGraphVersionId?: string;
   observe: () => Promise<AssetObservation | undefined>;
   fetchWritableGraphVersionId: (platform: DeviceInfo["platform"], targetProfile?: AssetTargetProfileLookup) => Promise<string | undefined>;
   retryDelayMs?: number;
   maxProfileAttempts?: number;
 }): Promise<AssetRecordingGraphVersionResolution> {
-  if (input.existingGraphVersionId) {
-    return { graphVersionId: input.existingGraphVersionId };
-  }
   const maxAttempts = Math.max(1, Math.floor(input.maxProfileAttempts ?? 2));
   let lastTargetProfile: AssetTargetProfileLookup | undefined;
   for (let index = 0; index < maxAttempts; index += 1) {
@@ -2432,6 +2457,24 @@ export async function resolveAssetRecordingGraphVersionId(input: {
     }
   }
   return { targetProfile: lastTargetProfile };
+}
+
+export function pageAssetLibraryInitialization(
+  platform: DeviceInfo["platform"],
+  targetProfile?: AssetTargetProfileLookup
+): PageAssetLibraryInitialization | undefined {
+  const targetIdentifier = platform === "android"
+    ? normalizeText(targetProfile?.androidPackageName)
+    : normalizeText(targetProfile?.iosBundleId);
+  if (!targetIdentifier) {
+    return undefined;
+  }
+  return {
+    platform,
+    appId: targetIdentifier,
+    targetIdentifier,
+    defaultName: `${targetIdentifier} 页面资产`
+  };
 }
 
 function delay(ms: number): Promise<void> {

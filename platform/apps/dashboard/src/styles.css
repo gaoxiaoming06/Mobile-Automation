@@ -1293,6 +1293,40 @@ button:disabled {
   flex: 1 1 auto;
 }
 
+.asset-library-initialization {
+  flex: 0 0 auto;
+  gap: 16px;
+  padding: 18px;
+}
+
+.asset-library-initialization .asset-facts {
+  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+}
+
+.asset-initialization-name {
+  display: grid;
+  gap: 7px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.asset-initialization-name input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17202a;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.asset-library-initialization > button {
+  justify-self: end;
+}
+
 .asset-detail-section {
   display: grid;
   gap: 10px;

@@ -31,6 +31,7 @@ export type PageElementLocator = {
 export interface PageAssetCatalog {
   listPages(appId: string, platform: PageAssetPlatform): PageAssetSummary[];
   getPage(pageId: string): PageAsset | undefined;
+  resolvePage(reference: string, appId: string, platform: PageAssetPlatform): PageAsset | undefined;
   listLocators(pageId: string): PageElementLocator[];
   findConfusablePages(pageId: string): PageAssetSummary[];
 }
@@ -58,6 +59,17 @@ export class StoragePageAssetCatalog implements PageAssetCatalog {
   getPage(pageId: string): PageAsset | undefined {
     const found = this.findPage(pageId);
     return found ? { ...summarizePage(found.graph, found.node), node: found.node } : undefined;
+  }
+
+  resolvePage(reference: string, appId: string, platform: PageAssetPlatform): PageAsset | undefined {
+    const pages = this.listPages(appId, platform);
+    const stableMatches = pages.filter((page) => page.id === reference || page.key === reference);
+    if (stableMatches.length === 1) {
+      return this.getPage(stableMatches[0].id);
+    }
+    const normalizedReference = normalize(reference);
+    const nameMatches = pages.filter((page) => normalize(page.name) === normalizedReference);
+    return nameMatches.length === 1 ? this.getPage(nameMatches[0].id) : undefined;
   }
 
   listLocators(pageId: string): PageElementLocator[] {

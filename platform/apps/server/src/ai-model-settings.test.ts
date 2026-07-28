@@ -3,42 +3,37 @@ import { isCodexAppServerProvider } from "./ai-client.js";
 import {
   previewAiModelSettingsUpdate,
   publicAiModelSettings,
+  readAiModelSettingsUpdate,
   resolveAiModelConfig
 } from "./ai-model-settings.js";
 
 describe("AI model settings", () => {
-  it("resolves enabled model settings without exposing the API key", () => {
-    const stored = {
-      enabled: true,
-      baseURL: "https://model.example/v1",
-      apiKey: "secret",
-      model: "vision-model",
-      timeoutMs: 12_000
-    };
+  it("stores only local Codex preferences and never provider credentials", () => {
+    const stored = { enabled: true, model: "gpt-5.4", timeoutMs: 12_000 };
+
     expect(resolveAiModelConfig({}, stored)).toEqual({
       enabled: true,
-      baseURL: "https://model.example/v1",
-      apiKey: "secret",
-      model: "vision-model",
+      baseURL: "codex://app-server",
+      model: "gpt-5.4",
       timeoutMs: 12_000
     });
     expect(publicAiModelSettings({}, stored)).toEqual({
       enabled: true,
-      baseURL: "https://model.example/v1",
-      model: "vision-model",
+      baseURL: "codex://app-server",
+      model: "gpt-5.4",
       timeoutMs: 12_000,
-      apiKeyConfigured: true,
+      apiKeyConfigured: false,
       source: "stored"
     });
   });
 
-  it("supports the Codex app-server provider without an API key", () => {
-    const config = resolveAiModelConfig({}, { enabled: true, baseURL: "codex://app-server", model: "gpt-5.4" });
+  it("supports the local Codex provider without an API key", () => {
+    const config = resolveAiModelConfig({}, { enabled: true, model: "gpt-5.4" });
     expect(config).toEqual({ enabled: true, baseURL: "codex://app-server", model: "gpt-5.4", timeoutMs: 30_000 });
     expect(isCodexAppServerProvider(config.enabled ? config.baseURL : "")).toBe(true);
   });
 
-  it("uses the new generic environment contract", () => {
+  it("allows an operator-managed HTTP provider only through environment variables", () => {
     expect(resolveAiModelConfig({
       AI_MODEL_ENABLED: "true",
       AI_MODEL_BASE_URL: "https://model.example/v1",
@@ -54,10 +49,19 @@ describe("AI model settings", () => {
     });
   });
 
-  it("can clear a stored API key", () => {
-    expect(previewAiModelSettingsUpdate(
-      { enabled: true, baseURL: "https://model.example/v1", apiKey: "secret", model: "vision-model" },
-      { clearApiKey: true }
-    )).toEqual({ enabled: true, baseURL: "https://model.example/v1", model: "vision-model" });
+  it("drops browser-supplied provider addresses and credentials", () => {
+    expect(previewAiModelSettingsUpdate(undefined, {
+      enabled: true,
+      model: "gpt-5.4",
+      timeoutMs: 10_000,
+      baseURL: "http://127.0.0.1:9999",
+      apiKey: "must-not-persist"
+    } as never)).toEqual({ enabled: true, model: "gpt-5.4", timeoutMs: 10_000 });
+  });
+
+  it("rejects provider fields at the HTTP settings boundary", () => {
+    expect(() => readAiModelSettingsUpdate({ enabled: true, baseURL: "http://127.0.0.1:9999" })).toThrow("Unknown AI settings field: baseURL");
+    expect(() => readAiModelSettingsUpdate({ enabled: true, apiKey: "secret" })).toThrow("Unknown AI settings field: apiKey");
+    expect(readAiModelSettingsUpdate({ enabled: true, model: "gpt-5.4", timeoutMs: 5000 })).toEqual({ enabled: true, model: "gpt-5.4", timeoutMs: 5000 });
   });
 });

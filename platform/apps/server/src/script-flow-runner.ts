@@ -4,7 +4,6 @@ import {
   type ScriptExecutionPlanStep,
   type ScriptFlowDocument,
   type ScriptParameterValue,
-  type ScriptStepRisk,
   type ScriptTarget
 } from "@mobile-automation/script-flow";
 import {
@@ -25,6 +24,7 @@ export type ScriptFlowBackendStartInput = {
   deviceSerial: string;
   caseName?: string;
   steps?: ActionStep[];
+  persistedSteps?: ActionStep[];
   mode?: RunMode;
   repeatCount?: number;
   stepIntervalMs?: number;
@@ -45,11 +45,13 @@ export interface ScriptFlowRunBackend {
 export type StartScriptFlowRunInput = {
   flowId: string;
   scriptVersion?: number;
+  planDigest: string;
+  dependencies: NonNullable<TestRun["sourceSnapshot"]>["dependencies"];
   sourceYaml?: string;
   flow: ScriptFlowDocument;
   deviceSerial: string;
   parameters?: Record<string, ScriptParameterValue>;
-  confirmedRisks?: ScriptStepRisk[];
+  confirmedRiskSteps?: string[];
   resolveFlow?: CompileScriptFlowOptions["resolveFlow"];
   mode?: RunMode;
   repeatCount?: number;
@@ -79,22 +81,38 @@ export class ScriptFlowRunner {
       parameters: input.parameters ?? {},
       resolveFlow: input.resolveFlow
     });
-    const missingRisks = plan.requiredRiskConfirmations.filter((risk) => !(input.confirmedRisks ?? []).includes(risk));
+    const persistedPlan = compileScriptFlow(input.flow, {
+      parameters: input.parameters ?? {},
+      resolveFlow: input.resolveFlow,
+      redactSensitiveParameters: true
+    });
+    const requiredRiskSteps = new Set(plan.riskConfirmations.map((confirmation) => confirmation.stepId));
+    const unknownConfirmations = (input.confirmedRiskSteps ?? []).filter((stepId) => !requiredRiskSteps.has(stepId));
+    if (unknownConfirmations.length) {
+      throw new Error(`Unknown risk confirmation step: ${unknownConfirmations.join(", ")}`);
+    }
+    const missingRisks = plan.riskConfirmations.filter((confirmation) => !(input.confirmedRiskSteps ?? []).includes(confirmation.stepId));
     if (missingRisks.length) {
-      throw new Error(`Risk confirmation required: ${missingRisks.join(", ")}`);
+      throw new Error(`Risk confirmation required: ${missingRisks.map((item) => `${item.stepId} (${item.risk})`).join(", ")}`);
     }
     const scriptParameters = visibleParameters(input.flow, plan.parameters);
-    const steps = plan.steps.map((step) => this.toActionStep(step, {
+    const stepContext = {
       flowId: input.flowId,
       scriptVersion: input.scriptVersion ?? 1,
       appId: input.flow.app.id,
       platform: input.flow.app.platform,
       scriptParameters
-    }));
+    };
+    const steps = plan.steps.map((step) => this.toActionStep(step, stepContext, nowIso()));
+    const persistedCandidates = persistedPlan.steps.map((step, index) =>
+      this.toActionStep(step, stepContext, steps[index]?.createdAt ?? nowIso())
+    );
+    const persistedSteps = maskPlanDifferences(steps, persistedCandidates);
     return this.deps.backend.start({
       deviceSerial: input.deviceSerial,
       caseName: input.flow.name,
       steps,
+      persistedSteps,
       mode: input.mode,
       repeatCount: input.repeatCount,
       stepIntervalMs: input.stepIntervalMs ?? 0,
@@ -109,6 +127,8 @@ export class ScriptFlowRunner {
         kind: "script_flow",
         flowId: input.flowId,
         version: input.scriptVersion ?? 1,
+        planDigest: input.planDigest,
+        dependencies: input.dependencies,
         ...(input.sourceYaml ? { sourceYaml: input.sourceYaml } : {}),
         parsed: input.flow as unknown as Record<string, unknown>
       }
@@ -123,9 +143,10 @@ export class ScriptFlowRunner {
       appId: string;
       platform: PageAssetPlatform;
       scriptParameters: Record<string, ScriptParameterValue>;
-    }
+    },
+    createdAt: string
   ): ActionStep {
-    const resolved = this.resolveAction(step, context.appId);
+    const resolved = this.resolveAction(step, context.appId, context.platform);
     const metadata = {
       scriptFlowId: context.flowId,
       scriptVersion: context.scriptVersion,
@@ -151,14 +172,14 @@ export class ScriptFlowRunner {
         ...metadata
       },
       ...(resolved.coordinate ? { coordinate: resolved.coordinate } : {}),
-      ...(step.onPage ? { preconditions: [pageExpectation(`before:${step.id}`, step.onPage, context, timeoutMs)] } : {}),
-      ...(expectedPage ? { expectations: [pageExpectation(`after:${step.id}`, expectedPage, context, timeoutMs)] } : {}),
+      ...(step.onPage ? { preconditions: [pageExpectation(`before:${step.id}`, step.onPage, context, timeoutMs, createdAt)] } : {}),
+      ...(expectedPage ? { expectations: [pageExpectation(`after:${step.id}`, expectedPage, context, timeoutMs, createdAt)] } : {}),
       ...(step.timeoutMs ? { timing: { timeoutMs: step.timeoutMs } } : {}),
-      createdAt: nowIso()
+      createdAt
     };
   }
 
-  private resolveAction(step: ScriptExecutionPlanStep, appId: string): {
+  private resolveAction(step: ScriptExecutionPlanStep, appId: string, platform: PageAssetPlatform): {
     type: ActionStep["type"];
     params: Record<string, unknown>;
     coordinate?: ActionStep["coordinate"];
@@ -175,24 +196,28 @@ export class ScriptFlowRunner {
     }
     const target = targetInput(step.input);
     if (step.action === "tap") {
-      return this.deps.targetResolver.resolve({ action: "tap", target, onPage: step.onPage });
+      return this.deps.targetResolver.resolve({ action: "tap", target, onPage: step.onPage, appId, platform });
     }
     if (step.action === "inputText") {
       return this.deps.targetResolver.resolve({
         action: "inputText",
         target,
         onPage: step.onPage,
+        appId,
+        platform,
         value: stringInput(step.input, "value")
       });
     }
     if (step.action === "clearText") {
-      return this.deps.targetResolver.resolve({ action: "clearText", target, onPage: step.onPage });
+      return this.deps.targetResolver.resolve({ action: "clearText", target, onPage: step.onPage, appId, platform });
     }
     if (step.action === "selectText") {
       return this.deps.targetResolver.resolve({
         action: "selectText",
         target,
         onPage: step.onPage,
+        appId,
+        platform,
         value: stringInput(step.input, "value"),
         confirmText: optionalStringInput(step.input, "confirmText")
       });
@@ -201,10 +226,28 @@ export class ScriptFlowRunner {
       action: "scrollUntilVisible",
       target,
       onPage: step.onPage,
+      appId,
+      platform,
       direction: verticalDirectionInput(step.input),
       maxSwipes: numberInput(step.input, "maxSwipes")
     });
   }
+}
+
+function maskPlanDifferences<T>(runtime: T, redacted: T): T {
+  if (Object.is(runtime, redacted)) {
+    return runtime;
+  }
+  if (Array.isArray(runtime) && Array.isArray(redacted)) {
+    return runtime.map((item, index) => maskPlanDifferences(item, redacted[index])) as T;
+  }
+  if (runtime && redacted && typeof runtime === "object" && typeof redacted === "object") {
+    return Object.fromEntries(Object.entries(runtime).map(([key, value]) => [
+      key,
+      maskPlanDifferences(value, (redacted as Record<string, unknown>)[key])
+    ])) as T;
+  }
+  return "[REDACTED]" as T;
 }
 
 export function pageStateExpectationVerifier(pageState: PageStateService): PageStateExpectationVerifier {
@@ -231,7 +274,8 @@ function pageExpectation(
   id: string,
   pageId: string,
   context: { appId: string; platform: PageAssetPlatform },
-  timeoutMs: number
+  timeoutMs: number,
+  createdAt: string
 ): NonNullable<ActionStep["expectations"]>[number] {
   return {
     id,
@@ -244,7 +288,7 @@ function pageExpectation(
       timeoutMs,
       blocking: true
     },
-    createdAt: nowIso()
+    createdAt
   };
 }
 

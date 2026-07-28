@@ -20,6 +20,21 @@ describe("DefaultPageStateService", () => {
     expect(collector.options).toEqual([{ includeScreenshot: true, includeOcr: true, includeUiTree: false }]);
   });
 
+  it("verifies a page referenced by its stable key", async () => {
+    const collector = new QueueObservationCollector([observation("主页")]);
+    const service = serviceFor([page("node-home", "classin.home", "主页")], collector);
+
+    const result = await service.verifyExpectedPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageId: "classin.home"
+    });
+
+    expect(result.status).toBe("matched");
+    expect(result.page?.id).toBe("node-home");
+  });
+
   it("returns multiple_candidates when the target shares all stable evidence with another page", async () => {
     const home = page("home", "classin.home", "主页", "全部班级");
     const duplicate = page("home-copy", "classin.home.copy", "主页副本", "全部班级");

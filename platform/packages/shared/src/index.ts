@@ -151,7 +151,7 @@ export type ActionStep = {
   createdAt: string;
 };
 
-export type TestCase = {
+export type RuntimeFlow = {
   id: string;
   name: string;
   description?: string;
@@ -324,7 +324,6 @@ export type AndroidAppMonitorSummary = {
 };
 
 export type RunConfig = {
-  caseId?: string;
   deviceSerial: string;
   runKind?: "case" | "script_flow" | "stability_exploration";
   mode: RunMode;
@@ -440,7 +439,6 @@ export type StepResult = {
 
 export type TestRun = {
   id: string;
-  caseId?: string;
   caseName: string;
   deviceSerial: string;
   status: RunStatus;
@@ -454,6 +452,14 @@ export type TestRun = {
     kind: "script_flow";
     flowId: string;
     version: number;
+    planDigest: string;
+    dependencies: Array<{
+      flowId: string;
+      version: number;
+      sourceHash: string;
+      sourceYaml: string;
+      parsed: Record<string, unknown>;
+    }>;
     sourceYaml?: string;
     parsed: Record<string, unknown>;
   };

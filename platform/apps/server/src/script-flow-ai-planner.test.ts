@@ -2,14 +2,22 @@ import { describe, expect, it } from "vitest";
 import type { ScriptFlow } from "@mobile-automation/shared";
 import type { PageAssetCatalog } from "./page-asset-catalog.js";
 import {
+  SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
   buildScriptFlowPlannerCatalog,
   generateScriptFlowDraft,
   parseScriptFlowAiResponse
 } from "./script-flow-ai-planner.js";
 
+it("only instructs AI to use supported ScriptFlow target modes", () => {
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("ocrText 或 pageElement");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("semantic");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("risk，值只能是 none");
+});
+
 describe("ScriptFlow AI planner", () => {
   it("builds a draft from page identity and optional locator assets", async () => {
     const catalog = pageCatalog();
+    let requestBody = "";
     const result = await generateScriptFlowDraft({
       config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
       prompt: "在主页点击添加好友",
@@ -17,13 +25,17 @@ describe("ScriptFlow AI planner", () => {
       platform: "android",
       pageCatalog: catalog,
       flows: [],
-      fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(readyResponse()) } }] }), { status: 200 })
+      fetchImpl: async (_url, init) => {
+        requestBody = String(init?.body ?? "");
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(readyResponse()) } }] }), { status: 200 });
+      }
     });
 
     expect(result).toMatchObject({ status: "ready", document: { name: "打开添加好友" } });
     if (result.status === "ready") {
       expect(result.sourceYaml).toContain('pageElement: "home-add-friend"');
     }
+    expect(requestBody).not.toContain("risk，值只能是 none");
   });
 
   it("rejects page references invented by the model", () => {
@@ -80,6 +92,7 @@ function readyResponse() {
         name: "点击添加好友",
         onPage: "classin.home",
         expectPage: "classin.friend.add",
+        risk: "interaction" as const,
         tap: { target: { pageElement: "home-add-friend" } }
       }],
       tags: ["ai-generated"]
@@ -88,12 +101,17 @@ function readyResponse() {
 }
 
 function pageCatalog(): PageAssetCatalog {
+  const pages = [
+    { id: "page-home", key: "classin.home", name: "主页", appId: "cn.eeo.classin", graphVersionId: "v1", matcherCount: 2 },
+    { id: "page-friend-add", key: "classin.friend.add", name: "添加好友", appId: "cn.eeo.classin", graphVersionId: "v1", matcherCount: 2 }
+  ];
   return {
-    listPages: () => [
-      { id: "page-home", key: "classin.home", name: "主页", appId: "cn.eeo.classin", graphVersionId: "v1", matcherCount: 2 },
-      { id: "page-friend-add", key: "classin.friend.add", name: "添加好友", appId: "cn.eeo.classin", graphVersionId: "v1", matcherCount: 2 }
-    ],
+    listPages: () => pages,
     getPage: () => undefined,
+    resolvePage: (reference) => {
+      const page = pages.find((candidate) => candidate.id === reference || candidate.key === reference);
+      return page ? { ...page, node: {} as never } : undefined;
+    },
     listLocators: (pageId) => pageId === "page-home" ? [{ id: "home-add-friend", label: "添加好友", targetText: "添加好友", requiresUiTree: false, raw: {} }] : [],
     findConfusablePages: () => []
   };

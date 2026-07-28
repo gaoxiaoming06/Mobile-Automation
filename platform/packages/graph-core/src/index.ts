@@ -101,7 +101,6 @@ export type GraphAssetSource = {
   sourceType: "source_scan" | "exploration" | "manual_recording" | "manual_edit" | "imported" | "ai_draft";
   filePath?: string;
   line?: number;
-  caseId?: string;
   stepId?: string;
   artifactId?: string;
   confidence?: number;

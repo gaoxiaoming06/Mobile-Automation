@@ -23,10 +23,10 @@ steps:
     tap:
       target:
         ocrText: \${className}
-        within: class-grid
     expectPage: classin.teacher.class.detail
   - id: select-duration
     onPage: classin.teacher.lesson.create
+    risk: interaction
     selectText:
       target:
         pageElement: lesson-duration-picker
@@ -115,9 +115,86 @@ app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: search
     inputText:
-      target: { semantic: 搜索输入框 }
+      target: { ocrText: 搜索输入框 }
       value: \${query}
 `)).toThrow(/undeclared parameter.*query/i);
+  });
+
+  it.each(["semantic", "visualTemplate", "within"])("rejects unsupported target field %s", (field) => {
+    expect(() => parseScriptFlow(`
+version: 1
+name: unsupported target
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: target
+    tap:
+      target:
+        ocrText: 主页
+        ${field}: legacy
+`)).toThrow(new RegExp(`target\\.${field}.*unknown field`, "i"));
+  });
+
+  it("requires exactly one supported target strategy", () => {
+    expect(() => parseScriptFlow(`
+version: 1
+name: ambiguous target
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: target
+    tap:
+      target: { ocrText: 主页, pageElement: home-title }
+`)).toThrow(/exactly one of ocrText or pageElement/i);
+  });
+
+  it("accepts pageElement interactions without a manual risk classification", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: public locator interaction
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open
+    onPage: lesson-create
+    tap: { target: { pageElement: details-button } }
+`);
+
+    expect(flow.steps[0]).toMatchObject({ id: "open" });
+  });
+
+  it("rejects risk none for click-like interactions", () => {
+    expect(() => parseScriptFlow(`
+version: 1
+name: unsafe opt out
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: order
+    risk: none
+    tap: { target: { ocrText: 立即下单 } }
+`)).toThrow(/tap.*risk none/i);
+  });
+
+  it("rejects unknown risk declarations", () => {
+    expect(() => parseScriptFlow(`
+version: 1
+name: invalid risk
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: target
+    risk: dangerous
+    tap: { target: { ocrText: 主页 } }
+`)).toThrow(/risk must be interaction, submit, publish, delete, or payment/i);
+  });
+
+  it("rejects defaults for sensitive parameters", () => {
+    expect(() => parseScriptFlow(`
+version: 1
+name: sensitive default
+app: { id: cn.eeo.classin, platform: android }
+parameters:
+  password: { type: string, sensitive: true, default: secret }
+steps:
+  - id: login
+    inputText: { target: { ocrText: 密码 }, value: "\${password}" }
+`)).toThrow(/sensitive parameter cannot define a default/i);
   });
 
   it("rejects unbounded static loops", () => {

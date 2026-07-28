@@ -28,7 +28,7 @@ type ScriptPlanView = {
     expectPage?: string;
     risk: string;
   }>;
-  requiredRiskConfirmations: string[];
+  riskConfirmations: Array<{ stepId: string; risk: string; stepName?: string }>;
 };
 
 type ScriptFlowsPanelProps = {
@@ -51,12 +51,14 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
   const [document, setDocument] = useState<ScriptDocumentView | undefined>(() => readDocument(selected?.parsed));
   const [issues, setIssues] = useState<Array<{ path: string; message: string }>>([]);
   const [plan, setPlan] = useState<ScriptPlanView>();
+  const [planDigest, setPlanDigest] = useState<string>();
   const [parameterValues, setParameterValues] = useState<Record<string, ScriptParameterValue>>(() => defaultParameterValues(document));
   const [deviceSerial, setDeviceSerial] = useState(selectedSerial);
-  const [confirmedRisks, setConfirmedRisks] = useState<string[]>([]);
+  const [confirmedRiskSteps, setConfirmedRiskSteps] = useState<string[]>([]);
   const [lastRun, setLastRun] = useState<TestRun>();
   const [busy, setBusy] = useState(false);
   const lineNumbers = useMemo(() => sourceYaml.split(/\r?\n/).map((_, index) => index + 1).join("\n"), [sourceYaml]);
+  const dirty = isScriptFlowDirty(selected, sourceYaml, status);
 
   useEffect(() => {
     if (initialFlows) return;
@@ -101,7 +103,8 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
     setParameterValues(defaultParameterValues(parsed));
     setIssues([]);
     setPlan(undefined);
-    setConfirmedRisks([]);
+    setPlanDigest(undefined);
+    setConfirmedRiskSteps([]);
     setLastRun(undefined);
   }
 
@@ -113,7 +116,8 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
     setParameterValues({});
     setIssues([]);
     setPlan(undefined);
-    setConfirmedRisks([]);
+    setPlanDigest(undefined);
+    setConfirmedRiskSteps([]);
     setLastRun(undefined);
   }
 
@@ -126,8 +130,11 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
         body: JSON.stringify({ sourceYaml })
       });
       setDocument(response.document);
-      setParameterValues((current) => ({ ...defaultParameterValues(response.document), ...current }));
+      setParameterValues(defaultParameterValues(response.document));
       setIssues([]);
+      setPlan(undefined);
+      setPlanDigest(undefined);
+      setConfirmedRiskSteps([]);
       setMessage("ScriptFlow 校验通过");
       return response.document;
     } catch (error) {
@@ -177,19 +184,20 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
   }
 
   async function preview() {
-    if (!selectedId) {
-      setMessage("请先保存脚本用例");
+    if (!selected || dirty) {
+      setMessage("请先保存当前脚本用例");
       return;
     }
     try {
       setBusy(true);
-      const response = await apiFetchJson<{ plan: ScriptPlanView }>(`/api/script-flows/${encodeURIComponent(selectedId)}/preview`, {
+      const response = await apiFetchJson<{ plan: ScriptPlanView; planDigest: string }>(`/api/script-flows/${encodeURIComponent(selectedId)}/preview`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ parameters: parameterValues })
+        body: JSON.stringify({ expectedVersion: selected.version, parameters: parameterValues })
       });
       setPlan(response.plan);
-      setConfirmedRisks([]);
+      setPlanDigest(response.planDigest);
+      setConfirmedRiskSteps([]);
       setMessage(`已生成 ${response.plan.steps.length} 个脚本步骤`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -199,19 +207,21 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
   }
 
   async function run() {
-    if (!selectedId) return;
+    if (!selected || dirty || !plan || !planDigest) return;
     try {
       setBusy(true);
       const androidAppMonitor = document?.app.id ? androidAppMonitorForApp?.(document.app.id) : undefined;
       const response = await apiFetchJson<{ run: TestRun }>(`/api/script-flows/${encodeURIComponent(selectedId)}/runs`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(buildScriptRunRequest({
+          expectedVersion: selected.version,
+          planDigest,
           deviceSerial,
           parameters: parameterValues,
-          confirmedRisks,
+          confirmedRiskSteps,
           ...(androidAppMonitor ? { androidAppMonitor } : {})
-        })
+        }))
       });
       setLastRun(response.run);
       setMessage(`已启动脚本：${response.run.id}`);
@@ -229,7 +239,12 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
         <div className="script-flows-toolbar">
           <button className="icon-button" type="button" title="刷新脚本用例" onClick={() => void refreshFlows()} disabled={busy}><RefreshCw size={16} /></button>
           <button type="button" onClick={createNew}><FilePlus2 size={16} /><span>新建</span></button>
-          <select aria-label="脚本状态" value={status} onChange={(event) => setStatus(event.target.value as ScriptFlow["status"])}>
+          <select aria-label="脚本状态" value={status} onChange={(event) => {
+            setStatus(event.target.value as ScriptFlow["status"]);
+            setPlan(undefined);
+            setPlanDigest(undefined);
+            setConfirmedRiskSteps([]);
+          }}>
             <option value="draft">草稿</option><option value="active">启用</option><option value="archived">归档</option>
           </select>
           <button type="button" onClick={() => void validate()} disabled={busy}><CheckCircle2 size={16} /><span>校验</span></button>
@@ -247,7 +262,7 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
           {!flows.length ? <p className="empty">暂无脚本用例</p> : null}
         </aside>
         <section className="script-flow-editor-pane">
-          <header><h3>ScriptFlow YAML</h3><button type="button" onClick={() => void preview()} disabled={busy || !selectedId}>预览计划</button></header>
+          <header><h3>ScriptFlow YAML</h3><button type="button" onClick={() => void preview()} disabled={busy || !selectedId || dirty}>预览计划</button></header>
           <div className="script-yaml-editor">
             <pre aria-hidden="true">{lineNumbers}</pre>
             <textarea
@@ -257,7 +272,10 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
               onChange={(event) => {
                 setSourceYaml(event.target.value);
                 setIssues([]);
+                setDocument(undefined);
                 setPlan(undefined);
+                setPlanDigest(undefined);
+                setConfirmedRiskSteps([]);
               }}
             />
           </div>
@@ -270,13 +288,18 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
             values={parameterValues}
             devices={devices}
             deviceSerial={deviceSerial}
-            requiredRisks={plan?.requiredRiskConfirmations ?? []}
-            confirmedRisks={confirmedRisks}
+            riskConfirmations={plan?.riskConfirmations ?? []}
+            confirmedRiskSteps={confirmedRiskSteps}
             busy={busy}
-            disabled={!selectedId}
-            onValueChange={(key, value) => setParameterValues((current) => ({ ...current, [key]: value }))}
+            disabled={!selectedId || dirty || !plan || !planDigest || status === "archived"}
+            onValueChange={(key, value) => {
+              setParameterValues((current) => ({ ...current, [key]: value }));
+              setPlan(undefined);
+              setPlanDigest(undefined);
+              setConfirmedRiskSteps([]);
+            }}
             onDeviceChange={setDeviceSerial}
-            onRiskChange={(risk, checked) => setConfirmedRisks((current) => checked ? [...new Set([...current, risk])] : current.filter((item) => item !== risk))}
+            onRiskChange={(stepId, checked) => setConfirmedRiskSteps((current) => checked ? [...new Set([...current, stepId])] : current.filter((item) => item !== stepId))}
             onRun={() => void run()}
           />
           {lastRun ? (
@@ -290,6 +313,25 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
       </div>
     </section>
   );
+}
+
+export function isScriptFlowDirty(
+  flow: ScriptFlow | undefined,
+  sourceYaml: string,
+  status: ScriptFlow["status"]
+): boolean {
+  return !flow || flow.sourceYaml !== sourceYaml || flow.status !== status;
+}
+
+export function buildScriptRunRequest(input: {
+  expectedVersion: number;
+  planDigest: string;
+  deviceSerial: string;
+  parameters: Record<string, ScriptParameterValue>;
+  confirmedRiskSteps: string[];
+  androidAppMonitor?: AndroidAppMonitorConfig;
+}): typeof input {
+  return input;
 }
 
 function ScriptStepPreview({ document, plan }: { document?: ScriptDocumentView; plan?: ScriptPlanView }) {

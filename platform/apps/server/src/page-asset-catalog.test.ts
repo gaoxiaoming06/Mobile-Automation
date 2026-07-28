@@ -50,6 +50,33 @@ describe("StoragePageAssetCatalog", () => {
     ]);
   });
 
+  it("resolves stable page keys and unique names inside the requested app and platform", () => {
+    const home = page({ id: "node-home", key: "classin.home", name: "主页", metadata: { assetRecordingConfirmed: true } });
+    const ios = page({
+      id: "node-ios",
+      key: "classin.ios-only",
+      name: "iOS 页面",
+      platformScope: "ios",
+      metadata: { assetRecordingConfirmed: true }
+    });
+    const catalog = new StoragePageAssetCatalog(new MemoryCatalogStorage(graph([home, ios])));
+
+    expect(catalog.resolvePage("node-home", "cn.eeo.classin", "android")?.id).toBe("node-home");
+    expect(catalog.resolvePage("classin.home", "cn.eeo.classin", "android")?.id).toBe("node-home");
+    expect(catalog.resolvePage("主页", "cn.eeo.classin", "android")?.id).toBe("node-home");
+    expect(catalog.resolvePage("classin.ios-only", "cn.eeo.classin", "android")).toBeUndefined();
+    expect(catalog.resolvePage("classin.home", "other.app", "android")).toBeUndefined();
+  });
+
+  it("does not guess when a page name is ambiguous", () => {
+    const first = page({ id: "first", key: "classin.first", name: "详情", metadata: { assetRecordingConfirmed: true } });
+    const second = page({ id: "second", key: "classin.second", name: "详情", metadata: { assetRecordingConfirmed: true } });
+    const catalog = new StoragePageAssetCatalog(new MemoryCatalogStorage(graph([first, second])));
+
+    expect(catalog.resolvePage("详情", "cn.eeo.classin", "android")).toBeUndefined();
+    expect(catalog.resolvePage("classin.first", "cn.eeo.classin", "android")?.id).toBe("first");
+  });
+
   it("finds pages that share stable identity evidence", () => {
     const home = page({
       id: "home",

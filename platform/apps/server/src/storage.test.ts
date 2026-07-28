@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +25,68 @@ describe("Storage", () => {
     delete process.env.DATA_DIR;
   });
 
+  it("deletes legacy test-case tables and rebuilds the run schema", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "mobile-automation-storage-legacy-"));
+    const databasePath = path.join(tempRoot, "mobile-automation.sqlite");
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      CREATE TABLE test_cases (id TEXT PRIMARY KEY);
+      CREATE TABLE steps (id TEXT PRIMARY KEY, case_id TEXT);
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY,
+        case_id TEXT,
+        case_name TEXT NOT NULL,
+        device_serial TEXT NOT NULL,
+        status TEXT NOT NULL,
+        config_json TEXT NOT NULL,
+        case_snapshot_json TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        report_html_path TEXT,
+        created_at TEXT NOT NULL
+      );
+    `);
+    legacy.close();
+
+    context = await createStorageContext(tempRoot);
+    const inspection = new DatabaseSync(databasePath, { readOnly: true });
+    const tables = inspection.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => String(row.name));
+    const runColumns = inspection.prepare("PRAGMA table_info(runs)").all().map((row) => String(row.name));
+    inspection.close();
+
+    expect(tables).not.toContain("test_cases");
+    expect(tables).not.toContain("steps");
+    expect(runColumns).not.toContain("case_id");
+    expect(runColumns).not.toContain("case_snapshot_json");
+    expect(runColumns).toContain("run_snapshot_json");
+  });
+
+  it("removes legacy AI provider URLs and keys from persisted settings", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "mobile-automation-storage-ai-settings-"));
+    const databasePath = path.join(tempRoot, "mobile-automation.sqlite");
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      CREATE TABLE app_settings (
+        setting_key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO app_settings VALUES (
+        'ai_model',
+        '{"enabled":true,"baseURL":"http://127.0.0.1:9999","apiKey":"legacy-secret","model":"gpt-5.4","timeoutMs":5000}',
+        '2026-07-28T00:00:00.000Z'
+      );
+    `);
+    legacy.close();
+
+    context = await createStorageContext(tempRoot);
+    const inspection = new DatabaseSync(databasePath, { readOnly: true });
+    const row = inspection.prepare("SELECT value_json FROM app_settings WHERE setting_key = 'ai_model'").get();
+    inspection.close();
+
+    expect(String(row?.value_json)).toBe('{"enabled":true,"model":"gpt-5.4","timeoutMs":5000}');
+  });
+
   it("persists ScriptFlow versions and keeps the run source snapshot", async () => {
     context = await createStorageContext();
     const firstDocument = scriptFlowDocument("创建课堂");
@@ -45,12 +108,14 @@ describe("Storage", () => {
       caseName: updated.name,
       deviceSerial: "device-1",
       configJson: JSON.stringify({ deviceSerial: "device-1", mode: "once", repeatCount: 1, stepIntervalMs: 0, stopOnFailure: true }),
-      caseSnapshotJson: JSON.stringify({
+      runSnapshotJson: JSON.stringify({
         steps: [],
         sourceSnapshot: {
           kind: "script_flow",
           flowId: updated.id,
           version: updated.version,
+          planDigest: "a".repeat(64),
+          dependencies: [],
           sourceYaml: updated.sourceYaml,
           parsed: updated.parsed
         }
@@ -93,6 +158,33 @@ describe("Storage", () => {
     expect(context.storage.findBusinessNodeByKey(version.id, page.key)).toEqual(expect.objectContaining({ name: "主页" }));
   });
 
+  it("creates the first page asset library with an active version", async () => {
+    context = await createStorageContext();
+
+    const library = context.storage.createPageAssetLibrary({
+      appId: "cn.eeo.classin",
+      name: "ClassIn 页面资产",
+      targetApp: {
+        productId: "cn.eeo.classin",
+        productName: "ClassIn",
+        profiles: [{ id: "android:cn.eeo.classin", platform: "android", androidPackageName: "cn.eeo.classin", isPrimary: true }]
+      }
+    });
+
+    expect(library).toEqual(expect.objectContaining({
+      appId: "cn.eeo.classin",
+      status: "active",
+      platformScope: "mobile-both",
+      activeVersionId: expect.any(String)
+    }));
+    expect(context.storage.getBusinessGraphVersion(library.activeVersionId ?? "")).toEqual(expect.objectContaining({
+      graphId: library.id,
+      version: 1,
+      status: "active",
+      nodes: []
+    }));
+  });
+
   it("persists runtime interceptor rules", async () => {
     context = await createStorageContext();
     const rule = context.storage.createRuntimeInterceptorRule(runtimeRule());
@@ -109,7 +201,7 @@ describe("Storage", () => {
       caseName: "视觉点击",
       deviceSerial: "device-1",
       configJson: JSON.stringify({ deviceSerial: "device-1" }),
-      caseSnapshotJson: JSON.stringify({ steps: [step] }),
+      runSnapshotJson: JSON.stringify({ steps: [step] }),
       steps: [step]
     });
     const result: StepResult = {

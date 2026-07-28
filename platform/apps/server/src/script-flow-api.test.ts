@@ -70,16 +70,22 @@ describe("ScriptFlow API", () => {
     });
 
     const preview = await post(context.baseUrl, `/api/script-flows/${created.id}/preview`, {
+      expectedVersion: 2,
       parameters: { friendName: "张三" }
     });
     expect(preview.status).toBe(200);
     expect(preview.body).toEqual(expect.objectContaining({
+      planDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
       plan: expect.objectContaining({ steps: [expect.objectContaining({ id: "open-add-friend", action: "tap" })] })
     }));
+    const planDigest = (preview.body as { planDigest: string }).planDigest;
 
     const runResponse = await post(context.baseUrl, `/api/script-flows/${created.id}/runs`, {
+      expectedVersion: 2,
+      planDigest,
       deviceSerial: "device-1",
       parameters: { friendName: "张三" },
+      confirmedRiskSteps: ["open-add-friend"],
       androidAppMonitor: {
         enabled: true,
         packageName: "cn.eeo.classin",
@@ -91,9 +97,11 @@ describe("ScriptFlow API", () => {
       expect.objectContaining({
         flowId: created.id,
         scriptVersion: 2,
+        planDigest,
         sourceYaml: updatedYaml,
         deviceSerial: "device-1",
         parameters: { friendName: "张三" },
+        confirmedRiskSteps: ["open-add-friend"],
         androidAppMonitor: {
           enabled: true,
           packageName: "cn.eeo.classin",
@@ -110,6 +118,54 @@ describe("ScriptFlow API", () => {
     expect(deleted.body).toEqual({ deleted: true });
     expect(context.storage.listScriptFlowVersions(created.id)).toEqual([]);
     expect((await get(context.baseUrl, `/api/script-flow-runs/${runId}`)).status).toBe(200);
+  });
+
+  it("rejects preview and execution when the client version is stale", async () => {
+    const context = await apiContext(servers);
+    const created = ((await post(context.baseUrl, "/api/script-flows", { sourceYaml })).body as { flow: ScriptFlow }).flow;
+    await put(context.baseUrl, `/api/script-flows/${created.id}`, { sourceYaml: sourceYaml.replace("打开添加好友", "打开添加好友页面") });
+
+    const preview = await post(context.baseUrl, `/api/script-flows/${created.id}/preview`, {
+      expectedVersion: 1,
+      parameters: { friendName: "张三" }
+    });
+    const run = await post(context.baseUrl, `/api/script-flows/${created.id}/runs`, {
+      expectedVersion: 1,
+      deviceSerial: "device-1",
+      parameters: { friendName: "张三" }
+    });
+
+    expect(preview).toEqual({ status: 409, body: { error: "ScriptFlow version changed; reload before continuing" } });
+    expect(run).toEqual({ status: 409, body: { error: "ScriptFlow version changed; reload before continuing" } });
+    expect(context.runner.inputs).toEqual([]);
+  });
+
+  it("rejects execution when a previewed runFlow dependency changes", async () => {
+    const context = await apiContext(servers);
+    const child = ((await post(context.baseUrl, "/api/script-flows", { sourceYaml: childSource("打开主页") })).body as { flow: ScriptFlow }).flow;
+    const parent = ((await post(context.baseUrl, "/api/script-flows", { sourceYaml: parentSource(child.id) })).body as { flow: ScriptFlow }).flow;
+    const preview = await post(context.baseUrl, `/api/script-flows/${parent.id}/preview`, {
+      expectedVersion: parent.version,
+      parameters: {}
+    });
+
+    expect(preview.status).toBe(200);
+    expect(preview.body).toEqual(expect.objectContaining({
+      planDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      dependencies: [{ flowId: child.id, version: 1, sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/) }]
+    }));
+
+    await put(context.baseUrl, `/api/script-flows/${child.id}`, { sourceYaml: childSource("打开新主页") });
+    const run = await post(context.baseUrl, `/api/script-flows/${parent.id}/runs`, {
+      expectedVersion: parent.version,
+      planDigest: (preview.body as { planDigest: string }).planDigest,
+      deviceSerial: "device-1",
+      parameters: {},
+      confirmedRiskSteps: ["child.open-home"]
+    });
+
+    expect(run).toEqual({ status: 409, body: { error: "Execution plan changed; preview again" } });
+    expect(context.runner.inputs).toEqual([]);
   });
 });
 
@@ -139,7 +195,7 @@ class MemoryScriptFlowStorage implements ScriptFlowApiStorage {
   private readonly runs = new Map<string, TestRun>();
 
   createScriptFlow(input: { sourceYaml: string; document: ScriptFlowDocument; status?: ScriptFlow["status"] }): ScriptFlow {
-    const flow = storedFlow("flow-1", 1, input);
+    const flow = storedFlow(`flow-${this.flows.size + 1}`, 1, input);
     this.flows.set(flow.id, flow);
     this.versions.set(flow.id, [storedVersion(flow)]);
     return flow;
@@ -173,6 +229,28 @@ class MemoryScriptFlowStorage implements ScriptFlowApiStorage {
   saveRun(run: TestRun): void { this.runs.set(run.id, run); }
 }
 
+function childSource(name: string): string {
+  return `
+version: 1
+name: ${name}
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open-home
+    tap: { target: { ocrText: 主页 } }
+`;
+}
+
+function parentSource(childId: string): string {
+  return `
+version: 1
+name: 父流程
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: child
+    runFlow: ${childId}
+`;
+}
+
 class CapturingScriptFlowRunner {
   readonly inputs: StartScriptFlowRunInput[] = [];
   constructor(private readonly storage: MemoryScriptFlowStorage) {}
@@ -194,6 +272,8 @@ class CapturingScriptFlowRunner {
         kind: "script_flow",
         flowId: input.flowId,
         version: input.scriptVersion ?? 1,
+        planDigest: input.planDigest,
+        dependencies: input.dependencies,
         sourceYaml: input.sourceYaml,
         parsed: input.flow as unknown as Record<string, unknown>
       },

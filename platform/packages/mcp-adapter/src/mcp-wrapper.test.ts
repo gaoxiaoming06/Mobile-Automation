@@ -10,12 +10,16 @@ describe("mobile automation MCP tools", () => {
       "list_script_flows",
       "get_script_flow",
       "generate_script_flow",
+      "preview_script_flow",
       "run_script_flow",
       "get_run",
       "get_report"
     ]);
     expect(() => assertNoSecretInMcpToolDefinitions()).not.toThrow();
     expect(JSON.stringify(mobileAutomationMcpTools)).not.toContain("graph");
+    expect(JSON.stringify(mobileAutomationMcpTools)).toContain("confirmedRiskSteps");
+    expect(JSON.stringify(mobileAutomationMcpTools)).toContain("planDigest");
+    expect(JSON.stringify(mobileAutomationMcpTools)).not.toContain("confirmedRisks");
   });
 
   it("maps handlers to ScriptFlow REST endpoints", async () => {
@@ -24,6 +28,8 @@ describe("mobile automation MCP tools", () => {
       serverUrl: "http://server.test",
       fetch: fakeFetch(requests, {
         "POST /api/script-flow-drafts/generate": { draft: { status: "needs_clarification", clarification: "要打开哪个班级？" } },
+        "GET /api/script-flows/flow-1": { flow: { id: "flow-1", version: 2 } },
+        "POST /api/script-flows/flow-1/preview": { planDigest: "a".repeat(64), plan: { steps: [], riskConfirmations: [] }, dependencies: [] },
         "POST /api/script-flows/flow-1/runs": { run: { id: "run-1", status: "running", sourceSnapshot: { kind: "script_flow" }, stepResults: [], artifacts: [] } }
       })
     });
@@ -31,10 +37,13 @@ describe("mobile automation MCP tools", () => {
     await expect(handlers.generate_script_flow({ prompt: "打开班级", appId: "cn.eeo.classin", platform: "android" })).resolves.toEqual(
       { status: "needs_clarification", clarification: "要打开哪个班级？" }
     );
-    await expect(handlers.run_script_flow({ flowId: "flow-1", deviceSerial: "device-1", parameters: { className: "班级四十二号" } })).resolves.toEqual(
+    await expect(handlers.preview_script_flow({ flowId: "flow-1", expectedVersion: 2, parameters: { className: "班级四十二号" } })).resolves.toEqual(
+      expect.objectContaining({ planDigest: "a".repeat(64) })
+    );
+    await expect(handlers.run_script_flow({ flowId: "flow-1", expectedVersion: 2, planDigest: "a".repeat(64), deviceSerial: "device-1", parameters: { className: "班级四十二号" } })).resolves.toEqual(
       expect.objectContaining({ runId: "run-1", status: "running" })
     );
-    expect(requests).toEqual(["POST /api/script-flow-drafts/generate", "POST /api/script-flows/flow-1/runs"]);
+    expect(requests).toEqual(["POST /api/script-flow-drafts/generate", "POST /api/script-flows/flow-1/preview", "POST /api/script-flows/flow-1/runs"]);
   });
 });
 

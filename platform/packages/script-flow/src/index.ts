@@ -18,6 +18,7 @@ export type {
   ScriptParameterOption,
   ScriptParameterType,
   ScriptParameterValue,
+  ScriptRiskConfirmation,
   ScriptStep,
   ScriptStepRisk,
   ScriptTarget

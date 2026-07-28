@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PageAssetCatalog, PageAssetSummary, PageElementLocator } from "./page-asset-catalog.js";
+import type { PageAsset, PageAssetCatalog, PageAssetSummary, PageElementLocator } from "./page-asset-catalog.js";
 import { ScriptTargetResolutionError, ScriptTargetResolver } from "./script-target-resolver.js";
 
 describe("ScriptTargetResolver", () => {
@@ -27,8 +27,10 @@ describe("ScriptTargetResolver", () => {
 
     const result = resolver.resolve({
       action: "tap",
-      target: { pageElement: "add-friend", ocrText: "不会使用" },
-      onPage: "home"
+      target: { pageElement: "add-friend" },
+      onPage: "classin.home",
+      appId: "cn.eeo.classin",
+      platform: "android"
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -41,18 +43,18 @@ describe("ScriptTargetResolver", () => {
     }));
   });
 
-  it("turns OCR and semantic targets into runtime visual actions without coordinates", () => {
+  it("turns OCR targets into runtime visual actions without coordinates", () => {
     const resolver = new ScriptTargetResolver(new MemoryCatalog([]));
 
-    expect(resolver.resolve({ action: "tap", target: { ocrText: "添加好友" } })).toEqual({
+    expect(resolver.resolve({ action: "tap", target: { ocrText: "添加好友" }, appId: "cn.eeo.classin", platform: "android" })).toEqual({
       type: "tap_on_text",
       strategy: "ocr_text",
       params: { text: "添加好友", mode: "contains" }
     });
-    expect(resolver.resolve({ action: "inputText", target: { semantic: "课堂名称输入框" }, value: "自动化课堂" }))
+    expect(resolver.resolve({ action: "inputText", target: { ocrText: "课堂名称输入框" }, value: "自动化课堂", appId: "cn.eeo.classin", platform: "android" }))
       .toEqual(expect.objectContaining({
         type: "input_text_to_element",
-        strategy: "semantic_ocr",
+        strategy: "ocr_text",
         params: expect.objectContaining({
           text: "自动化课堂",
           targetText: "课堂名称输入框",
@@ -68,7 +70,9 @@ describe("ScriptTargetResolver", () => {
     const result = resolver.resolve({
       action: "selectText",
       target: { ocrText: "课程时长" },
-      value: "30分钟"
+      value: "30分钟",
+      appId: "cn.eeo.classin",
+      platform: "android"
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -83,13 +87,11 @@ describe("ScriptTargetResolver", () => {
     }));
   });
 
-  it("requires onPage for pageElement and rejects unsupported visual-only input", () => {
+  it("requires onPage for pageElement", () => {
     const resolver = new ScriptTargetResolver(new MemoryCatalog([]));
 
-    expect(() => resolver.resolve({ action: "tap", target: { pageElement: "missing" } }))
+    expect(() => resolver.resolve({ action: "tap", target: { pageElement: "missing" }, appId: "cn.eeo.classin", platform: "android" }))
       .toThrow(ScriptTargetResolutionError);
-    expect(() => resolver.resolve({ action: "tap", target: { visualTemplate: "template-1" } }))
-      .toThrow("visualTemplate template-1 is not executable without a pageElement locator");
   });
 });
 
@@ -97,6 +99,18 @@ class MemoryCatalog implements PageAssetCatalog {
   constructor(private readonly locators: PageElementLocator[]) {}
   listPages(): PageAssetSummary[] { return []; }
   getPage(): undefined { return undefined; }
+  resolvePage(reference: string): PageAsset | undefined {
+    if (reference !== "home" && reference !== "classin.home") return undefined;
+    return {
+      id: "home",
+      key: "classin.home",
+      name: "主页",
+      appId: "cn.eeo.classin",
+      graphVersionId: "version",
+      matcherCount: 0,
+      node: {} as PageAsset["node"]
+    };
+  }
   listLocators(pageId: string): PageElementLocator[] { return pageId === "home" ? this.locators : []; }
   findConfusablePages(): PageAssetSummary[] { return []; }
 }

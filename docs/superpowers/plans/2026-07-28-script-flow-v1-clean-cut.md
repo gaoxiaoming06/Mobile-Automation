@@ -20,8 +20,11 @@
 6. 页面连接关系只从 ScriptFlow 的 `onPage -> expectPage` 自动生成只读 TransitionIndex。
 7. 规划阶段不实时识别设备页面；执行阶段才通过 PageStateService 验证 `onPage` / `expectPage`。
 8. 页面验证默认采集截图 + OCR，不采集 UI Tree；只有显式声明的结构定位器需要时才按步骤采集 UI Tree。
-9. 脚本不得保存绝对点击坐标。目标使用 OCR 文本、视觉模板、语义描述或公共 PageElement。
+9. 脚本不得保存绝对点击坐标。v1 目标只使用 OCR 文本或公共 PageElement。
 10. 第一版不执行任意 JavaScript，不允许无法审计的表达式，只支持声明式参数引用、条件、循环和子流程。
+11. 所有点击类动作默认进入确认边界，`risk: none` 不属于可写入的脚本语法；关键词只用于细分风险类别。
+12. 预览输出 `planDigest` 并固定全部 `runFlow` 依赖版本；任何源码、依赖或参数变化都必须重新预览。
+13. 网页只配置本机 Codex。外部 AI Provider 和密钥只允许来自环境变量，服务默认监听 `127.0.0.1`。
 
 ## 基线与恢复
 
@@ -105,7 +108,6 @@ steps:
     tap:
       target:
         ocrText: ${className}
-        within: class-grid
     expectPage: classin.teacher.class.detail
   - id: open-create-lesson
     onPage: classin.teacher.class.detail
@@ -169,10 +171,7 @@ steps:
   ```ts
   export type ScriptTarget = {
     ocrText?: string;
-    semantic?: string;
     pageElement?: string;
-    visualTemplate?: string;
-    within?: string;
   };
 
   type ScriptStepBase = { id: string; onPage?: string; expectPage?: string };
@@ -307,7 +306,7 @@ steps:
 
 - [ ] **步骤 4：实现 ScriptTargetResolver**
 
-  目标解析顺序为：公共 PageElement -> OCR 文本 -> 视觉模板 -> 语义描述。任一策略未稳定定位时失败，不按历史坐标或录制区域中心点击。
+  目标解析只接受公共 PageElement 或 OCR 文本。任一策略未稳定定位时失败，不按历史坐标或录制区域中心点击。
 
 - [ ] **步骤 5：实现 ScriptFlowRunner**
 

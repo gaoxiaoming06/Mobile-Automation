@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
 import type { DeviceInfo, TestRun } from "@mobile-automation/shared";
 import type { PageAssetCatalog, PageAssetSummary } from "./page-asset-catalog.js";
@@ -22,10 +22,12 @@ describe("ScriptFlowRunner", () => {
     });
 
     await runner.start({
+      ...previewBinding,
       flowId: "flow-1",
       flow,
       deviceSerial: "device-1",
       parameters: { className: "班级四十二号" },
+      confirmedRiskSteps: ["open-class"],
       androidAppMonitor: {
         enabled: true,
         packageName: "cn.eeo.classin"
@@ -58,6 +60,7 @@ describe("ScriptFlowRunner", () => {
     const runner = runnerWith(backend);
 
     await runner.start({
+      ...previewBinding,
       flowId: "flow-1",
       flow: document([{ id: "wait-home", waitForPage: "classin.home", timeoutMs: 5000 }]),
       deviceSerial: "device-1",
@@ -72,29 +75,42 @@ describe("ScriptFlowRunner", () => {
     }));
   });
 
-  it("uses typed run parameters and blocks unconfirmed risky actions", async () => {
+  it("uses typed run parameters and confirms each risky step independently", async () => {
     const backend = new CapturingBackend();
     const runner = runnerWith(backend);
     const flow = document([
-      { id: "publish", tap: { target: { ocrText: "发布" } } }
+      { id: "publish-primary", tap: { target: { ocrText: "发布" } } },
+      { id: "publish-copy", tap: { target: { ocrText: "再次发布" } } }
     ], {
       lessonName: { type: "string", required: true }
     });
 
     await expect(runner.start({
+      ...previewBinding,
       flowId: "flow-1",
       flow,
       deviceSerial: "device-1",
       parameters: { lessonName: "本次课堂" },
       recordVideo: false
-    })).rejects.toThrow("Risk confirmation required: publish");
+    })).rejects.toThrow("Risk confirmation required: publish-primary (publish), publish-copy (publish)");
 
-    await runner.start({
+    await expect(runner.start({
+      ...previewBinding,
       flowId: "flow-1",
       flow,
       deviceSerial: "device-1",
       parameters: { lessonName: "本次课堂" },
-      confirmedRisks: ["publish"],
+      confirmedRiskSteps: ["publish-primary"],
+      recordVideo: false
+    })).rejects.toThrow("Risk confirmation required: publish-copy (publish)");
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-1",
+      flow,
+      deviceSerial: "device-1",
+      parameters: { lessonName: "本次课堂" },
+      confirmedRiskSteps: ["publish-primary", "publish-copy"],
       recordVideo: false
     });
     expect(backend.input?.steps?.[0]?.params.scriptParameters).toEqual({ lessonName: "本次课堂" });
@@ -105,12 +121,99 @@ describe("ScriptFlowRunner", () => {
     const runner = runnerWith(backend, "ios");
 
     await expect(runner.start({
+      ...previewBinding,
       flowId: "flow-1",
       flow: document([{ id: "open", tap: { target: { ocrText: "主页" } } }]),
       deviceSerial: "device-1"
     })).rejects.toThrow("Script platform android does not match device platform ios");
   });
+
+  it("executes sensitive values in memory but sends redacted steps to persistence", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-sensitive",
+      flow: document([{
+        id: "password",
+        inputText: { target: { ocrText: "密码" }, value: "${password}" }
+      }], {
+        password: { type: "string", required: true, sensitive: true }
+      }),
+      deviceSerial: "device-1",
+      parameters: { password: "top-secret" },
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps?.[0]?.params.text).toBe("top-secret");
+    expect(backend.input?.persistedSteps?.[0]?.params.text).toBe("[REDACTED]");
+    expect(JSON.stringify(backend.input?.persistedSteps)).not.toContain("top-secret");
+  });
+
+  it("redacts sensitive scalar fields without corrupting step structure", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-sensitive-scalars",
+      flow: document([
+        { id: "step-1", inputText: { target: { ocrText: "短码" }, value: "${token}" } },
+        { id: "step-number", inputText: { target: { ocrText: "数字" }, value: "${pin}" } },
+        { id: "step-boolean", inputText: { target: { ocrText: "开关" }, value: "${enabled}" } }
+      ], {
+        token: { type: "string", required: true, sensitive: true },
+        pin: { type: "number", required: true, sensitive: true },
+        enabled: { type: "boolean", required: true, sensitive: true }
+      }),
+      deviceSerial: "device-1",
+      parameters: { token: "__SCRIPT_FLOW_REDACTED__", pin: 1, enabled: true },
+      recordVideo: false
+    });
+
+    expect(backend.input?.persistedSteps?.map((step) => ({
+      id: step.id,
+      order: step.order,
+      enabled: step.enabled,
+      text: step.params.text
+    }))).toEqual([
+      { id: "step-1", order: 1, enabled: true, text: "[REDACTED]" },
+      { id: "step-number", order: 2, enabled: true, text: "[REDACTED]" },
+      { id: "step-boolean", order: 3, enabled: true, text: "[REDACTED]" }
+    ]);
+  });
+
+  it("keeps persisted evidence timestamps aligned with runtime steps", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+    const clock = vi.spyOn(Date.prototype, "toISOString")
+      .mockReturnValueOnce("2026-07-28T00:00:00.001Z")
+      .mockReturnValueOnce("2026-07-28T00:00:00.002Z");
+
+    try {
+      await runner.start({
+        ...previewBinding,
+        flowId: "flow-sensitive-time",
+        flow: document([{
+          id: "password",
+          inputText: { target: { ocrText: "密码" }, value: "${password}" }
+        }], {
+          password: { type: "string", required: true, sensitive: true }
+        }),
+        deviceSerial: "device-1",
+        parameters: { password: "secret" },
+        recordVideo: false
+      });
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(backend.input?.persistedSteps?.[0]?.createdAt).toBe(backend.input?.steps?.[0]?.createdAt);
+  });
 });
+
+const previewBinding = { planDigest: "a".repeat(64), dependencies: [] };
 
 function runnerWith(backend: CapturingBackend, platform: DeviceInfo["platform"] = "android"): ScriptFlowRunner {
   return new ScriptFlowRunner({
@@ -146,6 +249,7 @@ class CapturingBackend implements ScriptFlowRunBackend {
 class EmptyCatalog implements PageAssetCatalog {
   listPages(): PageAssetSummary[] { return []; }
   getPage(): undefined { return undefined; }
+  resolvePage(): undefined { return undefined; }
   listLocators(): [] { return []; }
   findConfusablePages(): PageAssetSummary[] { return []; }
 }

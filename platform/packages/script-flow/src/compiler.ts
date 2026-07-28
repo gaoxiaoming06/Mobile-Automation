@@ -20,28 +20,37 @@ export class ScriptFlowCompileError extends Error {
 type ExpansionContext = {
   flow: ScriptFlowDocument;
   parameters: Record<string, ScriptParameterValue>;
+  renderedParameters: Record<string, ScriptParameterValue>;
   resolveFlow?: CompileScriptFlowOptions["resolveFlow"];
+  redactSensitiveParameters: boolean;
   stack: string[];
   prefix: string;
 };
 
 export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScriptFlowOptions = {}): ScriptExecutionPlan {
   const parameters = resolveParameters(flow.parameters, options.parameters ?? {});
+  const redactSensitiveParameters = options.redactSensitiveParameters === true;
   const steps = expandSteps(flow.steps, {
     flow,
     parameters,
+    renderedParameters: redactSensitiveParameters ? redactParameters(flow.parameters, parameters) : parameters,
     resolveFlow: options.resolveFlow,
+    redactSensitiveParameters,
     stack: [flow.name],
     prefix: ""
   }).map((step, index) => ({ ...step, order: index + 1 }));
-  const requiredRiskConfirmations = Array.from(new Set(steps.map((step) => step.risk).filter((risk) => risk !== "none")));
+  const riskConfirmations = steps.flatMap((step) => step.risk === "none" ? [] : [{
+    stepId: step.id,
+    risk: step.risk,
+    ...(step.name ? { stepName: step.name } : {})
+  }]);
   return {
     flowName: flow.name,
     app: flow.app,
     ...(flow.start ? { start: flow.start } : {}),
     parameters,
     steps,
-    requiredRiskConfirmations
+    riskConfirmations
   };
 }
 
@@ -95,21 +104,39 @@ function expandChildFlow(
   }
   const rawBindings = step.with ?? {};
   const bindings: Record<string, ScriptParameterValue> = {};
+  const renderedBindings: Record<string, ScriptParameterValue> = {};
   for (const [key, value] of Object.entries(rawBindings)) {
-    const resolved = interpolateValue(value, context.parameters);
+    const resolved = interpolateBindingValue(value, context.parameters);
+    const rendered = interpolateBindingValue(value, context.renderedParameters);
     if (!isParameterValue(resolved)) {
       throw new ScriptFlowCompileError(`runFlow binding ${key} must resolve to a scalar value`);
     }
+    if (!isParameterValue(rendered)) {
+      throw new ScriptFlowCompileError(`runFlow binding ${key} must resolve to a scalar value`);
+    }
     bindings[key] = resolved;
+    renderedBindings[key] = rendered;
   }
   const parameters = resolveParameters(child.parameters, bindings);
+  const renderedParameters = context.redactSensitiveParameters
+    ? redactParameters(child.parameters, resolveParameters(child.parameters, renderedBindings))
+    : parameters;
   return expandSteps(child.steps, {
     flow: child,
     parameters,
+    renderedParameters,
     resolveFlow: context.resolveFlow,
+    redactSensitiveParameters: context.redactSensitiveParameters,
     stack: [...context.stack, step.runFlow],
     prefix: expandedId
   });
+}
+
+function interpolateBindingValue(value: unknown, parameters: Record<string, ScriptParameterValue>): unknown {
+  if (typeof value === "string" && /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value)) {
+    return exactParameterValue(value, parameters);
+  }
+  return interpolateValue(value, parameters);
 }
 
 function compileExecutableStep(
@@ -117,13 +144,13 @@ function compileExecutableStep(
   id: string,
   context: ExpansionContext
 ): Omit<ScriptExecutionPlanStep, "order"> {
-  const { action, input } = executableAction(step, context.parameters);
-  const onPage = step.onPage ? interpolateString(step.onPage, context.parameters) : undefined;
-  const expectPage = step.expectPage ? interpolateString(step.expectPage, context.parameters) : undefined;
-  const risk = inferRisk(action, input);
+  const { action, input } = executableAction(step, context.renderedParameters);
+  const onPage = step.onPage ? interpolateString(step.onPage, context.renderedParameters) : undefined;
+  const expectPage = step.expectPage ? interpolateString(step.expectPage, context.renderedParameters) : undefined;
+  const risk = step.risk ?? inferRisk(action, input);
   return {
     id,
-    ...(step.name ? { name: interpolateString(step.name, context.parameters) } : {}),
+    ...(step.name ? { name: interpolateString(step.name, context.renderedParameters) } : {}),
     action,
     input,
     ...(onPage ? { onPage } : {}),
@@ -203,6 +230,27 @@ function resolveParameters(
   return result;
 }
 
+function redactParameters(
+  definitions: Record<string, ScriptParameterDefinition>,
+  parameters: Record<string, ScriptParameterValue>
+): Record<string, ScriptParameterValue> {
+  return Object.fromEntries(Object.entries(parameters).map(([key, value]) => [
+    key,
+    definitions[key]?.sensitive === true ? redactedValue(value) : value
+  ]));
+}
+
+function redactedValue(value: ScriptParameterValue): ScriptParameterValue {
+  if (typeof value === "number") {
+    return value === Number.MIN_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : Number.MIN_SAFE_INTEGER;
+  }
+  if (typeof value === "boolean") {
+    return !value;
+  }
+  const marker = "__SCRIPT_FLOW_REDACTED__";
+  return value === marker ? `${marker}_` : marker;
+}
+
 function resolveRepeatTimes(value: number | string, parameters: Record<string, ScriptParameterValue>, stepId: string): number {
   const resolved = typeof value === "number" ? value : exactParameterValue(value, parameters);
   if (typeof resolved !== "number" || !Number.isInteger(resolved) || resolved < 1 || resolved > 100) {
@@ -267,7 +315,7 @@ function inferRisk(action: ScriptExecutableAction, input: Record<string, unknown
   if (/提交|确认创建|submit/i.test(text)) {
     return "submit";
   }
-  return "none";
+  return "interaction";
 }
 
 function valueMatchesType(value: ScriptParameterValue, type: ScriptParameterDefinition["type"]): boolean {

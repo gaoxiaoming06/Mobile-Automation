@@ -19,13 +19,13 @@ type ScriptRunFormProps = {
   values: Record<string, ScriptParameterValue>;
   devices: Array<{ serial: string; name?: string }>;
   deviceSerial: string;
-  requiredRisks: string[];
-  confirmedRisks: string[];
+  riskConfirmations: Array<{ stepId: string; risk: string; stepName?: string }>;
+  confirmedRiskSteps: string[];
   busy: boolean;
   disabled?: boolean;
   onValueChange: (key: string, value: ScriptParameterValue) => void;
   onDeviceChange: (serial: string) => void;
-  onRiskChange: (risk: string, checked: boolean) => void;
+  onRiskChange: (stepId: string, checked: boolean) => void;
   onRun: () => void;
 };
 
@@ -34,8 +34,8 @@ export function ScriptRunForm({
   values,
   devices,
   deviceSerial,
-  requiredRisks,
-  confirmedRisks,
+  riskConfirmations,
+  confirmedRiskSteps,
   busy,
   disabled = false,
   onValueChange,
@@ -47,7 +47,7 @@ export function ScriptRunForm({
   const primary = entries.filter(([, definition]) => definition.required || !definition.advanced);
   const optional = entries.filter(([, definition]) => !definition.required && definition.advanced);
   const missingRequired = entries.some(([key, definition]) => definition.required && isMissing(values[key]));
-  const missingRisk = requiredRisks.some((risk) => !confirmedRisks.includes(risk));
+  const missingRisk = riskConfirmations.some((confirmation) => !confirmedRiskSteps.includes(confirmation.stepId));
 
   return (
     <section className="script-run-form">
@@ -74,17 +74,17 @@ export function ScriptRunForm({
           </div>
         </details>
       ) : null}
-      {requiredRisks.length ? (
+      {riskConfirmations.length ? (
         <fieldset className="script-risk-confirmations">
           <legend>风险确认</legend>
-          {requiredRisks.map((risk) => (
-            <label key={risk}>
+          {riskConfirmations.map((confirmation) => (
+            <label key={confirmation.stepId}>
               <input
                 type="checkbox"
-                checked={confirmedRisks.includes(risk)}
-                onChange={(event) => onRiskChange(risk, event.target.checked)}
+                checked={confirmedRiskSteps.includes(confirmation.stepId)}
+                onChange={(event) => onRiskChange(confirmation.stepId, event.target.checked)}
               />
-              <span>{riskLabel(risk)}</span>
+              <span>{riskLabel(confirmation)}</span>
             </label>
           ))}
         </fieldset>
@@ -151,7 +151,7 @@ function isMissing(value: ScriptParameterValue | undefined): boolean {
   return value === undefined || value === "";
 }
 
-function riskLabel(risk: string): string {
-  const labels: Record<string, string> = { publish: "发布", submit: "提交", delete: "删除", payment: "支付" };
-  return `确认执行${labels[risk] ?? risk}`;
+function riskLabel(confirmation: { stepId: string; risk: string; stepName?: string }): string {
+  const labels: Record<string, string> = { interaction: "交互", publish: "发布", submit: "提交", delete: "删除", payment: "支付" };
+  return `确认执行${labels[confirmation.risk] ?? confirmation.risk}：${confirmation.stepName ?? confirmation.stepId}`;
 }

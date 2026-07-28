@@ -30,7 +30,7 @@ export type AiJsonResult = {
 };
 
 export function isCodexAppServerProvider(baseURL?: string): boolean {
-  return Boolean(baseURL?.trim().toLowerCase().startsWith(CODEX_PROVIDER_BASE_URL));
+  return baseURL?.trim().toLowerCase() === CODEX_PROVIDER_BASE_URL;
 }
 
 export async function runAiJsonRequest(config: AiClientConfig, request: AiJsonRequest, fetchImpl: AiClientFetch = fetch): Promise<AiJsonResult> {

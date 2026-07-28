@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 
-type CliCommand = "devices" | "flows" | "runs" | "run-flow" | "status" | "report" | "help";
+type CliCommand = "devices" | "flows" | "runs" | "preview-flow" | "run-flow" | "status" | "report" | "help";
 
 type CliRequest = {
   method: "GET" | "POST";
@@ -50,15 +50,28 @@ export function buildRequest(parsed: ParsedCli): CliRequest {
   if (parsed.command === "status" || parsed.command === "report") {
     return { method: "GET", path: `/api/runs/${encodeURIComponent(requiredOption(parsed.options.run, "--run"))}` };
   }
+  if (parsed.command === "preview-flow") {
+    const flowId = requiredOption(parsed.options.flow, "--flow");
+    return {
+      method: "POST",
+      path: `/api/script-flows/${encodeURIComponent(flowId)}/preview`,
+      body: compactObject({
+        expectedVersion: positiveIntegerOption(parsed.options.version, "--version"),
+        parameters: jsonObjectOption(parsed.options.params, "--params")
+      })
+    };
+  }
   if (parsed.command === "run-flow") {
     const flowId = requiredOption(parsed.options.flow, "--flow");
     return {
       method: "POST",
       path: `/api/script-flows/${encodeURIComponent(flowId)}/runs`,
       body: compactObject({
+        expectedVersion: positiveIntegerOption(parsed.options.version, "--version"),
+        planDigest: requiredOption(parsed.options.plan, "--plan"),
         deviceSerial: requiredOption(parsed.options.device, "--device"),
         parameters: jsonObjectOption(parsed.options.params, "--params"),
-        confirmedRisks: csvOption(parsed.options.confirmRisk),
+        confirmedRiskSteps: csvOption(parsed.options.confirmStep),
         mode: stringOption(parsed.options.mode),
         repeatCount: numberOption(parsed.options.repeat),
         stepIntervalMs: numberOption(parsed.options.interval)
@@ -95,12 +108,19 @@ export function formatResponse(command: CliCommand, payload: unknown, serverUrl:
     return readArray(payload, "devices").map((device) => `${String(device.serial ?? device.id)}\t${String(device.platform ?? "-")}\t${String(device.status ?? "-")}\t${String(device.name ?? "")}`).join("\n");
   }
   if (command === "flows") {
-    return readArray(payload, "flows").map((flow) => `${String(flow.id)}\t${String(flow.status)}\t${String(flow.platform)}\t${String(flow.name)}`).join("\n");
+    return readArray(payload, "flows").map((flow) => `${String(flow.id)}\tv${String(flow.version)}\t${String(flow.status)}\t${String(flow.platform)}\t${String(flow.name)}`).join("\n");
   }
   if (command === "runs") {
     return readArray(payload, "runs").map((run) => `${String(run.id)}\t${String(run.status)}\t${String(run.caseName)}\t${String(run.deviceSerial)}`).join("\n");
   }
   const run = readObject(payload, "run");
+  if (command === "preview-flow") {
+    const preview = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+    const plan = readObject(preview, "plan");
+    const steps = Array.isArray(plan.steps) ? plan.steps.length : 0;
+    const risks = Array.isArray(plan.riskConfirmations) ? plan.riskConfirmations.length : 0;
+    return [`planDigest=${String(preview.planDigest ?? "")}`, `steps=${steps}`, `confirmations=${risks}`].join("\n");
+  }
   if (command === "run-flow") return `Started ${String(run.id)} (${String(run.status)})`;
   if (command === "status") return [`Run ${String(run.id)}`, `status=${String(run.status)}`, `flow=${String(readObject(run.sourceSnapshot).flowName ?? run.caseName ?? "-")}`, `device=${String(run.deviceSerial)}`].join("\n");
   if (command === "report") return run.reportHtmlPath ? `${serverUrl}/api/reports/${encodeURIComponent(String(run.id))}/html` : "Report is not ready";
@@ -114,7 +134,8 @@ function helpText(): string {
     "Usage:",
     "  pnpm cli -- devices",
     "  pnpm cli -- flows [--app cn.eeo.classin] [--platform android]",
-    "  pnpm cli -- run-flow --flow <flowId> --device <serial> [--params '{\"className\":\"班级四十二号\"}']",
+    "  pnpm cli -- preview-flow --flow <flowId> --version <version> [--params '{\"className\":\"班级四十二号\"}']",
+    "  pnpm cli -- run-flow --flow <flowId> --version <version> --plan <planDigest> --device <serial> [--params '{\"className\":\"班级四十二号\"}'] [--confirmStep open-class]",
     "  pnpm cli -- runs --limit 20",
     "  pnpm cli -- status --run <runId>",
     "  pnpm cli -- report --run <runId>",
@@ -139,6 +160,12 @@ function numberOption(value: string | boolean | undefined): number | undefined {
   if (!raw) return undefined;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function positiveIntegerOption(value: string | boolean | undefined, name: string): number {
+  const parsed = numberOption(value);
+  if (!parsed || !Number.isInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer`);
+  return parsed;
 }
 
 function jsonObjectOption(value: string | boolean | undefined, name: string): Record<string, unknown> | undefined {

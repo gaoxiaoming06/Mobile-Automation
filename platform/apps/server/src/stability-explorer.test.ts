@@ -160,7 +160,7 @@ describe("StabilityExplorer", () => {
       })
     );
     expect(completed.artifacts.some((artifact) => artifact.type === "report_json" && artifact.name === "stability-exploration-summary.json")).toBe(true);
-    expect(completed.reportHtmlPath).toBe("runs/report-run/reports/report.html");
+    expect(completed.reportHtmlPath).toBe(`runs/${run.id}/reports/report.html`);
   });
 
   it("can start exploration from the current foreground app without relaunching", async () => {
@@ -660,10 +660,9 @@ class RuntimeInterceptorExplorerDriver extends ScriptedExplorerDriver {
 class MemoryExplorerStorage implements StabilityExplorerStorage {
   private readonly runs = new Map<string, TestRun>();
 
-  createRun(input: { caseId?: string; caseName: string; deviceSerial: string; configJson: string; caseSnapshotJson: string; steps: ActionStep[] }): TestRun {
+  createRun(input: { id?: string; caseName: string; deviceSerial: string; configJson: string; runSnapshotJson: string; steps: ActionStep[] }): TestRun {
     const run: TestRun = {
-      id: "report-run",
-      caseId: input.caseId,
+      id: input.id ?? "report-run",
       caseName: input.caseName,
       deviceSerial: input.deviceSerial,
       status: "running",

@@ -1,4 +1,3 @@
-import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
@@ -17,9 +16,11 @@ import { type BusinessGraphVersion, type Observation } from "@mobile-automation/
 import { WebSocketServer } from "ws";
 import { ArtifactCleanupScheduler } from "./artifact-cleanup.js";
 import { readAndroidAppMonitorConfig } from "./android-app-monitor-request.js";
-import { AutomationRunner, DeviceBusyError } from "./automation-runner.js";
+import { AutomationRunner } from "./automation-runner.js";
+import { DeviceExecutionBusyError, DeviceExecutionLease } from "./device-execution-lease.js";
 import { artifactFilePath, artifactRoot, artifactSendFileOptions, artifactUrl } from "./artifacts.js";
 import { pageAssetLibraryTargetMismatchMessage } from "./page-asset-library-target.js";
+import { registerPageAssetLibraryRoutes } from "./page-asset-library-api.js";
 import { buildConfirmedPageAssetInput, identifyOrCreateCurrentPageDraft, readCurrentPageCollectionOptions } from "./current-page-asset.js";
 import { buildPageAssetLibrarySummary } from "./page-assets-summary.js";
 import { createVisualLocatorTemplate } from "./page-matcher.js";
@@ -36,17 +37,17 @@ import {
 } from "./page-element-assets.js";
 import { validatePageElementAssetQuality, type PageElementQualityResult } from "./page-element-quality.js";
 import { ScrcpyStreamBridge } from "./scrcpy-stream.js";
+import { resolveServerHost } from "./server-network.js";
 import { Storage } from "./storage.js";
 import {
   previewAiModelSettingsUpdate,
   publicAiModelSettings,
+  readAiModelSettingsUpdate,
   resolveAiModelConfig,
-  type AiModelSettingsUpdateInput
 } from "./ai-model-settings.js";
 import { AiPageDraftError, generateAiPageDraft } from "./ai-page-draft.js";
 import {
   StabilityExplorer,
-  StabilityExplorerDeviceBusyError,
   type StabilityExplorerAllowedAction,
   type StabilityExplorerAppExitPolicy,
   type StabilityExplorerBacktrackStrategy,
@@ -88,15 +89,17 @@ const ocr = createDefaultOcrService();
 const observationService = new ObservationService(driver, ocr);
 const pageAssetCatalog = new StoragePageAssetCatalog(storage);
 const pageStateService = new DefaultPageStateService(pageAssetCatalog, observationService, readPageAssetBaselineArtifact);
+const deviceExecutionLease = new DeviceExecutionLease();
 const runner = new AutomationRunner(storage, driver, ocr, {
-  verifyPageState: pageStateExpectationVerifier(pageStateService)
+  verifyPageState: pageStateExpectationVerifier(pageStateService),
+  executionLease: deviceExecutionLease
 });
 const scriptFlowRunner = new ScriptFlowRunner({
   backend: runner,
   driver,
   targetResolver: new ScriptTargetResolver(pageAssetCatalog)
 });
-const stabilityExplorer = new StabilityExplorer(storage, driver, ocr);
+const stabilityExplorer = new StabilityExplorer(storage, driver, ocr, deviceExecutionLease);
 const scrcpyStreamBridge = new ScrcpyStreamBridge();
 const artifactCleanupScheduler = new ArtifactCleanupScheduler(storage);
 
@@ -106,7 +109,6 @@ await runner.markStaleRunningRunsStopped("Server started with no active worker f
 });
 artifactCleanupScheduler.start();
 
-app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 app.use("/artifacts", express.static(artifactRoot, { fallthrough: false }));
 
@@ -119,6 +121,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 registerScriptFlowRoutes(app, { storage, runner: scriptFlowRunner });
+registerPageAssetLibraryRoutes(app, { storage });
 registerScriptFlowAiRoutes(app, {
   generateDraft: ({ prompt, appId, platform }) => generateScriptFlowDraft({
     config: resolveAiModelConfig(process.env, storage.getAiModelSettings()),
@@ -136,12 +139,11 @@ app.get("/api/settings/ai-model", (_req, res) => {
 
 app.put("/api/settings/ai-model", (req, res) => {
   try {
-    const body = req.body as Record<string, unknown>;
-    const update = aiModelSettingsUpdateFromBody(body);
+    const update = readAiModelSettingsUpdate(req.body);
     const candidate = previewAiModelSettingsUpdate(storage.getAiModelSettings(), update);
     const resolved = resolveAiModelConfig(process.env, candidate);
     if (candidate.enabled && !resolved.enabled) {
-      res.status(400).json({ error: "AI 模型配置不完整，请填写接口地址和模型名；HTTP 接口还需要 API Key" });
+      res.status(400).json({ error: "AI 模型配置不完整，请填写 Codex 模型名" });
       return;
     }
     const saved = storage.updateAiModelSettings(update);
@@ -396,21 +398,6 @@ app.get("/api/devices/:serial/observation", async (req, res) => {
       lang: typeof req.query.lang === "string" ? req.query.lang : undefined
     });
     res.json({ observation });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-app.get("/api/page-assets", (req, res) => {
-  try {
-    const graphId = typeof req.query.graphId === "string" ? req.query.graphId.trim() : "";
-    const libraries = storage.listBusinessGraphs().filter((graph) => !graphId || graph.id === graphId);
-    res.json({
-      libraries: libraries.map((graph) => ({
-        ...graph,
-        activeVersion: graph.activeVersionId ? storage.getBusinessGraphVersionSummary(graph.activeVersionId) : undefined
-      }))
-    });
   } catch (error) {
     sendError(res, error);
   }
@@ -817,10 +804,6 @@ app.post("/api/stability-explorations", (req, res) => {
       res.status(400).json({ error: "packageName is required" });
       return;
     }
-    const activeLegacyRun = runner.getActiveRunForDevice(body.deviceSerial);
-    if (activeLegacyRun) {
-      throw new DeviceBusyError(body.deviceSerial, activeLegacyRun.runId);
-    }
     const run = stabilityExplorer.start(body);
     res.status(202).json({ run, active: stabilityExplorer.isRunning(run.id) });
   } catch (error) {
@@ -979,8 +962,9 @@ process.once("SIGTERM", () => {
   void shutdown().finally(() => process.exit(0));
 });
 
-server.listen(port, () => {
-  console.log(`Mobile Automation server listening on http://localhost:${port}`);
+const host = resolveServerHost(process.env);
+server.listen(port, host, () => {
+  console.log(`Mobile Automation server listening on http://${host}:${port}`);
 });
 
 async function shutdown(): Promise<void> {
@@ -1008,19 +992,12 @@ function sendPageAssetLibraryTargetMismatch(res: express.Response, graphVersion:
 }
 
 function sendKnownError(res: express.Response, error: unknown): boolean {
-  if (error instanceof DeviceBusyError) {
+  if (error instanceof DeviceExecutionBusyError) {
     res.status(409).json({
-      error: "设备正在执行用例，请等待当前执行结束或先停止当前执行。",
+      error: "设备正在执行其他任务，请等待当前执行结束或先停止当前执行。",
       activeRunId: error.activeRunId,
-      deviceSerial: error.deviceSerial
-    });
-    return true;
-  }
-  if (error instanceof StabilityExplorerDeviceBusyError) {
-    res.status(409).json({
-      error: "设备正在执行稳定性探索，请等待当前执行结束或先停止当前执行。",
-      activeRunId: error.activeRunId,
-      deviceSerial: error.deviceSerial
+      deviceSerial: error.deviceSerial,
+      activeKind: error.activeKind
     });
     return true;
   }
@@ -1826,26 +1803,6 @@ function recordValue(value: unknown): Record<string, unknown> {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function stringBodyValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function positiveNumberBodyValue(value: unknown): number | undefined {
-  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : undefined;
-}
-
-function aiModelSettingsUpdateFromBody(body: Record<string, unknown>): AiModelSettingsUpdateInput {
-  return {
-    enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
-    baseURL: stringBodyValue(body.baseURL),
-    apiKey: stringBodyValue(body.apiKey),
-    model: stringBodyValue(body.model),
-    timeoutMs: positiveNumberBodyValue(body.timeoutMs),
-    clearApiKey: body.clearApiKey === true
-  };
 }
 
 function firstString(values: unknown[]): string | undefined {

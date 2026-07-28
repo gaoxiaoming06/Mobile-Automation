@@ -25,11 +25,10 @@ export type ScriptParameterValue = string | number | boolean;
 
 export type ScriptTarget = {
   ocrText?: string;
-  semantic?: string;
   pageElement?: string;
-  visualTemplate?: string;
-  within?: string;
 };
+
+export type ScriptStepRisk = "none" | "interaction" | "submit" | "publish" | "delete" | "payment";
 
 export type ScriptStepBase = {
   id: string;
@@ -37,6 +36,7 @@ export type ScriptStepBase = {
   onPage?: string;
   expectPage?: string;
   timeoutMs?: number;
+  risk?: Exclude<ScriptStepRisk, "none">;
 };
 
 export type ScriptLaunchAppStep = ScriptStepBase & {
@@ -156,8 +156,6 @@ export type ScriptExecutableAction =
   | "waitForPage"
   | "assertPage";
 
-export type ScriptStepRisk = "none" | "submit" | "publish" | "delete" | "payment";
-
 export type ScriptExecutionPlanStep = {
   id: string;
   order: number;
@@ -174,16 +172,23 @@ export type ScriptExecutionPlanStep = {
   };
 };
 
+export type ScriptRiskConfirmation = {
+  stepId: string;
+  risk: Exclude<ScriptStepRisk, "none">;
+  stepName?: string;
+};
+
 export type ScriptExecutionPlan = {
   flowName: string;
   app: ScriptFlowDocument["app"];
   start?: ScriptFlowDocument["start"];
   parameters: Record<string, ScriptParameterValue>;
   steps: ScriptExecutionPlanStep[];
-  requiredRiskConfirmations: ScriptStepRisk[];
+  riskConfirmations: ScriptRiskConfirmation[];
 };
 
 export type CompileScriptFlowOptions = {
   parameters?: Record<string, ScriptParameterValue>;
   resolveFlow?: (id: string) => ScriptFlowDocument | undefined;
+  redactSensitiveParameters?: boolean;
 };

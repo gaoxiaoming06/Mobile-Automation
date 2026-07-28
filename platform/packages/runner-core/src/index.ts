@@ -10,7 +10,6 @@ export function normalizeRunConfig(config: Partial<RunConfig> & { deviceSerial: 
   const repeatCount = Math.max(1, Math.floor(config.repeatCount ?? 1));
   const mode = config.mode ?? (repeatCount > 1 ? "repeat_n" : "once");
   return {
-    caseId: config.caseId,
     deviceSerial: config.deviceSerial,
     mode,
     repeatCount,

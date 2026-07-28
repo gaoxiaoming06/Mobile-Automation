@@ -1,12 +1,14 @@
 import type { ActionStep } from "@mobile-automation/shared";
 import type { ScriptTarget } from "@mobile-automation/script-flow";
-import type { PageAssetCatalog, PageElementLocator } from "./page-asset-catalog.js";
+import type { PageAssetCatalog, PageAssetPlatform, PageElementLocator } from "./page-asset-catalog.js";
 
 export type ScriptTargetAction = "tap" | "inputText" | "clearText" | "selectText" | "scrollUntilVisible";
 
 export type ScriptTargetResolutionInput = {
   action: ScriptTargetAction;
   target: ScriptTarget;
+  appId: string;
+  platform: PageAssetPlatform;
   onPage?: string;
   value?: string;
   confirmText?: string;
@@ -37,22 +39,15 @@ export class ScriptTargetResolver {
     if (input.target.ocrText) {
       return this.resolveRuntimeText(input, input.target.ocrText, "ocr_text");
     }
-    if (input.target.visualTemplate) {
-      throw new ScriptTargetResolutionError(
-        `visualTemplate ${input.target.visualTemplate} is not executable without a pageElement locator`
-      );
-    }
-    if (input.target.semantic) {
-      return this.resolveRuntimeText(input, input.target.semantic, "semantic_ocr");
-    }
-    throw new ScriptTargetResolutionError("Target has no executable visual or semantic evidence");
+    throw new ScriptTargetResolutionError("Target has no executable OCR or page-element evidence");
   }
 
   private resolvePageElement(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
     if (!input.onPage) {
       throw new ScriptTargetResolutionError(`pageElement ${input.target.pageElement} requires onPage`);
     }
-    const locator = this.catalog.listLocators(input.onPage).find((candidate) => candidate.id === input.target.pageElement);
+    const page = this.catalog.resolvePage(input.onPage, input.appId, input.platform);
+    const locator = page && this.catalog.listLocators(page.id).find((candidate) => candidate.id === input.target.pageElement);
     if (!locator) {
       throw new ScriptTargetResolutionError(`Page element not found: ${input.onPage}/${input.target.pageElement}`);
     }
@@ -102,7 +97,7 @@ export class ScriptTargetResolver {
     };
   }
 
-  private resolveRuntimeText(input: ScriptTargetResolutionInput, text: string, strategy: "ocr_text" | "semantic_ocr"): ResolvedScriptTarget {
+  private resolveRuntimeText(input: ScriptTargetResolutionInput, text: string, strategy: "ocr_text"): ResolvedScriptTarget {
     if (input.action === "tap") {
       return { type: "tap_on_text", strategy, params: { text, mode: "contains" } };
     }

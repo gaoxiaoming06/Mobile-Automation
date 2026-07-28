@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ScriptFlow } from "@mobile-automation/shared";
-import { ScriptFlowsPanel } from "./ScriptFlowsPanel.js";
+import { ScriptFlowsPanel, buildScriptRunRequest, isScriptFlowDirty } from "./ScriptFlowsPanel.js";
 
 describe("ScriptFlowsPanel", () => {
   it("renders a script library, YAML editor, validation preview, and typed run controls", () => {
@@ -24,6 +24,31 @@ describe("ScriptFlowsPanel", () => {
     expect(markup).not.toContain("PageTask");
     expect(markup).not.toContain("连接边");
     expect(markup).not.toContain("key=value");
+  });
+
+  it("treats source and status changes as unsaved execution state", () => {
+    const saved = flow();
+
+    expect(isScriptFlowDirty(saved, saved.sourceYaml, saved.status)).toBe(false);
+    expect(isScriptFlowDirty(saved, `${saved.sourceYaml}\n# changed`, saved.status)).toBe(true);
+    expect(isScriptFlowDirty(saved, saved.sourceYaml, "archived")).toBe(true);
+    expect(isScriptFlowDirty(undefined, saved.sourceYaml, saved.status)).toBe(true);
+  });
+
+  it("binds execution to the exact preview digest", () => {
+    expect(buildScriptRunRequest({
+      expectedVersion: 3,
+      planDigest: "a".repeat(64),
+      deviceSerial: "device-1",
+      parameters: { className: "班级四十二号" },
+      confirmedRiskSteps: ["open-class"]
+    })).toEqual({
+      expectedVersion: 3,
+      planDigest: "a".repeat(64),
+      deviceSerial: "device-1",
+      parameters: { className: "班级四十二号" },
+      confirmedRiskSteps: ["open-class"]
+    });
   });
 });
 

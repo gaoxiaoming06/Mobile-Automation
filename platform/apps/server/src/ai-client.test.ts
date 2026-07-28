@@ -3,6 +3,11 @@ import { isCodexAppServerProvider, runAiJsonRequest } from "./ai-client.js";
 
 const config = { baseURL: "https://llm.example.com/v1", apiKey: "sk-test", model: "test-model", timeoutMs: 5000 };
 
+it("recognizes only the exact local Codex provider address", () => {
+  expect(isCodexAppServerProvider("codex://app-server")).toBe(true);
+  expect(isCodexAppServerProvider("codex://app-server.evil.example")).toBe(false);
+});
+
 function okResponse(content: string): Response {
   return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
 }

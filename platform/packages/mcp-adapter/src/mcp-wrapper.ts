@@ -9,6 +9,7 @@ export type MobileAutomationMcpToolName =
   | "list_script_flows"
   | "get_script_flow"
   | "generate_script_flow"
+  | "preview_script_flow"
   | "run_script_flow"
   | "get_run"
   | "get_report";
@@ -51,14 +52,25 @@ export const mobileAutomationMcpTools: MobileAutomationMcpToolDefinition[] = [
     inputSchema: objectSchema({ prompt: stringSchema(), appId: stringSchema(), platform: platformSchema }, ["prompt", "appId", "platform"])
   },
   {
+    name: "preview_script_flow",
+    description: "Compile a saved ScriptFlow into an immutable preview and return its plan digest and required confirmations.",
+    inputSchema: objectSchema({
+      flowId: stringSchema(),
+      expectedVersion: integerSchema(),
+      parameters: objectSchema({}, [], true)
+    }, ["flowId", "expectedVersion"])
+  },
+  {
     name: "run_script_flow",
     description: "Run a saved ScriptFlow on a device with typed parameters and explicit risk confirmations.",
     inputSchema: objectSchema({
       flowId: stringSchema(),
+      expectedVersion: integerSchema(),
+      planDigest: stringSchema(),
       deviceSerial: stringSchema(),
       parameters: objectSchema({}, [], true),
-      confirmedRisks: arraySchema(enumSchema(["submit", "publish", "delete", "payment"]))
-    }, ["flowId", "deviceSerial"])
+      confirmedRiskSteps: arraySchema(stringSchema())
+    }, ["flowId", "expectedVersion", "planDigest", "deviceSerial"])
   },
   { name: "get_run", description: "Get ScriptFlow run status and failure evidence.", inputSchema: objectSchema({ runId: stringSchema() }, ["runId"]) },
   { name: "get_report", description: "Get the HTML report URL for a ScriptFlow run.", inputSchema: objectSchema({ runId: stringSchema() }, ["runId"]) }
@@ -81,11 +93,18 @@ export function createMobileAutomationMcpToolHandlers(config: McpAdapterConfig =
       appId: requiredString(input.appId, "appId"),
       platform: requiredString(input.platform, "platform")
     }),
+    preview_script_flow: (input) => adapter.previewScriptFlow({
+      flowId: requiredString(input.flowId, "flowId"),
+      expectedVersion: positiveInteger(input.expectedVersion, "expectedVersion"),
+      parameters: scalarRecord(input.parameters)
+    }),
     run_script_flow: (input) => adapter.runScriptFlow({
       flowId: requiredString(input.flowId, "flowId"),
+      expectedVersion: positiveInteger(input.expectedVersion, "expectedVersion"),
+      planDigest: requiredString(input.planDigest, "planDigest"),
       deviceSerial: requiredString(input.deviceSerial, "deviceSerial"),
       parameters: scalarRecord(input.parameters),
-      confirmedRisks: stringArray(input.confirmedRisks)
+      confirmedRiskSteps: stringArray(input.confirmedRiskSteps)
     }),
     get_run: (input) => adapter.getRun({ runId: requiredString(input.runId, "runId") }),
     get_report: (input) => adapter.getReport({ runId: requiredString(input.runId, "runId") })
@@ -111,6 +130,10 @@ function arraySchema(items: JsonSchema): JsonSchema {
   return { type: "array", items };
 }
 
+function integerSchema(): JsonSchema {
+  return { type: "integer", minimum: 1 };
+}
+
 function enumSchema(values: string[]): JsonSchema {
   return { type: "string", enum: values };
 }
@@ -122,6 +145,11 @@ function requiredString(value: unknown, field: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function positiveInteger(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) throw new Error(`${field} must be a positive integer`);
+  return value;
 }
 
 function scriptFlowStatus(value: unknown): "draft" | "active" | "archived" | undefined {
@@ -138,6 +166,6 @@ function scalarRecord(value: unknown): Record<string, string | number | boolean>
 
 function stringArray(value: unknown): string[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("confirmedRisks must be a string array");
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("confirmedRiskSteps must be a string array");
   return value as string[];
 }

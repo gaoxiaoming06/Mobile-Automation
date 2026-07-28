@@ -1,4 +1,4 @@
-import { DatabaseZap, Save, Sparkles } from "lucide-react";
+import { DatabaseZap, RefreshCw, Save, Sparkles } from "lucide-react";
 import { useRef, useState } from "react";
 import type { FormEvent, PointerEvent, ReactNode } from "react";
 import { AI_LOCATOR_KIND_LABELS, aiElementSuggestionToDraft, type AiElementSuggestion } from "../ai-page-draft-merge";
@@ -192,6 +192,12 @@ export type AssetRecordingPanelProps = {
   onSavePageElement?: (draft: AssetRecordingPageElementDraft) => boolean | void | Promise<boolean | void>;
   pageElementSaveError?: string;
   onDeletePageElement?: (element: AssetRecordingPageElement) => void | Promise<void>;
+  libraryInitialization?: {
+    platform: "android" | "ios";
+    targetIdentifier: string;
+    defaultName: string;
+  };
+  onInitializePageAssetLibrary?: (name: string) => void | Promise<void>;
   onResizePointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
 };
 
@@ -257,6 +263,8 @@ export function AssetRecordingPanel({
   onSavePageElement,
   pageElementSaveError,
   onDeletePageElement,
+  libraryInitialization,
+  onInitializePageAssetLibrary,
   onResizePointerDown
 }: AssetRecordingPanelProps) {
   const page = currentPage ?? { status: "idle" as const };
@@ -721,6 +729,49 @@ export function AssetRecordingPanel({
     );
   }
 
+  if (libraryInitialization) {
+    return (
+      <section className="asset-recording-module module-page">
+        <div className="asset-preview-column">
+          {previewSlot ?? <div className="asset-preview-placeholder">选择设备后显示实时预览</div>}
+          {identifying ? <div className="asset-preview-blocker">识别中</div> : null}
+        </div>
+        <div className="recording-resizer asset-recording-resizer" onPointerDown={onResizePointerDown} role="separator" aria-orientation="vertical" aria-label="调整预览和页面信息区域宽度" title="拖动调整左右区域宽度" />
+        <div className="asset-editor-column">
+          <form
+            className="panel asset-page-card asset-page-card-shell asset-library-initialization"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const name = String(new FormData(event.currentTarget).get("libraryName") ?? "").trim();
+              if (name) {
+                void onInitializePageAssetLibrary?.(name);
+              }
+            }}
+          >
+            <div className="asset-page-title">
+              <div className="asset-page-name-display">
+                <DatabaseZap size={18} />
+                <strong>初始化页面资产库</strong>
+              </div>
+            </div>
+            <div className="asset-facts compact">
+              <div><span>平台</span><strong>{libraryInitialization.platform === "android" ? "Android" : "iOS"}</strong></div>
+              <div><span>App 标识</span><strong>{libraryInitialization.targetIdentifier}</strong></div>
+            </div>
+            <label className="asset-initialization-name">
+              资产库名称
+              <input name="libraryName" defaultValue={libraryInitialization.defaultName} required />
+            </label>
+            <button className="icon-button primary" type="submit" disabled={busy || !onInitializePageAssetLibrary}>
+              <DatabaseZap size={16} />
+              创建并识别当前页
+            </button>
+          </form>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="asset-recording-module module-page">
       <div className="asset-preview-column">
@@ -756,6 +807,16 @@ export function AssetRecordingPanel({
                   </div>
                 )}
                 <div className="asset-title-status">
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label="重新识别当前页"
+                    title="重新识别当前页"
+                    disabled={busy || identifying}
+                    onClick={() => void onIdentifyCurrentPage()}
+                  >
+                    <RefreshCw size={15} />
+                  </button>
                   <span className={`asset-status ${page.status}`}>{statusLabel(page.status)}</span>
                   <b title={scoreTitle}>{scoreLabel}</b>
                 </div>

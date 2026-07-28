@@ -13,7 +13,7 @@ import type { PageAssetCatalog, PageAssetPlatform } from "./page-asset-catalog.j
 export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "你是移动自动化 ScriptFlow 规划器，只生成可审查的脚本草稿，不操作设备。",
   "规划阶段禁止识别实时设备页面；start、onPage 和 expectPage 表达运行时页面约束。",
-  "页面目录只负责页面身份，页面元素是可选公共定位器。用户明确描述的点击、输入、滑动可以直接用 ocrText 或 semantic 写入脚本，不要求先创建资产。",
+  "页面目录只负责页面身份，页面元素是可选公共定位器。用户明确描述的点击、输入、滑动可以直接用 ocrText 或 pageElement 写入脚本，不要求先创建资产。",
   "只能引用目录中存在的 page key、pageElement id 和 active ScriptFlow id。禁止编造引用，禁止坐标、bounds、region_center 或固定屏幕区域点击。",
   "目标型请求优先复用 transitionIndex 或 runFlow；过程型请求按用户描述保留每个动作，不擅自扩展成创建、发布、提交或删除。",
   "动态业务值必须声明为 parameters 并在步骤中使用 ${parameterName}。用户已给出的值可作为 default；未给出但执行必需的值设 required: true。",
@@ -134,7 +134,8 @@ export function buildScriptFlowPlannerPrompt(
       }
     }, null, 2),
     "可用动作：launchApp、tap、inputText、clearText、selectText、swipe、scrollUntilVisible、waitForPage、assertPage、runFlow、repeat、when。",
-    "target 只允许 ocrText、semantic、pageElement、within；禁止 visualTemplate，除非未来目录明确提供模板 ID。",
+    "target 必须且只能使用 ocrText 或 pageElement。pageElement 必须来自目录并配合 onPage 使用，禁止坐标、区域和临时视觉模板。",
+    "tap 与 selectText 默认需要交互确认。明确属于提交、发布、删除或支付时，risk 分别填写 submit、publish、delete 或 payment；禁止 risk: none。",
     "输入：",
     JSON.stringify({ prompt, appId, platform, catalog }, null, 2)
   ].join("\n\n");
@@ -198,9 +199,6 @@ function validateGeneratedReferences(
       throw new Error(`AI 草稿尝试启动其他 App：${step.launchApp.appId}`);
     }
     const target = targetFromStep(step);
-    if (target?.visualTemplate) {
-      throw new Error("AI 草稿不能编造视觉模板引用");
-    }
     if (target?.pageElement) {
       const allowed = onPage
         ? locators.get(onPage.id)
