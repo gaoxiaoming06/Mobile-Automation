@@ -1,647 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyRuntimeOverlayToExecutionPlan,
-  buildExecutionPlan,
   detectNode,
-  planRoute,
-  resolveTargetNode,
-  type ActionPolicy,
   type BusinessGraphVersion,
   type BusinessNode,
   type Observation,
-  type OperationEdge,
   type StateMatcher
 } from "./index.js";
-
-describe("graph-core target resolver", () => {
-  it("resolves a business target by node key and text matcher without using AI", () => {
-    const graphVersion = graph({
-      nodes: [
-        node("root", "root", matcher("activity", "LauncherActivity")),
-        {
-          ...node("homework_create", "page", matcher("text", "新建作业")),
-          key: "homework.create",
-          name: "新建作业页"
-        }
-      ],
-      edges: []
-    });
-
-    expect(
-      resolveTargetNode(graphVersion, {
-        key: "homework.create",
-        platform: "android"
-      })
-    ).toEqual(expect.objectContaining({ status: "resolved", targetNode: expect.objectContaining({ id: "homework_create" }) }));
-
-    expect(
-      resolveTargetNode(graphVersion, {
-        text: "新建作业",
-        platform: "android"
-      })
-    ).toEqual(expect.objectContaining({ status: "resolved", targetNode: expect.objectContaining({ id: "homework_create" }) }));
-  });
-
-  it("returns ambiguity instead of guessing when multiple nodes match a weak target", () => {
-    const graphVersion = graph({
-      nodes: [node("dialog-a", "business_state", matcher("text", "允许")), node("dialog-b", "business_state", matcher("text", "允许"))],
-      edges: []
-    });
-
-    const result = resolveTargetNode(graphVersion, {
-      text: "允许",
-      platform: "android"
-    });
-
-    expect(result.status).toBe("ambiguous");
-    expect(result.candidates.map((candidate) => candidate.node.id)).toEqual(["dialog-a", "dialog-b"]);
-  });
-});
-
-describe("graph-core route planner", () => {
-  it("plans an active route from root to target with a stable snapshot", () => {
-    const graphVersion = graph({
-      nodes: [
-        node("root", "root", matcher("activity", "LauncherActivity")),
-        node("home", "page", matcher("resource_id", "com.demo:id/home")),
-        node("homework_create", "page", matcher("text", "新建作业"))
-      ],
-      edges: [
-        edge("edge-root-home", "root", "home", action("tap-home"), 0.9),
-        edge("edge-home-homework", "home", "homework_create", action("tap-homework"), 0.8)
-      ]
-    });
-
-    const plan = planRoute({
-      graphVersion,
-      appId: "classin-android",
-      targetApp: targetApp(),
-      targetNodeId: "homework_create",
-      platform: "android",
-      now: "2026-06-11T00:00:00.000Z",
-      idFactory: (prefix) => `${prefix}-fixed`
-    });
-
-    expect(plan.id).toBe("route-fixed");
-    expect(plan.unresolvedIssues).toEqual([]);
-    expect(plan.nodes.map((item) => item.id)).toEqual(["root", "home", "homework_create"]);
-    expect(plan.edges.map((item) => item.edge.id)).toEqual(["edge-root-home", "edge-home-homework"]);
-    expect(plan.snapshot).toEqual({
-      graphVersionId: "graph-version-1",
-      nodeIds: ["root", "home", "homework_create"],
-      edgeIds: ["edge-root-home", "edge-home-homework"],
-      createdAt: "2026-06-11T00:00:00.000Z"
-    });
-  });
-
-  it("requires a concrete target app binding before planning a formal graph route", () => {
-    const graphVersion = graph({
-      nodes: [node("root", "root", matcher("activity", "LauncherActivity")), node("home", "page", matcher("text", "首页"))],
-      edges: [edge("edge-root-home", "root", "home", action("tap-home"))]
-    });
-
-    const plan = planRoute({
-      graphVersion,
-      appId: "classin-android",
-      targetNodeId: "home",
-      platform: "android"
-    });
-
-    expect(plan.edges).toEqual([]);
-    expect(plan.unresolvedIssues).toEqual([
-      expect.objectContaining({
-        code: "GRAPH_APP_BINDING_MISSING",
-        severity: "error"
-      })
-    ]);
-  });
-
-  it("returns a blocking issue when the target node is unreachable", () => {
-    const graphVersion = graph({
-      nodes: [node("root", "root", matcher("activity", "LauncherActivity")), node("settings", "page", matcher("text", "设置"))],
-      edges: []
-    });
-
-    const plan = planRoute({
-      graphVersion,
-      appId: "classin-android",
-      targetApp: targetApp(),
-      targetNodeId: "settings",
-      platform: "android"
-    });
-
-    expect(plan.edges).toEqual([]);
-    expect(plan.unresolvedIssues).toEqual([
-      expect.objectContaining({
-        code: "TARGET_NODE_UNREACHABLE",
-        severity: "error",
-        nodeId: "settings"
-      })
-    ]);
-  });
-
-  it("filters unsupported platforms before planning", () => {
-    const graphVersion = graph({
-      nodes: [
-        node("root", "root", matcher("activity", "LauncherActivity")),
-        {
-          ...node("ios-only", "page", matcher("text", "iOS")),
-          platformScope: "ios"
-        }
-      ],
-      edges: [edge("edge-root-ios", "root", "ios-only", action("tap-ios"))]
-    });
-
-    const plan = planRoute({
-      graphVersion,
-      appId: "classin-android",
-      targetApp: targetApp(),
-      targetNodeId: "ios-only",
-      platform: "android"
-    });
-
-    expect(plan.unresolvedIssues).toEqual([
-      expect.objectContaining({
-        code: "TARGET_NODE_NOT_FOUND",
-        severity: "error",
-        nodeId: "ios-only"
-      })
-    ]);
-  });
-
-  it("keeps validation issues visible for missing matcher and action policy", () => {
-    const graphVersion = graph({
-      nodes: [node("root", "root", matcher("activity", "LauncherActivity")), node("empty", "page")],
-      edges: [edge("edge-root-empty", "root", "empty")]
-    });
-
-    const plan = planRoute({
-      graphVersion,
-      appId: "classin-android",
-      targetApp: targetApp(),
-      targetNodeId: "empty",
-      platform: "android"
-    });
-
-    expect(plan.nodes.map((item) => item.id)).toEqual(["root", "empty"]);
-    expect(plan.unresolvedIssues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "MISSING_MATCHER",
-          severity: "warning",
-          nodeId: "empty"
-        }),
-        expect.objectContaining({
-          code: "MISSING_ACTION_POLICY",
-          severity: "error",
-          edgeId: "edge-root-empty"
-        })
-      ])
-    );
-  });
-
-  it("rejects coordinate-only actions in formal business graph routes", () => {
-    const graphVersion = graph({
-      nodes: [node("root", "root", matcher("activity", "LauncherActivity")), node("home", "page", matcher("text", "首页"))],
-      edges: [edge("edge-root-home", "root", "home", coordinateAction("coordinate-tap"))]
-    });
-
-    const plan = planRoute({
-      graphVersion,
-      appId: "classin-android",
-      targetApp: targetApp(),
-      targetNodeId: "home",
-      platform: "android"
-    });
-
-    expect(plan.unresolvedIssues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "UNSTABLE_COORDINATE_ACTION",
-          severity: "error",
-          edgeId: "edge-root-home"
-        })
-      ])
-    );
-  });
-});
-
-describe("graph-core execution planner", () => {
-  it("expands a route plan into executable steps with action policy, expectations, and guards", () => {
-    const graphVersion = graph({
-      nodes: [
-        node("root", "root", matcher("activity", "LauncherActivity")),
-        {
-          ...node("home", "page", matcher("resource_id", "com.demo:id/home")),
-          defaultExpectations: [expectation("expect-home-title", "text", { expected: "首页" })]
-        },
-        {
-          ...node("homework_create", "page", matcher("text", "新建作业")),
-          defaultExpectations: [expectation("expect-homework-editor", "text", { expected: "作业编辑器" })]
-        }
-      ],
-      edges: [
-        edge("edge-root-home", "root", "home", action("tap-home"), 0.9),
-        {
-          ...edge("edge-home-homework", "home", "homework_create", action("tap-homework"), 0.8),
-          preconditions: [expectation("pre-home-ready", "text", { expected: "首页" })],
-          expectations: [expectation("expect-homework", "text", { expected: "新建作业" })],
-          actionPolicies: [action("tap-homework"), { ...action("tap-homework-coordinate"), priority: 2, fallback: true, reliabilityHint: "low" }]
-        }
-      ]
-    });
-    const routePlan = planRoute({
-      graphVersion,
-      appId: "demo-android",
-      targetApp: targetApp("com.demo"),
-      targetNodeId: "homework_create",
-      platform: "android",
-      now: "2026-06-11T00:00:00.000Z",
-      idFactory: (prefix) => `${prefix}-route`
-    });
-
-    const executionPlan = buildExecutionPlan({
-      routePlan,
-      platform: "android",
-      now: "2026-06-11T00:00:01.000Z",
-      idFactory: (prefix) => `${prefix}-exec`
-    });
-
-    expect(executionPlan.id).toBe("execution_plan-exec");
-    expect(executionPlan.routePlanId).toBe("route-route");
-    expect(executionPlan.unresolvedIssues).toEqual([]);
-    expect(executionPlan.steps).toHaveLength(2);
-    expect(executionPlan.steps[0]).toEqual(
-      expect.objectContaining({
-        edgeId: "edge-root-home",
-        executionMode: "action",
-        action: expect.objectContaining({ id: "tap-home", type: "tap_on_element" })
-      })
-    );
-    expect(executionPlan.steps[1]).toEqual(
-      expect.objectContaining({
-        edgeId: "edge-home-homework",
-        preconditions: expect.arrayContaining([expect.objectContaining({ id: "expect-home-title" }), expect.objectContaining({ id: "pre-home-ready" })]),
-        selectedActionPolicy: expect.objectContaining({ id: "tap-homework", fallback: false }),
-        fallbackActionPolicies: [expect.objectContaining({ id: "tap-homework-coordinate", fallback: true })],
-        expectations: [expect.objectContaining({ id: "expect-homework" }), expect.objectContaining({ id: "expect-homework-editor" })],
-        systemGuards: [
-          expect.objectContaining({ type: "no_crash", enabled: true }),
-          expect.objectContaining({ type: "app_alive", enabled: true })
-        ]
-      })
-    );
-    expect(executionPlan.snapshot).toEqual({
-      routePlanId: "route-route",
-      graphVersionId: "graph-version-1",
-      nodeIds: ["root", "home", "homework_create"],
-      edgeIds: ["edge-root-home", "edge-home-homework"],
-      actionIds: ["tap-home", "tap-homework"],
-      createdAt: "2026-06-11T00:00:01.000Z"
-    });
-  });
-
-  it("applies runtime overlay expectations to the matching edge and target node without mutating graph assets", () => {
-    const graphVersion = graph({
-      nodes: [
-        node("root", "root", matcher("activity", "LauncherActivity")),
-        {
-          ...node("home", "page", matcher("resource_id", "com.demo:id/home")),
-          defaultExpectations: [expectation("expect-home-title", "text", { expected: "首页" })]
-        },
-        {
-          ...node("homework_create", "page", matcher("text", "新建作业")),
-          defaultExpectations: [expectation("expect-homework-editor", "text", { expected: "作业编辑器" })]
-        }
-      ],
-      edges: [
-        edge("edge-root-home", "root", "home", action("tap-home"), 0.9),
-        {
-          ...edge("edge-home-homework", "home", "homework_create", action("tap-homework"), 0.8),
-          expectations: [expectation("expect-homework", "text", { expected: "新建作业" })]
-        }
-      ]
-    });
-    const routePlan = planRoute({
-      graphVersion,
-      appId: "classin-android",
-      targetApp: targetApp(),
-      targetNodeId: "homework_create",
-      platform: "android"
-    });
-    const executionPlan = buildExecutionPlan({
-      routePlan,
-      platform: "android"
-    });
-
-    const overlaid = applyRuntimeOverlayToExecutionPlan(executionPlan, {
-      id: "overlay-1",
-      nodeExpectationOverrides: [
-        {
-          nodeId: "homework_create",
-          expectations: [expectation("overlay-target-text", "text", { expected: "新版作业编辑器" })]
-        }
-      ],
-      edgeExpectationOverrides: [
-        {
-          edgeId: "edge-home-homework",
-          expectations: [expectation("overlay-edge-text", "text", { expected: "发布按钮" })]
-        }
-      ],
-      note: "AI changed target page copy"
-    });
-
-    expect(executionPlan.steps[1]?.expectations.map((item) => item.id)).not.toContain("overlay-target-text");
-    expect(overlaid.steps[1]?.expectations.map((item) => item.id)).toEqual(
-      expect.arrayContaining(["expect-homework", "expect-homework-editor", "overlay-target-text", "overlay-edge-text"])
-    );
-    expect(overlaid.steps[1]?.runtimeOverlay).toEqual({
-      id: "overlay-1",
-      note: "AI changed target page copy",
-      targetExpectationIds: ["overlay-target-text"],
-      edgeExpectationIds: ["overlay-edge-text"]
-    });
-    expect(graphVersion.nodes.find((item) => item.id === "homework_create")?.defaultExpectations.map((item) => item.id)).toEqual(["expect-homework-editor"]);
-  });
-
-  it("applies runtime params to action templates without mutating graph assets", () => {
-    const graphVersion = graph({
-      nodes: [node("home", "page", matcher("ocr_text", "主页")), node("class_detail", "page", matcher("ocr_text", "班级详情"))],
-      edges: [
-        {
-          ...edge("edge-home-class-detail", "home", "class_detail", undefined, 0.8),
-          actionPolicies: [
-            {
-              ...action("tap-class-grid"),
-              action: {
-                id: "tap-class-grid",
-                order: 1,
-                type: "tap_on_image",
-                enabled: true,
-                params: {
-                  abilityType: "grid_candidate",
-                  region: { x: 3, y: 30, width: 94, height: 60 },
-                  scrollProfile: {
-                    containerKind: "grid_list",
-                    targetKind: "item_text",
-                    targetQuery: "{{className}}"
-                  }
-                },
-                createdAt: "2026-06-11T00:00:00.000Z"
-              }
-            }
-          ]
-        }
-      ]
-    });
-    const routePlan = planRoute({
-      graphVersion,
-      appId: "classin-android",
-      targetApp: targetApp(),
-      startNodeId: "home",
-      targetNodeId: "class_detail",
-      platform: "android"
-    });
-    const executionPlan = buildExecutionPlan({ routePlan, platform: "android" });
-
-    const overlaid = applyRuntimeOverlayToExecutionPlan(executionPlan, {
-      id: "overlay-class-name",
-      runtimeParams: {
-        className: "班级四十一号"
-      }
-    });
-
-    expect(executionPlan.steps[0]?.action?.params.scrollProfile).toEqual(
-      expect.objectContaining({
-        targetQuery: "{{className}}"
-      })
-    );
-    expect(overlaid.steps[0]?.action?.params.scrollProfile).toEqual(
-      expect.objectContaining({
-        targetQuery: "班级四十一号"
-      })
-    );
-    expect(overlaid.steps[0]?.runtimeOverlay).toEqual(
-      expect.objectContaining({
-        id: "overlay-class-name",
-        runtimeParamKeys: ["className"]
-      })
-    );
-  });
-
-  it("uses className runtime param to target legacy grid candidates by text", () => {
-    const graphVersion = graph({
-      nodes: [node("home", "page", matcher("ocr_text", "主页")), node("class_detail", "page", matcher("ocr_text", "班级详情"))],
-      edges: [
-        {
-          ...edge("edge-home-class-detail", "home", "class_detail", undefined, 0.8),
-          actionPolicies: [
-            {
-              ...action("tap-class-grid"),
-              action: {
-                id: "tap-class-grid",
-                order: 1,
-                type: "tap_on_image",
-                enabled: true,
-                params: {
-                  abilityType: "grid_candidate",
-                  region: { x: 3, y: 30, width: 94, height: 60 },
-                  candidateIndex: 0,
-                  scrollProfile: {
-                    containerKind: "grid_list",
-                    targetKind: "nth_item",
-                    columns: 2
-                  }
-                },
-                createdAt: "2026-06-11T00:00:00.000Z"
-              }
-            }
-          ]
-        }
-      ]
-    });
-    const routePlan = planRoute({
-      graphVersion,
-      appId: "classin-android",
-      targetApp: targetApp(),
-      startNodeId: "home",
-      targetNodeId: "class_detail",
-      platform: "android"
-    });
-    const executionPlan = buildExecutionPlan({ routePlan, platform: "android" });
-
-    const overlaid = applyRuntimeOverlayToExecutionPlan(executionPlan, {
-      id: "overlay-class-name",
-      runtimeParams: {
-        className: "班级四十二号"
-      }
-    });
-
-    expect(executionPlan.steps[0]?.action?.params.scrollProfile).toEqual(
-      expect.objectContaining({
-        targetKind: "nth_item"
-      })
-    );
-    expect(overlaid.steps[0]?.action?.params.scrollProfile).toEqual(
-      expect.objectContaining({
-        targetKind: "item_text",
-        targetQuery: "班级四十二号"
-      })
-    );
-  });
-
-  it("builds a noop target validation step when the current node is already the target", () => {
-    const graphVersion = graph({
-      nodes: [
-        node("root", "root", matcher("activity", "LauncherActivity")),
-        {
-          ...node("homework_create", "page", matcher("text", "新建作业")),
-          defaultExpectations: [expectation("expect-homework-editor", "text", { expected: "作业编辑器" })]
-        }
-      ],
-      edges: []
-    });
-    const routePlan = planRoute({
-      graphVersion,
-      appId: "classin-android",
-      targetApp: targetApp(),
-      startNodeId: "homework_create",
-      targetNodeId: "homework_create",
-      platform: "android",
-      now: "2026-06-11T00:00:00.000Z",
-      idFactory: (prefix) => `${prefix}-target`
-    });
-
-    const executionPlan = buildExecutionPlan({
-      routePlan,
-      platform: "android",
-      now: "2026-06-11T00:00:01.000Z",
-      idFactory: (prefix) => `${prefix}-target`
-    });
-    const overlaid = applyRuntimeOverlayToExecutionPlan(executionPlan, {
-      id: "overlay-target",
-      nodeExpectationOverrides: [
-        {
-          nodeId: "homework_create",
-          expectations: [expectation("overlay-homework-copy", "text", { expected: "新版课堂文案" })]
-        }
-      ]
-    });
-
-    expect(routePlan.edges).toEqual([]);
-    expect(overlaid.steps).toHaveLength(1);
-    expect(overlaid.steps[0]).toEqual(
-      expect.objectContaining({
-        edgeId: "__target_validation__",
-        edgeKey: "target.validation",
-        executionMode: "noop",
-        fromNode: expect.objectContaining({ id: "homework_create" }),
-        toNode: expect.objectContaining({ id: "homework_create" }),
-        expectations: expect.arrayContaining([
-          expect.objectContaining({ id: "expect-homework-editor" }),
-          expect.objectContaining({ id: "overlay-homework-copy" })
-        ]),
-        runtimeOverlay: expect.objectContaining({
-          id: "overlay-target",
-          targetExpectationIds: ["overlay-homework-copy"],
-          edgeExpectationIds: []
-        })
-      })
-    );
-    expect(overlaid.steps[0]?.systemGuards.map((item) => item.type)).toEqual(["no_crash", "app_alive"]);
-  });
-
-  it("marks an execution step blocked when the edge has no action policy", () => {
-    const graphVersion = graph({
-      nodes: [node("root", "root", matcher("activity", "LauncherActivity")), node("empty", "page", matcher("text", "空页面"))],
-      edges: [edge("edge-root-empty", "root", "empty")]
-    });
-    const routePlan = planRoute({
-      graphVersion,
-      appId: "demo-android",
-      targetApp: targetApp("com.demo"),
-      targetNodeId: "empty",
-      platform: "android"
-    });
-
-    const executionPlan = buildExecutionPlan({
-      routePlan,
-      platform: "android",
-      idFactory: (prefix) => `${prefix}-blocked`
-    });
-
-    expect(executionPlan.steps[0]).toEqual(
-      expect.objectContaining({
-        edgeId: "edge-root-empty",
-        executionMode: "blocked",
-        action: undefined,
-        issues: [expect.objectContaining({ code: "MISSING_ACTION_POLICY", severity: "error", edgeId: "edge-root-empty" })]
-      })
-    );
-    expect(executionPlan.unresolvedIssues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "MISSING_ACTION_POLICY", edgeId: "edge-root-empty" })]));
-  });
-
-  it("selects a deterministic action over coordinate actions even when the coordinate policy has higher priority", () => {
-    const graphVersion = graph({
-      nodes: [node("root", "root", matcher("activity", "LauncherActivity")), node("home", "page", matcher("text", "首页"))],
-      edges: [
-        {
-          ...edge("edge-root-home", "root", "home"),
-          actionPolicies: [coordinateAction("coordinate-primary", 1, false), action("semantic-home", 2, false)]
-        }
-      ]
-    });
-    const routePlan = planRoute({
-      graphVersion,
-      appId: "demo-android",
-      targetApp: targetApp("com.demo"),
-      targetNodeId: "home",
-      platform: "android"
-    });
-
-    const executionPlan = buildExecutionPlan({
-      routePlan,
-      platform: "android"
-    });
-
-    expect(executionPlan.steps[0]).toEqual(
-      expect.objectContaining({
-        executionMode: "action",
-        selectedActionPolicy: expect.objectContaining({ id: "semantic-home" }),
-        action: expect.objectContaining({ type: "tap_on_element" }),
-        fallbackActionPolicies: expect.arrayContaining([expect.objectContaining({ id: "coordinate-primary" })])
-      })
-    );
-  });
-
-  it("blocks execution when a route edge only has coordinate actions", () => {
-    const graphVersion = graph({
-      nodes: [node("root", "root", matcher("activity", "LauncherActivity")), node("home", "page", matcher("text", "首页"))],
-      edges: [edge("edge-root-home", "root", "home", coordinateAction("coordinate-only"))]
-    });
-    const routePlan = planRoute({
-      graphVersion,
-      appId: "demo-android",
-      targetApp: targetApp("com.demo"),
-      targetNodeId: "home",
-      platform: "android"
-    });
-
-    const executionPlan = buildExecutionPlan({
-      routePlan,
-      platform: "android"
-    });
-
-    expect(executionPlan.steps[0]).toEqual(
-      expect.objectContaining({
-        executionMode: "blocked",
-        action: undefined,
-        issues: [expect.objectContaining({ code: "UNSTABLE_COORDINATE_ACTION", edgeId: "edge-root-home" })]
-      })
-    );
-    expect(executionPlan.unresolvedIssues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "UNSTABLE_COORDINATE_ACTION", edgeId: "edge-root-home" })]));
-  });
-});
 
 describe("graph-core state detector", () => {
   it("matches the current node using activity, resource-id, and UI text", () => {
@@ -656,8 +20,7 @@ describe("graph-core state detector", () => {
           matcher("resource_id", "com.demo:id/join_class", 2),
           matcher("text", "进入课堂", 1)
         )
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(observation(), graphVersion, "android");
@@ -673,8 +36,7 @@ describe("graph-core state detector", () => {
       nodes: [
         node("home", "page", matcher("activity", "HomeActivity", 2), matcher("ocr_text", "全部班级", 1)),
         node("settings", "page", matcher("activity", "SettingsActivity", 2), matcher("ocr_text", "设置", 1))
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -711,8 +73,7 @@ describe("graph-core state detector", () => {
           matcher("ocr_text", "立即注册", 0.5),
           matcher("ocr_text", "登录", 0.5)
         )
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -746,8 +107,7 @@ describe("graph-core state detector", () => {
           { ...matcher("package", "cn.eeo.classin", 1), critical: true },
           matcher("text", "立即注册", 0.5)
         )
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -768,8 +128,7 @@ describe("graph-core state detector", () => {
 
   it("returns unknown when no candidate reaches the minimum score", () => {
     const graphVersion = graph({
-      nodes: [node("home", "page", matcher("activity", "HomeActivity", 2), matcher("resource_id", "com.demo:id/home", 2))],
-      edges: []
+      nodes: [node("home", "page", matcher("activity", "HomeActivity", 2), matcher("resource_id", "com.demo:id/home", 2))]
     });
 
     const result = detectNode(
@@ -789,8 +148,7 @@ describe("graph-core state detector", () => {
 
   it("does not match a business node from app context and a single weak text signal", () => {
     const graphVersion = graph({
-      nodes: [node("home-shell", "page", matcher("package", "com.demo", 2), matcher("text", "首页", 4))],
-      edges: []
+      nodes: [node("home-shell", "page", matcher("package", "com.demo", 2), matcher("text", "首页", 4))]
     });
 
     const result = detectNode(
@@ -816,8 +174,7 @@ describe("graph-core state detector", () => {
 
   it("accepts two weak state signals as a fallback when no strong state anchor exists", () => {
     const graphVersion = graph({
-      nodes: [node("teacher-classes", "page", matcher("package", "com.demo", 2), matcher("text", "我是教师", 2), matcher("ocr_text", "全部班级", 2))],
-      edges: []
+      nodes: [node("teacher-classes", "page", matcher("package", "com.demo", 2), matcher("text", "我是教师", 2), matcher("ocr_text", "全部班级", 2))]
     });
 
     const result = detectNode(
@@ -843,8 +200,7 @@ describe("graph-core state detector", () => {
 
   it("requires configured strong state anchors to match before accepting weak text evidence", () => {
     const graphVersion = graph({
-      nodes: [node("class-detail", "page", matcher("package", "com.demo", 2), matcher("resource_id", "com.demo:id/activity_list", 3), matcher("text", "课节", 4))],
-      edges: []
+      nodes: [node("class-detail", "page", matcher("package", "com.demo", 2), matcher("resource_id", "com.demo:id/activity_list", 3), matcher("text", "课节", 4))]
     });
 
     const result = detectNode(
@@ -878,8 +234,7 @@ describe("graph-core state detector", () => {
           matcher("resource_id", "com.demo:id/activity_list", 3),
           matcher("text", "课节", 3)
         )
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -932,8 +287,7 @@ describe("graph-core state detector", () => {
           matcher("ocr_text", "我是教师", 1.8),
           matcher("ocr_text", "全部班级", 1.8)
         )
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -987,8 +341,7 @@ describe("graph-core state detector", () => {
           matcher("ocr_text", "我是教师", 1.8),
           matcher("ocr_text", "全部班级", 1.8)
         )
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -1062,8 +415,7 @@ describe("graph-core state detector", () => {
             region: { x: 16.35, y: 8.74, width: 13.21, height: 2.91 }
           }
         )
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -1098,8 +450,7 @@ describe("graph-core state detector", () => {
       nodes: [
         node("dialog-a", "business_state", matcher("ocr_text", "允许", 1)),
         node("dialog-b", "business_state", matcher("ocr_text", "允许", 1))
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -1127,8 +478,7 @@ describe("graph-core state detector", () => {
           matcher("text", "我是教师", 3),
           matcher("text", "全部班级", 2)
         )
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -1159,8 +509,7 @@ describe("graph-core state detector", () => {
             }
           ]
         }
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -1200,8 +549,7 @@ describe("graph-core state detector", () => {
             }
           ]
         }
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -1256,8 +604,7 @@ describe("graph-core state detector", () => {
             }
           ]
         }
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -1301,8 +648,7 @@ describe("graph-core state detector", () => {
             }
           ]
         }
-      ],
-      edges: []
+      ]
     });
 
     const result = detectNode(
@@ -1338,8 +684,7 @@ describe("graph-core state detector", () => {
             }
           ]
         }
-      ],
-      edges: []
+      ]
     });
 
     const bottomTextResult = detectNode(
@@ -1385,8 +730,7 @@ describe("graph-core state detector", () => {
             }
           ]
         }
-      ],
-      edges: []
+      ]
     });
 
     const bottomTextResult = detectNode(
@@ -1426,8 +770,7 @@ describe("graph-core state detector", () => {
             }
           ]
         }
-      ],
-      edges: []
+      ]
     });
 
     const bottomTextResult = detectNode(
@@ -1457,7 +800,7 @@ describe("graph-core state detector", () => {
   });
 });
 
-function graph(input: { nodes: BusinessNode[]; edges: OperationEdge[] }): BusinessGraphVersion {
+function graph(input: { nodes: BusinessNode[] }): BusinessGraphVersion {
   return {
     id: "graph-version-1",
     graphId: "graph-1",
@@ -1465,7 +808,6 @@ function graph(input: { nodes: BusinessNode[]; edges: OperationEdge[] }): Busine
     sourceSummary: [],
     status: "active",
     nodes: input.nodes,
-    edges: input.edges,
     createdAt: "2026-06-11T00:00:00.000Z"
   };
 }
@@ -1484,88 +826,12 @@ function node(id: string, nodeType: BusinessNode["nodeType"], ...matchers: State
   };
 }
 
-function edge(id: string, fromNodeId: string, toNodeId: string, actionPolicy?: ActionPolicy, reliabilityScore?: number): OperationEdge {
-  return {
-    id,
-    graphVersionId: "graph-version-1",
-    fromNodeId,
-    toNodeId,
-    key: id,
-    name: id,
-    intent: id,
-    status: "active",
-    source: "manual_edit",
-    preconditions: [],
-    actionPolicies: actionPolicy ? [actionPolicy] : [],
-    expectations: [],
-    reliabilityScore
-  };
-}
-
 function matcher(type: StateMatcher["type"], value: string, weight = 1): StateMatcher {
   return {
     id: `${type}-${value}`,
     type,
     value,
     weight
-  };
-}
-
-function action(id: string, priority = 1, fallback = false): ActionPolicy {
-  return {
-    id,
-    priority,
-    action: {
-      id,
-      order: 1,
-      type: "tap_on_element",
-      enabled: true,
-      params: {
-        locator: {
-          strategy: "android_uiautomator",
-          resourceId: `com.demo:id/${id}`
-        }
-      },
-      createdAt: "2026-06-11T00:00:00.000Z"
-    },
-    fallback,
-    reliabilityHint: "high"
-  };
-}
-
-function coordinateAction(id: string, priority = 1, fallback = false): ActionPolicy {
-  return {
-    id,
-    priority,
-    action: {
-      id,
-      order: 1,
-      type: "tap",
-      enabled: true,
-      params: {
-        x: 120,
-        y: 240
-      },
-      createdAt: "2026-06-11T00:00:00.000Z"
-    },
-    fallback,
-    reliabilityHint: "low"
-  };
-}
-
-function targetApp(androidPackageName = "cn.eeo.classin") {
-  return {
-    androidPackageName
-  };
-}
-
-function expectation(id: string, type: "text" | "no_crash" | "app_alive", params: Record<string, unknown>) {
-  return {
-    id,
-    type,
-    enabled: true,
-    params,
-    createdAt: "2026-06-11T00:00:00.000Z"
   };
 }
 

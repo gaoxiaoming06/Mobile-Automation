@@ -19,7 +19,7 @@ describe("PageMatcher", () => {
     const runtimeDraft = node({
       id: "runtime-node",
       key: "runtime.unknown.home",
-      name: "运行期未知节点：首页",
+      name: "待确认页面：首页",
       status: "active",
       tags: ["runtime-discovered"],
       matchers: [matcher("text", "主页", 9, true, "android")]
@@ -846,7 +846,6 @@ function graph(nodes: BusinessNode[]): BusinessGraphVersion {
     sourceSummary: [],
     status: "active",
     nodes,
-    edges: [],
     createdAt: "2026-06-18T10:00:00.000Z"
   };
 }

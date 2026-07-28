@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AndroidAppMonitorConfig, FlowStartStrategy, TestRun } from "@mobile-automation/shared";
-import type { GraphRunSummary } from "../components/GraphRunDetail";
 
 type UseRunExecutionOptions = {
   selectedSerial: string;
@@ -18,7 +17,6 @@ export function useRunExecution({ selectedSerial, setMessage }: UseRunExecutionO
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [currentRunId, setCurrentRunId] = useState("");
   const [currentRun, setCurrentRun] = useState<TestRun | null>(null);
-  const [currentGraphRun, setCurrentGraphRun] = useState<GraphRunSummary | null>(null);
   const [runsLimit, setRunsLimit] = useState(30);
   const activeRunForSelectedDevice = runs.find((run) => run.deviceSerial === selectedSerial && isActiveRun(run));
   const selectedDeviceBusy = Boolean(activeRunForSelectedDevice);
@@ -46,7 +44,6 @@ export function useRunExecution({ selectedSerial, setMessage }: UseRunExecutionO
       setCurrentRunId(runId);
       if (!runId) {
         setCurrentRun(null);
-        setCurrentGraphRun(null);
         return;
       }
       const cachedRun = runs.find((run) => run.id === runId);
@@ -60,27 +57,9 @@ export function useRunExecution({ selectedSerial, setMessage }: UseRunExecutionO
   useEffect(() => {
     if (!currentRunId) {
       setCurrentRun(null);
-      setCurrentGraphRun(null);
       return;
     }
     let cancelled = false;
-    const refreshCurrentGraphRun = async () => {
-      const response = await fetch(`/api/graph-runs/${currentRunId}`);
-      if (cancelled) {
-        return;
-      }
-      if (response.status === 404) {
-        setCurrentGraphRun(null);
-        return;
-      }
-      if (!response.ok) {
-        return;
-      }
-      const json = (await response.json()) as { graphRun: GraphRunSummary };
-      if (!cancelled) {
-        setCurrentGraphRun(json.graphRun);
-      }
-    };
     const refreshCurrentRun = async () => {
       const response = await fetch(`/api/runs/${currentRunId}`);
       if (!response.ok) {
@@ -94,7 +73,6 @@ export function useRunExecution({ selectedSerial, setMessage }: UseRunExecutionO
       if (!json.active && json.run.status !== "running") {
         await refreshRuns();
       }
-      await refreshCurrentGraphRun();
     };
     void refreshCurrentRun();
     const timer = window.setInterval(refreshCurrentRun, 1000);
@@ -145,7 +123,6 @@ export function useRunExecution({ selectedSerial, setMessage }: UseRunExecutionO
   return {
     runs,
     currentRun,
-    currentGraphRun,
     currentRunId,
     runsLimit,
     activeRunForSelectedDevice,

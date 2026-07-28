@@ -12,9 +12,8 @@ import {
   type TestCase,
   type TestRun
 } from "@mobile-automation/shared";
-import { detectNode, type BusinessGraph, type BusinessGraphVersion, type BusinessNode, type Observation } from "@mobile-automation/graph-core";
+import type { Observation } from "@mobile-automation/graph-core";
 import type { AutomationDeviceDriver, DeviceEventWatcher, ObservedDeviceEvent } from "./mobile-driver.js";
-import { candidateActionForObservation, generateExplorationCandidates } from "./auto-explorer.js";
 import { createDefaultOcrService, type OcrService } from "./ocr.js";
 import { ObservationService } from "./observation-service.js";
 import { RuntimeInterceptor, type RuntimeInterceptorRecord, type RuntimeInterceptorRule } from "./runtime-interceptor.js";
@@ -26,7 +25,7 @@ export type StabilityExplorerStartMode = "launch_app" | "current_state" | "resta
 export type StabilityExplorerAllowedAction = "tap" | "swipe" | "back" | "wait";
 export type StabilityExplorerAppExitPolicy = "back_to_app" | "restart_app" | "stop";
 export type StabilityExplorerBacktrackStrategy = "none" | "shallow" | "depth_first";
-export type StabilityCandidateSource = "runtime_interceptor" | "backtrack" | "page_ability" | "ocr_text" | "ui_element" | "visual_safe_region" | "random_safe_region" | "system";
+export type StabilityCandidateSource = "runtime_interceptor" | "backtrack" | "ocr_text" | "ui_element" | "visual_safe_region" | "random_safe_region" | "system";
 export type StabilityCandidateStatus = "ready" | "skipped";
 
 export type StabilityExplorerConfigInput = {
@@ -67,8 +66,6 @@ export type StabilityCandidate = {
   skipReason?: "dangerous_text" | "unsupported_action" | "missing_region" | "system_region" | "system_text" | "repeated_no_change" | "path_explored";
   region?: { x: number; y: number; width: number; height: number };
   priority?: number;
-  matchedPageNodeId?: string;
-  matchedPageName?: string;
 };
 
 export type StabilityExplorerStorage = RunArtifactStorage & {
@@ -79,8 +76,6 @@ export type StabilityExplorerStorage = RunArtifactStorage & {
   addDeviceEvent(event: DeviceEvent): void;
   listRunIdsByStatus(status: TestRun["status"]): string[];
   listRuntimeInterceptorRules?(filter?: { enabledOnly?: boolean; platform?: "android" | "ios"; appPackageName?: string; iosBundleId?: string }): RuntimeInterceptorRule[];
-  listBusinessGraphs?(): BusinessGraph[];
-  getBusinessGraphVersion?(id: string): BusinessGraphVersion | undefined;
 };
 
 type ActiveStabilityRun = {
@@ -319,8 +314,6 @@ export class StabilityExplorer {
           continue;
         }
 
-        const graphVersion = this.findActiveGraphVersion(config.packageName);
-        const matchedPage = graphVersion ? matchedStablePage(before, graphVersion) : undefined;
         const beforeMeaningfulSignature = meaningfulObservationSignature(before);
         let candidates = buildBacktrackCandidates(config, backtrackState);
         if (!candidates.length) {
@@ -328,8 +321,6 @@ export class StabilityExplorer {
             observation: before,
             config,
             actionIndex: index,
-            graphVersion,
-            matchedPage,
             avoidCandidateKeys: avoidedCandidateKeysBySignature.get(beforeMeaningfulSignature),
             exploredCandidateKeys: exploredCandidateKeysBySignature.get(beforeMeaningfulSignature)
           });
@@ -575,13 +566,6 @@ export class StabilityExplorer {
     return interceptor.handle({ phase: "state_transition", maxPasses: 2 });
   }
 
-  private findActiveGraphVersion(packageName: string): BusinessGraphVersion | undefined {
-    const graphs = this.storage.listBusinessGraphs?.() ?? [];
-    const graph = graphs.find((item) => item.status === "active" && item.targetApp?.androidPackageName === packageName && item.activeVersionId)
-      ?? graphs.find((item) => item.status === "active" && item.appId === packageName && item.activeVersionId);
-    return graph?.activeVersionId ? this.storage.getBusinessGraphVersion?.(graph.activeVersionId) : undefined;
-  }
-
   private async collectMetric(runId: string, deviceSerial: string, stepResultId?: string): Promise<void> {
     const metric = await this.driver.samplePerformance(deviceSerial, runId, stepResultId).catch(() => undefined);
     if (metric) {
@@ -709,40 +693,11 @@ export function buildStabilityCandidates(input: {
   observation: Observation;
   config: StabilityExplorerConfig;
   actionIndex: number;
-  graphVersion?: BusinessGraphVersion;
-  matchedPage?: BusinessNode;
   avoidCandidateKeys?: Set<string>;
   exploredCandidateKeys?: Set<string>;
 }): StabilityCandidate[] {
   const candidates: StabilityCandidate[] = [];
   const resolution = input.observation.resolution ?? { width: 1080, height: 2400 };
-  const matchedPage = input.matchedPage;
-  if (input.graphVersion && matchedPage) {
-    const pageAbilityCandidates = generateExplorationCandidates({
-      node: matchedPage,
-      observation: input.observation,
-      graphVersion: input.graphVersion,
-      maxCandidates: 12
-    })
-      .filter((candidate) => candidate.source === "manual_element")
-      .map((candidate): StabilityCandidate => {
-        const action = candidateActionForObservation(candidate, input.observation);
-        const allowed = Boolean(action && actionAllowed(action, input.config.allowedActions));
-        return {
-          id: candidate.id,
-          label: candidate.label,
-          source: "page_ability",
-          status: candidate.status === "ready" && allowed ? "ready" : "skipped",
-          skipReason: candidate.status === "skipped" ? "dangerous_text" : allowed ? undefined : "unsupported_action",
-          region: candidate.region,
-          priority: -1000,
-          action,
-          matchedPageNodeId: matchedPage.id,
-          matchedPageName: matchedPage.name
-        };
-      });
-    candidates.push(...pageAbilityCandidates);
-  }
   for (const text of input.observation.ocrTexts ?? []) {
     if (!text.text?.trim()) {
       continue;
@@ -848,8 +803,6 @@ function stepMetadata(
     candidateLabel: candidate?.label,
     candidateSource: candidate?.source,
     candidateAction: candidate?.action,
-    matchedPageNodeId: candidate?.matchedPageNodeId,
-    matchedPageName: candidate?.matchedPageName,
     skippedCandidates: candidates
       .filter((item) => item.status === "skipped")
       .slice(0, 12)
@@ -884,12 +837,11 @@ function candidateRank(candidate: StabilityCandidate): number {
   const sourceRank: Record<StabilityCandidateSource, number> = {
     runtime_interceptor: 0,
     backtrack: 1,
-    page_ability: 2,
-    ocr_text: 3,
-    ui_element: 4,
-    visual_safe_region: 5,
-    random_safe_region: 6,
-    system: 7
+    ocr_text: 2,
+    ui_element: 3,
+    visual_safe_region: 4,
+    random_safe_region: 5,
+    system: 6
   };
   return statusRank + sourceRank[candidate.source] * 1000 + (candidate.priority ?? 0);
 }
@@ -1021,15 +973,6 @@ function actionAvoidKey(action: DeviceActionRequest | undefined): string {
     return `launch_app:${action.packageName}`;
   }
   return action.type;
-}
-
-function matchedStablePage(observation: Observation, graphVersion: BusinessGraphVersion): BusinessNode | undefined {
-  const result = detectNode(observation, graphVersion, observation.platform);
-  return result.status === "matched" && result.node && isConfirmedStablePage(result.node) ? result.node : undefined;
-}
-
-function isConfirmedStablePage(node: BusinessNode): boolean {
-  return node.status === "active" && node.nodeType === "page" && (Boolean(node.metadata?.assetRecordingConfirmed) || node.tags.includes("page-asset") || node.tags.includes("asset-recording"));
 }
 
 function actionAllowed(action: DeviceActionRequest, allowedActions: StabilityExplorerAllowedAction[]): boolean {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BusinessGraph, BusinessGraphVersion, BusinessNode, OperationEdge, StateMatcher } from "@mobile-automation/graph-core";
+import type { BusinessGraph, BusinessGraphVersion, BusinessNode, StateMatcher } from "@mobile-automation/graph-core";
 import { StoragePageAssetCatalog } from "./page-asset-catalog.js";
 
 describe("StoragePageAssetCatalog", () => {
@@ -29,22 +29,17 @@ describe("StoragePageAssetCatalog", () => {
     expect(catalog.listPages("other.app", "android")).toEqual([]);
   });
 
-  it("reads optional public locators but ignores transitions and page tasks", () => {
+  it("reads optional public locators", () => {
     const home = page({
       id: "home",
       key: "classin.home",
       name: "主页",
       metadata: {
         assetRecordingConfirmed: true,
-        assetRecordingPageElements: [
-          { id: "search", label: "搜索", locator: "ocr:搜索", locatorKind: "text_locator" }
-        ],
         assetRecordingManualElements: [
           { id: "search", label: "全局搜索", targetText: "搜索", locatorKind: "text_locator" },
           { id: "class-grid", label: "班级列表", structuralLocator: { role: "grid" }, locatorKind: "structural_locator" }
-        ],
-        assetRecordingPageTransitions: [{ id: "legacy-transition", elementId: "search" }],
-        assetRecordingPageTasks: [{ id: "legacy-task", name: "旧任务" }]
+        ]
       }
     });
     const catalog = new StoragePageAssetCatalog(new MemoryCatalogStorage(graph([home])));
@@ -53,8 +48,6 @@ describe("StoragePageAssetCatalog", () => {
       expect.objectContaining({ id: "search", label: "全局搜索", requiresUiTree: false }),
       expect.objectContaining({ id: "class-grid", label: "班级列表", requiresUiTree: true })
     ]);
-    expect(catalog.listLocators("home").map((item) => item.id)).not.toContain("legacy-transition");
-    expect(catalog.listLocators("home").map((item) => item.id)).not.toContain("legacy-task");
   });
 
   it("finds pages that share stable identity evidence", () => {
@@ -112,7 +105,7 @@ class MemoryCatalogStorage {
   }
 }
 
-function graph(nodes: BusinessNode[], edges: OperationEdge[] = []): BusinessGraphVersion {
+function graph(nodes: BusinessNode[]): BusinessGraphVersion {
   return {
     id: "version",
     graphId: "graph",
@@ -120,7 +113,6 @@ function graph(nodes: BusinessNode[], edges: OperationEdge[] = []): BusinessGrap
     sourceSummary: [],
     status: "active",
     nodes,
-    edges,
     createdAt: "2026-07-28T00:00:00.000Z"
   };
 }

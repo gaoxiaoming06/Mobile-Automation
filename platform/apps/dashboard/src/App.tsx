@@ -15,7 +15,6 @@ import {
   type DeviceActionRequest,
   type DeviceInfo,
   type FlowStartStrategy,
-  type ParameterProfile,
   type Platform,
   type SemanticDeviceActionRequest,
   type TestRun,
@@ -24,23 +23,13 @@ import {
 import { AppNav, type AppNavItemId } from "./components/AppNav";
 import {
   AssetRecordingPanel,
-  normalizeAssetRecordingIntent,
-  type AssetRecordingAutoExploreReport,
-  type AssetRecordingCompoundStepDraft,
   type AssetRecordingCurrentPage,
   type AssetRecordingDynamicMask,
-  type AssetRecordingIntent,
   type AssetRecordingLocatorKind,
-  type AssetRecordingOperationTransitionDraft,
-  type AssetRecordingPageElementDraft,
-  type AssetRecordingPageTask,
-  type AssetRecordingPageTaskDraft,
-  type AssetRecordingPageTaskTransitionDraft
+  type AssetRecordingPageElementDraft
 } from "./components/AssetRecordingPanel";
 import { PreviewPanel } from "./components/PreviewPanel";
 import { PageAssetsPanel } from "./components/PageAssetsPanel";
-import { parseRuntimeParams } from "./components/runtime-params";
-import { AssetCompositionPanel } from "./components/AssetCompositionPanel";
 import { ScriptFlowsPanel } from "./components/ScriptFlowsPanel";
 import { AiScriptFlowsPanel } from "./components/AiScriptFlowsPanel";
 import type { RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
@@ -110,97 +99,12 @@ type StabilityExplorerStrategy = "conservative" | "balanced" | "aggressive";
 type StabilityExplorerStartMode = "launch_app" | "current_state" | "restart_app";
 type StabilityExplorerAppExitPolicy = "back_to_app" | "restart_app" | "stop";
 type StabilityExplorerBacktrackStrategy = "none" | "shallow" | "depth_first";
-type AssetPatrolStartMode = "current_state" | "launch_app" | "restart_app";
-type AssetPatrolPageScope = "current_page" | "reachable_pages" | "tagged_pages" | "all_active_pages";
-export type AndroidAppMonitorDefaultMode = "off" | "asset_and_stability" | "all_runs";
-export type AndroidAppMonitorExecutionKind =
-  | "asset_patrol"
-  | "stability_exploration"
-  | "graph_run"
-  | "script_flow";
+export type AndroidAppMonitorDefaultMode = "off" | "all_runs";
+export type AndroidAppMonitorExecutionKind = "stability_exploration" | "script_flow";
 type AndroidAppMonitorSettingsDraft = Omit<AndroidAppMonitorRequestState, "enabled" | "packageName" | "startStrategy" | "startAppPackageName"> & {
   defaultMode: AndroidAppMonitorDefaultMode;
 };
 type AndroidAppMonitorExecutionOverrides = Partial<Record<AndroidAppMonitorExecutionKind, boolean>>;
-type AssetPatrolPlanStep = {
-  id: string;
-  order: number;
-  kind: string;
-  label: string;
-  status: "ready" | "skipped" | "needs_repair";
-  skipReason?: string;
-  pageModelName?: string;
-  pageElementId?: string;
-  pageTransitionId?: string;
-  pageTaskId?: string;
-  evidence?: Record<string, unknown>;
-};
-type AssetPatrolPlanGroup = {
-  key: "page" | "element" | "transition" | "task";
-  title: string;
-  items: Array<{
-    id: string;
-    label: string;
-    detail: string;
-    status: AssetPatrolPlanStep["status"];
-  }>;
-};
-type AssetPatrolPlan = {
-  status: "ready" | "diagnostic";
-  startPage?: { id: string; name: string; score: number };
-  issues: Array<{ code: string; severity: "warning" | "error"; message: string }>;
-  steps: AssetPatrolPlanStep[];
-  summary: {
-    pageChecks: number;
-    elementChecks: number;
-    transitionChecks: number;
-    taskChecks: number;
-    skipped: number;
-    needsRepair: number;
-  };
-};
-type AssetRuntimeParamDefinition = {
-  key: string;
-  usages?: Array<{
-    pageModelName?: string;
-    taskName?: string;
-    stepLabel?: string;
-    fieldType?: string;
-    binding?: string;
-  }>;
-};
-type AssetDrivenExecutionItem = {
-  id: string;
-  order: number;
-  label: string;
-  fromPage: string;
-  toPage: string;
-  status: "pending" | "running" | "passed" | "failed" | "skipped" | "stopped";
-  runId?: string;
-  latestStep?: string;
-  errorMessage?: string;
-  reportHtmlPath?: string;
-};
-type AssetDrivenExecutionSession = {
-  id: string;
-  deviceSerial: string;
-  packageName: string;
-  graphVersionId?: string;
-  startNodeId: string;
-  startNodeName: string;
-  status: "running" | "passed" | "failed" | "stopped";
-  totalEdges: number;
-  completedEdges: number;
-  runningEdges: number;
-  pendingEdges: number;
-  failedEdges: number;
-  needsRepair: number;
-  runningItem?: AssetDrivenExecutionItem;
-  items: AssetDrivenExecutionItem[];
-  startedAt: string;
-  updatedAt: string;
-  endedAt?: string;
-};
 type StabilityAllowedActions = {
   tap: boolean;
   swipe: boolean;
@@ -208,16 +112,16 @@ type StabilityAllowedActions = {
   wait: boolean;
 };
 type TextStorage = Pick<Storage, "getItem" | "setItem">;
-type AiDiagnosisSettingsSource = "stored" | "environment" | "none";
-export type PublicAiDiagnosisSettings = {
+type AiModelSettingsSource = "stored" | "environment" | "none";
+export type PublicAiModelSettings = {
   enabled: boolean;
   baseURL: string;
   model: string;
   timeoutMs: number;
   apiKeyConfigured: boolean;
-  source: AiDiagnosisSettingsSource;
+  source: AiModelSettingsSource;
 };
-export type AiDiagnosisSettingsDraft = {
+export type AiModelSettingsDraft = {
   enabled: boolean;
   baseURL: string;
   apiKey: string;
@@ -231,21 +135,8 @@ export const DEFAULT_STABILITY_EXPLORER_APP_EXIT_POLICY: StabilityExplorerAppExi
 export const DEFAULT_STABILITY_EXPLORER_MAX_DEPTH = 4;
 export const DEFAULT_STABILITY_DANGEROUS_TEXT_PATTERNS = ["删除", "退出登录", "注销", "支付", "发布", "提交", "确认删除"];
 export const DEFAULT_STABILITY_DANGEROUS_TEXT = DEFAULT_STABILITY_DANGEROUS_TEXT_PATTERNS.join("\n");
-export const DEFAULT_ASSET_PATROL_PACKAGE_NAME = "cn.eeo.classin";
-export const DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES: Record<string, string> = {
-  phone: "18743085313",
-  mobile: "18743085313",
-  password: "eeo123",
-  pwd: "eeo123",
-  className: "班级四十二号",
-  lessonName: "班级四十二号",
-  duration: "30",
-  recordClassroom: "true",
-  recordLive: "false"
-};
-export const ASSET_DRIVEN_TEST_ACTION_LABEL = "开始资产测试";
-export const ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE = "当前为诊断模式：只检查页面匹配、元素重定位、边和任务编排质量，不会触发页面点击或输入。";
-export const DEFAULT_AI_DIAGNOSIS_SETTINGS: PublicAiDiagnosisSettings = {
+export const DEFAULT_SCRIPT_APP_ID = "cn.eeo.classin";
+export const DEFAULT_AI_MODEL_SETTINGS: PublicAiModelSettings = {
   enabled: false,
   baseURL: "",
   model: "",
@@ -254,7 +145,7 @@ export const DEFAULT_AI_DIAGNOSIS_SETTINGS: PublicAiDiagnosisSettings = {
   source: "none"
 };
 export const DEFAULT_ANDROID_APP_MONITOR_SETTINGS: AndroidAppMonitorSettingsDraft = {
-  defaultMode: "asset_and_stability",
+  defaultMode: "off",
   includeSubprocesses: true,
   cpuThresholdEnabled: false,
   cpuThresholdPercent: 80,
@@ -314,33 +205,7 @@ type AssetObservation = {
   raw?: Record<string, unknown>;
 };
 
-type AssetTransitionCandidateApiResponse = {
-  result: {
-    from: {
-      status?: "matched" | "created" | "reused" | "skipped";
-      reason?: string;
-      node?: { name: string; key: string; matchers?: Array<{ critical?: boolean }> };
-    };
-    to: {
-      status?: "matched" | "created" | "reused" | "skipped";
-      reason?: string;
-      node?: { name: string; key: string; matchers?: Array<{ critical?: boolean }> };
-    };
-    edge: {
-      status?: "created" | "reused" | "skipped";
-      reason?: string;
-      edge?: {
-        name: string;
-        status: "draft" | "active" | "deprecated" | "rejected";
-        reliabilityScore?: number;
-        expectations?: Array<{ title?: string; type?: string }>;
-      };
-    };
-    warnings: Array<{ code: string; message: string }>;
-  };
-};
-
-type AssetGraphTargetProfile = {
+type PageAssetTargetProfile = {
   id?: string;
   platform?: DeviceInfo["platform"] | "harmony" | "flutter";
   displayName?: string;
@@ -351,12 +216,10 @@ type AssetGraphTargetProfile = {
   isPrimary?: boolean;
 };
 
-type AssetGraphTargetApp = {
+type PageAssetTargetApp = {
   productId?: string;
   productName?: string;
-  androidPackageName?: string;
-  iosBundleId?: string;
-  profiles?: AssetGraphTargetProfile[];
+  profiles?: PageAssetTargetProfile[];
 };
 
 type AssetTargetProfileLookup = {
@@ -364,12 +227,12 @@ type AssetTargetProfileLookup = {
   iosBundleId?: string;
 };
 
-type GraphListItem = {
+type PageAssetLibraryListItem = {
   appId?: string;
   name?: string;
   status?: string;
   platformScope?: string;
-  targetApp?: AssetGraphTargetApp;
+  targetApp?: PageAssetTargetApp;
   activeVersion?: {
     id?: string;
     status?: string;
@@ -447,28 +310,6 @@ type CurrentPageAssetApiResponse = {
       matcherCount?: number;
       elementCount?: number;
       updatedAt?: string;
-      transitions?: Array<{
-        id: string;
-        key?: string;
-        name: string;
-        status: string;
-        source?: string;
-        actionSummary?: string;
-        actionLocator?: string;
-        actionKind?: "tap" | "scroll" | "long_press" | "input" | "unknown";
-        targetName?: string;
-        targetKey?: string;
-        expectationSummary?: string;
-        reliabilityScore?: number;
-      }>;
-      tasks?: Array<{
-        id: string;
-        name: string;
-        status: "active" | "draft" | "deprecated";
-        stepCount?: number;
-        parameterKeys?: string[];
-        updatedAt?: string;
-      }>;
     }>;
   };
   error?: string;
@@ -535,56 +376,6 @@ export function assetRecordingIdentificationStateAfter(
   };
 }
 
-export function assetConnectionEdgeMessage(
-  type: "missing_source" | "confirm_failed" | "confirmed" | "delete_failed" | "deleted",
-  edgeName?: string
-): string {
-  if (type === "missing_source") {
-    return "当前页面还没有保存为页面资产，请先保存页面后再确认连接边";
-  }
-  if (type === "confirm_failed") {
-    return "连接边确认失败";
-  }
-  if (type === "confirmed") {
-    return `已确认连接边：${edgeName ?? "目标页面"}`;
-  }
-  if (type === "delete_failed") {
-    return "删除连接边失败";
-  }
-  return `已删除连接边：${edgeName ?? "目标页面"}`;
-}
-
-export function assetOperationTransitionRequestBody(
-  draft: AssetRecordingOperationTransitionDraft,
-  context: { sourceNodeId: string; platformScope: "android" | "ios" | "mobile-both" }
-) {
-  return {
-    sourceNodeId: context.sourceNodeId,
-    targetNodeId: draft.targetNodeId ?? context.sourceNodeId,
-    ...(draft.abilityType ? { abilityType: draft.abilityType } : {}),
-    actionKind: draft.actionKind,
-    locator: draft.locator,
-    semanticArea: draft.semanticArea,
-    coordinateSpace: draft.coordinateSpace,
-    elementLabel: draft.elementLabel,
-    targetText: draft.targetText,
-    availability: draft.availability,
-    outcomeType: draft.outcomeType,
-    targetLabel: draft.targetLabel,
-    platformScope: context.platformScope,
-    ...(draft.tapPointPercent ? { tapPointPercent: draft.tapPointPercent } : {}),
-    ...(draft.compoundSteps?.length ? { compoundSteps: compoundStepsRequestBody(draft.compoundSteps) } : {}),
-    ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {}),
-    ...(draft.locatorKind ? { locatorKind: draft.locatorKind } : {}),
-    ...(draft.dynamicMasks?.length ? { dynamicMasks: draft.dynamicMasks } : {}),
-    ...(draft.structuralLocator ? { structuralLocator: draft.structuralLocator } : {}),
-    ...(draft.dynamicRegion ? { dynamicRegion: draft.dynamicRegion } : {}),
-    ...(draft.itemTemplate ? { itemTemplate: draft.itemTemplate } : {}),
-    ...(draft.transitionKind ? { transitionKind: draft.transitionKind } : {}),
-    ...(draft.parameterMapping ? { parameterMapping: draft.parameterMapping } : {})
-  };
-}
-
 export function assetPageElementRequestBody(
   draft: AssetRecordingPageElementDraft,
   context: { sourceNodeId: string; platformScope: "android" | "ios" | "mobile-both" }
@@ -592,22 +383,14 @@ export function assetPageElementRequestBody(
   return {
     elementId: draft.elementId,
     sourceNodeId: context.sourceNodeId,
-    ...(draft.abilityType ? { abilityType: draft.abilityType } : {}),
-    actionKind: draft.actionKind,
     locator: draft.locator,
     semanticArea: draft.semanticArea,
     coordinateSpace: draft.coordinateSpace,
     elementLabel: draft.elementLabel,
     targetText: draft.targetText,
-    availability: draft.availability,
     platformScope: context.platformScope,
-    outcomeType: draft.outcomeType,
-    outcomeLabel: draft.outcomeLabel,
-    targetNodeId: draft.targetNodeId,
-    targetLabel: draft.targetLabel,
     ...(draft.tapPointPercent ? { tapPointPercent: draft.tapPointPercent } : {}),
     ...(draft.anchorOffsetPercent ? { anchorOffsetPercent: draft.anchorOffsetPercent } : {}),
-    ...(draft.compoundSteps?.length ? { compoundSteps: compoundStepsRequestBody(draft.compoundSteps) } : {}),
     ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {}),
     ...(draft.quality ? { quality: draft.quality } : {}),
     ...(draft.visualLocator ? { visualLocator: draft.visualLocator } : {}),
@@ -615,73 +398,16 @@ export function assetPageElementRequestBody(
     ...(draft.dynamicMasks?.length ? { dynamicMasks: draft.dynamicMasks } : {}),
     ...(draft.structuralLocator ? { structuralLocator: draft.structuralLocator } : {}),
     ...(draft.dynamicRegion ? { dynamicRegion: draft.dynamicRegion } : {}),
-    ...(draft.itemTemplate ? { itemTemplate: draft.itemTemplate } : {}),
-    ...(draft.transitionKind ? { transitionKind: draft.transitionKind } : {}),
-    ...(draft.parameterMapping ? { parameterMapping: draft.parameterMapping } : {})
-  };
-}
-
-export function assetPageTaskRequestBody(
-  draft: AssetRecordingPageTaskDraft,
-  context: { sourceNodeId: string }
-) {
-  return {
-    sourceNodeId: context.sourceNodeId,
-    taskId: draft.taskId,
-    name: draft.name,
-    status: draft.status,
-    steps: draft.steps
-  };
-}
-
-export function assetPageTaskTransitionRequestBody(
-  draft: AssetRecordingPageTaskTransitionDraft,
-  context: { sourceNodeId: string; platformScope: "android" | "ios" | "mobile-both" }
-) {
-  return {
-    sourceNodeId: context.sourceNodeId,
-    targetNodeId: draft.targetNodeId,
-    taskId: draft.taskId,
-    taskName: draft.taskName,
-    platformScope: context.platformScope
+    ...(draft.itemTemplate ? { itemTemplate: draft.itemTemplate } : {})
   };
 }
 
 export function validateAssetPageElementDraftForSave(draft: AssetRecordingPageElementDraft): string | undefined {
-  if ((draft.outcomeType === "navigate" || draft.outcomeType === "compound_navigation") && !draft.targetNodeId) {
-    return "跳转页面类型必须选择已保存的目标页面；如果只是普通点击，请把结果类型改为本页状态变化或无可见变化";
-  }
   const region = imageRegionMetadata(draft.locator);
   if (region && isRegionTooSmallForPageElement(region)) {
     return "圈选区域过小，请重新圈选完整的可识别元素区域";
   }
-  if (draft.outcomeType === "navigate" && !draft.targetNodeId?.trim()) {
-    return "跳转页面类型必须选择已保存的目标页面，否则不会进入路径规划";
-  }
   return undefined;
-}
-
-type ManualCompoundStepRequestBody = {
-  actionKind: "wait" | "tap";
-  locator: string;
-  elementLabel: string;
-  semanticArea: "content";
-  coordinateSpace: "runtime";
-  waitTimeoutMs?: number;
-};
-
-function compoundStepsRequestBody(steps: AssetRecordingCompoundStepDraft[] | undefined): ManualCompoundStepRequestBody[] {
-  return (steps ?? []).map((step): ManualCompoundStepRequestBody => {
-    const elementLabel = step.label?.trim() || step.text;
-    return {
-      actionKind: step.type === "wait_until_state" ? "wait" : "tap",
-      locator: `text:${step.text}`,
-      elementLabel,
-      semanticArea: "content",
-      coordinateSpace: "runtime",
-      ...(step.type === "wait_until_state" && step.timeoutMs ? { waitTimeoutMs: step.timeoutMs } : {})
-    };
-  });
 }
 
 export function stabilityExplorerRequestBody(input: {
@@ -718,275 +444,6 @@ export function stabilityExplorerRequestBody(input: {
     stopOnUnknownPageStuck: true,
     ...(input.androidAppMonitor ? { androidAppMonitor: input.androidAppMonitor } : {})
   };
-}
-
-export function assetPatrolPageScopeOptions(): Array<{ value: AssetPatrolPageScope; label: string; disabled: boolean }> {
-  return [
-    { value: "current_page", label: "当前页", disabled: false },
-    { value: "reachable_pages", label: "可达页面", disabled: false },
-    { value: "tagged_pages", label: "标记页面（后续接入）", disabled: true },
-    { value: "all_active_pages", label: "全部已激活页面（后续接入）", disabled: true }
-  ];
-}
-
-export function assetPatrolRequestBody(input: {
-  selectedSerial: string;
-  packageName: string;
-  startMode: AssetPatrolStartMode;
-  pageScope: AssetPatrolPageScope;
-  maxDurationMinutes: number;
-  maxTransitions: number;
-  allowRiskyActions: boolean;
-  allowBusinessSubmit: boolean;
-  dangerousTextPatternsText: string;
-  parameterProfileId?: string;
-  runtimeParamsText?: string;
-  androidAppMonitor?: AndroidAppMonitorConfig;
-}) {
-  const runtimeParams = parseRuntimeParams(input.runtimeParamsText);
-  return {
-    deviceSerial: input.selectedSerial,
-    packageName: input.packageName.trim(),
-    startMode: input.startMode,
-    pageScope: supportedAssetPatrolPageScope(input.pageScope),
-    maxDurationMs: Math.max(1, Math.floor(input.maxDurationMinutes || 1)) * 60_000,
-    maxTransitions: Math.max(0, Math.floor(input.maxTransitions || 0)),
-    allowRiskyActions: input.allowRiskyActions,
-    allowBusinessSubmit: input.allowBusinessSubmit,
-    dangerousTextPatterns: dangerousTextPatternsFromText(input.dangerousTextPatternsText),
-    ...(input.parameterProfileId?.trim() ? { parameterProfileId: input.parameterProfileId.trim() } : {}),
-    ...(runtimeParams ? { runtimeParams } : {}),
-    ...(input.androidAppMonitor ? { androidAppMonitor: input.androidAppMonitor } : {})
-  };
-}
-
-export function assetPatrolRuntimeParamsTemplate(parameters: Array<Pick<AssetRuntimeParamDefinition, "key">>): string {
-  return parameters
-    .map((parameter) => parameter.key.trim())
-    .filter(Boolean)
-    .map((key) => `${key}=${defaultAssetPatrolRuntimeParamValue(key)}`)
-    .join("\n");
-}
-
-export function mergeAssetPatrolRuntimeParamsText(currentText: string, parameters: Array<Pick<AssetRuntimeParamDefinition, "key">>): string {
-  const existingKeys = runtimeParamKeysFromText(currentText);
-  const currentLines = currentText
-    .split(/\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => defaultedRuntimeParamLine(line));
-  const missingLines = parameters
-    .map((parameter) => parameter.key.trim())
-    .filter((key) => key && !existingKeys.has(key))
-    .map((key) => `${key}=${defaultAssetPatrolRuntimeParamValue(key)}`);
-  return [...currentLines, ...missingLines].join("\n");
-}
-
-function defaultedRuntimeParamLine(line: string): string {
-  const separator = line.indexOf("=");
-  if (separator < 0) {
-    return line;
-  }
-  const key = line.slice(0, separator).trim();
-  const value = line.slice(separator + 1).trim();
-  if (!key || value) {
-    return line;
-  }
-  return `${key}=${defaultAssetPatrolRuntimeParamValue(key)}`;
-}
-
-function defaultAssetPatrolRuntimeParamValue(key: string): string {
-  const normalized = key.trim();
-  if (DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES[normalized] !== undefined) {
-    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES[normalized];
-  }
-  const lower = normalized.toLowerCase();
-  if (lower.includes("phone") || lower.includes("mobile")) {
-    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.phone;
-  }
-  if (lower.includes("password") || lower.includes("passwd") || lower.includes("pwd")) {
-    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.password;
-  }
-  if (lower.includes("classname") || lower.includes("class_name")) {
-    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.className;
-  }
-  if (lower.includes("lessonname") || lower.includes("lesson_name") || lower.includes("title")) {
-    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.lessonName;
-  }
-  if (lower.includes("duration")) {
-    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.duration;
-  }
-  if (lower.includes("recordclassroom")) {
-    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.recordClassroom;
-  }
-  if (lower.includes("recordlive")) {
-    return DEFAULT_ASSET_PATROL_RUNTIME_PARAM_VALUES.recordLive;
-  }
-  return "";
-}
-
-export function assetPatrolRuntimeParamValuesFromText(value: string): Record<string, string> {
-  return Object.fromEntries(
-    value
-      .split(/[\n,，;]/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .map((item) => {
-        const separator = item.indexOf("=");
-        if (separator < 0) {
-          return undefined;
-        }
-        const key = item.slice(0, separator).trim();
-        return key ? [key, item.slice(separator + 1).trim()] as const : undefined;
-      })
-      .filter((item): item is readonly [string, string] => Boolean(item))
-  );
-}
-
-export function setAssetPatrolRuntimeParamValue(currentText: string, key: string, value: string): string {
-  const normalizedKey = key.trim();
-  if (!normalizedKey) {
-    return currentText;
-  }
-  const lines = currentText
-    .split(/\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  let replaced = false;
-  const nextLines = lines.map((line) => {
-    const separator = line.indexOf("=");
-    const lineKey = separator >= 0 ? line.slice(0, separator).trim() : "";
-    if (lineKey !== normalizedKey) {
-      return line;
-    }
-    replaced = true;
-    return `${normalizedKey}=${value}`;
-  });
-  if (!replaced) {
-    nextLines.push(`${normalizedKey}=${value}`);
-  }
-  return nextLines.join("\n");
-}
-
-export function assetPatrolRuntimeParamDefinitionsForDisplay(
-  parameters: AssetRuntimeParamDefinition[],
-  currentPageName?: string
-): AssetRuntimeParamDefinition[] {
-  const normalizedCurrentPageName = currentPageName?.trim();
-  return [...parameters].sort((left, right) => {
-    const leftCurrentPage = runtimeParamUsedByPage(left, normalizedCurrentPageName);
-    const rightCurrentPage = runtimeParamUsedByPage(right, normalizedCurrentPageName);
-    if (leftCurrentPage !== rightCurrentPage) {
-      return Number(rightCurrentPage) - Number(leftCurrentPage);
-    }
-    return runtimeParamPriority(left.key) - runtimeParamPriority(right.key);
-  });
-}
-
-export function assetPatrolRuntimeParamUsageSummary(parameter: AssetRuntimeParamDefinition): string {
-  const usage = parameter.usages?.[0];
-  return [usage?.pageModelName, usage?.taskName, usage?.stepLabel].filter(Boolean).join(" / ") || parameter.key;
-}
-
-export function assetPatrolRuntimeParamPlaceholder(parameter: AssetRuntimeParamDefinition): string {
-  const key = parameter.key.toLowerCase();
-  const usageText = assetPatrolRuntimeParamUsageSummary(parameter).toLowerCase();
-  if (key.includes("password") || usageText.includes("密码")) {
-    return "请输入密码";
-  }
-  if (key.includes("phone") || key.includes("mobile") || usageText.includes("手机号")) {
-    return "手机号/邮箱";
-  }
-  if (key.includes("duration") || usageText.includes("时长")) {
-    return "例如：30";
-  }
-  if (key.includes("record") || parameter.usages?.some((usage) => usage.binding === "desired_state")) {
-    return "true / false";
-  }
-  if (key.includes("name") || key.includes("title") || usageText.includes("标题")) {
-    return "填写测试数据";
-  }
-  return "填写运行值";
-}
-
-function runtimeParamUsedByPage(parameter: AssetRuntimeParamDefinition, pageName: string | undefined): boolean {
-  if (!pageName) {
-    return false;
-  }
-  return parameter.usages?.some((usage) => usage.pageModelName === pageName) ?? false;
-}
-
-function runtimeParamPriority(key: string): number {
-  const normalized = key.toLowerCase();
-  if (normalized.includes("phone") || normalized.includes("mobile")) {
-    return 10;
-  }
-  if (normalized.includes("password")) {
-    return 20;
-  }
-  if (normalized.includes("classname")) {
-    return 30;
-  }
-  return 100;
-}
-
-function runtimeParamKeysFromText(value: string): Set<string> {
-  return new Set(
-    value
-      .split(/[\n,，;]/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .map((item) => {
-        const separator = item.indexOf("=");
-        return separator >= 0 ? item.slice(0, separator).trim() : "";
-      })
-      .filter(Boolean)
-  );
-}
-
-function supportedAssetPatrolPageScope(value: AssetPatrolPageScope): AssetPatrolPageScope {
-  return value === "current_page" || value === "reachable_pages" ? value : "current_page";
-}
-
-export function assetPatrolPlanGroups(plan: AssetPatrolPlan | undefined): AssetPatrolPlanGroup[] {
-  if (!plan) {
-    return [];
-  }
-  const groups: AssetPatrolPlanGroup[] = [
-    { key: "page", title: "页面", items: [] },
-    { key: "element", title: "能力", items: [] },
-    { key: "transition", title: "连接边", items: [] },
-    { key: "task", title: "任务", items: [] }
-  ];
-  for (const step of plan.steps) {
-    const group = groups.find((item) => item.key === assetPatrolPlanStepGroupKey(step.kind));
-    if (!group) {
-      continue;
-    }
-    group.items.push({
-      id: step.id,
-      label: step.label,
-      detail: [step.pageModelName, step.status, step.skipReason].filter(Boolean).join(" · "),
-      status: step.status
-    });
-  }
-  return groups.filter((group) => group.items.length > 0);
-}
-
-function assetPatrolPlanStepGroupKey(kind: string): AssetPatrolPlanGroup["key"] | undefined {
-  if (kind === "page_match" || kind === "screenshot_region_match" || kind === "ocr_region_match") {
-    return "page";
-  }
-  if (kind === "element_relocation" || kind === "content_scroll") {
-    return "element";
-  }
-  if (kind === "transition_validation") {
-    return "transition";
-  }
-  if (kind === "task_dry_run") {
-    return "task";
-  }
-  return undefined;
 }
 
 export function loadStabilityDangerousTextForPackage(packageName: string, storage: TextStorage | undefined = browserTextStorage()): string {
@@ -1066,145 +523,17 @@ export function stabilityRunProgressSummary(run: TestRun | null | undefined) {
   };
 }
 
-export function assetPatrolRunProgressSummary(run: TestRun | null | undefined) {
-  if (!run?.config.assetPatrol) {
-    return undefined;
-  }
-  const latestStep = run.stepResults.at(-1);
-  const metadata = latestStep?.metadata?.assetPatrol;
-  const patrolMetadata = isAssetPatrolStepMetadata(metadata) ? metadata : undefined;
-  const failed = run.stepResults.filter((step) => step.status === "failed").length;
-  const skipped = run.stepResults.filter((step) => step.status === "skipped").length;
-  const needsRepair = run.stepResults.filter((step) => {
-    const item = step.metadata?.assetPatrol;
-    return isAssetPatrolStepMetadata(item) && (item.status === "needs_repair" || item.skipReason === "runtime_relocation_required");
-  }).length;
-  return {
-    packageName: run.config.assetPatrol.packageName,
-    progressText: `${run.stepResults.length} 项`,
-    latestCheck: patrolMetadata?.label ?? "-",
-    latestKind: patrolMetadata?.kind ?? "-",
-    pageName: patrolMetadata?.pageModelName ?? patrolMetadata?.startPage?.name ?? "-",
-    failed,
-    skipped,
-    needsRepair
-  };
-}
-
-export function assetDrivenRunProgressSummary(run: TestRun | null | undefined, packageName: string) {
-  if (!run) {
-    return undefined;
-  }
-  const assetPatrolSummary = assetPatrolRunProgressSummary(run);
-  if (assetPatrolSummary) {
-    return assetPatrolSummary;
-  }
-  const latestStep = run.stepResults.at(-1);
-  const failed = run.stepResults.filter((step) => step.status === "failed").length;
-  const skipped = run.stepResults.filter((step) => step.status === "skipped").length;
-  return {
-    packageName: packageName.trim() || "-",
-    progressText: `${run.stepResults.length} 步`,
-    latestCheck: latestStep ? `${latestStep.stepOrder}. ${latestStep.type}` : "等待执行结果",
-    latestKind: run.config.runKind ?? "run",
-    pageName: run.caseName,
-    failed,
-    skipped,
-    needsRepair: failed
-  };
-}
-
-export function assetDrivenExecutionProgressSummary(execution: AssetDrivenExecutionSession | null | undefined) {
-  if (!execution) {
-    return undefined;
-  }
-  const latestItem =
-    execution.runningItem ??
-    execution.items.find((item) => item.status === "failed" || item.status === "stopped") ??
-    execution.items.filter((item) => item.status === "passed").at(-1) ??
-    execution.items[0];
-  return {
-    packageName: execution.packageName,
-    progressText: `${execution.completedEdges}/${execution.totalEdges}`,
-    latestCheck: latestItem?.label ?? "等待执行",
-    pageName: execution.startNodeName,
-    failed: execution.failedEdges,
-    skipped: execution.items.filter((item) => item.status === "skipped").length,
-    needsRepair: execution.needsRepair
-  };
-}
-
-export function assetPatrolPanelDisplayMode(input: { plan?: AssetPatrolPlan; currentRun?: TestRun; assetDrivenExecution?: AssetDrivenExecutionSession }): "run" | "plan" | "empty" {
-  if (input.assetDrivenExecution) {
-    return "run";
-  }
-  if (input.currentRun && isActiveRunStatus(input.currentRun)) {
-    return "run";
-  }
-  if (input.plan) {
-    return "plan";
-  }
-  if (input.currentRun) {
-    return "run";
-  }
-  return "empty";
-}
-
-export function assetPatrolPlanRequiresBusinessSubmit(plan: AssetPatrolPlan | undefined): boolean {
-  if (!plan || plan.status !== "ready") {
-    return false;
-  }
-  return plan.steps.some((step) => step.kind === "task_dry_run" || step.skipReason === "business_submit_disabled");
-}
-
-export function shouldAutoSyncAssetPatrolRuntimeParams(input: {
-  activeNavItem: AppNavItemId;
-  packageName: string;
-  lastSyncedPackageName?: string;
-}): boolean {
-  const packageName = input.packageName.trim();
-  return input.activeNavItem === "assetPatrol" && Boolean(packageName) && packageName !== (input.lastSyncedPackageName ?? "").trim();
-}
-
-export function shouldRestoreAssetDrivenExecution(input: {
-  activeNavItem: AppNavItemId;
-  selectedSerial: string;
-  packageName: string;
-  assetDrivenExecutionId?: string;
-}): boolean {
-  return input.activeNavItem === "assetPatrol" && Boolean(input.selectedSerial) && Boolean(input.packageName.trim()) && !input.assetDrivenExecutionId;
-}
-
-export function canStartAssetDrivenTest(input: {
-  selectedSerial: string;
-  packageName: string;
-  selectedDeviceBusy: boolean;
-  busy: boolean;
-  running: boolean;
-}): boolean {
-  return Boolean(input.selectedSerial && input.packageName.trim() && !input.selectedDeviceBusy && !input.busy && !input.running);
-}
-
-export function assetDrivenTestStartMessage(run: Pick<TestRun, "id">, queue?: { total?: number; remaining?: number }): string {
-  const total = typeof queue?.total === "number" ? queue.total : undefined;
-  const remaining = typeof queue?.remaining === "number" ? queue.remaining : undefined;
-  if (total && total > 1) {
-    return `已启动资产测试：${run.id}，本页面资产边 ${total} 条，剩余 ${Math.max(0, remaining ?? total - 1)} 条后台巡检`;
-  }
-  return `已启动资产测试：${run.id}`;
-}
-
-export function aiDiagnosisDraftFromSettings(settings: PublicAiDiagnosisSettings): AiDiagnosisSettingsDraft {
+export function aiModelDraftFromSettings(settings: PublicAiModelSettings): AiModelSettingsDraft {
   return {
     enabled: settings.enabled,
     baseURL: settings.baseURL,
     apiKey: "",
     model: settings.model,
-    timeoutMs: settings.timeoutMs || DEFAULT_AI_DIAGNOSIS_SETTINGS.timeoutMs
+    timeoutMs: settings.timeoutMs || DEFAULT_AI_MODEL_SETTINGS.timeoutMs
   };
 }
 
-export function aiDiagnosisSettingsRequestBody(draft: AiDiagnosisSettingsDraft): Record<string, unknown> {
+export function aiModelSettingsRequestBody(draft: AiModelSettingsDraft): Record<string, unknown> {
   return {
     enabled: draft.enabled,
     baseURL: draft.baseURL.trim(),
@@ -1238,13 +567,7 @@ export function androidAppMonitorForExecution(
 }
 
 export function androidAppMonitorDefaultEnabled(defaultMode: AndroidAppMonitorDefaultMode, executionKind: AndroidAppMonitorExecutionKind): boolean {
-  if (defaultMode === "all_runs") {
-    return true;
-  }
-  if (defaultMode === "asset_and_stability") {
-    return executionKind === "asset_patrol" || executionKind === "stability_exploration";
-  }
-  return false;
+  return defaultMode === "all_runs" && (executionKind === "script_flow" || executionKind === "stability_exploration");
 }
 
 function androidAppMonitorEnabledForExecution(
@@ -1255,7 +578,7 @@ function androidAppMonitorEnabledForExecution(
   return enabledOverride ?? androidAppMonitorDefaultEnabled(draft.defaultMode, executionKind);
 }
 
-function flowStartStrategyForExplorerStartMode(mode: StabilityExplorerStartMode | AssetPatrolStartMode): FlowStartStrategy {
+function flowStartStrategyForExplorerStartMode(mode: StabilityExplorerStartMode): FlowStartStrategy {
   if (mode === "current_state") {
     return "keep_current";
   }
@@ -1273,9 +596,7 @@ export function App() {
   const [runtimeInterceptorRules, setRuntimeInterceptorRules] = useState<RuntimeInterceptorRule[]>([]);
   const [assetRecordingGraphVersionId, setAssetRecordingGraphVersionId] = useState("");
   const [assetRecordingPage, setAssetRecordingPage] = useState<AssetRecordingCurrentPage>({ status: "idle" });
-  const [assetRecordingIntent, setAssetRecordingIntent] = useState<AssetRecordingIntent>();
   const [assetPageElementSaveError, setAssetPageElementSaveError] = useState<string>();
-  const [assetAutoExploreReport, setAssetAutoExploreReport] = useState<AssetRecordingAutoExploreReport>();
   const [assetRecordingIdentifying, setAssetRecordingIdentifying] = useState(false);
   const [assetRecordingAiIdentifying, setAssetRecordingAiIdentifying] = useState(false);
   const [stabilityPackageName, setStabilityPackageName] = useState("");
@@ -1294,22 +615,8 @@ export function App() {
     back: true,
     wait: true
   });
-  const [assetPatrolPackageName, setAssetPatrolPackageName] = useState(DEFAULT_ASSET_PATROL_PACKAGE_NAME);
-  const [assetPatrolStartMode, setAssetPatrolStartMode] = useState<AssetPatrolStartMode>("current_state");
-  const [assetPatrolPageScope, setAssetPatrolPageScope] = useState<AssetPatrolPageScope>("current_page");
-  const [assetPatrolMaxDurationMinutes, setAssetPatrolMaxDurationMinutes] = useState(2);
-  const [assetPatrolMaxTransitions, setAssetPatrolMaxTransitions] = useState(8);
-  const [assetPatrolAllowRiskyActions, setAssetPatrolAllowRiskyActions] = useState(false);
-  const [assetPatrolAllowBusinessSubmit, setAssetPatrolAllowBusinessSubmit] = useState(false);
-  const [assetPatrolDangerousText, setAssetPatrolDangerousText] = useState(DEFAULT_STABILITY_DANGEROUS_TEXT);
-  const [assetPatrolParameterProfiles, setAssetPatrolParameterProfiles] = useState<ParameterProfile[]>([]);
-  const [assetPatrolParameterProfileId, setAssetPatrolParameterProfileId] = useState("");
-  const [assetPatrolPlan, setAssetPatrolPlan] = useState<AssetPatrolPlan>();
-  const [assetDrivenPanelRunId, setAssetDrivenPanelRunId] = useState("");
-  const [assetDrivenExecutionId, setAssetDrivenExecutionId] = useState("");
-  const [assetDrivenExecution, setAssetDrivenExecution] = useState<AssetDrivenExecutionSession>();
-  const [aiDiagnosisSettings, setAiDiagnosisSettings] = useState<PublicAiDiagnosisSettings>(DEFAULT_AI_DIAGNOSIS_SETTINGS);
-  const [aiDiagnosisDraft, setAiDiagnosisDraft] = useState<AiDiagnosisSettingsDraft>(aiDiagnosisDraftFromSettings(DEFAULT_AI_DIAGNOSIS_SETTINGS));
+  const [aiModelSettings, setAiModelSettings] = useState<PublicAiModelSettings>(DEFAULT_AI_MODEL_SETTINGS);
+  const [aiModelDraft, setAiModelDraft] = useState<AiModelSettingsDraft>(aiModelDraftFromSettings(DEFAULT_AI_MODEL_SETTINGS));
   const [androidAppMonitorDraft, setAndroidAppMonitorDraft] = useState<AndroidAppMonitorSettingsDraft>(DEFAULT_ANDROID_APP_MONITOR_SETTINGS);
   const [androidAppMonitorExecutionOverrides, setAndroidAppMonitorExecutionOverrides] = useState<AndroidAppMonitorExecutionOverrides>({});
   const activePreviewWorkspaceKey = previewWorkspaceKey(activeNavItem);
@@ -1320,7 +627,7 @@ export function App() {
   const resizeStartRef = useRef<ResizeStart | null>(null);
   const semanticSnapshotsRef = useRef<SemanticSnapshots>({});
   const assetRecordingIdentificationInFlightRef = useRef(0);
-  const aiDiagnosisSettingsLoadedRef = useRef(false);
+  const aiModelSettingsLoadedRef = useRef(false);
 
   const {
     devices,
@@ -1360,7 +667,6 @@ export function App() {
   const {
     runs,
     currentRun,
-    currentGraphRun,
     runsLimit,
     activeRunForSelectedDevice,
     selectedDeviceBusy,
@@ -1372,46 +678,11 @@ export function App() {
     resumeCurrentRun,
     stepCurrentRun
   } = useRunExecution({ selectedSerial, setMessage });
-  const assetPatrolAndroidAppMonitorEnabled = androidAppMonitorEnabledForExecution(
-    androidAppMonitorDraft,
-    "asset_patrol",
-    androidAppMonitorExecutionOverrides.asset_patrol
-  );
   const stabilityAndroidAppMonitorEnabled = androidAppMonitorEnabledForExecution(
     androidAppMonitorDraft,
     "stability_exploration",
     androidAppMonitorExecutionOverrides.stability_exploration
   );
-
-  useEffect(() => {
-    if (!assetDrivenExecutionId) {
-      setAssetDrivenExecution(undefined);
-      return;
-    }
-    let cancelled = false;
-    const refreshExecution = async () => {
-      const response = await fetch(`/api/asset-patrols/executions/${encodeURIComponent(assetDrivenExecutionId)}`);
-      if (cancelled) {
-        return;
-      }
-      if (!response.ok) {
-        return;
-      }
-      const json = (await response.json().catch(() => ({}))) as { execution?: AssetDrivenExecutionSession };
-      if (!cancelled && json.execution) {
-        setAssetDrivenExecution(json.execution);
-      }
-    };
-    void refreshExecution();
-    const intervalMs = assetDrivenExecution?.status === "running" ? 1000 : 5000;
-    const timer = window.setInterval(() => {
-      void refreshExecution();
-    }, intervalMs);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [assetDrivenExecutionId, assetDrivenExecution?.status]);
 
   function updateAssetRecordingIdentification(event: "begin" | "end") {
     const nextState = assetRecordingIdentificationStateAfter(assetRecordingIdentificationInFlightRef.current, event);
@@ -1436,29 +707,29 @@ export function App() {
     setRuntimeInterceptorRules(json.rules);
   }
 
-  async function loadAiDiagnosisSettings() {
+  async function loadAiModelSettings() {
     try {
-      const json = await apiFetchJson<{ settings: PublicAiDiagnosisSettings }>("/api/settings/ai-diagnosis");
-      setAiDiagnosisSettings(json.settings);
-      setAiDiagnosisDraft(aiDiagnosisDraftFromSettings(json.settings));
-      setMessage("已加载 AI 诊断配置");
+      const json = await apiFetchJson<{ settings: PublicAiModelSettings }>("/api/settings/ai-model");
+      setAiModelSettings(json.settings);
+      setAiModelDraft(aiModelDraftFromSettings(json.settings));
+      setMessage("已加载 AI 模型配置");
     } catch (error) {
-      aiDiagnosisSettingsLoadedRef.current = false;
+      aiModelSettingsLoadedRef.current = false;
       setMessage(error instanceof Error ? error.message : String(error));
     }
   }
 
-  async function saveAiDiagnosisSettings() {
+  async function saveAiModelSettings() {
     try {
       setBusy(true);
-      const json = await apiFetchJson<{ settings: PublicAiDiagnosisSettings }>("/api/settings/ai-diagnosis", {
+      const json = await apiFetchJson<{ settings: PublicAiModelSettings }>("/api/settings/ai-model", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(aiDiagnosisSettingsRequestBody(aiDiagnosisDraft))
+        body: JSON.stringify(aiModelSettingsRequestBody(aiModelDraft))
       });
-      setAiDiagnosisSettings(json.settings);
-      setAiDiagnosisDraft(aiDiagnosisDraftFromSettings(json.settings));
-      setMessage("已保存 AI 诊断配置");
+      setAiModelSettings(json.settings);
+      setAiModelDraft(aiModelDraftFromSettings(json.settings));
+      setMessage("已保存 AI 模型配置");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1471,40 +742,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (activeNavItem !== "assetPatrol" || !assetPatrolPackageName.trim()) {
+    if (activeNavItem !== "settings" || aiModelSettingsLoadedRef.current) {
       return;
     }
-    const timer = window.setTimeout(() => {
-      void syncAssetPatrolParameterProfiles({ silent: true });
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [activeNavItem, assetPatrolPackageName]);
-
-  useEffect(() => {
-    if (!shouldRestoreAssetDrivenExecution({
-      activeNavItem,
-      selectedSerial,
-      packageName: assetPatrolPackageName,
-      assetDrivenExecutionId
-    })) {
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void syncLatestAssetDrivenExecution({ silent: true, isCancelled: () => cancelled });
-    }, 250);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [activeNavItem, selectedSerial, assetPatrolPackageName, assetDrivenExecutionId]);
-
-  useEffect(() => {
-    if (activeNavItem !== "settings" || aiDiagnosisSettingsLoadedRef.current) {
-      return;
-    }
-    aiDiagnosisSettingsLoadedRef.current = true;
-    void loadAiDiagnosisSettings();
+    aiModelSettingsLoadedRef.current = true;
+    void loadAiModelSettings();
   }, [activeNavItem]);
 
   useEffect(() => {
@@ -1547,7 +789,7 @@ export function App() {
     };
   }, [activeNavItem, navCollapsed]);
 
-  async function runAction(action: DeviceActionRequest, captureAssetTransition = true, recordedAction?: AssetRecordingAction) {
+  async function runAction(action: DeviceActionRequest) {
     if (!selectedSerial) {
       setMessage("请先选择设备");
       return;
@@ -1563,18 +805,9 @@ export function App() {
       setMessage("正在识别当前页面，请稍候");
       return;
     }
-    const shouldCaptureAssetTransition = activeNavItem === "assetRecording" && selectedDevice && captureAssetTransition;
-    const cachedAssetObservation = isAssetObservation(assetRecordingPage.observation) ? assetRecordingPage.observation : undefined;
-    const beforeAssetObservation =
-      shouldCaptureAssetTransition && selectedDevice
-        ? buildAssetObservationFromSnapshots(selectedSerial, selectedDevice.platform, semanticSnapshotsRef.current) ?? cachedAssetObservation
-        : undefined;
     if (sendScrcpyDirectAction(action)) {
       semanticSnapshotsRef.current = {};
       setMessage(`已通过 scrcpy 执行 ${action.type}`);
-      if (shouldCaptureAssetTransition) {
-        scheduleAssetRecordingTransition(recordedAction ?? action, beforeAssetObservation);
-      }
       return;
     }
     setBusy(true);
@@ -1591,128 +824,10 @@ export function App() {
       semanticSnapshotsRef.current = {};
       refreshScreenshot();
       setMessage(`已执行 ${action.type}`);
-      if (shouldCaptureAssetTransition) {
-        scheduleAssetRecordingTransition(recordedAction ?? action, beforeAssetObservation);
-      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
-    }
-  }
-
-  function scheduleAssetRecordingTransition(recordable: AssetRecordingAction, beforeObservation: AssetObservation | undefined) {
-    beginAssetRecordingIdentification();
-    window.setTimeout(() => {
-      void (async () => {
-        try {
-          await captureAssetRecordingTransition(recordable, beforeObservation, { manageIdentification: false });
-        } finally {
-          endAssetRecordingIdentification();
-        }
-      })();
-    }, 900);
-  }
-
-  async function captureAssetRecordingTransition(
-    recordable: AssetRecordingAction,
-    beforeObservation: AssetObservation | undefined,
-    options: { manageIdentification?: boolean } = {}
-  ) {
-    if (!selectedSerial || !selectedDevice) {
-      return;
-    }
-    const shouldManageIdentification = options.manageIdentification ?? true;
-    if (shouldManageIdentification) {
-      beginAssetRecordingIdentification();
-    }
-    try {
-      const before = beforeObservation ?? (await fetchAssetObservation(selectedSerial).catch(() => undefined));
-      const after = await fetchAssetObservation(selectedSerial).catch(() => undefined);
-      const targetProfile = targetProfileLookupFromObservation(before) ?? targetProfileLookupFromObservation(after);
-      const graphVersionId = targetProfile
-        ? await fetchWritableGraphVersionId(selectedDevice.platform, targetProfile)
-        : assetRecordingGraphVersionId || (await fetchWritableGraphVersionId(selectedDevice.platform));
-      if (!graphVersionId) {
-        await identifyCurrentPageAsset();
-        return;
-      }
-      setAssetRecordingGraphVersionId(graphVersionId);
-      if (!before || !after) {
-        await identifyCurrentPageAsset();
-        setMessage("已刷新页面信息，但本次动作缺少前后页面快照，暂未生成页面连接候选");
-        return;
-      }
-      const step = deviceActionToAssetRecordingStep(recordable, selectedDeviceSize);
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/asset-transition-candidates`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          step,
-          beforeObservation: before,
-          afterObservation: after,
-          confirm: false,
-          includeOcr: false
-        })
-      });
-      const json = (await response.json()) as AssetTransitionCandidateApiResponse & CurrentPageAssetApiResponse & { error?: string };
-      if (!response.ok) {
-        throw new Error(json.error ?? "页面连接候选生成失败");
-      }
-      await identifyCurrentPageAsset();
-      const edge = json.result.edge.edge;
-      const messagePrefix = edge ? `已生成页面连接候选：${edge.name}` : "动作已执行，暂未生成页面连接候选";
-      setMessage(messagePrefix);
-    } catch (error) {
-      await identifyCurrentPageAsset();
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (shouldManageIdentification) {
-        endAssetRecordingIdentification();
-      }
-    }
-  }
-
-  async function createTapAssetAction(point: { x: number; y: number }): Promise<AssetRecordingAction> {
-    const fallback: AssetRecordingAction = { type: "tap", x: point.x, y: point.y };
-    const actionStrategy = actionStrategyForWorkspace(activeNavItem, {
-      identifying: assetRecordingIdentifying || assetRecordingIdentificationInFlightRef.current > 0
-    });
-    if (!actionStrategy.useCachedSemanticTarget || !selectedSerial || !selectedDevice?.capabilities.screenshot) {
-      return fallback;
-    }
-    const cachedAction = createTapAssetActionFromSnapshot(point, selectedDeviceSize, semanticSnapshotsRef.current);
-    if (cachedAction.type !== "tap" || selectedDevice.platform !== "android" || !actionStrategy.resolveLiveLocatorBeforeAction) {
-      return cachedAction;
-    }
-    const liveElementAction = await fetchTapElementAssetAction(selectedSerial, point);
-    return liveElementAction ?? cachedAction;
-  }
-
-  async function fetchTapElementAssetAction(serial: string, point: { x: number; y: number }): Promise<AssetRecordingAction | undefined> {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 1600);
-    try {
-      const response = await fetch(`/api/devices/${encodeURIComponent(serial)}/locators/element-at`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          x: point.x,
-          y: point.y,
-          deviceWidth: selectedDeviceSize.width,
-          deviceHeight: selectedDeviceSize.height
-        }),
-        signal: controller.signal
-      });
-      if (!response.ok) {
-        return undefined;
-      }
-      const lookup = (await response.json()) as ElementLookupResponse;
-      return createTapAssetActionFromElementLookup(point, lookup);
-    } catch {
-      return undefined;
-    } finally {
-      window.clearTimeout(timeout);
     }
   }
 
@@ -1780,8 +895,7 @@ export function App() {
     }
     const controlSize = previewMode === "scrcpy" ? previewMediaSize : selectedDeviceSize;
     const endControlPoint = pointerToDevice(event, controlSize);
-    const endRecordedPoint = pointerToDevice(event, selectedDeviceSize);
-    if (!endControlPoint || !endRecordedPoint) {
+    if (!endControlPoint) {
       return;
     }
 
@@ -1805,13 +919,6 @@ export function App() {
       mediaSize,
       controlSize
     );
-    const startRecordedPoint = viewportPointToDevicePoint(
-      { x: start.x, y: start.y },
-      { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-      mediaSize,
-      selectedDeviceSize
-    );
-
     const gesture = classifyPreviewGesture({ distancePx: distance, durationMs });
     if (gesture === "swipe") {
       void runAction({
@@ -1821,25 +928,11 @@ export function App() {
         endX: endControlPoint.x,
         endY: endControlPoint.y,
         durationMs
-      }, true, {
-        type: "swipe",
-        startX: startRecordedPoint.x,
-        startY: startRecordedPoint.y,
-        endX: endRecordedPoint.x,
-        endY: endRecordedPoint.y,
-        durationMs
       });
     } else if (gesture === "long_press") {
-      void runAction(
-        { type: "long_press", x: startControlPoint.x, y: startControlPoint.y, durationMs },
-        true,
-        { type: "long_press", x: startRecordedPoint.x, y: startRecordedPoint.y, durationMs }
-      );
+      void runAction({ type: "long_press", x: startControlPoint.x, y: startControlPoint.y, durationMs });
     } else {
-      void (async () => {
-        const recordedAction = await createTapAssetAction(endRecordedPoint);
-        await runAction({ type: "tap", x: endControlPoint.x, y: endControlPoint.y }, true, recordedAction);
-      })();
+      void runAction({ type: "tap", x: endControlPoint.x, y: endControlPoint.y });
     }
   }
 
@@ -1878,17 +971,12 @@ export function App() {
     setActiveNavItem("devices");
   }
 
-  function openAssetRecording(intent?: unknown) {
-    setAssetRecordingIntent(normalizeAssetRecordingIntent(intent));
+  function openAssetRecording() {
     setActiveNavItem("assetRecording");
   }
 
   function openPageAssets() {
     setActiveNavItem("pageAssets");
-  }
-
-  function openAssetPatrol() {
-    setActiveNavItem("assetPatrol");
   }
 
   function openScriptFlows() {
@@ -1897,10 +985,6 @@ export function App() {
 
   function openAiScriptFlows() {
     setActiveNavItem("aiScriptFlows");
-  }
-
-  function openParameterCenter() {
-    setActiveNavItem("parameterCenter");
   }
 
   function openStability() {
@@ -2019,7 +1103,7 @@ export function App() {
         return;
       }
       setAssetRecordingGraphVersionId(graphVersionId);
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/current-page`, {
+      const response = await fetch(`/api/page-assets/${encodeURIComponent(graphVersionId)}/current-page`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2034,7 +1118,6 @@ export function App() {
       }
       const mappedPage = mapCurrentPageAssetResponse(json, graphVersionId);
       setAssetRecordingPage(mappedPage);
-      setAssetAutoExploreReport(undefined);
       setMessage(pageAssetMessage(json, mappedPage));
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
@@ -2054,7 +1137,7 @@ export function App() {
     }
     setAssetRecordingAiIdentifying(true);
     try {
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/ai-page-draft`, {
+      const response = await fetch(`/api/page-assets/${encodeURIComponent(graphVersionId)}/ai-page-draft`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ observation })
@@ -2107,14 +1190,14 @@ export function App() {
       };
       const response = pageDraft.nodeId
         ? await fetch(
-            `/api/graphs/${encodeURIComponent(assetRecordingPage.graphVersionId)}/assets/nodes/${encodeURIComponent(pageDraft.nodeId)}/promote`,
+            `/api/page-assets/${encodeURIComponent(assetRecordingPage.graphVersionId)}/assets/nodes/${encodeURIComponent(pageDraft.nodeId)}/promote`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(assetPayload)
             }
           )
-        : await fetch(`/api/graphs/${encodeURIComponent(assetRecordingPage.graphVersionId)}/assets/nodes`, {
+        : await fetch(`/api/page-assets/${encodeURIComponent(assetRecordingPage.graphVersionId)}/assets/nodes`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(assetPayload)
@@ -2150,7 +1233,7 @@ export function App() {
     const graphVersionId = assetRecordingPage.graphVersionId;
     const sourceNodeId = draft.sourceNodeId ?? assetRecordingPage.nodeId;
     if (!graphVersionId || !sourceNodeId) {
-      const errorMessage = "当前页面还没有保存为页面资产，请先保存页面后再录入可操作元素";
+      const errorMessage = "当前页面还没有保存为页面资产，请先保存页面后再录入公共定位器";
       setAssetPageElementSaveError(errorMessage);
       setMessage(errorMessage);
       return false;
@@ -2168,7 +1251,7 @@ export function App() {
         sourceNodeId,
         platformScope: selectedDevice?.platform ?? "android"
       });
-      const validationResponse = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/page-elements/validate`, {
+      const validationResponse = await fetch(`/api/page-assets/${encodeURIComponent(graphVersionId)}/assets/page-elements/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2183,17 +1266,17 @@ export function App() {
         error?: string;
       };
       if (!validationResponse.ok || !validationJson.quality) {
-        throw new Error(validationJson.error ?? "可操作元素质量校验失败");
+        throw new Error(validationJson.error ?? "公共定位器质量校验失败");
       }
       if (validationJson.quality.status === "fail") {
-        throw new Error(validationJson.quality.warnings.find((warning) => warning.severity === "error")?.message ?? "可操作元素质量不满足保存要求");
+        throw new Error(validationJson.quality.warnings.find((warning) => warning.severity === "error")?.message ?? "公共定位器质量不满足保存要求");
       }
       const qualityCheckedDraft: AssetRecordingPageElementDraft = {
         ...draft,
         quality: validationJson.quality,
         ...(validationJson.visualLocator ? { visualLocator: validationJson.visualLocator } : {})
       };
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/page-elements`, {
+      const response = await fetch(`/api/page-assets/${encodeURIComponent(graphVersionId)}/assets/page-elements`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
@@ -2209,7 +1292,7 @@ export function App() {
         error?: string;
       };
       if (!response.ok || json.result?.status !== "saved") {
-        throw new Error(json.error ?? "可操作元素保存失败");
+        throw new Error(json.error ?? "公共定位器保存失败");
       }
       setAssetRecordingPage((page) => ({
         ...page,
@@ -2241,7 +1324,7 @@ export function App() {
     }
     try {
       setBusy(true);
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/page-elements/${encodeURIComponent(sourceNodeId)}/${encodeURIComponent(element.id)}`, {
+      const response = await fetch(`/api/page-assets/${encodeURIComponent(graphVersionId)}/assets/page-elements/${encodeURIComponent(sourceNodeId)}/${encodeURIComponent(element.id)}`, {
         method: "DELETE"
       });
       const json = (await response.json().catch(() => ({}))) as {
@@ -2265,130 +1348,6 @@ export function App() {
     }
   }
 
-  async function saveAssetPageTask(draft: AssetRecordingPageTaskDraft) {
-    const graphVersionId = assetRecordingPage.graphVersionId;
-    const sourceNodeId = draft.sourceNodeId ?? assetRecordingPage.nodeId;
-    if (!graphVersionId || !sourceNodeId) {
-      setMessage("当前页面还没有保存为页面资产，请先保存页面后再编排页面任务");
-      return;
-    }
-    if (!draft.steps.length) {
-      setMessage("页面任务至少需要一个有效步骤");
-      return;
-    }
-    try {
-      setBusy(true);
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/page-tasks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(assetPageTaskRequestBody(draft, { sourceNodeId }))
-      });
-      const json = (await response.json().catch(() => ({}))) as {
-        result?: { status?: string; task?: AssetRecordingPageTask };
-        assets?: CurrentPageAssetApiResponse["assets"];
-        error?: string;
-      };
-      if (!response.ok || json.result?.status !== "saved" || !json.result.task) {
-        throw new Error(json.error ?? "页面任务保存失败");
-      }
-      setAssetRecordingPage((page) => ({
-        ...page,
-        savedAssets: mapPageAssets(json.assets),
-        tasks: mergePageTasks([json.result!.task!], page.tasks ?? [])
-      }));
-      setMessage(`已保存页面任务：${json.result.task.name}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function deleteAssetPageTask(task: AssetRecordingPageTask) {
-    const graphVersionId = assetRecordingPage.graphVersionId;
-    const sourceNodeId = assetRecordingPage.nodeId;
-    if (!graphVersionId || !sourceNodeId || !task.id) {
-      setMessage("当前页面任务缺少可删除的资产标识");
-      return;
-    }
-    try {
-      setBusy(true);
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/page-tasks/${encodeURIComponent(sourceNodeId)}/${encodeURIComponent(task.id)}`, {
-        method: "DELETE"
-      });
-      const json = (await response.json().catch(() => ({}))) as {
-        result?: { status?: string };
-        assets?: CurrentPageAssetApiResponse["assets"];
-        error?: string;
-      };
-      if (!response.ok || json.result?.status !== "deleted") {
-        throw new Error(json.error ?? "删除页面任务失败");
-      }
-      setAssetRecordingPage((page) => ({
-        ...page,
-        savedAssets: mapPageAssets(json.assets),
-        tasks: (page.tasks ?? []).filter((item) => item.id !== task.id)
-      }));
-      setMessage(`已删除页面任务：${task.name}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function previewAutoExplore(options: { maxDepth: number; maxCandidates: number; maxActions: number }) {
-    await requestAutoExplore("preview", options);
-  }
-
-  async function runAutoExplore(options: { maxDepth: number; maxCandidates: number; maxActions: number }) {
-    await requestAutoExplore("run", options);
-  }
-
-  async function requestAutoExplore(mode: "preview" | "run", options: { maxDepth: number; maxCandidates: number; maxActions: number }) {
-    if (!selectedSerial || !selectedDevice) {
-      setMessage("请先选择设备");
-      return;
-    }
-    const pageObservation = assetRecordingPage.status !== "idle" && isAssetObservation(assetRecordingPage.observation) ? assetRecordingPage.observation : undefined;
-    const targetProfile = targetProfileLookupFromObservation(pageObservation)
-      ?? targetProfileLookupFromObservation(await fetchAssetObservation(selectedSerial).catch(() => undefined));
-    const graphVersionId = assetRecordingPage.graphVersionId
-      || (targetProfile ? await fetchWritableGraphVersionId(selectedDevice.platform, targetProfile) : assetRecordingGraphVersionId || (await fetchWritableGraphVersionId(selectedDevice.platform)));
-    if (!graphVersionId) {
-      setMessage(targetProfile ? "当前前台 App 尚未绑定产品资产库 Profile" : "未找到可写入的页面资产库版本");
-      return;
-    }
-    try {
-      setBusy(true);
-      const response = await fetch(`/api/graphs/${encodeURIComponent(graphVersionId)}/auto-explorer/${mode}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          deviceSerial: selectedSerial,
-          maxDepth: options.maxDepth,
-          maxCandidates: options.maxCandidates,
-          maxActions: options.maxActions
-        })
-      });
-      const json = (await response.json().catch(() => ({}))) as {
-        report?: AssetRecordingAutoExploreReport;
-        error?: string;
-      };
-      if (!response.ok || !json.report) {
-        throw new Error(json.error ?? "发现页面连接失败");
-      }
-      setAssetRecordingGraphVersionId(graphVersionId);
-      setAssetAutoExploreReport(json.report);
-      const action = mode === "preview" ? "已生成页面连接候选" : "页面连接发现完成";
-      setMessage(json.report.status === "blocked" ? json.report.message ?? "页面连接发现已阻断" : `${action}：${json.report.plan.steps.length} 步`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function updateStabilityPackageName(packageName: string) {
     setStabilityPackageName(packageName);
     setStabilityDangerousText(loadStabilityDangerousTextForPackage(packageName));
@@ -2397,16 +1356,6 @@ export function App() {
   function updateStabilityDangerousText(text: string) {
     setStabilityDangerousText(text);
     saveStabilityDangerousTextForPackage(stabilityPackageName, text);
-  }
-
-  function updateAssetPatrolPackageName(packageName: string) {
-    setAssetPatrolPackageName(packageName);
-    setAssetPatrolDangerousText(loadStabilityDangerousTextForPackage(packageName));
-    setAssetPatrolPlan(undefined);
-    setAssetDrivenExecutionId("");
-    setAssetDrivenExecution(undefined);
-    setAssetPatrolParameterProfiles([]);
-    setAssetPatrolParameterProfileId("");
   }
 
   function updateAndroidAppMonitorExecutionOverride(kind: AndroidAppMonitorExecutionKind, enabled: boolean) {
@@ -2427,187 +1376,6 @@ export function App() {
       executionPackageName: packageName,
       enabledOverride
     });
-  }
-
-  function assetPatrolRequestPayload() {
-    return assetPatrolRequestBody({
-      selectedSerial,
-      packageName: assetPatrolPackageName,
-      startMode: assetPatrolStartMode,
-      pageScope: assetPatrolPageScope,
-      maxDurationMinutes: assetPatrolMaxDurationMinutes,
-      maxTransitions: assetPatrolMaxTransitions,
-      allowRiskyActions: assetPatrolAllowRiskyActions,
-      allowBusinessSubmit: assetPatrolAllowBusinessSubmit,
-      dangerousTextPatternsText: assetPatrolDangerousText,
-      parameterProfileId: assetPatrolParameterProfileId,
-      androidAppMonitor: androidAppMonitorForExecution(androidAppMonitorDraft, {
-        executionKind: "asset_patrol",
-        startStrategy: flowStartStrategyForExplorerStartMode(assetPatrolStartMode),
-        executionPackageName: assetPatrolPackageName,
-        enabledOverride: androidAppMonitorExecutionOverrides.asset_patrol
-      })
-    });
-  }
-
-  async function syncAssetPatrolParameterProfiles(options: { silent?: boolean } = {}) {
-    const packageName = assetPatrolPackageName.trim();
-    if (!packageName) {
-      if (!options.silent) {
-        setMessage("请先填写目标包名");
-      }
-      return;
-    }
-    try {
-      if (!options.silent) {
-        setBusy(true);
-      }
-      const query = new URLSearchParams({ appId: packageName, platform: "android" });
-      const json = await apiFetchJson<{ profiles?: ParameterProfile[] }>(`/api/asset-composition/parameter-profiles?${query.toString()}`);
-      const profiles = (json.profiles ?? []).filter((profile) => profile.status === "active");
-      setAssetPatrolParameterProfiles(profiles);
-      setAssetPatrolParameterProfileId((current) => profiles.some((profile) => profile.id === current) ? current : profiles[0]?.id ?? "");
-      if (!options.silent) {
-        setMessage(profiles.length ? `已加载 ${profiles.length} 个执行组合` : "当前应用还没有可用执行组合");
-      }
-    } catch (error) {
-      if (!options.silent) {
-        setMessage(error instanceof Error ? error.message : String(error));
-      }
-    } finally {
-      if (!options.silent) {
-        setBusy(false);
-      }
-    }
-  }
-
-  async function syncLatestAssetDrivenExecution(options: { silent?: boolean; isCancelled?: () => boolean } = {}) {
-    const packageName = assetPatrolPackageName.trim();
-    if (!selectedSerial || !packageName) {
-      return;
-    }
-    try {
-      const query = new URLSearchParams({
-        deviceSerial: selectedSerial,
-        packageName
-      });
-      const response = await fetch(`/api/asset-patrols/executions?${query.toString()}`);
-      if (options.isCancelled?.()) {
-        return;
-      }
-      const json = (await response.json().catch(() => ({}))) as { execution?: AssetDrivenExecutionSession; error?: string };
-      if (!response.ok) {
-        throw new Error(json.error ?? "同步资产测试状态失败");
-      }
-      if (options.isCancelled?.() || !json.execution) {
-        return;
-      }
-      setAssetDrivenExecutionId(json.execution.id);
-      setAssetDrivenExecution(json.execution);
-      if (json.execution.runningItem?.runId) {
-        setAssetDrivenPanelRunId(json.execution.runningItem.runId);
-      }
-      if (!options.silent) {
-        setMessage(`已同步资产测试批次：${json.execution.id}`);
-      }
-    } catch (error) {
-      if (!options.silent) {
-        setMessage(error instanceof Error ? error.message : String(error));
-      }
-    }
-  }
-
-  async function startAssetDrivenTest() {
-    if (!selectedSerial) {
-      setMessage("请先选择设备");
-      return;
-    }
-    if (!assetPatrolPackageName.trim()) {
-      setMessage("请先填写目标包名");
-      return;
-    }
-    if (selectedDeviceBusy) {
-      setMessage(`当前设备正在执行：${activeRunForSelectedDevice?.id ?? ""}`);
-      return;
-    }
-    if (assetDrivenExecution?.status === "running") {
-      setMessage(`本轮资产测试正在执行：${assetDrivenExecution.id}`);
-      return;
-    }
-    if (!assetPatrolAllowBusinessSubmit && assetPatrolPlanRequiresBusinessSubmit(assetPatrolPlan)) {
-      setMessage("当前资产测试会执行页面任务，请先勾选“允许业务提交”后再开始资产测试。");
-      return;
-    }
-    try {
-      setBusy(true);
-      saveStabilityDangerousTextForPackage(assetPatrolPackageName, assetPatrolDangerousText);
-      const response = await fetch("/api/asset-patrols/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(assetPatrolRequestPayload())
-      });
-      const json = (await response.json().catch(() => ({}))) as {
-        run?: TestRun;
-        plan?: AssetPatrolPlan;
-        error?: string;
-        activeRunId?: string;
-        assetDrivenExecution?: AssetDrivenExecutionSession;
-        assetDrivenQueue?: { id?: string; total?: number; remaining?: number };
-      };
-      if (!response.ok || !json.run) {
-        if (json.plan) {
-          setAssetPatrolPlan(json.plan);
-        }
-        throw new Error(json.error ?? (json.activeRunId ? `设备正在执行：${json.activeRunId}` : "启动资产测试失败"));
-      }
-      setAssetDrivenPanelRunId(json.run.id);
-      setAssetDrivenExecutionId(json.assetDrivenExecution?.id ?? json.assetDrivenQueue?.id ?? "");
-      setAssetDrivenExecution(json.assetDrivenExecution);
-      setAssetPatrolPlan(undefined);
-      await refreshRuns();
-      setMessage(assetDrivenTestStartMessage(json.run, json.assetDrivenQueue));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function stopAssetPatrol(targetId: string) {
-    try {
-      setBusy(true);
-      const shouldStopExecution = targetId === assetDrivenExecution?.id || targetId === assetDrivenExecutionId;
-      const response = await fetch(
-        shouldStopExecution
-          ? `/api/asset-patrols/executions/${encodeURIComponent(targetId)}/stop`
-          : `/api/runs/${encodeURIComponent(targetId)}/stop`,
-        { method: "POST" }
-      );
-      const json = (await response.json().catch(() => ({}))) as { run?: TestRun; execution?: AssetDrivenExecutionSession; error?: string };
-      if (!response.ok) {
-        throw new Error(json.error ?? "停止资产驱动巡检失败");
-      }
-      if (shouldStopExecution) {
-        if (json.execution) {
-          setAssetDrivenExecution(json.execution);
-          setAssetDrivenExecutionId(json.execution.id);
-          const currentExecutionRunId = json.execution.runningItem?.runId ?? assetDrivenPanelRunId;
-          if (currentExecutionRunId) {
-            setCurrentRunId(currentExecutionRunId);
-          }
-        }
-        await refreshRuns();
-        setMessage(`已停止本轮资产测试：${targetId}`);
-        return;
-      }
-      setCurrentRunId(targetId);
-      await refreshRuns();
-      setMessage(`已停止资产驱动巡检：${targetId}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function startStabilityExploration() {
@@ -2686,31 +1454,16 @@ export function App() {
 
   const workspaceStyle: PreviewWorkspaceStyle = workspaceStyleForNav(activeNavItem, 0, assetRecordingPreviewWidth);
   const stabilityPackageOptions = knownStabilityPackages(runs);
-  const assetPatrolPackageOptions = stabilityPackageOptions;
   const currentStabilityRun =
     (currentRun?.config.runKind === "stability_exploration" ? currentRun : undefined) ??
     runs.find((run) => run.config.runKind === "stability_exploration" && run.deviceSerial === selectedSerial && isActiveRunStatus(run)) ??
     runs.find((run) => run.config.runKind === "stability_exploration" && run.deviceSerial === selectedSerial);
   const stabilitySummary = stabilityRunProgressSummary(currentStabilityRun);
-  const trackedAssetDrivenRun =
-    (assetDrivenPanelRunId && currentRun?.id === assetDrivenPanelRunId ? currentRun : undefined) ??
-    (assetDrivenPanelRunId ? runs.find((run) => run.id === assetDrivenPanelRunId) : undefined);
-  const activeAssetDrivenGraphRun = assetDrivenPanelRunId
-    ? runs.find((run) => run.config.runKind === "business_graph" && run.deviceSerial === selectedSerial && isActiveRunStatus(run))
-    : undefined;
-  const currentAssetPatrolRun =
-    trackedAssetDrivenRun ??
-    activeAssetDrivenGraphRun ??
-    (currentRun?.config.runKind === "asset_patrol" ? currentRun : undefined) ??
-    runs.find((run) => run.config.runKind === "asset_patrol" && run.deviceSerial === selectedSerial && isActiveRunStatus(run)) ??
-    runs.find((run) => run.config.runKind === "asset_patrol" && run.deviceSerial === selectedSerial);
-  const assetPatrolSummary = assetDrivenExecutionProgressSummary(assetDrivenExecution) ?? assetDrivenRunProgressSummary(currentAssetPatrolRun, assetPatrolPackageName);
 
   const runResultsPanel = (
     <RunResultsPanel
       selectedDevice={selectedDevice}
       currentRun={currentRun}
-      currentGraphRun={currentGraphRun}
       runs={runs}
       runsLimit={runsLimit}
       selectedSerial={selectedSerial}
@@ -2775,8 +1528,6 @@ export function App() {
           openPageAssets={openPageAssets}
           openScriptFlows={openScriptFlows}
           openAiScriptFlows={openAiScriptFlows}
-          openParameterCenter={openParameterCenter}
-          openAssetPatrol={openAssetPatrol}
           openStability={openStability}
           openRuns={openRuns}
           openSettings={openSettings}
@@ -2811,14 +1562,7 @@ export function App() {
             onSavePageElement={saveAssetPageElement}
             pageElementSaveError={assetPageElementSaveError}
             onDeletePageElement={deleteAssetPageElement}
-            onSavePageTask={saveAssetPageTask}
-            onDeletePageTask={deleteAssetPageTask}
-            autoExploreReport={assetAutoExploreReport}
-            onPreviewAutoExplore={previewAutoExplore}
-            onRunAutoExplore={runAutoExplore}
             onResizePointerDown={onAssetRecordingResizePointerDown}
-            recordingIntent={assetRecordingIntent}
-            onRecordingIntentConsumed={() => setAssetRecordingIntent(undefined)}
             previewSlot={
               <PreviewPanel
                 key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
@@ -2869,6 +1613,11 @@ export function App() {
             initialSourceYaml={pendingScriptDraft || undefined}
             onInitialSourceConsumed={() => setPendingScriptDraft("")}
             setMessage={setMessage}
+            androidAppMonitorForApp={(appId) => keepCurrentAndroidAppMonitorForPackage(
+              "script_flow",
+              appId,
+              androidAppMonitorExecutionOverrides.script_flow
+            )}
             onOpenRun={(runId) => {
               setCurrentRunId(runId);
               openRuns({ keepCurrentRun: true });
@@ -2878,75 +1627,11 @@ export function App() {
 
         {activeNavItem === "aiScriptFlows" && (
           <AiScriptFlowsPanel
-            defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
+            defaultAppId={DEFAULT_SCRIPT_APP_ID}
             setMessage={setMessage}
             onUseDraft={(sourceYaml) => {
               setPendingScriptDraft(sourceYaml);
               openScriptFlows();
-            }}
-          />
-        )}
-
-        {activeNavItem === "parameterCenter" && (
-          <AssetCompositionPanel
-            mode="parameters"
-            selectedSerial={selectedSerial}
-            selectedDeviceBusy={selectedDeviceBusy}
-            defaultAppId={DEFAULT_ASSET_PATROL_PACKAGE_NAME}
-            setMessage={setMessage}
-            androidAppMonitorEnabled={false}
-            onAndroidAppMonitorEnabledChange={() => undefined}
-            androidAppMonitorForPackage={() => undefined}
-          />
-        )}
-
-        {activeNavItem === "assetPatrol" && (
-          <AssetPatrolPanel
-            devices={selectableDevices}
-            selectedSerial={selectedSerial}
-            selectedDevice={selectedDevice}
-            selectedDeviceBusy={selectedDeviceBusy}
-            packageName={assetPatrolPackageName}
-            packageOptions={assetPatrolPackageOptions}
-            startMode={assetPatrolStartMode}
-            pageScope={assetPatrolPageScope}
-            maxDurationMinutes={assetPatrolMaxDurationMinutes}
-            maxTransitions={assetPatrolMaxTransitions}
-            allowRiskyActions={assetPatrolAllowRiskyActions}
-            allowBusinessSubmit={assetPatrolAllowBusinessSubmit}
-            dangerousTextPatternsText={assetPatrolDangerousText}
-            parameterProfiles={assetPatrolParameterProfiles}
-            parameterProfileId={assetPatrolParameterProfileId}
-            plan={assetPatrolPlan}
-            assetDrivenExecution={assetDrivenExecution}
-            currentRun={currentAssetPatrolRun}
-            summary={assetPatrolSummary}
-            androidAppMonitorEnabled={assetPatrolAndroidAppMonitorEnabled}
-            busy={busy}
-            onAndroidAppMonitorEnabledChange={(enabled) => updateAndroidAppMonitorExecutionOverride("asset_patrol", enabled)}
-            onSelectDevice={(serial) => {
-              const device = selectableDevices.find((item) => item.serial === serial);
-              if (device) {
-                selectDeviceAndCloseStream(device);
-              }
-            }}
-            onPackageNameChange={updateAssetPatrolPackageName}
-            onStartModeChange={setAssetPatrolStartMode}
-            onPageScopeChange={setAssetPatrolPageScope}
-            onMaxDurationMinutesChange={setAssetPatrolMaxDurationMinutes}
-            onMaxTransitionsChange={setAssetPatrolMaxTransitions}
-            onAllowRiskyActionsChange={setAssetPatrolAllowRiskyActions}
-            onAllowBusinessSubmitChange={setAssetPatrolAllowBusinessSubmit}
-            onDangerousTextPatternsChange={(value) => {
-              setAssetPatrolDangerousText(value);
-              saveStabilityDangerousTextForPackage(assetPatrolPackageName, value);
-            }}
-            onParameterProfileIdChange={setAssetPatrolParameterProfileId}
-            onExecute={() => void startAssetDrivenTest()}
-            onStop={(runId) => void stopAssetPatrol(runId)}
-            onOpenRun={(runId) => {
-              setCurrentRunId(runId);
-              openRuns({ keepCurrentRun: true });
             }}
           />
         )}
@@ -3004,13 +1689,13 @@ export function App() {
 
         {activeNavItem === "settings" && (
           <SettingsView
-            aiSettings={aiDiagnosisSettings}
-            aiDraft={aiDiagnosisDraft}
+            aiSettings={aiModelSettings}
+            aiDraft={aiModelDraft}
             androidAppMonitorDraft={androidAppMonitorDraft}
             busy={busy}
-            onAiDraftChange={(patch) => setAiDiagnosisDraft((draft) => ({ ...draft, ...patch }))}
+            onAiDraftChange={(patch) => setAiModelDraft((draft) => ({ ...draft, ...patch }))}
             onAndroidAppMonitorDraftChange={(patch) => setAndroidAppMonitorDraft((draft) => ({ ...draft, ...patch }))}
-            onSaveAiSettings={() => void saveAiDiagnosisSettings()}
+            onSaveAiSettings={() => void saveAiModelSettings()}
           />
         )}
 
@@ -3020,11 +1705,11 @@ export function App() {
 }
 
 type SettingsViewProps = {
-  aiSettings: PublicAiDiagnosisSettings;
-  aiDraft: AiDiagnosisSettingsDraft;
+  aiSettings: PublicAiModelSettings;
+  aiDraft: AiModelSettingsDraft;
   androidAppMonitorDraft: AndroidAppMonitorSettingsDraft;
   busy: boolean;
-  onAiDraftChange: (patch: Partial<AiDiagnosisSettingsDraft>) => void;
+  onAiDraftChange: (patch: Partial<AiModelSettingsDraft>) => void;
   onAndroidAppMonitorDraftChange: (patch: Partial<AndroidAppMonitorSettingsDraft>) => void;
   onSaveAiSettings: () => void;
 };
@@ -3044,7 +1729,7 @@ function SettingsView({
         draft={androidAppMonitorDraft}
         onDraftChange={onAndroidAppMonitorDraftChange}
       />
-      <AiDiagnosisSettingsPanel
+      <AiModelSettingsPanel
         settings={aiSettings}
         draft={aiDraft}
         busy={busy}
@@ -3055,11 +1740,11 @@ function SettingsView({
   );
 }
 
-type AiDiagnosisSettingsPanelProps = {
-  settings: PublicAiDiagnosisSettings;
-  draft: AiDiagnosisSettingsDraft;
+type AiModelSettingsPanelProps = {
+  settings: PublicAiModelSettings;
+  draft: AiModelSettingsDraft;
   busy: boolean;
-  onDraftChange: (patch: Partial<AiDiagnosisSettingsDraft>) => void;
+  onDraftChange: (patch: Partial<AiModelSettingsDraft>) => void;
   onSave: () => void;
 };
 
@@ -3163,19 +1848,18 @@ export function AndroidAppMonitorSettingsPanel({
 
 function androidAppMonitorDefaultModeOptions(): Array<{ value: AndroidAppMonitorDefaultMode; label: string; detail: string }> {
   return [
-    { value: "asset_and_stability", label: "资产巡检/稳定性", detail: "默认采集长链路和探索任务的应用 CPU、内存证据。" },
     { value: "off", label: "关闭", detail: "不额外采集应用 CPU、内存数据，报告仍保留基础设备性能。" },
-    { value: "all_runs", label: "所有正式执行", detail: "资产用例、AI 资产用例也默认采集应用性能。" }
+    { value: "all_runs", label: "全部执行", detail: "ScriptFlow 与稳定性探索默认采集应用 CPU、内存证据。" }
   ];
 }
 
-export function AiDiagnosisSettingsPanel({
+export function AiModelSettingsPanel({
   settings,
   draft,
   busy,
   onDraftChange,
   onSave
-}: AiDiagnosisSettingsPanelProps) {
+}: AiModelSettingsPanelProps) {
   const keyStatus = settings.baseURL.trim().toLowerCase().startsWith("codex://app-server")
     ? "Codex 本地入口，无需密钥"
     : settings.apiKeyConfigured
@@ -3185,7 +1869,7 @@ export function AiDiagnosisSettingsPanel({
     <div className="panel settings-content-panel">
       <div className="panel-head">
         <div>
-          <h2>AI 诊断</h2>
+          <h2>AI 模型</h2>
           <span className="settings-status-line">
             {settings.enabled ? "已启用" : "未启用"} · {keyStatus} · {settingsSourceLabel(settings.source)}
           </span>
@@ -3200,7 +1884,7 @@ export function AiDiagnosisSettingsPanel({
       <div className="settings-form-grid">
         <label className="settings-toggle-row">
           <input type="checkbox" checked={draft.enabled} onChange={(event) => onDraftChange({ enabled: event.target.checked })} />
-          启用失败后 AI 诊断
+          启用 AI 页面分析与用例生成
         </label>
         <label>
           接口地址
@@ -3226,7 +1910,7 @@ export function AiDiagnosisSettingsPanel({
             max={120000}
             type="number"
             value={draft.timeoutMs}
-            onChange={(event) => onDraftChange({ timeoutMs: clampNumberInput(event.target.value, 1000, 120000, DEFAULT_AI_DIAGNOSIS_SETTINGS.timeoutMs) })}
+            onChange={(event) => onDraftChange({ timeoutMs: clampNumberInput(event.target.value, 1000, 120000, DEFAULT_AI_MODEL_SETTINGS.timeoutMs) })}
           />
         </label>
       </div>
@@ -3234,7 +1918,7 @@ export function AiDiagnosisSettingsPanel({
   );
 }
 
-function settingsSourceLabel(source: AiDiagnosisSettingsSource): string {
+function settingsSourceLabel(source: AiModelSettingsSource): string {
   if (source === "stored") {
     return "设置页";
   }
@@ -3262,400 +1946,6 @@ function AppMonitorExecutionToggle({
       <input type="checkbox" checked={enabled} onChange={(event) => onChange?.(event.target.checked)} />
     </label>
   );
-}
-
-type AssetPatrolPanelProps = {
-  devices: DeviceInfo[];
-  selectedSerial: string;
-  selectedDevice?: DeviceInfo;
-  selectedDeviceBusy: boolean;
-  packageName: string;
-  packageOptions: string[];
-  startMode: AssetPatrolStartMode;
-  pageScope: AssetPatrolPageScope;
-  maxDurationMinutes: number;
-  maxTransitions: number;
-  allowRiskyActions: boolean;
-  allowBusinessSubmit: boolean;
-  dangerousTextPatternsText: string;
-  parameterProfiles?: ParameterProfile[];
-  parameterProfileId?: string;
-  /** @deprecated Test-only compatibility for callers not yet migrated to parameter profiles. */
-  runtimeParamsText?: string;
-  /** @deprecated Test-only compatibility for callers not yet migrated to parameter profiles. */
-  runtimeParamDefinitions?: AssetRuntimeParamDefinition[];
-  plan?: AssetPatrolPlan;
-  assetDrivenExecution?: AssetDrivenExecutionSession;
-  currentRun?: TestRun;
-  summary?: ReturnType<typeof assetDrivenExecutionProgressSummary> | ReturnType<typeof assetDrivenRunProgressSummary>;
-  androidAppMonitorEnabled?: boolean;
-  busy: boolean;
-  onAndroidAppMonitorEnabledChange?: (enabled: boolean) => void;
-  onSelectDevice: (serial: string) => void;
-  onPackageNameChange: (value: string) => void;
-  onStartModeChange: (value: AssetPatrolStartMode) => void;
-  onPageScopeChange: (value: AssetPatrolPageScope) => void;
-  onMaxDurationMinutesChange: (value: number) => void;
-  onMaxTransitionsChange: (value: number) => void;
-  onAllowRiskyActionsChange: (value: boolean) => void;
-  onAllowBusinessSubmitChange: (value: boolean) => void;
-  onDangerousTextPatternsChange: (value: string) => void;
-  onParameterProfileIdChange?: (value: string) => void;
-  /** @deprecated Test-only compatibility for callers not yet migrated to parameter profiles. */
-  onRuntimeParamsChange?: (value: string) => void;
-  /** @deprecated Test-only compatibility for callers not yet migrated to parameter profiles. */
-  onSyncRuntimeParams?: () => void;
-  onExecute: () => void;
-  onStop: (runId: string) => void;
-  onOpenRun: (runId: string) => void;
-};
-
-export function AssetPatrolPanel({
-  devices,
-  selectedSerial,
-  selectedDevice,
-  selectedDeviceBusy,
-  packageName,
-  packageOptions,
-  startMode,
-  pageScope,
-  maxDurationMinutes,
-  maxTransitions,
-  allowRiskyActions,
-  allowBusinessSubmit,
-  dangerousTextPatternsText,
-  parameterProfiles = [],
-  parameterProfileId = "",
-  plan,
-  assetDrivenExecution,
-  currentRun,
-  summary,
-  androidAppMonitorEnabled = false,
-  busy,
-  onAndroidAppMonitorEnabledChange,
-  onSelectDevice,
-  onPackageNameChange,
-  onStartModeChange,
-  onPageScopeChange,
-  onMaxDurationMinutesChange,
-  onMaxTransitionsChange,
-  onAllowRiskyActionsChange,
-  onAllowBusinessSubmitChange,
-  onDangerousTextPatternsChange,
-  onParameterProfileIdChange = () => undefined,
-  onExecute,
-  onStop,
-  onOpenRun
-}: AssetPatrolPanelProps) {
-  const running = Boolean(assetDrivenExecution?.status === "running" || (currentRun && isActiveRunStatus(currentRun)));
-  const stopTargetId = assetDrivenExecution?.status === "running" ? assetDrivenExecution.id : currentRun && isActiveRunStatus(currentRun) ? currentRun.id : "";
-  const canUseDevice = canStartAssetDrivenTest({
-    selectedSerial,
-    packageName,
-    selectedDeviceBusy,
-    busy,
-    running
-  });
-  const displayMode = assetPatrolPanelDisplayMode({ plan, currentRun, assetDrivenExecution });
-  const selectedParameterProfile = parameterProfiles.find((profile) => profile.id === parameterProfileId);
-  const assetDrivenTestNeedsBusinessSubmit = !allowBusinessSubmit && assetPatrolPlanRequiresBusinessSubmit(plan);
-  const panelSummary = summary ?? assetDrivenExecutionProgressSummary(assetDrivenExecution) ?? assetDrivenRunProgressSummary(currentRun, packageName);
-  const planGroups = assetPatrolPlanGroups(plan);
-
-  return (
-    <section className="module-page stability-module">
-      <div className="panel module-head-panel">
-        <div>
-          <span className="module-eyebrow">资产驱动巡检</span>
-          <h2>按 PageStateFlow 资产测试当前页面</h2>
-        </div>
-        <div className="module-stat-grid">
-          <div>
-            <strong>{assetDrivenExecution ? `${assetDrivenExecution.totalEdges}` : plan ? `${plan.steps.length}` : "0"}</strong>
-            <span>计划检查</span>
-          </div>
-          <div>
-            <strong>{assetDrivenExecution?.needsRepair ?? plan?.summary.needsRepair ?? panelSummary?.needsRepair ?? 0}</strong>
-            <span>建议修复</span>
-          </div>
-          <div>
-            <strong>{assetDrivenExecution?.status ?? currentRun?.status ?? "idle"}</strong>
-            <span>运行状态</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="stability-layout">
-        <div className="panel stability-config-panel">
-          <div className="panel-head">
-            <h2>测试配置</h2>
-          </div>
-          <div className="stability-form-grid">
-            <label>
-              设备
-              <select value={selectedSerial} onChange={(event) => onSelectDevice(event.target.value)}>
-                <option value="">选择设备</option>
-                {devices.map((device) => (
-                  <option key={device.serial} value={device.serial}>
-                    {device.name || device.serial}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              目标包
-              <input list="asset-patrol-package-options" value={packageName} onChange={(event) => onPackageNameChange(event.target.value)} placeholder="cn.eeo.classin" />
-              <datalist id="asset-patrol-package-options">
-                {packageOptions.map((item) => (
-                  <option key={item} value={item} />
-                ))}
-              </datalist>
-            </label>
-            <label>
-              起始方式
-              <select value={startMode} onChange={(event) => onStartModeChange(event.target.value as AssetPatrolStartMode)}>
-                <option value="current_state">当前页开始</option>
-                <option value="launch_app">启动 App</option>
-                <option value="restart_app">重启 App</option>
-              </select>
-            </label>
-            <label>
-              巡检范围
-              <select value={pageScope} onChange={(event) => onPageScopeChange(event.target.value as AssetPatrolPageScope)}>
-                {assetPatrolPageScopeOptions().map((option) => (
-                  <option key={option.value} value={option.value} disabled={option.disabled}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              最大时长
-              <input min={1} max={30} type="number" value={maxDurationMinutes} onChange={(event) => onMaxDurationMinutesChange(clampNumberInput(event.target.value, 1, 30, 2))} />
-            </label>
-            <label>
-              最大边数
-              <input min={0} max={200} type="number" value={maxTransitions} onChange={(event) => onMaxTransitionsChange(clampNumberInput(event.target.value, 0, 200, 8))} />
-            </label>
-          </div>
-
-          <div className="stability-checkbox-grid">
-            <label>
-              <input type="checkbox" checked={allowRiskyActions} onChange={(event) => onAllowRiskyActionsChange(event.target.checked)} />
-              允许危险动作
-            </label>
-            <label>
-              <input type="checkbox" checked={allowBusinessSubmit} onChange={(event) => onAllowBusinessSubmitChange(event.target.checked)} />
-              允许业务提交
-            </label>
-          </div>
-
-          <label className="stability-danger-list">
-            危险词
-            <textarea value={dangerousTextPatternsText} onChange={(event) => onDangerousTextPatternsChange(event.target.value)} rows={5} />
-          </label>
-
-          <AppMonitorExecutionToggle
-            enabled={androidAppMonitorEnabled}
-            packageName={packageName}
-            onChange={onAndroidAppMonitorEnabledChange}
-          />
-
-          <div className="stability-danger-list">
-            <div className="runtime-param-header">
-              <span>执行组合</span>
-            </div>
-            <label className="parameter-profile-picker">
-              <select value={parameterProfileId} onChange={(event) => onParameterProfileIdChange(event.target.value)}>
-                <option value="">不使用执行组合</option>
-                {parameterProfiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.name}{profile.environment ? ` · ${profile.environment}` : ""} · v{profile.version}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span className="runtime-param-hint">
-              {selectedParameterProfile
-                ? `本次执行使用「${selectedParameterProfile.name}」的冻结快照（已绑定 ${selectedParameterProfile.bindings?.length ?? 0} 个业务领域${Object.keys(selectedParameterProfile.values).length ? `，含 ${Object.keys(selectedParameterProfile.values).length} 项高级覆盖` : ""}）。在“参数中心 > 执行组合”中统一维护。`
-                : "请在“参数中心 > 执行组合”维护并选择一套运行数据；缺少动态参数的能力会被跳过或进入诊断。"}
-            </span>
-          </div>
-
-          <div className="action-row">
-            <button className="icon-button primary" type="button" disabled={!canUseDevice} onClick={onExecute}>
-              <PlayCircle size={16} />
-              {ASSET_DRIVEN_TEST_ACTION_LABEL}
-            </button>
-            {running && stopTargetId ? (
-              <button className="icon-button danger" type="button" disabled={busy} onClick={() => onStop(stopTargetId)}>
-                <Square size={16} />
-                停止
-              </button>
-            ) : null}
-          </div>
-          {assetDrivenTestNeedsBusinessSubmit ? (
-            <div className="runtime-param-hint">当前计划包含页面任务；真实执行前需要勾选“允许业务提交”。</div>
-          ) : null}
-        </div>
-
-        <div className="panel stability-status-panel">
-          <div className="panel-head">
-            <h2>{displayMode === "run" ? "执行结果" : "测试计划"}</h2>
-            {displayMode === "run" && assetDrivenExecution ? (
-              <span className={`run-status-mini ${assetDrivenExecution.status}`}>{assetDrivenExecution.status}</span>
-            ) : displayMode === "run" && currentRun ? (
-              <span className={`run-status-mini ${currentRun.status}`}>{currentRun.status}</span>
-            ) : plan ? (
-              <span className={`run-status-mini ${plan.status === "ready" ? "passed" : "failed"}`}>{plan.status}</span>
-            ) : null}
-          </div>
-          {displayMode === "run" && assetDrivenExecution ? (
-            <>
-              <div className="stability-run-card">
-                <strong>资产测试批次</strong>
-                <span>{assetDrivenExecution.id}</span>
-              </div>
-              <div className="stability-facts">
-                <div><span>当前页</span><strong>{assetDrivenExecution.startNodeName}</strong></div>
-                <div><span>总边数</span><strong>{assetDrivenExecution.totalEdges}</strong></div>
-                <div><span>已完成</span><strong>{assetDrivenExecution.completedEdges}/{assetDrivenExecution.totalEdges}</strong></div>
-                <div><span>当前执行</span><strong>{assetDrivenExecution.runningItem?.label ?? "等待下一条边"}</strong></div>
-                <div><span>待执行</span><strong>{assetDrivenExecution.pendingEdges}</strong></div>
-                <div><span>失败</span><strong>{assetDrivenExecution.failedEdges}</strong></div>
-              </div>
-              <div className="stability-timeline">
-                {assetDrivenExecution.items.map((item) => (
-                  <div key={item.id} className={`stability-step ${assetDrivenExecutionItemClassName(item.status)}`}>
-                    <strong>{item.order}. {item.label}</strong>
-                    <span>
-                      {item.fromPage} -&gt; {item.toPage} · {assetDrivenExecutionItemStatusLabel(item.status)}
-                      {item.latestStep ? ` · ${item.latestStep}` : ""}
-                      {item.runId ? ` · ${item.runId}` : ""}
-                    </span>
-                    {item.errorMessage ? <span>{item.errorMessage}</span> : null}
-                  </div>
-                ))}
-              </div>
-              <div className="action-row">
-                <a className="report-link" href={`/api/asset-patrols/executions/${encodeURIComponent(assetDrivenExecution.id)}/report`} target="_blank" rel="noreferrer">
-                  打开批次报告
-                </a>
-                {assetDrivenExecution.runningItem?.runId ? (
-                  <button className="icon-button" type="button" onClick={() => onOpenRun(assetDrivenExecution.runningItem?.runId ?? "")}>
-                    查看当前执行
-                  </button>
-                ) : null}
-              </div>
-            </>
-          ) : displayMode === "plan" && plan ? (
-            <>
-              <div className="stability-facts">
-                <div><span>当前页</span><strong>{plan.startPage?.name ?? "-"}</strong></div>
-                <div><span>页面检查</span><strong>{plan.summary.pageChecks}</strong></div>
-                <div><span>元素检查</span><strong>{plan.summary.elementChecks}</strong></div>
-                <div><span>边检查</span><strong>{plan.summary.transitionChecks}</strong></div>
-                <div><span>跳过</span><strong>{plan.summary.skipped}</strong></div>
-                <div><span>建议修复</span><strong>{plan.summary.needsRepair}</strong></div>
-              </div>
-              {plan.issues.length ? (
-                <div className="stability-timeline">
-                  {plan.issues.map((issue) => (
-                    <div key={`${issue.code}-${issue.message}`} className={`stability-step ${issue.severity === "error" ? "failed" : "skipped"}`}>
-                      <strong>{issue.code}</strong>
-                      <span>{issue.message}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {planGroups.length ? (
-                <div className="asset-patrol-plan-groups">
-                  {planGroups.map((group) => (
-                    <div className="asset-patrol-plan-group" key={group.key}>
-                      <div className="asset-patrol-plan-group-title">
-                        <strong>{group.title}</strong>
-                        <span>{group.items.length}</span>
-                      </div>
-                      <div className="stability-timeline">
-                        {group.items.map((item) => (
-                          <div key={item.id} className={`stability-step ${item.status === "ready" ? "passed" : item.status === "skipped" ? "skipped" : "failed"}`}>
-                            <strong>{item.label}</strong>
-                            <span>{item.detail}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty">当前计划没有可执行检查项</div>
-              )}
-            </>
-          ) : displayMode === "run" && currentRun ? (
-            <>
-              <div className="stability-run-card">
-                <strong>{currentRun.caseName}</strong>
-                <span>{currentRun.id}</span>
-              </div>
-              {currentRun.config.runKind === "asset_patrol" ? <div className="stability-diagnostic-note">{ASSET_PATROL_DIAGNOSTIC_MODE_NOTICE}</div> : null}
-              <div className="stability-facts">
-                <div><span>设备</span><strong>{selectedDevice?.name || selectedSerial || currentRun.deviceSerial}</strong></div>
-                <div><span>包名</span><strong>{panelSummary?.packageName ?? packageName}</strong></div>
-                <div><span>页面</span><strong>{panelSummary?.pageName ?? currentRun.caseName}</strong></div>
-                <div><span>最近执行</span><strong>{panelSummary?.latestCheck ?? "等待执行结果"}</strong></div>
-                <div><span>失败</span><strong>{panelSummary?.failed ?? 0}</strong></div>
-                <div><span>建议修复</span><strong>{panelSummary?.needsRepair ?? 0}</strong></div>
-              </div>
-              <div className="action-row">
-                <button className="icon-button" type="button" onClick={() => onOpenRun(currentRun.id)}>
-                  查看执行
-                </button>
-                {currentRun.reportHtmlPath ? (
-                  <a className="report-link" href={`/api/reports/${currentRun.id}/html`} target="_blank" rel="noreferrer">
-                    打开报告
-                  </a>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <div className="empty">选择设备和目标包后开始资产测试</div>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function assetDrivenExecutionItemClassName(status: AssetDrivenExecutionItem["status"]): string {
-  if (status === "passed") {
-    return "passed";
-  }
-  if (status === "failed" || status === "stopped") {
-    return "failed";
-  }
-  if (status === "skipped") {
-    return "skipped";
-  }
-  return "running";
-}
-
-function assetDrivenExecutionItemStatusLabel(status: AssetDrivenExecutionItem["status"]): string {
-  if (status === "pending") {
-    return "待执行";
-  }
-  if (status === "running") {
-    return "运行中";
-  }
-  if (status === "passed") {
-    return "成功";
-  }
-  if (status === "skipped") {
-    return "跳过";
-  }
-  if (status === "stopped") {
-    return "已停止";
-  }
-  return "失败";
 }
 
 type StabilityExplorerPanelProps = {
@@ -4085,24 +2375,24 @@ function DeviceManagementView({
   );
 }
 
-export function selectAssetGraphVersionId(
-  graphs: GraphListItem[],
+export function selectPageAssetLibraryVersionId(
+  libraries: PageAssetLibraryListItem[],
   platform: DeviceInfo["platform"],
   targetProfile?: AssetTargetProfileLookup
 ): string | undefined {
-  const activeGraphs = graphs.filter((graph) => {
-    if (graph.status === "deprecated" || !graph.activeVersion?.id) {
+  const activeLibraries = libraries.filter((library) => {
+    if (library.status === "deprecated" || !library.activeVersion?.id) {
       return false;
     }
-    if (graph.activeVersion.status && graph.activeVersion.status !== "active") {
+    if (library.activeVersion.status && library.activeVersion.status !== "active") {
       return false;
     }
-    return platformScopeMatchesGraph(graph.platformScope, platform);
+    return platformScopeMatchesLibrary(library.platformScope, platform);
   });
   if (hasTargetProfileLookup(targetProfile, platform)) {
-    return activeGraphs.find((graph) => graphMatchesTargetProfile(graph, targetProfile, platform))?.activeVersion?.id;
+    return activeLibraries.find((library) => libraryMatchesTargetProfile(library, targetProfile, platform))?.activeVersion?.id;
   }
-  return activeGraphs[0]?.activeVersion?.id;
+  return activeLibraries[0]?.activeVersion?.id;
 }
 
 type AssetRecordingGraphVersionResolution = {
@@ -4150,16 +2440,16 @@ function delay(ms: number): Promise<void> {
 }
 
 async function fetchWritableGraphVersionId(platform: DeviceInfo["platform"], targetProfile?: AssetTargetProfileLookup): Promise<string | undefined> {
-  const response = await fetch("/api/graphs");
+  const response = await fetch("/api/page-assets");
   if (!response.ok) {
     return undefined;
   }
-  const json = (await response.json()) as { graphs: GraphListItem[] };
-  return selectAssetGraphVersionId(json.graphs, platform, targetProfile);
+  const json = (await response.json()) as { libraries: PageAssetLibraryListItem[] };
+  return selectPageAssetLibraryVersionId(json.libraries, platform, targetProfile);
 }
 
-function graphMatchesTargetProfile(graph: GraphListItem, targetProfile: AssetTargetProfileLookup | undefined, platform: DeviceInfo["platform"]): boolean {
-  return targetProfilesForGraph(graph).some((profile) => {
+function libraryMatchesTargetProfile(library: PageAssetLibraryListItem, targetProfile: AssetTargetProfileLookup | undefined, platform: DeviceInfo["platform"]): boolean {
+  return targetProfilesForLibrary(library).some((profile) => {
     if (platform === "android") {
       const androidPackageName = normalizeText(targetProfile?.androidPackageName);
       return profile.platform === "android" && Boolean(androidPackageName) && normalizeText(profile.androidPackageName) === androidPackageName;
@@ -4169,33 +2459,14 @@ function graphMatchesTargetProfile(graph: GraphListItem, targetProfile: AssetTar
   });
 }
 
-function targetProfilesForGraph(graph: GraphListItem): AssetGraphTargetProfile[] {
-  const profiles = (graph.targetApp?.profiles ?? []).map(normalizeAssetGraphTargetProfile).filter((profile): profile is AssetGraphTargetProfile => Boolean(profile));
-  const legacyProfiles: AssetGraphTargetProfile[] = [];
-  const androidPackageName = normalizeText(graph.targetApp?.androidPackageName);
-  if (androidPackageName) {
-    legacyProfiles.push({
-      id: "legacy-android-primary",
-      platform: "android",
-      displayName: "Android",
-      androidPackageName,
-      isPrimary: profiles.every((profile) => profile.platform !== "android")
-    });
-  }
-  const iosBundleId = normalizeText(graph.targetApp?.iosBundleId);
-  if (iosBundleId) {
-    legacyProfiles.push({
-      id: "legacy-ios-primary",
-      platform: "ios",
-      displayName: "iOS",
-      iosBundleId,
-      isPrimary: profiles.every((profile) => profile.platform !== "ios")
-    });
-  }
-  return dedupeAssetGraphTargetProfiles([...profiles, ...legacyProfiles]);
+function targetProfilesForLibrary(library: PageAssetLibraryListItem): PageAssetTargetProfile[] {
+  const profiles = (library.targetApp?.profiles ?? [])
+    .map(normalizePageAssetTargetProfile)
+    .filter((profile): profile is PageAssetTargetProfile => Boolean(profile));
+  return dedupePageAssetTargetProfiles(profiles);
 }
 
-function normalizeAssetGraphTargetProfile(profile: AssetGraphTargetProfile): AssetGraphTargetProfile | undefined {
+function normalizePageAssetTargetProfile(profile: PageAssetTargetProfile): PageAssetTargetProfile | undefined {
   const platform = profile.platform === "android" || profile.platform === "ios" || profile.platform === "harmony" || profile.platform === "flutter" ? profile.platform : undefined;
   if (!platform) {
     return undefined;
@@ -4212,11 +2483,11 @@ function normalizeAssetGraphTargetProfile(profile: AssetGraphTargetProfile): Ass
   };
 }
 
-function dedupeAssetGraphTargetProfiles(profiles: AssetGraphTargetProfile[]): AssetGraphTargetProfile[] {
+function dedupePageAssetTargetProfiles(profiles: PageAssetTargetProfile[]): PageAssetTargetProfile[] {
   const seen = new Set<string>();
-  const result: AssetGraphTargetProfile[] = [];
+  const result: PageAssetTargetProfile[] = [];
   for (const profile of profiles) {
-    const key = assetGraphTargetProfileKey(profile);
+    const key = pageAssetTargetProfileKey(profile);
     if (seen.has(key)) {
       continue;
     }
@@ -4226,7 +2497,7 @@ function dedupeAssetGraphTargetProfiles(profiles: AssetGraphTargetProfile[]): As
   return result;
 }
 
-function assetGraphTargetProfileKey(profile: AssetGraphTargetProfile): string {
+function pageAssetTargetProfileKey(profile: PageAssetTargetProfile): string {
   if (profile.platform === "android" && profile.androidPackageName) {
     return `android:${profile.androidPackageName}`;
   }
@@ -4258,7 +2529,7 @@ function hasTargetProfileLookup(targetProfile: AssetTargetProfileLookup | undefi
   return platform === "android" ? Boolean(normalizeText(targetProfile?.androidPackageName)) : Boolean(normalizeText(targetProfile?.iosBundleId));
 }
 
-function platformScopeMatchesGraph(scope: string | undefined, platform: DeviceInfo["platform"]): boolean {
+function platformScopeMatchesLibrary(scope: string | undefined, platform: DeviceInfo["platform"]): boolean {
   return !scope || scope === platform || scope === "mobile-both";
 }
 
@@ -4274,9 +2545,6 @@ function knownStabilityPackages(runs: TestRun[]): string[] {
     }
     if (run.config.stabilityExploration?.packageName) {
       packages.add(run.config.stabilityExploration.packageName);
-    }
-    if (run.config.assetPatrol?.packageName) {
-      packages.add(run.config.assetPatrol.packageName);
     }
   }
   return Array.from(packages).sort();
@@ -4317,17 +2585,6 @@ function isStabilityStepMetadata(value: unknown): value is {
   currentPackage?: string;
   resultType?: string;
   skippedCandidates?: Array<{ label?: string; skipReason?: string }>;
-} {
-  return typeof value === "object" && value !== null;
-}
-
-function isAssetPatrolStepMetadata(value: unknown): value is {
-  kind?: string;
-  label?: string;
-  status?: string;
-  skipReason?: string;
-  pageModelName?: string;
-  startPage?: { name?: string };
 } {
   return typeof value === "object" && value !== null;
 }
@@ -4418,31 +2675,9 @@ export function mapCurrentPageAssetResponse(response: CurrentPageAssetApiRespons
     uiTexts: summarizeObservationTexts(observation, "ui"),
     ocrTexts: summarizeObservationTexts(observation, "ocr"),
     elements: mergeOperationElements(manualOperationElementsMetadata(nodeMetadata, observation?.resolution), summarizeObservationElements(observation)),
-    transitions: mapAssetTransitions(response.assets, matchedPageNode?.id ?? result.match.node?.id ?? result.node?.id ?? candidate?.node?.id),
-    tasks: pageTasksMetadata(nodeMetadata),
     aiDescription: stringMetadata(nodeMetadata, "aiDescription") ?? summarizeAssetAiDescription(mappedStatus, pageName, observation),
     savedAssets: mapPageAssets(response.assets)
   };
-}
-
-function mapAssetTransitions(assets: CurrentPageAssetApiResponse["assets"], nodeId: string | undefined): AssetRecordingCurrentPage["transitions"] {
-  if (!nodeId) {
-    return [];
-  }
-  const asset = (assets?.pageAssets ?? []).find((item) => item.id === nodeId);
-  return (asset?.transitions ?? []).map((transition) => ({
-    id: transition.id,
-    name: transition.name,
-    status: transition.status,
-    source: transition.source,
-    actionSummary: transition.actionSummary,
-    targetName: transition.targetName,
-    targetKey: transition.targetKey,
-    expectationSummary: transition.expectationSummary,
-    reliabilityScore: transition.reliabilityScore,
-    actionLocator: transition.actionLocator,
-    actionKind: transition.actionKind
-  }));
 }
 
 function mapPageAssets(assets: CurrentPageAssetApiResponse["assets"]): AssetRecordingCurrentPage["savedAssets"] {
@@ -4456,76 +2691,6 @@ function mapPageAssets(assets: CurrentPageAssetApiResponse["assets"]): AssetReco
     elementCount: asset.elementCount,
     updatedAt: asset.updatedAt
   }));
-}
-
-function pageTasksMetadata(metadata: Record<string, unknown> | undefined): NonNullable<AssetRecordingCurrentPage["tasks"]> {
-  const value = metadata?.assetRecordingPageTasks;
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map(pageTaskMetadata)
-    .filter((task): task is NonNullable<AssetRecordingCurrentPage["tasks"]>[number] => Boolean(task))
-    .sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
-}
-
-function pageTaskMetadata(value: unknown): NonNullable<AssetRecordingCurrentPage["tasks"]>[number] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const task = value as Record<string, unknown>;
-  const id = stringMetadata(task, "id");
-  const name = stringMetadata(task, "name");
-  if (!id || !name) {
-    return undefined;
-  }
-  const status = task.status === "draft" || task.status === "deprecated" ? task.status : "active";
-  const steps = pageTaskStepsMetadata(task.steps);
-  return {
-    id,
-    name,
-    status,
-    steps,
-    createdAt: stringMetadata(task, "createdAt"),
-    updatedAt: stringMetadata(task, "updatedAt")
-  };
-}
-
-function pageTaskStepsMetadata(value: unknown): AssetRecordingPageTask["steps"] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((item, index): AssetRecordingPageTask["steps"][number] | undefined => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        return undefined;
-      }
-      const step = item as Record<string, unknown>;
-      return {
-        id: stringMetadata(step, "id"),
-        order: numberMetadata(step.order) ?? index + 1,
-        elementId: stringMetadata(step, "elementId"),
-        fieldType: pageTaskFieldTypeMetadata(step.fieldType),
-        label: stringMetadata(step, "label"),
-        valueParamKey: stringMetadata(step, "valueParamKey"),
-        desiredStateParamKey: stringMetadata(step, "desiredStateParamKey"),
-        text: stringMetadata(step, "text")
-      };
-    })
-    .filter((step): step is AssetRecordingPageTask["steps"][number] => Boolean(step))
-    .sort((left, right) => left.order - right.order);
-}
-
-function pageTaskFieldTypeMetadata(value: unknown): AssetRecordingPageTask["steps"][number]["fieldType"] {
-  return value === "text_input" ||
-    value === "picker_select" ||
-    value === "toggle_set" ||
-    value === "subpage_edit" ||
-    value === "submit" ||
-    value === "tap" ||
-    value === "wait"
-    ? value
-    : "tap";
 }
 
 function inferVisualPageName(observation: AssetObservation | undefined, fallback?: string): string | undefined {
@@ -4649,19 +2814,11 @@ function manualOperationElementsMetadata(metadata: Record<string, unknown> | und
         return undefined;
       }
       const id = stringMetadata(element, "id");
-      const abilityType = manualOperationAbilityType(element.abilityType);
-      const actionKind = manualOperationActionKind(element.actionKind);
-      const availability = manualOperationAvailability(element.availability);
       const semanticArea = visualSemanticAreaMetadata(element.semanticArea);
       const coordinateSpace = coordinateSpaceMetadata(element.coordinateSpace);
       const region = rectMetadata(element.region);
       const scrollProfile = scrollProfileMetadata(element.scrollProfile);
-      const outcomeType = stringMetadata(element, "outcomeType");
-      const outcomeLabel = stringMetadata(element, "outcomeLabel") ?? stringMetadata(element, "targetLabel");
-      const targetNodeId = stringMetadata(element, "targetNodeId");
-      const targetLabel = stringMetadata(element, "targetLabel");
       const targetText = stringMetadata(element, "targetText");
-      const compoundSteps = compoundStepsMetadata(element.compoundSteps);
       const quality = pageElementQualityMetadata(element.quality);
       const visualLocator = visualLocatorMetadata(element.visualLocator);
       const locatorKind = locatorKindMetadata(element.locatorKind);
@@ -4669,8 +2826,6 @@ function manualOperationElementsMetadata(metadata: Record<string, unknown> | und
       const structuralLocator = recordMetadata(element.structuralLocator);
       const dynamicRegionId = stringMetadata(element, "dynamicRegionId");
       const itemTemplateId = stringMetadata(element, "itemTemplateId");
-      const transitionKind = transitionKindMetadata(element.transitionKind);
-      const parameterMapping = stringRecordMetadata(element.parameterMapping);
       return {
         ...(id ? { id } : {}),
         label,
@@ -4678,17 +2833,9 @@ function manualOperationElementsMetadata(metadata: Record<string, unknown> | und
         ...(locatorKind ? { locatorKind } : {}),
         ...(semanticArea ? { semanticArea } : {}),
         ...(coordinateSpace ? { coordinateSpace } : {}),
-        action: stringMetadata(element, "action") ?? actionKind,
-        ...(abilityType ? { abilityType } : {}),
-        actionKind,
-        availability,
         source: "manual",
         ...(region ? { region } : {}),
         ...(resolution ? { viewport: resolution } : {}),
-        ...(outcomeType ? { outcomeType: outcomeType as NonNullable<PageElement["outcomeType"]> } : {}),
-        ...(outcomeLabel ? { outcomeLabel } : {}),
-        ...(targetNodeId ? { targetNodeId } : {}),
-        ...(targetLabel ? { targetLabel } : {}),
         ...(targetText ? { targetText } : {}),
         ...(quality ? { quality } : {}),
         ...(visualLocator ? { visualLocator } : {}),
@@ -4696,9 +2843,6 @@ function manualOperationElementsMetadata(metadata: Record<string, unknown> | und
         ...(structuralLocator ? { structuralLocator } : {}),
         ...(dynamicRegionId ? { dynamicRegionId } : {}),
         ...(itemTemplateId ? { itemTemplateId } : {}),
-        ...(transitionKind ? { transitionKind } : {}),
-        ...(parameterMapping ? { parameterMapping } : {}),
-        ...(compoundSteps.length ? { compoundSteps } : {}),
         ...(scrollProfile ? { scrollProfile } : {})
       };
     })
@@ -4710,11 +2854,11 @@ function mergeOperationElements(
   manualElements: NonNullable<AssetRecordingCurrentPage["elements"]>,
   candidateElements: NonNullable<AssetRecordingCurrentPage["elements"]>
 ): NonNullable<AssetRecordingCurrentPage["elements"]> {
-  const manualKeys = new Set(manualElements.map((element) => `${element.actionKind ?? element.action}:${element.locator}`));
+  const manualKeys = new Set(manualElements.map((element) => element.locator));
   const manualIds = new Set(manualElements.map((element) => element.id).filter(Boolean));
   return dedupeManualOperationElements([
     ...manualElements,
-    ...candidateElements.filter((element) => !manualKeys.has(`${element.actionKind ?? element.action}:${element.locator}`) && (!element.id || !manualIds.has(element.id)))
+    ...candidateElements.filter((element) => !manualKeys.has(element.locator) && (!element.id || !manualIds.has(element.id)))
   ]);
 }
 
@@ -4744,14 +2888,6 @@ function manualOperationElementsRepresentSameTarget(
     return false;
   }
   if (!left.label || !right.label || left.label !== right.label) {
-    return false;
-  }
-  if ((left.actionKind ?? left.action) !== (right.actionKind ?? right.action)) {
-    return false;
-  }
-  const leftCompound = left.compoundSteps?.length ? JSON.stringify(left.compoundSteps) : "";
-  const rightCompound = right.compoundSteps?.length ? JSON.stringify(right.compoundSteps) : "";
-  if (leftCompound !== rightCompound) {
     return false;
   }
   if (left.locator === right.locator) {
@@ -4797,14 +2933,6 @@ function manualOperationElementPriority(element: NonNullable<AssetRecordingCurre
   return score;
 }
 
-function mergePageTasks(
-  nextTasks: NonNullable<AssetRecordingCurrentPage["tasks"]>,
-  currentTasks: NonNullable<AssetRecordingCurrentPage["tasks"]>
-): NonNullable<AssetRecordingCurrentPage["tasks"]> {
-  const nextIds = new Set(nextTasks.map((task) => task.id));
-  return [...currentTasks.filter((task) => !nextIds.has(task.id)), ...nextTasks].sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
-}
-
 function manualElementFromOperationDraft(
   draft: AssetRecordingPageElementDraft,
   _platformScope: string,
@@ -4812,9 +2940,6 @@ function manualElementFromOperationDraft(
 ): NonNullable<AssetRecordingCurrentPage["elements"]>[number] {
   const region = imageRegionMetadata(draft.locator);
   const id = stringMetadata(persistedElement, "id");
-  const abilityType = manualOperationAbilityType(persistedElement?.abilityType) ?? draft.abilityType;
-  const targetNodeId = stringMetadata(persistedElement, "targetNodeId") ?? draft.targetNodeId;
-  const targetLabel = stringMetadata(persistedElement, "targetLabel") ?? draft.targetLabel;
   const targetText = stringMetadata(persistedElement, "targetText") ?? draft.targetText;
   const semanticArea = visualSemanticAreaMetadata(persistedElement?.semanticArea) ?? draft.semanticArea;
   const coordinateSpace = coordinateSpaceMetadata(persistedElement?.coordinateSpace) ?? draft.coordinateSpace;
@@ -4825,8 +2950,6 @@ function manualElementFromOperationDraft(
   const structuralLocator = recordMetadata(persistedElement?.structuralLocator) ?? draft.structuralLocator;
   const dynamicRegionId = stringMetadata(persistedElement, "dynamicRegionId") ?? stringMetadata(recordMetadata(draft.dynamicRegion), "id");
   const itemTemplateId = stringMetadata(persistedElement, "itemTemplateId") ?? stringMetadata(recordMetadata(draft.itemTemplate), "id");
-  const transitionKind = transitionKindMetadata(persistedElement?.transitionKind) ?? draft.transitionKind;
-  const parameterMapping = stringRecordMetadata(persistedElement?.parameterMapping) ?? draft.parameterMapping;
   return {
     ...(id ?? draft.elementId ? { id: id ?? draft.elementId } : {}),
     label: draft.elementLabel,
@@ -4834,16 +2957,8 @@ function manualElementFromOperationDraft(
     ...(locatorKind ? { locatorKind } : {}),
     ...(semanticArea ? { semanticArea } : {}),
     ...(coordinateSpace ? { coordinateSpace } : {}),
-    action: draft.actionKind,
-    ...(abilityType ? { abilityType } : {}),
-    actionKind: draft.actionKind,
-    availability: draft.availability,
     source: "manual",
     ...(region ? { region } : {}),
-    ...(draft.outcomeType ? { outcomeType: draft.outcomeType } : {}),
-    ...(draft.outcomeLabel ? { outcomeLabel: draft.outcomeLabel } : {}),
-    ...(targetNodeId ? { targetNodeId } : {}),
-    ...(targetLabel ? { targetLabel } : {}),
     ...(targetText ? { targetText } : {}),
     ...(quality ? { quality } : {}),
     ...(visualLocator ? { visualLocator } : {}),
@@ -4851,9 +2966,6 @@ function manualElementFromOperationDraft(
     ...(structuralLocator ? { structuralLocator } : {}),
     ...(dynamicRegionId ? { dynamicRegionId } : {}),
     ...(itemTemplateId ? { itemTemplateId } : {}),
-    ...(transitionKind ? { transitionKind } : {}),
-    ...(parameterMapping ? { parameterMapping } : {}),
-    ...(draft.compoundSteps?.length ? { compoundSteps: draft.compoundSteps } : {}),
     ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {})
   };
 }
@@ -4914,10 +3026,6 @@ function locatorKindMetadata(value: unknown): AssetRecordingLocatorKind | undefi
     : undefined;
 }
 
-function transitionKindMetadata(value: unknown): "static" | "parameterized" | undefined {
-  return value === "static" || value === "parameterized" ? value : undefined;
-}
-
 function dynamicMasksMetadata(value: unknown): AssetRecordingDynamicMask[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -4953,17 +3061,6 @@ function dynamicMaskKindMetadata(value: unknown): AssetRecordingDynamicMask["kin
     : undefined;
 }
 
-function stringRecordMetadata(value: unknown): Record<string, string> | undefined {
-  const input = recordMetadata(value);
-  if (!input) {
-    return undefined;
-  }
-  const entries = Object.entries(input)
-    .map(([key, item]) => [key.trim(), typeof item === "string" ? item.trim() : ""] as const)
-    .filter(([key, item]) => key.length > 0 && item.length > 0);
-  return entries.length ? Object.fromEntries(entries) : undefined;
-}
-
 function rectMetadata(value: unknown): { x: number; y: number; width: number; height: number } | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -4977,18 +3074,6 @@ function rectMetadata(value: unknown): { x: number; y: number; width: number; he
     return undefined;
   }
   return { x, y, width, height };
-}
-
-function manualOperationActionKind(value: unknown): NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["actionKind"]> {
-  return value === "scroll" || value === "long_press" || value === "input" || value === "unknown" ? value : "tap";
-}
-
-function manualOperationAvailability(value: unknown): NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["availability"]> {
-  return value === "after_scroll" || value === "conditional" ? value : "visible";
-}
-
-function manualOperationAbilityType(value: unknown): NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["abilityType"]> | undefined {
-  return value === "fixed_tap" || value === "scroll_candidate" || value === "grid_candidate" || value === "conditional_tap" ? value : undefined;
 }
 
 function visualSemanticAreaMetadata(value: unknown): NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["semanticArea"]> | undefined {
@@ -5015,7 +3100,6 @@ function scrollProfileMetadata(value: unknown): NonNullable<NonNullable<AssetRec
     columns: numberMetadata(input.columns),
     targetKind: input.targetKind === "ocr_text" || input.targetKind === "semantic_label" || input.targetKind === "nth_item" || input.targetKind === "image_region" ? input.targetKind : "item_text",
     targetQuery: stringMetadata(input, "targetQuery"),
-    afterFoundAction: input.afterFoundAction === "tap_child" || input.afterFoundAction === "verify_visible" ? input.afterFoundAction : "tap_item",
     candidateItemHeightPercent: numberMetadata(input.candidateItemHeightPercent),
     clickSafePoint: clickSafePointMetadata(input.clickSafePoint),
     scrollStepPercent: numberMetadata(input.scrollStepPercent),
@@ -5034,47 +3118,6 @@ function clickSafePointMetadata(value: unknown): { xPercent: number; yPercent: n
     return undefined;
   }
   return { xPercent, yPercent };
-}
-
-function compoundStepsMetadata(value: unknown): NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["compoundSteps"]> {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const steps: NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["compoundSteps"]> = [];
-  for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      continue;
-    }
-    const step = item as Record<string, unknown>;
-    const actionKind = stringMetadata(step, "actionKind");
-    const locatorText = textFromTextLocator(stringMetadata(step, "locator"));
-    const type = step.type === "wait_until_state" || step.type === "tap_on_text"
-      ? step.type
-      : actionKind === "wait"
-        ? "wait_until_state"
-        : actionKind === "tap" && locatorText
-          ? "tap_on_text"
-          : undefined;
-    const text = stringMetadata(step, "text") ?? locatorText;
-    if (!type || !text) {
-      continue;
-    }
-    steps.push({
-      type,
-      text,
-      label: stringMetadata(step, "label") ?? stringMetadata(step, "elementLabel"),
-      timeoutMs: numberMetadata(step.timeoutMs) ?? numberMetadata(step.waitTimeoutMs)
-    });
-  }
-  return steps;
-}
-
-function textFromTextLocator(locator: string | undefined): string | undefined {
-  if (!locator?.startsWith("text:")) {
-    return undefined;
-  }
-  const text = locator.replace(/^text:\s*/, "").trim();
-  return text || undefined;
 }
 
 function summarizeMatcherResults(
@@ -5096,145 +3139,8 @@ function summarizeEvidenceDiagnostics(evidence: CurrentPageMatcherEvidenceApi[] 
     .map((result) => `${result.type ?? "matcher"}:${result.expected ?? result.actual ?? "unknown"}`);
 }
 
-function summarizeObservationElements(observation: AssetObservation | undefined) {
-  const previewCrop = summarizeOperationPreviewCrop(observation?.resolution);
-  const elementCandidates = (observation?.uiElements ?? [])
-    .filter((element) => element.visible !== false && hasStableOperationSignal(element))
-    .slice(0, 18)
-    .map((element) => {
-      const actionKind = summarizeElementActionKind(element);
-      const region = summarizeElementRegion(element, observation?.resolution);
-      return {
-        label: element.text || element.contentDesc || element.accessibilityId || element.resourceId || element.className || "未命名元素",
-        locator: element.resourceId
-          ? `resource-id: ${element.resourceId}`
-          : element.accessibilityId || element.contentDesc
-            ? `accessibility/desc: ${element.accessibilityId ?? element.contentDesc}`
-            : element.text
-              ? `text: ${element.text}`
-              : element.className
-                ? `class: ${element.className}`
-                : "locator 待确认",
-        action: actionKind === "scroll" ? "scroll" : actionKind === "long_press" ? "long_press / tap" : "tap",
-        actionKind,
-        availability: summarizeElementAvailability(element),
-        ...(region ? { region } : {}),
-        previewCrop,
-        viewport: observation?.resolution,
-        ...(actionKind === "scroll" ? { scrollProfile: summarizeScrollProfile(element) } : {})
-      };
-    });
-  return [...elementCandidates, ...summarizeInferredScrollRegions(observation, previewCrop)];
-}
-
-function summarizeInferredScrollRegions(observation: AssetObservation | undefined, previewCrop: ReturnType<typeof summarizeOperationPreviewCrop>) {
-  const resolution = observation?.resolution;
-  if (!resolution?.width || !resolution.height) {
-    return [];
-  }
-  const cardElements = (observation?.uiElements ?? [])
-    .filter((element) => element.visible !== false && element.bounds && looksLikeScrollableCardText(element))
-    .slice(0, 12);
-  if (cardElements.length < 3) {
-    return [];
-  }
-  const bounds = combinedBounds(cardElements.map((element) => element.bounds!).filter(Boolean));
-  if (!bounds) {
-    return [];
-  }
-  const uniqueColumns = uniqueRounded(cardElements.map((element) => element.bounds!.x), 80).length;
-  const columns = Math.max(1, Math.min(3, uniqueColumns));
-  return [
-    {
-      label: columns >= 2 ? "推断滚动区域：班级列表" : "推断滚动区域：列表",
-      locator: columns >= 2 ? "inferred-scroll-region: class-card-grid" : "inferred-scroll-region: vertical-list",
-      action: "scroll",
-      actionKind: "scroll" as const,
-      availability: "visible" as const,
-      region: summarizeBoundsRegion(bounds, resolution),
-      previewCrop,
-      viewport: resolution,
-      scrollProfile: {
-        containerKind: columns >= 2 ? "grid_list" as const : "list" as const,
-        direction: "vertical" as const,
-        columns,
-        targetKind: "item_text" as const,
-        afterFoundAction: "tap_item" as const
-      }
-    }
-  ];
-}
-
-function looksLikeScrollableCardText(element: AssetObservation["uiElements"][number]): boolean {
-  const text = `${element.text ?? ""} ${element.contentDesc ?? ""}`;
-  return /班级|课程|开放加入|加入|课节|课堂/.test(text);
-}
-
-function combinedBounds(items: Array<{ x: number; y: number; width: number; height: number }>) {
-  if (!items.length) {
-    return undefined;
-  }
-  const left = Math.min(...items.map((item) => item.x));
-  const top = Math.min(...items.map((item) => item.y));
-  const right = Math.max(...items.map((item) => item.x + item.width));
-  const bottom = Math.max(...items.map((item) => item.y + item.height));
-  return { x: left, y: top, width: right - left, height: bottom - top };
-}
-
-function summarizeBoundsRegion(bounds: { x: number; y: number; width: number; height: number }, resolution: NonNullable<AssetObservation["resolution"]>) {
-  return {
-    x: clampPercent((bounds.x / resolution.width) * 100),
-    y: clampPercent((bounds.y / resolution.height) * 100),
-    width: clampPercent((bounds.width / resolution.width) * 100),
-    height: clampPercent((bounds.height / resolution.height) * 100)
-  };
-}
-
-function uniqueRounded(values: number[], tolerance: number): number[] {
-  return values.reduce<number[]>((items, value) => {
-    return items.some((item) => Math.abs(item - value) <= tolerance) ? items : [...items, value];
-  }, []);
-}
-
-function summarizeScrollProfile(element: AssetObservation["uiElements"][number]) {
-  const label = `${element.text ?? ""} ${element.contentDesc ?? ""} ${element.resourceId ?? ""} ${element.className ?? ""}`.toLowerCase();
-  const isGridLike = /grid|recycler|class_list|班级|card/.test(label);
-  const isHorizontalLike = /tab|horizontal|carousel|横向|分类/.test(label);
-  return {
-    containerKind: isHorizontalLike ? "tab_bar" as const : isGridLike ? "grid_list" as const : "list" as const,
-    direction: isHorizontalLike ? "horizontal" as const : "vertical" as const,
-    columns: isGridLike && !isHorizontalLike ? 2 : 1,
-    targetKind: "item_text" as const,
-    afterFoundAction: isHorizontalLike ? "tap_item" as const : "tap_item" as const
-  };
-}
-
-function summarizeOperationPreviewCrop(resolution: AssetObservation["resolution"]): { x: number; y: number; width: number; height: number } | undefined {
-  if (!resolution?.width || !resolution.height) {
-    return undefined;
-  }
-  const topInsetPercent = resolution.height >= 2000 ? 4 : 3;
-  const bottomInsetPercent = 0;
-  return {
-    x: 0,
-    y: topInsetPercent,
-    width: 100,
-    height: Math.max(1, 100 - topInsetPercent - bottomInsetPercent)
-  };
-}
-
-function summarizeElementRegion(element: AssetObservation["uiElements"][number], resolution: AssetObservation["resolution"]): { x: number; y: number; width: number; height: number } | undefined {
-  if (!element.bounds || !resolution?.width || !resolution.height || element.bounds.width <= 0 || element.bounds.height <= 0) {
-    return undefined;
-  }
-  const x = clampPercent((element.bounds.x / resolution.width) * 100);
-  const y = clampPercent((element.bounds.y / resolution.height) * 100);
-  return {
-    x,
-    y,
-    width: clampPercent((element.bounds.width / resolution.width) * 100, 0, 100 - x),
-    height: clampPercent((element.bounds.height / resolution.height) * 100, 0, 100 - y)
-  };
+function summarizeObservationElements(_observation: AssetObservation | undefined): NonNullable<AssetRecordingCurrentPage["elements"]> {
+  return [];
 }
 
 function clampPercent(value: number, min = 0, max = 100): number {

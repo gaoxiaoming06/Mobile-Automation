@@ -172,28 +172,6 @@ describe("androidAppMonitorDisplaySummaryFromRun", () => {
       severity: "warning"
     });
   });
-
-  it("falls back to sample counts embedded in legacy monitor event summary", () => {
-    expect(
-      androidAppMonitorDisplaySummaryFromRun(
-        runWithAndroidAppMonitorEvent({
-          summary: "[Android App Monitor] collected 3 CPU, 2 memory, 1 lifecycle samples",
-          detail: JSON.stringify({
-            packageName: "cn.eeo.classin",
-            processes: [],
-            incidents: 0
-          })
-        })
-      )
-    ).toMatchObject({
-      packageName: "cn.eeo.classin",
-      cpuSamples: 3,
-      memorySamples: 2,
-      lifecycleSamples: 1,
-      incidentCount: 0,
-      severity: "info"
-    });
-  });
 });
 
 function actionStep(overrides: Partial<ActionStep>): ActionStep {

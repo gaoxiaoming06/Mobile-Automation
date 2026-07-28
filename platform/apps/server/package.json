@@ -16,7 +16,6 @@
     "@mobile-automation/runner-core": "workspace:*",
     "@mobile-automation/script-flow": "workspace:*",
     "@mobile-automation/shared": "workspace:*",
-    "@mobile-automation/source-scanner": "workspace:*",
     "@yume-chan/adb": "^2.6.0",
     "@yume-chan/adb-scrcpy": "^2.3.2",
     "@yume-chan/adb-server-node-tcp": "^2.5.2",

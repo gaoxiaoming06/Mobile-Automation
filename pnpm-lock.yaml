@@ -84,9 +84,6 @@ importers:
       '@mobile-automation/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@mobile-automation/source-scanner':
-        specifier: workspace:*
-        version: link:../../packages/source-scanner
       '@yume-chan/adb':
         specifier: ^2.6.0
         version: 2.6.0
@@ -173,15 +170,6 @@ importers:
         version: 2.9.0
 
   platform/packages/shared: {}
-
-  platform/packages/source-scanner:
-    dependencies:
-      '@mobile-automation/graph-core':
-        specifier: workspace:*
-        version: link:../graph-core
-      '@mobile-automation/shared':
-        specifier: workspace:*
-        version: link:../shared
 
   platform/packages/test-support:
     dependencies:

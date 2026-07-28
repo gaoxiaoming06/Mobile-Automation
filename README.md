@@ -2,7 +2,7 @@
 
 Mobile visual automation testing platform.
 
-The first MVP now focuses on Android device discovery, browser-embedded scrcpy live preview, remote control, PageStateFlow asset authoring, asset-driven execution, performance/event capture, and HTML test reports. iOS support is implemented as a first incremental layer for device discovery, screenshot preview, basic battery sampling, and WDA-backed control when WebDriverAgent is configured.
+The current product uses ScriptFlow YAML as the test-case source of truth and PageAsset as the page-identity source of truth. It includes Android device discovery, browser-embedded scrcpy preview, visual/OCR execution, AI-assisted ScriptFlow generation, performance/event capture, and HTML reports. iOS support remains an incremental device-driver layer.
 
 ## Project Structure
 
@@ -56,23 +56,19 @@ See [docs/adr](docs/adr/) for decision details.
 Start here:
 
 - [Product README](docs/product/mobile-automation-platform/README.md)
-- [Requirements](docs/product/mobile-automation-platform/spec/requirements.md)
-- [Design](docs/product/mobile-automation-platform/spec/design.md)
-- [Tasks](docs/product/mobile-automation-platform/spec/tasks.md)
-- [Acceptance](docs/product/mobile-automation-platform/spec/acceptance.md)
-- [Traceability](docs/product/mobile-automation-platform/spec/traceability.md)
+- [ScriptFlow v1 contract](docs/product/mobile-automation-platform/spec/script-flow-v1.md)
+- [Implementation plan](docs/superpowers/plans/2026-07-28-script-flow-v1-clean-cut.md)
 
 ## AI Read Order
 
 For future implementation sessions:
 
 1. [README.md](README.md)
-2. [AI / new contributor handoff](docs/product/mobile-automation-platform/ai-handoff.md)
-3. [AI development workflow](docs/guides/ai-development-workflow.md)
-4. [docs/product/mobile-automation-platform/README.md](docs/product/mobile-automation-platform/README.md)
+2. [Product README](docs/product/mobile-automation-platform/README.md)
+3. [ScriptFlow v1 contract](docs/product/mobile-automation-platform/spec/script-flow-v1.md)
+4. [AI development workflow](docs/guides/ai-development-workflow.md)
 5. Relevant ADRs in [docs/adr](docs/adr/)
 6. Relevant local skill in [skills/skills](skills/skills/)
-7. Implementation task in [tasks.md](docs/product/mobile-automation-platform/spec/tasks.md)
 
 ## First Implementation Direction
 
@@ -82,7 +78,7 @@ For future implementation sessions:
 4. Implement Android driver foundation.
 5. Implement server device/session APIs.
 6. Implement dashboard device list and preview.
-7. Implement page assets, asset-driven execution, and report loop.
+7. Implement PageAsset identity, ScriptFlow execution, and report loop.
 
 ## Local Development
 

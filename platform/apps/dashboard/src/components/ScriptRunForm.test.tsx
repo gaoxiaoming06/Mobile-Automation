@@ -32,4 +32,27 @@ describe("ScriptRunForm", () => {
     expect(markup).toContain("风险确认");
     expect(markup).not.toContain("key=value");
   });
+
+  it("keeps the idle label when execution is disabled", () => {
+    const markup = renderToStaticMarkup(
+      <ScriptRunForm
+        parameters={{}}
+        values={{}}
+        devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+        deviceSerial="device-1"
+        requiredRisks={[]}
+        confirmedRisks={[]}
+        busy={false}
+        disabled
+        onValueChange={vi.fn()}
+        onDeviceChange={vi.fn()}
+        onRiskChange={vi.fn()}
+        onRun={vi.fn()}
+      />
+    );
+
+    expect(markup).toContain("开始执行");
+    expect(markup).not.toContain("启动中");
+    expect(markup).toContain("disabled=\"\"");
+  });
 });

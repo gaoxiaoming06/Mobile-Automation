@@ -180,7 +180,6 @@ function graphForPages(pages: PageAsset[]): BusinessGraphVersion {
     sourceSummary: ["page-state-service"],
     status: "active",
     nodes: pages.map((page) => page.node),
-    edges: [],
     createdAt: new Date(0).toISOString()
   };
 }

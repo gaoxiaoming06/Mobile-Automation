@@ -7,7 +7,7 @@ const response: AiPageDraftApiResponse = {
     identityOcrTexts: [{ text: "鲸放肿瘤百科" }],
     identityRegions: [{ id: "title", label: "标题区", x: 5, y: 10, width: 88, height: 6, semanticArea: "top" }],
     elements: [
-      { elementLabel: "搜索入口", abilityType: "fixed_tap", actionKind: "tap", locatorKind: "visual_locator", locator: "image-region:4,18,92,6", coordinateSpace: "screen", semanticArea: "top", riskNotes: [] }
+      { elementLabel: "搜索入口", locatorKind: "visual_locator", locator: "image-region:4,18,92,6", coordinateSpace: "screen", semanticArea: "top", riskNotes: [] }
     ]
   },
   warnings: ["状态栏文案已剔除"],
@@ -48,9 +48,6 @@ describe("aiElementSuggestionToDraft", () => {
   it("maps a visual suggestion to element draft with defaults", () => {
     expect(aiElementSuggestionToDraft(response.suggestion.elements[0]!, "node-1")).toEqual({
       sourceNodeId: "node-1",
-      abilityType: "fixed_tap",
-      actionKind: "tap",
-      availability: "visible",
       locator: "image-region:4,18,92,6",
       semanticArea: "top",
       coordinateSpace: "screen",
@@ -63,19 +60,15 @@ describe("aiElementSuggestionToDraft", () => {
   it("keeps every structured locator field when mapping to a draft", () => {
     const suggestion: AiElementSuggestion = {
       elementLabel: "医生列表",
-      abilityType: "grid_candidate",
-      actionKind: "tap",
       locatorKind: "collection_item_locator",
       locator: "image-region:2,30,96,55",
       coordinateSpace: "screen",
       region: { x: 2, y: 30, width: 96, height: 55 },
       semanticArea: "content",
       riskNotes: [],
-      scrollProfile: { containerKind: "list", direction: "vertical", targetKind: "ocr_text", targetQuery: "{{itemText}}", afterFoundAction: "tap_item" },
+      scrollProfile: { containerKind: "list", direction: "vertical", targetKind: "ocr_text", targetQuery: "{{itemText}}" },
       dynamicRegion: { id: "dynamic_region_ai_x", kind: "grid" },
       itemTemplate: { id: "item_template_ai_x" },
-      transitionKind: "parameterized",
-      parameterMapping: { itemText: "dynamicRegion.item.titleText" },
       dynamicMasks: [{ kind: "avatar", region: { x: 4, y: 32, width: 8, height: 5 }, reason: "医生头像" }]
     };
     expect(aiElementSuggestionToDraft(suggestion, "node-1")).toMatchObject({
@@ -83,8 +76,6 @@ describe("aiElementSuggestionToDraft", () => {
       scrollProfile: expect.objectContaining({ targetQuery: "{{itemText}}" }),
       dynamicRegion: { id: "dynamic_region_ai_x", kind: "grid" },
       itemTemplate: { id: "item_template_ai_x" },
-      transitionKind: "parameterized",
-      parameterMapping: { itemText: "dynamicRegion.item.titleText" },
       dynamicMasks: [expect.objectContaining({ kind: "avatar" })]
     });
   });
@@ -92,8 +83,6 @@ describe("aiElementSuggestionToDraft", () => {
   it("maps top bar and anchor offset suggestions with runtime payloads", () => {
     const topBar: AiElementSuggestion = {
       elementLabel: "搜索图标",
-      abilityType: "fixed_tap",
-      actionKind: "tap",
       locatorKind: "top_bar_icon_locator",
       locator: "top-bar-icon:search",
       coordinateSpace: "runtime",
@@ -111,8 +100,6 @@ describe("aiElementSuggestionToDraft", () => {
 
     const anchor: AiElementSuggestion = {
       elementLabel: "会员中心右侧箭头",
-      abilityType: "fixed_tap",
-      actionKind: "tap",
       locatorKind: "ocr_anchor_offset",
       locator: "image-region:88,20,8,5",
       coordinateSpace: "screen",

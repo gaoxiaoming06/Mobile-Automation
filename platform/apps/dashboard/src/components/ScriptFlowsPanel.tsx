@@ -1,6 +1,6 @@
 import { CheckCircle2, FilePlus2, RefreshCw, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { ScriptFlow, TestRun } from "@mobile-automation/shared";
+import type { AndroidAppMonitorConfig, ScriptFlow, TestRun } from "@mobile-automation/shared";
 import { ApiError, apiFetchJson } from "../api.js";
 import {
   ScriptRunForm,
@@ -39,9 +39,10 @@ type ScriptFlowsPanelProps = {
   onInitialSourceConsumed?: () => void;
   setMessage: (message: string) => void;
   onOpenRun: (runId: string) => void;
+  androidAppMonitorForApp?: (appId: string) => AndroidAppMonitorConfig | undefined;
 };
 
-export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initialSourceYaml, onInitialSourceConsumed, setMessage, onOpenRun }: ScriptFlowsPanelProps) {
+export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initialSourceYaml, onInitialSourceConsumed, setMessage, onOpenRun, androidAppMonitorForApp }: ScriptFlowsPanelProps) {
   const [flows, setFlows] = useState<ScriptFlow[]>(initialFlows ?? []);
   const [selectedId, setSelectedId] = useState(initialFlows?.[0]?.id ?? "");
   const selected = flows.find((flow) => flow.id === selectedId);
@@ -201,10 +202,16 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
     if (!selectedId) return;
     try {
       setBusy(true);
+      const androidAppMonitor = document?.app.id ? androidAppMonitorForApp?.(document.app.id) : undefined;
       const response = await apiFetchJson<{ run: TestRun }>(`/api/script-flows/${encodeURIComponent(selectedId)}/runs`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ deviceSerial, parameters: parameterValues, confirmedRisks })
+        body: JSON.stringify({
+          deviceSerial,
+          parameters: parameterValues,
+          confirmedRisks,
+          ...(androidAppMonitor ? { androidAppMonitor } : {})
+        })
       });
       setLastRun(response.run);
       setMessage(`已启动脚本：${response.run.id}`);
@@ -265,7 +272,8 @@ export function ScriptFlowsPanel({ devices, selectedSerial, initialFlows, initia
             deviceSerial={deviceSerial}
             requiredRisks={plan?.requiredRiskConfirmations ?? []}
             confirmedRisks={confirmedRisks}
-            busy={busy || !selectedId}
+            busy={busy}
+            disabled={!selectedId}
             onValueChange={(key, value) => setParameterValues((current) => ({ ...current, [key]: value }))}
             onDeviceChange={setDeviceSerial}
             onRiskChange={(risk, checked) => setConfirmedRisks((current) => checked ? [...new Set([...current, risk])] : current.filter((item) => item !== risk))}

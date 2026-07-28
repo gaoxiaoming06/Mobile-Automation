@@ -173,86 +173,6 @@ export type FlowStartStrategy = "keep_current" | "go_home" | "launch_app" | "res
 
 export type FlowStartSetupScope = "before_run" | "before_each_iteration";
 
-export type FlowStateMatcher = {
-  id: string;
-  type: string;
-  value: string;
-  weight: number;
-  threshold?: number;
-  critical?: boolean;
-  params?: Record<string, unknown>;
-  region?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-  platform?: Platform | "mobile-both";
-  source?: Record<string, unknown>;
-};
-
-export type FlowStateAnchor = {
-  id: string;
-  name: string;
-  matchers: FlowStateMatcher[];
-  expectations?: StepExpectation[];
-  screenshotAnchor?: {
-    artifactId: string;
-    threshold: number;
-    region?: {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-    };
-  };
-  metadata?: Record<string, unknown>;
-};
-
-export type RuleStateMatcher = FlowStateMatcher;
-
-export type RuleStateAnchor = FlowStateAnchor;
-
-export type TestRuleStepSourceType =
-  | "structured_flow"
-  | "business_graph"
-  | "manual_recording"
-  | "manual_edit"
-  | "imported"
-  | "ai_overlay";
-
-export type TestRuleStep = {
-  id: string;
-  order: number;
-  title: string;
-  enabled: boolean;
-  beforeState: RuleStateAnchor;
-  action: ActionStep;
-  afterExpectations: StepExpectation[];
-  systemGuards: StepExpectation[];
-  timing?: {
-    transitionTimeoutMs?: number;
-    pollIntervalMs?: number;
-    stableSampleCount?: number;
-  };
-  source?: Record<string, unknown> & {
-    sourceType?: TestRuleStepSourceType;
-    sourceId?: string;
-  };
-  artifacts?: Record<string, unknown>;
-  createdAt: string;
-};
-
-export type StructuredFlowStatus = "draft" | "active" | "deprecated";
-
-export type StructuredFlowStartStrategy = FlowStartStrategy | "install_build_and_launch";
-
-export type StructuredFlowAppVersion = {
-  displayVersion: string;
-  buildNumber?: string;
-  versionCode?: string;
-  compatibleRange?: string;
-};
 
 export type InstalledAppInfo = {
   packageName?: string;
@@ -264,31 +184,6 @@ export type InstalledAppInfo = {
   lastUpdateTime?: string;
 };
 
-export type StructuredFlowStep = TestRuleStep;
-
-export type StructuredFlow = {
-  id: string;
-  name: string;
-  description?: string;
-  appId?: string;
-  appName: string;
-  platform: Platform;
-  targetApp: {
-    androidPackageName?: string;
-    iosBundleId?: string;
-  };
-  appVersion: StructuredFlowAppVersion;
-  startState: FlowStateAnchor;
-  endState: FlowStateAnchor;
-  role?: string;
-  startStrategy: StructuredFlowStartStrategy;
-  tags: string[];
-  status: StructuredFlowStatus;
-  version: number;
-  steps: StructuredFlowStep[];
-  createdAt: string;
-  updatedAt: string;
-};
 
 export type ScriptFlowPlatform = "android" | "ios" | "harmony" | "flutter";
 
@@ -318,155 +213,6 @@ export type ScriptFlowVersion = {
   createdAt: string;
 };
 
-export type AssetParameterValueType = "string" | "number" | "boolean" | "template";
-
-export type AssetParameterValue = {
-  type: AssetParameterValueType;
-  value: string | number | boolean;
-  sensitive?: boolean;
-};
-
-export type ParameterProfileStatus = "active" | "deprecated";
-
-/**
- * One reusable business-data record, such as an account or a classroom draft.
- * Records belong to a data domain rather than the page that happens to collect
- * the data during a flow.
- */
-export type ParameterDataRecord = {
-  id: string;
-  appId: string;
-  platform: Platform;
-  domainKey: string;
-  name: string;
-  description?: string;
-  environment?: string;
-  values: Record<string, AssetParameterValue>;
-  status: ParameterProfileStatus;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ParameterProfileBinding = {
-  domainKey: string;
-  recordId: string;
-};
-
-export type ParameterProfile = {
-  id: string;
-  appId: string;
-  platform: Platform;
-  name: string;
-  description?: string;
-  environment?: string;
-  /** Selects at most one reusable record from each business data domain. */
-  bindings?: ParameterProfileBinding[];
-  /**
-   * Legacy flat values and explicit profile-level overrides. These win over
-   * values coming from bound records to keep existing profiles compatible.
-   */
-  values: Record<string, AssetParameterValue>;
-  status: ParameterProfileStatus;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type MetaFunctionStatus = "draft" | "active" | "deprecated";
-
-export type MetaFunctionParameterControl = "text" | "number" | "toggle" | "datetime" | "select";
-
-export type MetaFunctionParameterOption = {
-  label: string;
-  value: string | number | boolean;
-};
-
-export type MetaFunctionParameter = {
-  key: string;
-  type: AssetParameterValueType;
-  label?: string;
-  required?: boolean;
-  defaultValue?: string | number | boolean;
-  control?: MetaFunctionParameterControl;
-  options?: MetaFunctionParameterOption[];
-  advanced?: boolean;
-};
-
-type MetaFunctionStepBase = {
-  id: string;
-  order: number;
-  enabled: boolean;
-  name?: string;
-};
-
-export type MetaFunctionStep =
-  | (MetaFunctionStepBase & {
-      kind: "reach_page";
-      targetPageModelId: string;
-    })
-  | (MetaFunctionStepBase & {
-      kind: "invoke_capability";
-      sourcePageModelId: string;
-      pageElementId: string;
-      targetPageModelId?: string;
-    })
-  | (MetaFunctionStepBase & {
-      kind: "run_page_task";
-      pageModelId: string;
-      pageTaskId: string;
-    })
-  | (MetaFunctionStepBase & {
-      kind: "verify_page";
-      pageModelId: string;
-    })
-  | (MetaFunctionStepBase & {
-      kind: "system_action";
-      actionType: "launch_app";
-      packageName?: string;
-    });
-
-export type MetaFunction = {
-  id: string;
-  appId: string;
-  platform: Platform;
-  name: string;
-  description?: string;
-  parameters: MetaFunctionParameter[];
-  steps: MetaFunctionStep[];
-  status: MetaFunctionStatus;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type AssetCompositeCaseStatus = "draft" | "active" | "deprecated";
-
-export type AssetCompositeCaseStep = {
-  id: string;
-  order: number;
-  metaFunctionId: string;
-  enabled: boolean;
-  name?: string;
-  parameterOverrides?: Record<string, string | number | boolean>;
-};
-
-export type AssetCompositeCase = {
-  id: string;
-  appId: string;
-  platform: Platform;
-  name: string;
-  description?: string;
-  parameterProfileId?: string;
-  runMode: RunMode;
-  repeatCount: number;
-  stopOnFailure: boolean;
-  steps: AssetCompositeCaseStep[];
-  status: AssetCompositeCaseStatus;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-};
 
 export type AndroidAppMonitorThreshold = {
   enabled: boolean;
@@ -577,24 +323,10 @@ export type AndroidAppMonitorSummary = {
   };
 };
 
-export type RunExecutionParentType = "asset_composition" | "free_composition" | "asset_patrol";
-
-export type RunExecutionContext = {
-  parentExecutionId: string;
-  parentExecutionType: RunExecutionParentType;
-  parentExecutionName: string;
-  executionItemId?: string;
-  itemOrder?: number;
-  itemLabel?: string;
-  itemKind?: string;
-  retryOfRunId?: string;
-  recovery?: boolean;
-};
-
 export type RunConfig = {
   caseId?: string;
   deviceSerial: string;
-  runKind?: "case" | "structured_flow" | "business_graph" | "stability_exploration" | "asset_patrol";
+  runKind?: "case" | "script_flow" | "stability_exploration";
   mode: RunMode;
   repeatCount: number;
   stepIntervalMs: number;
@@ -606,7 +338,6 @@ export type RunConfig = {
   startAppPackageName?: string;
   startSetupScope?: FlowStartSetupScope;
   executionProfile?: "full" | "fast_visual";
-  executionContext?: RunExecutionContext;
   androidAppMonitor?: AndroidAppMonitorConfig;
   stabilityExploration?: {
     packageName: string;
@@ -624,18 +355,6 @@ export type RunConfig = {
     stopOnAnr: boolean;
     stopOnBlackScreen: boolean;
     stopOnUnknownPageStuck: boolean;
-  };
-  assetPatrol?: {
-    packageName: string;
-    graphVersionId?: string;
-    startMode: "current_state" | "launch_app" | "restart_app";
-    pageScope: "current_page" | "reachable_pages" | "tagged_pages" | "all_active_pages";
-    maxDurationMs: number;
-    maxTransitions: number;
-    allowRiskyActions: boolean;
-    allowBusinessSubmit: boolean;
-    dangerousTextPatterns: string[];
-    runtimeParams: Record<string, string>;
   };
 };
 
@@ -689,12 +408,10 @@ export type DeviceEvent = {
     | "black_screen"
     | "unknown_page_stuck"
     | "stability_exploration"
-    | "asset_patrol"
     | "native_crash"
     | "process_death"
     | "performance_threshold"
-    | "android_app_monitor"
-    | "ai_diagnosis";
+    | "android_app_monitor";
   severity: "info" | "warning" | "error";
   occurredAt: string;
   summary: string;
@@ -762,15 +479,14 @@ export function androidAppMonitorDisplaySummaryFromRun(run: Pick<TestRun, "event
   }
   const detail = objectRecordFromJson(event.detail);
   const sampleCounts = objectRecord(detail?.sampleCounts);
-  const legacyCounts = legacyAndroidAppMonitorSampleCounts(event.summary);
   const processes = Array.isArray(detail?.processes) ? detail.processes : [];
   const incidents = detail?.incidents;
   return {
     packageName: stringFromUnknown(detail?.packageName) || "-",
     processCount: processes.length,
-    cpuSamples: numberFromUnknown(sampleCounts?.cpu) ?? legacyCounts.cpu,
-    memorySamples: numberFromUnknown(sampleCounts?.memory) ?? legacyCounts.memory,
-    lifecycleSamples: numberFromUnknown(sampleCounts?.lifecycle) ?? legacyCounts.lifecycle,
+    cpuSamples: numberFromUnknown(sampleCounts?.cpu) ?? 0,
+    memorySamples: numberFromUnknown(sampleCounts?.memory) ?? 0,
+    lifecycleSamples: numberFromUnknown(sampleCounts?.lifecycle) ?? 0,
     incidentCount: Array.isArray(incidents) ? incidents.length : numberFromUnknown(incidents) ?? 0,
     severity: event.severity
   };
@@ -818,15 +534,6 @@ function numberFromUnknown(value: unknown): number | undefined {
 
 function stringFromUnknown(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function legacyAndroidAppMonitorSampleCounts(summary: string): { cpu: number; memory: number; lifecycle: number } {
-  const match = summary.match(/collected\s+(\d+)\s+CPU,\s+(\d+)\s+memory,\s+(\d+)\s+lifecycle/i);
-  return {
-    cpu: match?.[1] ? Number(match[1]) : 0,
-    memory: match?.[2] ? Number(match[2]) : 0,
-    lifecycle: match?.[3] ? Number(match[3]) : 0
-  };
 }
 
 export type ToolStatus = {

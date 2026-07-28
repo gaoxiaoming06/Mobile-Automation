@@ -2,16 +2,12 @@ import { DatabaseZap, Info, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { apiFetchJson } from "../api";
 
-type BusinessGraph = {
+type PageAssetLibrary = {
   id: string;
   appId: string;
   name: string;
   status: string;
   platformScope?: string;
-  targetApp?: {
-    androidPackageName?: string;
-    iosBundleId?: string;
-  };
   activeVersion?: {
     id: string;
     version: number;
@@ -36,17 +32,6 @@ type PageAssetSummary = {
   visibleTexts: string[];
   resourceIds: string[];
   accessibilityIds: string[];
-  transitions?: PageAssetTransitionSummary[];
-  tasks?: PageAssetTaskSummary[];
-  updatedAt?: string;
-};
-
-type PageAssetTaskSummary = {
-  id: string;
-  name: string;
-  status: "active" | "draft" | "deprecated";
-  stepCount: number;
-  parameterKeys: string[];
   updatedAt?: string;
 };
 
@@ -63,29 +48,13 @@ type PageAssetScreenshotRegionSummary = {
   baselineUrl?: string;
 };
 
-type PageAssetTransitionSummary = {
-  id: string;
-  key: string;
-  name: string;
-  status: string;
-  source: string;
-  actionSummary?: string;
-  actionLocator?: string;
-  actionKind?: "tap" | "scroll" | "long_press" | "input" | "unknown";
-  targetNodeId: string;
-  targetName?: string;
-  targetKey?: string;
-  expectationSummary?: string;
-  reliabilityScore?: number;
-};
-
 type GraphAssetGovernanceSummary = {
   graphVersionId: string;
   pageAssets: PageAssetSummary[];
 };
 
-type GraphListResponse = {
-  graphs: BusinessGraph[];
+type PageAssetLibraryListResponse = {
+  libraries: PageAssetLibrary[];
 };
 
 type GraphAssetsResponse = {
@@ -93,12 +62,12 @@ type GraphAssetsResponse = {
 };
 
 type PageAssetsSnapshot = {
-  graphs: BusinessGraph[];
+  libraries: PageAssetLibrary[];
   assetsByVersionId: Record<string, GraphAssetGovernanceSummary>;
 };
 
 type PageAssetsPanelProps = {
-  graphs?: BusinessGraph[];
+  libraries?: PageAssetLibrary[];
   assetsByVersionId?: Record<string, GraphAssetGovernanceSummary>;
   onOpenAssetRecording: () => void;
   setMessage: (message: string) => void;
@@ -107,42 +76,42 @@ type PageAssetsPanelProps = {
 type DecoratedPageAsset = PageAssetSummary & { graphName?: string; appId?: string; graphVersion?: number; graphVersionId?: string };
 
 export function PageAssetsPanel({
-  graphs: initialGraphs,
+  libraries: initialLibraries,
   assetsByVersionId: initialAssetsByVersionId,
   onOpenAssetRecording,
   setMessage
 }: PageAssetsPanelProps) {
-  const [graphs, setGraphs] = useState<BusinessGraph[]>(initialGraphs ?? []);
+  const [libraries, setLibraries] = useState<PageAssetLibrary[]>(initialLibraries ?? []);
   const [assetsByVersionId, setAssetsByVersionId] = useState<Record<string, GraphAssetGovernanceSummary>>(initialAssetsByVersionId ?? {});
   const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
   const pageAssets = useMemo(
     () =>
-      graphs.flatMap((graph) =>
-        graph.activeVersion?.id
-          ? (assetsByVersionId[graph.activeVersion.id]?.pageAssets ?? []).map((asset) => ({
+      libraries.flatMap((library) =>
+        library.activeVersion?.id
+          ? (assetsByVersionId[library.activeVersion.id]?.pageAssets ?? []).map((asset) => ({
               ...asset,
-              graphName: graph.name,
-              appId: graph.appId,
-              graphVersion: graph.activeVersion?.version,
-              graphVersionId: graph.activeVersion?.id
+              graphName: library.name,
+              appId: library.appId,
+              graphVersion: library.activeVersion?.version,
+              graphVersionId: library.activeVersion?.id
             }))
           : []
       ),
-    [assetsByVersionId, graphs]
+    [assetsByVersionId, libraries]
   );
   const selectedLibraryAsset = useMemo(() => pageAssets.find((asset) => asset.id === selectedAssetId) ?? pageAssets[0], [pageAssets, selectedAssetId]);
   const libraryStats = useMemo(() => pageAssetLibraryStats(pageAssets), [pageAssets]);
 
   useEffect(() => {
-    if (!initialGraphs && !initialAssetsByVersionId) {
+    if (!initialLibraries && !initialAssetsByVersionId) {
       void refreshPageAssets();
     }
-  }, [initialAssetsByVersionId, initialGraphs]);
+  }, [initialAssetsByVersionId, initialLibraries]);
 
   useEffect(() => {
-    if (initialGraphs || initialAssetsByVersionId) {
+    if (initialLibraries || initialAssetsByVersionId) {
       return;
     }
     function refreshOnVisible() {
@@ -156,13 +125,13 @@ export function PageAssetsPanel({
       document.removeEventListener("visibilitychange", refreshOnVisible);
       window.removeEventListener("focus", refreshOnVisible);
     };
-  }, [initialAssetsByVersionId, initialGraphs]);
+  }, [initialAssetsByVersionId, initialLibraries]);
 
   async function refreshPageAssets() {
     try {
       setBusy(true);
       const snapshot = await loadPageAssetsSnapshot();
-      setGraphs(snapshot.graphs);
+      setLibraries(snapshot.libraries);
       setAssetsByVersionId(snapshot.assetsByVersionId);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -173,12 +142,12 @@ export function PageAssetsPanel({
 
   async function deletePageAsset(graphVersionId: string | undefined, assetId: string, assetName: string) {
     if (!graphVersionId) {
-      setMessage("页面资产缺少图谱版本，无法删除");
+      setMessage("页面资产缺少资产库版本，无法删除");
       return;
     }
     try {
       setBusy(true);
-      const response = await apiFetchJson<GraphAssetsResponse>(`/api/graphs/${encodeURIComponent(graphVersionId)}/assets/nodes/${encodeURIComponent(assetId)}`, {
+      const response = await apiFetchJson<GraphAssetsResponse>(`/api/page-assets/${encodeURIComponent(graphVersionId)}/assets/nodes/${encodeURIComponent(assetId)}`, {
         method: "DELETE"
       });
       setAssetsByVersionId((current) => ({
@@ -227,20 +196,20 @@ export function PageAssetsPanel({
 }
 
 export async function loadPageAssetsSnapshot(fetchJson: typeof apiFetchJson = apiFetchJson): Promise<PageAssetsSnapshot> {
-  const graphResponse = await fetchJson<GraphListResponse>("/api/graphs");
-  const activeGraphs = graphResponse.graphs.filter((graph) => graph.status !== "deprecated" && graph.activeVersion?.id);
+  const libraryResponse = await fetchJson<PageAssetLibraryListResponse>("/api/page-assets");
+  const activeLibraries = libraryResponse.libraries.filter((library) => library.status !== "deprecated" && library.activeVersion?.id);
   const summaries = await Promise.all(
-    activeGraphs.map(async (graph) => {
-      const versionId = graph.activeVersion?.id;
+    activeLibraries.map(async (library) => {
+      const versionId = library.activeVersion?.id;
       if (!versionId) {
         return undefined;
       }
-      const response = await fetchJson<GraphAssetsResponse>(`/api/graphs/${encodeURIComponent(versionId)}/assets?limit=120`);
+      const response = await fetchJson<GraphAssetsResponse>(`/api/page-assets/${encodeURIComponent(versionId)}/assets?limit=120`);
       return [versionId, response.assets] as const;
     })
   );
   return {
-    graphs: activeGraphs,
+    libraries: activeLibraries,
     assetsByVersionId: Object.fromEntries(summaries.filter((item): item is [string, GraphAssetGovernanceSummary] => Boolean(item)))
   };
 }
@@ -249,8 +218,6 @@ type PageAssetLibraryStats = {
   pages: number;
   matchers: number;
   elements: number;
-  transitions: number;
-  tasks: number;
   regions: number;
 };
 
@@ -267,15 +234,7 @@ function PageAssetLibraryStats({ stats }: { stats: PageAssetLibraryStats }) {
       </div>
       <div>
         <strong>{stats.elements}</strong>
-        <span>可操作</span>
-      </div>
-      <div>
-        <strong>{stats.transitions}</strong>
-        <span>连接边</span>
-      </div>
-      <div>
-        <strong>{stats.tasks}</strong>
-        <span>页面任务</span>
+        <span>公共定位器</span>
       </div>
       <div>
         <strong>{stats.regions}</strong>
@@ -291,11 +250,9 @@ function pageAssetLibraryStats(assets: DecoratedPageAsset[]): PageAssetLibrarySt
       pages: stats.pages + 1,
       matchers: stats.matchers + (asset.criticalMatcherCount || asset.matcherCount),
       elements: stats.elements + asset.elementCount,
-      transitions: stats.transitions + transitionCount(asset),
-      tasks: stats.tasks + taskCount(asset),
       regions: stats.regions + (asset.screenshotRegions?.length ?? 0)
     }),
-    { pages: 0, matchers: 0, elements: 0, transitions: 0, tasks: 0, regions: 0 }
+    { pages: 0, matchers: 0, elements: 0, regions: 0 }
   );
 }
 
@@ -344,15 +301,7 @@ function PageAssetList({
             </span>
             <span>
               <strong>{asset.elementCount}</strong>
-              可操作
-            </span>
-            <span>
-              <strong>{transitionCount(asset)}</strong>
-              出口
-            </span>
-            <span>
-              <strong>{taskCount(asset)}</strong>
-              任务
+              公共定位器
             </span>
           </div>
           <div className="page-asset-row-actions">
@@ -374,20 +323,18 @@ function PageAssetList({
 function PageAssetDetailPanel({ asset }: { asset: DecoratedPageAsset }) {
   const identityTexts = assetIdentityTexts(asset);
   const screenshotRegions = asset.screenshotRegions ?? [];
-  const transitions = asset.transitions ?? [];
-  const tasks = asset.tasks ?? [];
   return (
     <aside className="page-asset-detail-panel" aria-label={`页面资产详情：${asset.name}`}>
       <div className="page-asset-detail-head">
         <div>
           <h3>{asset.name}</h3>
-          <span>{assetGraphSummary(asset)} · {platformLabel(asset.platformScope)} · {asset.elementCount} 个可操作元素</span>
+          <span>{assetGraphSummary(asset)} · {platformLabel(asset.platformScope)} · {asset.elementCount} 个公共定位器</span>
         </div>
       </div>
 
       <div className="page-asset-detail-content">
         <div className="page-asset-detail-section">
-          <h4>概览</h4>
+                <h4>页面身份</h4>
           <dl>
             <div>
               <dt>确认依据</dt>
@@ -398,16 +345,8 @@ function PageAssetDetailPanel({ asset }: { asset: DecoratedPageAsset }) {
               <dd>{screenshotRegions.length}</dd>
             </div>
             <div>
-              <dt>可操作</dt>
+              <dt>公共定位器</dt>
               <dd>{asset.elementCount}</dd>
-            </div>
-            <div>
-              <dt>连接边</dt>
-              <dd>{transitionCount(asset)}</dd>
-            </div>
-            <div>
-              <dt>页面任务</dt>
-              <dd>{taskCount(asset)}</dd>
             </div>
             <div>
               <dt>状态</dt>
@@ -448,41 +387,8 @@ function PageAssetDetailPanel({ asset }: { asset: DecoratedPageAsset }) {
           </div>
 
           <div className="page-asset-detail-section">
-            <h4>页面能力</h4>
-            <p>{asset.elementCount > 0 ? `已录入 ${asset.elementCount} 个可操作区域；具体区域和能力类型在资产录制页维护。` : "还没有录入可操作区域。"}</p>
-          </div>
-
-          <div className="page-asset-detail-section">
-            <h4>页面任务</h4>
-            {tasks.length ? (
-              <div className="page-asset-transition-list">
-                {tasks.map((task) => (
-                  <div className="page-asset-transition-card" key={task.id}>
-                    <strong>{task.name}</strong>
-                    <span>{task.stepCount} 个步骤{task.parameterKeys.length ? ` · 参数：${task.parameterKeys.join("、")}` : ""}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p>暂无页面任务；表单填写、提交、页面内配置会在资产录制页维护。</p>
-            )}
-          </div>
-
-          <div className="page-asset-detail-section">
-            <h4>连接边</h4>
-            {transitions.length ? (
-              <div className="page-asset-transition-list">
-                {transitions.map((transition) => (
-                  <div className="page-asset-transition-card" key={transition.id}>
-                    <strong>{transition.targetName ? `到 ${transition.targetName}` : transition.name}</strong>
-                    <span>{transition.actionSummary ?? transition.actionLocator ?? "未记录动作摘要"}</span>
-                    {transition.expectationSummary ? <small>{transition.expectationSummary}</small> : null}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p>暂无连接边；需要在资产录制页把本页能力连接到目标页面。</p>
-            )}
+            <h4>公共定位器</h4>
+            <p>{asset.elementCount > 0 ? `已录入 ${asset.elementCount} 个可复用定位器；临时动作可以直接写在 ScriptFlow 中。` : "暂无公共定位器；脚本仍可使用 OCR 或语义目标执行临时动作。"}</p>
           </div>
 
           <div className="page-asset-detail-section page-asset-identity-card">
@@ -494,14 +400,6 @@ function PageAssetDetailPanel({ asset }: { asset: DecoratedPageAsset }) {
         </div>
     </aside>
   );
-}
-
-function transitionCount(asset: PageAssetSummary): number {
-  return asset.transitions?.length ?? 0;
-}
-
-function taskCount(asset: PageAssetSummary): number {
-  return asset.tasks?.filter((task) => task.status !== "deprecated").length ?? 0;
 }
 
 function platformLabel(platformScope: string | undefined): string {

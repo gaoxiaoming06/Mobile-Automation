@@ -13,6 +13,7 @@ This directory will hold practical development, debugging, deployment, and opera
 Available guides:
 
 - [AI development workflow](ai-development-workflow.md)
+- [ScriptFlow REST / CLI / MCP](script-flow-tools.md)
 - [Deployment](deployment.md)
 - [iOS WebDriverAgent setup](ios-wda.md)
 

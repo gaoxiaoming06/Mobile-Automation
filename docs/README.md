@@ -13,7 +13,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 
 # 自动化测试平台文档
 
-本目录用于维护自动化测试平台的产品规划、需求、设计、任务、验收和追踪文档。
+本目录维护自动化测试平台当前产品契约、架构决策、开发指南和测试证据。
 
 ## Features
 
@@ -37,12 +37,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 ## AI 推荐阅读顺序
 
 1. [产品 README](product/mobile-automation-platform/README.md)
-2. [AI development workflow](guides/ai-development-workflow.md)
-3. [product-plan.md](product/mobile-automation-platform/spec/product-plan.md)
-4. [requirements.md](product/mobile-automation-platform/spec/requirements.md)
-5. [design.md](product/mobile-automation-platform/spec/design.md)
-6. [tasks.md](product/mobile-automation-platform/spec/tasks.md)
-7. [acceptance.md](product/mobile-automation-platform/spec/acceptance.md)
-8. [traceability.md](product/mobile-automation-platform/spec/traceability.md)
-9. [changelog.md](product/mobile-automation-platform/spec/changelog.md)
-10. [adr/](adr/)
+2. [ScriptFlow v1](product/mobile-automation-platform/spec/script-flow-v1.md)
+3. [AI development workflow](guides/ai-development-workflow.md)
+4. [ScriptFlow 工具指南](guides/script-flow-tools.md)
+5. [adr/](adr/)

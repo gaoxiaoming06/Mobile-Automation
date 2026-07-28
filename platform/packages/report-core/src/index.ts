@@ -1,6 +1,5 @@
 import {
   androidAppMonitorDisplaySummaryFromRun,
-  isSystemGuardExpectationType,
   shouldDisplayExpectationResult,
   type AndroidAppMonitorDisplaySummary,
   type ArtifactRef,
@@ -85,40 +84,11 @@ export function renderReportHtml(run: TestRun): string {
     .condition-detail strong { color: #1d2733; }
     .evidence-links { display: grid; gap: 4px; }
     .evidence-links a { color: #2563eb; text-decoration: none; font-weight: 650; }
-    .graph-panel { background: #fff; border: 1px solid #dce4ef; border-radius: 8px; padding: 16px; margin-top: 12px; box-shadow: 0 10px 28px rgba(20, 34, 52, 0.04); }
-    .graph-path { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
-    .graph-node { border: 1px solid #cbd8e7; background: #f8fafc; border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 720; color: #1d2733; }
-    .graph-arrow { color: #64748b; font-weight: 760; }
-    .graph-meta { color: #64748b; font-size: 12px; margin-top: 4px; word-break: break-all; }
-    .graph-match { display: grid; gap: 4px; color: #64748b; font-size: 12px; }
-    .graph-match strong { color: #1d2733; }
-    .graph-match-candidates { display: grid; gap: 5px; margin-top: 4px; }
-    .graph-match-candidates > div { border: 1px solid #dce4ef; background: #f8fafc; border-radius: 7px; padding: 6px 8px; }
-    .graph-matchers { display: grid; gap: 4px; margin-top: 5px; }
-    .graph-matchers div { border: 1px solid #dce4ef; background: #fff; border-radius: 6px; padding: 5px 6px; }
-    .graph-matchers div.matched { border-color: #b7e4c7; background: #f6fef9; }
-    .graph-matchers div.missed { border-color: #f3b5af; background: #fff5f4; }
-    .graph-matchers span { display: block; margin-top: 2px; word-break: break-all; }
-    .graph-action { display: grid; gap: 4px; color: #64748b; font-size: 12px; }
-    .graph-action strong { color: #1d2733; }
-    .graph-action span { word-break: break-all; }
-    .graph-json { display: block; max-width: 320px; white-space: pre-wrap; word-break: break-all; border: 1px solid #dce4ef; background: #f8fafc; border-radius: 6px; padding: 5px 6px; color: #334155; font-size: 11px; }
-    .graph-source { display: inline-flex; align-items: center; min-height: 21px; border-radius: 999px; padding: 0 8px; background: #f1f5f9; color: #475569; font-size: 12px; font-weight: 720; }
-    .graph-source.overlay { background: #e0f2fe; color: #026aa2; }
-    .graph-source.guard { background: #fff7d6; color: #915700; }
-    .graph-deviations { display: grid; gap: 5px; margin-top: 8px; }
-    .graph-deviations div { border: 1px solid #f3cf72; background: #fffbeb; color: #93370d; border-radius: 7px; padding: 6px 8px; font-size: 12px; }
-    .graph-deviations strong, .graph-deviations span { display: block; }
-    .graph-diagnostics { display: grid; gap: 8px; margin-top: 12px; }
-    .graph-diagnostics div { border: 1px solid #dce4ef; background: #f8fafc; color: #475569; border-radius: 7px; padding: 8px 10px; font-size: 12px; }
-    .graph-diagnostics strong { color: #1d2733; display: block; margin-bottom: 3px; }
-    .graph-diagnostics span { display: block; word-break: break-all; }
-    .graph-diagnostics .warning { border-color: #f3cf72; background: #fffbeb; color: #93370d; }
-    .graph-interceptors { display: grid; gap: 5px; margin-top: 8px; }
-    .graph-interceptors div { border: 1px solid #bae6fd; background: #f0f9ff; color: #075985; border-radius: 7px; padding: 6px 8px; font-size: 12px; }
-    .graph-interceptors strong, .graph-interceptors span { display: block; }
-    .graph-recovery { border: 1px solid #a7f3d0; background: #ecfdf3; color: #067647; border-radius: 7px; padding: 6px 8px; font-size: 12px; margin-top: 8px; }
-    .graph-recovery strong, .graph-recovery span { display: block; }
+    .run-summary-panel { background: #fff; border: 1px solid #dce4ef; border-radius: 8px; padding: 16px; margin-top: 12px; box-shadow: 0 10px 28px rgba(20, 34, 52, 0.04); }
+    .run-diagnostics { display: grid; gap: 8px; margin-top: 12px; }
+    .run-diagnostics div { border: 1px solid #dce4ef; background: #f8fafc; color: #475569; border-radius: 7px; padding: 8px 10px; font-size: 12px; }
+    .run-diagnostics strong { color: #1d2733; display: block; margin-bottom: 3px; }
+    .run-diagnostics span { display: block; word-break: break-all; }
     @media (max-width: 760px) {
       main { padding: 14px; }
       .hero-top { display: grid; }
@@ -151,10 +121,7 @@ export function renderReportHtml(run: TestRun): string {
       </section>
     </section>
 
-    ${renderGraphReport(run)}
     ${renderStabilityReport(run)}
-    ${renderAssetPatrolReport(run)}
-    ${renderAiDiagnosisReport(run)}
 
     <h2>性能摘要</h2>
     <section class="summary">
@@ -262,115 +229,6 @@ export function renderReportHtml(run: TestRun): string {
 </html>`;
 }
 
-type GraphStepReport = {
-  step: StepResult;
-  graph: GraphStepMetadata;
-};
-
-type GraphStepMetadata = {
-  versionId?: string;
-  planStepId?: string;
-  edgeId?: string;
-  edgeKey?: string;
-  fromNodeId?: string;
-  fromNodeName?: string;
-  toNodeId?: string;
-  toNodeName?: string;
-  phase?: string;
-  usedActionPolicyId?: string;
-  fallbackActionPolicyId?: string;
-  runtimeOverlay?: {
-    id?: string;
-    note?: string;
-    targetExpectationIds?: string[];
-    edgeExpectationIds?: string[];
-  };
-  beforeMatch?: NodeMatchSummary;
-  afterMatch?: NodeMatchSummary;
-  actionPolicy?: GraphActionPolicySummary;
-  recoveryAttempt?: number;
-  recoveryReasonDeviationId?: string;
-  deviations?: GraphDeviationSummary[];
-  interceptors?: GraphInterceptorSummary[];
-};
-
-type GraphDeviationSummary = {
-  id?: string;
-  phase?: string;
-  expectedNodeId?: string;
-  actualNodeId?: string;
-  actualStatus?: string;
-  attempt?: number;
-  action?: string;
-  message?: string;
-  recordedAt?: string;
-};
-
-type GraphInterceptorSummary = {
-  id?: string;
-  phase?: string;
-  ruleId?: string;
-  ruleName?: string;
-  matchedText?: string;
-  action?: {
-    type?: string;
-    x?: number;
-    y?: number;
-  };
-  handledAt?: string;
-};
-
-type NodeMatchSummary = {
-  status?: string;
-  nodeId?: string;
-  nodeName?: string;
-  score?: number;
-  candidates?: NodeMatchCandidateSummary[];
-};
-
-type NodeMatchCandidateSummary = {
-  nodeId?: string;
-  nodeName?: string;
-  score?: number;
-  matchedWeight?: number;
-  totalWeight?: number;
-  quality?: {
-    status?: string;
-    reasons?: string[];
-    matchedContextSignals?: number;
-    matchedStrongSignals?: number;
-    matchedWeakSignals?: number;
-    missingStrongMatcherIds?: string[];
-  };
-  matcherResults?: MatcherResultSummary[];
-};
-
-type MatcherResultSummary = {
-  matcherId?: string;
-  type?: string;
-  expected?: string;
-  actual?: string;
-  weight?: number;
-  matched?: boolean;
-  score?: number;
-  reason?: string;
-};
-
-type GraphActionPolicySummary = {
-  id?: string;
-  priority?: number;
-  fallback?: boolean;
-  reliabilityHint?: string;
-  action?: {
-    id?: string;
-    type?: string;
-    title?: string;
-    params?: unknown;
-    timing?: unknown;
-    coordinate?: unknown;
-  };
-};
-
 function renderStabilityReport(run: TestRun): string {
   const config = run.config.stabilityExploration;
   if (!config) {
@@ -383,7 +241,7 @@ function renderStabilityReport(run: TestRun): string {
   const skippedCandidates = run.stepResults.reduce((sum, step) => sum + (readStabilityMetadata(step.metadata)?.skippedCandidates?.length ?? 0), 0);
 
   return `<h2>稳定性探索摘要</h2>
-    <section class="graph-panel">
+    <section class="run-summary-panel">
       <section class="summary">
         <div class="metric"><span>目标包</span><strong>${escapeHtml(config.packageName)}</strong></div>
         <div class="metric"><span>Seed</span><strong>${escapeHtml(config.seed)}</strong></div>
@@ -396,7 +254,7 @@ function renderStabilityReport(run: TestRun): string {
         <div class="metric"><span>过滤候选</span><strong>${skippedCandidates}</strong></div>
         <div class="metric"><span>最近动作</span><strong>${escapeHtml(latestMetadata?.candidateLabel ?? "-")}</strong></div>
       </section>
-      <div class="graph-diagnostics">
+      <div class="run-diagnostics">
         <div><strong>允许动作</strong><span>${escapeHtml(config.allowedActions.join(", "))}</span></div>
         <div><strong>危险词</strong><span>${escapeHtml(config.dangerousTextPatterns.join(", "))}</span></div>
         <div><strong>最近来源</strong><span>${escapeHtml(latestMetadata?.candidateSource ?? "-")} · ${escapeHtml(latestMetadata?.currentPackage ?? config.packageName)}</span></div>
@@ -404,376 +262,7 @@ function renderStabilityReport(run: TestRun): string {
     </section>`;
 }
 
-function renderAssetPatrolReport(run: TestRun): string {
-  const config = run.config.assetPatrol;
-  if (!config) {
-    return "";
-  }
-  const latestStep = run.stepResults.at(-1);
-  const latestMetadata = readAssetPatrolMetadata(latestStep?.metadata);
-  const assetSteps = run.stepResults
-    .map((step) => ({ step, metadata: readAssetPatrolMetadata(step.metadata) }))
-    .filter((item): item is { step: StepResult; metadata: NonNullable<ReturnType<typeof readAssetPatrolMetadata>> } => Boolean(item.metadata));
-  const failedSteps = assetSteps.filter(({ step }) => step.status === "failed").length;
-  const skippedSteps = assetSteps.filter(({ step }) => step.status === "skipped").length;
-  const needsRepair = assetSteps.filter(({ metadata }) => metadata.status === "needs_repair" || metadata.skipReason === "runtime_relocation_required").length;
-
-  return `<h2>资产驱动巡检摘要</h2>
-    <section class="graph-panel">
-      <section class="summary">
-        <div class="metric"><span>目标包</span><strong>${escapeHtml(config.packageName)}</strong></div>
-        <div class="metric"><span>启动方式</span><strong>${escapeHtml(config.startMode)}</strong></div>
-        <div class="metric"><span>巡检范围</span><strong>${escapeHtml(config.pageScope)}</strong></div>
-        <div class="metric"><span>检查项</span><strong>${assetSteps.length}</strong></div>
-        <div class="metric"><span>失败检查</span><strong>${failedSteps}</strong></div>
-        <div class="metric"><span>跳过检查</span><strong>${skippedSteps}</strong></div>
-        <div class="metric"><span>建议修复</span><strong>${needsRepair}</strong></div>
-        <div class="metric"><span>当前页</span><strong>${escapeHtml(latestMetadata?.pageModelName ?? latestMetadata?.startPage?.name ?? "-")}</strong></div>
-        <div class="metric"><span>最近检查</span><strong>${escapeHtml(latestMetadata?.label ?? "-")}</strong></div>
-      </section>
-      <div class="graph-diagnostics">
-        <div><strong>危险词</strong><span>${escapeHtml(config.dangerousTextPatterns.join(", "))}</span></div>
-        <div><strong>最近原因</strong><span>${escapeHtml(latestMetadata?.skipReason ?? "-")}</span></div>
-        <div><strong>执行模式</strong><span>${escapeHtml(latestMetadata?.executionMode ?? "diagnostic")}</span></div>
-      </div>
-    </section>`;
-}
-
-function renderAiDiagnosisReport(run: TestRun): string {
-  const events = run.events.filter((event) => event.type === "ai_diagnosis");
-  if (!events.length) {
-    return "";
-  }
-  return `<h2>AI 诊断</h2>
-    <section class="graph-panel">
-      <div class="graph-diagnostics">
-        ${events
-          .map((event) => {
-            const detail = readJsonObject(event.detail);
-            const artifacts = event.artifactIds
-              .map((id) => run.artifacts.find((artifact) => artifact.id === id))
-              .filter((artifact): artifact is ArtifactRef => Boolean(artifact));
-            return `<div class="${event.severity === "warning" ? "warning" : ""}">
-              <strong>${escapeHtml(event.summary)}</strong>
-              <span>置信度=${escapeHtml(formatUnknown(detail?.confidence, "-"))} · 建议=${escapeHtml(formatUnknown(detail?.recommendedAction, "-"))} · 自动应用=${escapeHtml(formatUnknown(detail?.safeToAutoApply, false))}</span>
-              ${artifacts.length ? renderEvidenceLinks(artifacts) : ""}
-            </div>`;
-          })
-          .join("")}
-      </div>
-    </section>`;
-}
-
-function renderGraphReport(run: TestRun): string {
-  const graphSteps = collectGraphSteps(run);
-  if (!graphSteps.length) {
-    return "";
-  }
-  const first = graphSteps[0]!;
-  const last = graphSteps.at(-1)!;
-  const failed = graphSteps.find(({ step }) => step.status === "failed" || step.status === "timeout");
-  const routeNodes = graphRouteNodes(graphSteps);
-  const overlayCount = graphSteps.reduce((count, item) => count + overlayExpectationIds(item.graph).size, 0);
-  const diagnostics = graphDiagnostics(run, graphSteps);
-  return `<h2>业务图谱执行</h2>
-    <section class="graph-panel">
-      <section class="summary">
-        <div class="metric"><span>Graph Version</span><strong>${escapeHtml(first.graph.versionId ?? "-")}</strong></div>
-        <div class="metric"><span>Start Node</span><strong>${escapeHtml(first.graph.fromNodeName ?? first.graph.fromNodeId ?? "-")}</strong></div>
-        <div class="metric"><span>Target Node</span><strong>${escapeHtml(last.graph.toNodeName ?? last.graph.toNodeId ?? "-")}</strong></div>
-        <div class="metric"><span>Graph Steps</span><strong>${graphSteps.length}</strong></div>
-        <div class="metric"><span>Runtime Overlay</span><strong>${overlayCount ? `${overlayCount} 条` : "无"}</strong></div>
-        <div class="metric"><span>Failed At</span><strong>${failed ? `${failed.graph.toNodeName ?? failed.graph.toNodeId ?? "-"} / ${failed.graph.phase ?? failed.step.status}` : "无"}</strong></div>
-        <div class="metric"><span>Bootstrap</span><strong>${diagnostics.bootstrapEvents.length ? `${diagnostics.bootstrapEvents.length} 次` : "无"}</strong></div>
-        <div class="metric"><span>Transition Wait</span><strong>${diagnostics.transitionWaits.length ? `${diagnostics.transitionWaits.length} 次` : "无"}</strong></div>
-      </section>
-      <div class="graph-path">
-        ${routeNodes.map((node, index) => `${index > 0 ? '<span class="graph-arrow">→</span>' : ""}<span class="graph-node">${escapeHtml(node)}</span>`).join("")}
-      </div>
-      ${renderGraphDiagnostics(diagnostics)}
-      <div class="graph-meta">这一区域展示图谱规划路径和真实执行结果；旧版线性步骤只作为底层证据，图谱语义以节点、边、状态识别和预期验证为准。</div>
-    </section>
-    <table>
-      <thead>
-        <tr><th>#</th><th>业务边</th><th>节点迁移</th><th>状态</th><th>节点识别</th><th>动作策略</th><th>预期分组</th><th>证据</th></tr>
-      </thead>
-      <tbody>
-        ${graphSteps.map(({ step, graph }) => renderGraphStepRow(run, step, graph)).join("")}
-      </tbody>
-    </table>`;
-}
-
-function graphDiagnostics(run: TestRun, graphSteps: GraphStepReport[]): {
-  bootstrapEvents: TestRun["events"];
-  transitionWaits: GraphDeviationSummary[];
-  recoveries: GraphStepMetadata[];
-} {
-  const transitionWaits = graphSteps.flatMap(({ graph }) => graph.deviations ?? []).filter((deviation) => deviation.action === "retry_observe");
-  const recoveries = graphSteps.map(({ graph }) => graph).filter((graph) => typeof graph.recoveryAttempt === "number");
-  return {
-    bootstrapEvents: run.events.filter((event) => event.type === "start_state_failed"),
-    transitionWaits,
-    recoveries
-  };
-}
-
-function renderGraphDiagnostics(diagnostics: ReturnType<typeof graphDiagnostics>): string {
-  const rows: string[] = [];
-  for (const event of diagnostics.bootstrapEvents) {
-    rows.push(`<div class="warning"><strong>启动归位</strong><span>${escapeHtml(event.summary)}${event.detail ? `：${escapeHtml(event.detail)}` : ""}</span></div>`);
-  }
-  for (const deviation of diagnostics.transitionWaits.slice(0, 5)) {
-    rows.push(
-      `<div><strong>状态等待</strong><span>${escapeHtml(deviation.message ?? "动作后持续等待目标节点出现。")} ${
-        deviation.actualNodeId ? `实际节点=${escapeHtml(deviation.actualNodeId)}` : ""
-      }</span></div>`
-    );
-  }
-  if (diagnostics.recoveries.length) {
-    rows.push(`<div><strong>路径恢复</strong><span>本次执行触发 ${diagnostics.recoveries.length} 次恢复 / 重规划。</span></div>`);
-  }
-  return rows.length ? `<div class="graph-diagnostics">${rows.join("")}</div>` : "";
-}
-
-function renderGraphStepRow(run: TestRun, step: StepResult, graph: GraphStepMetadata): string {
-  const evidenceIds = uniqueStrings([
-    step.afterScreenshotId,
-    ...step.artifacts.map((artifact) => artifact.id),
-    ...(step.expectationResults ?? []).flatMap((result) => result.evidenceArtifactIds)
-  ]);
-  const artifacts = evidenceIds
-    .map((id) => run.artifacts.find((artifact) => artifact.id === id) ?? step.artifacts.find((artifact) => artifact.id === id))
-    .filter((artifact): artifact is ArtifactRef => Boolean(artifact));
-  return `<tr>
-    <td>${step.stepOrder}</td>
-    <td><strong>${escapeHtml(graph.edgeKey ?? graph.edgeId ?? "-")}</strong><div class="graph-meta">${escapeHtml(graph.edgeId ?? "")}</div></td>
-    <td>${escapeHtml(graph.fromNodeName ?? graph.fromNodeId ?? "-")}<br /><span class="muted">→</span> ${escapeHtml(graph.toNodeName ?? graph.toNodeId ?? "-")}</td>
-    <td>${renderStepStatus(step.status)}<div class="graph-meta">${escapeHtml(graph.phase ?? "-")}</div>${renderGraphRecovery(graph)}${step.errorMessage ? `<div class="expectation-reason">${escapeHtml(step.errorMessage)}</div>` : ""}</td>
-    <td>${renderGraphMatch("Before", graph.beforeMatch)}${renderGraphMatch("After", graph.afterMatch)}</td>
-    <td>${renderGraphActionPolicy(step, graph)}${renderSemanticLocatorEvidence(step.metadata?.semantic)}</td>
-    <td>${renderGraphExpectationGroups(step.expectationResults ?? [], graph)}${renderGraphInterceptors(graph.interceptors)}${renderGraphDeviations(graph.deviations)}</td>
-    <td>${renderEvidenceLinks(artifacts)}</td>
-  </tr>`;
-}
-
-function renderGraphInterceptors(interceptors: GraphInterceptorSummary[] | undefined): string {
-  if (!interceptors?.length) {
-    return "";
-  }
-  return `<div class="graph-interceptors">${interceptors
-    .map(
-      (item) =>
-        `<div><strong>运行时清障 ${escapeHtml(item.phase ?? "-")}</strong><span>${escapeHtml(item.ruleName ?? item.ruleId ?? "-")}：${escapeHtml(item.matchedText ?? "-")}${
-          item.action?.type ? ` · ${escapeHtml(item.action.type)}(${escapeHtml(String(item.action.x ?? "-"))}, ${escapeHtml(String(item.action.y ?? "-"))})` : ""
-        }</span></div>`
-    )
-    .join("")}</div>`;
-}
-
-function renderGraphDeviations(deviations: GraphDeviationSummary[] | undefined): string {
-  if (!deviations?.length) {
-    return "";
-  }
-  return `<div class="graph-deviations">${deviations
-    .map((deviation) =>
-      `<div><strong>偏离 ${escapeHtml(deviation.phase ?? "-")}</strong><span>第 ${escapeHtml(String(deviation.attempt ?? 1))} 次 · ${escapeHtml(deviation.action ?? "-")}：${escapeHtml(deviation.message ?? "-")}</span></div>`
-    )
-    .join("")}</div>`;
-}
-
-function renderGraphRecovery(graph: GraphStepMetadata): string {
-  if (typeof graph.recoveryAttempt !== "number") {
-    return "";
-  }
-  return `<div class="graph-recovery"><strong>恢复路径</strong><span>第 ${escapeHtml(String(graph.recoveryAttempt))} 次重规划${
-    graph.recoveryReasonDeviationId ? ` · 来源偏离 ${escapeHtml(graph.recoveryReasonDeviationId)}` : ""
-  }</span></div>`;
-}
-
-function renderGraphMatch(label: string, match: NodeMatchSummary | undefined): string {
-  if (!match) {
-    return `<div class="graph-match"><strong>${escapeHtml(label)}:</strong> <span class="muted">无</span></div>`;
-  }
-  const score = typeof match.score === "number" ? ` ${(match.score * 100).toFixed(0)}%` : "";
-  const candidates = (match.candidates ?? [])
-    .slice(0, 3)
-    .map((candidate) => {
-      const candidateScore = typeof candidate.score === "number" ? ` ${Math.round(candidate.score * 100)}%` : "";
-      const weight =
-        typeof candidate.matchedWeight === "number" && typeof candidate.totalWeight === "number"
-          ? ` · 命中 ${candidate.matchedWeight} / ${candidate.totalWeight}`
-          : "";
-      return `<div><span>${escapeHtml(candidate.nodeName ?? candidate.nodeId ?? "-")}${escapeHtml(candidateScore)}${escapeHtml(weight)}${renderMatchQualityText(
-        candidate.quality
-      )}</span>${renderMatcherResults(candidate.matcherResults)}</div>`;
-    })
-    .join("");
-  return `<div class="graph-match"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(match.status ?? "-")} ${escapeHtml(match.nodeName ?? match.nodeId ?? "")}${escapeHtml(score)}${
-    candidates ? `<div class="graph-match-candidates"><strong>候选</strong>${candidates}</div>` : ""
-  }</div>`;
-}
-
-function renderMatchQualityText(quality: NodeMatchCandidateSummary["quality"]): string {
-  if (!quality) {
-    return "";
-  }
-  const signalText = [
-    typeof quality.matchedStrongSignals === "number" ? `强锚点 ${quality.matchedStrongSignals}` : "",
-    typeof quality.matchedWeakSignals === "number" ? `弱锚点 ${quality.matchedWeakSignals}` : "",
-    typeof quality.matchedContextSignals === "number" ? `上下文 ${quality.matchedContextSignals}` : ""
-  ]
-    .filter(Boolean)
-    .join(" / ");
-  const reasons = quality.reasons?.length ? ` · 原因 ${quality.reasons.join(", ")}` : "";
-  const missing = quality.missingStrongMatcherIds?.length ? ` · 缺失强锚点 ${quality.missingStrongMatcherIds.join(", ")}` : "";
-  const prefix = quality.status ? ` · 质量 ${quality.status}` : "";
-  return `${prefix}${signalText ? ` · ${signalText}` : ""}${reasons}${missing}`;
-}
-
-function renderMatcherResults(results: MatcherResultSummary[] | undefined): string {
-  if (!results?.length) {
-    return "";
-  }
-  return `<div class="graph-matchers">${results
-    .slice(0, 6)
-    .map((result) => {
-      const state = result.matched === false ? "未命中" : "命中";
-      const detail = [
-        result.expected ? `期望=${result.expected}` : "",
-        result.actual ? `实际=${result.actual}` : "",
-        typeof result.weight === "number" ? `权重=${result.weight}` : "",
-        typeof result.score === "number" ? `得分=${result.score}` : "",
-        result.reason ? `原因=${result.reason}` : ""
-      ]
-        .filter(Boolean)
-        .join("；");
-      return `<div class="${result.matched === false ? "missed" : "matched"}"><strong>${escapeHtml(state)} ${escapeHtml(result.matcherId ?? "-")}</strong><span>${escapeHtml(result.type ?? "-")}${
-        detail ? ` · ${escapeHtml(detail)}` : ""
-      }</span></div>`;
-    })
-    .join("")}</div>`;
-}
-
-function renderGraphActionPolicy(step: StepResult, graph: GraphStepMetadata): string {
-  const policy = graph.actionPolicy;
-  if (!policy) {
-    return `${escapeHtml(step.type)}${graph.usedActionPolicyId ? `<div class="graph-meta">policy=${escapeHtml(graph.usedActionPolicyId)}</div>` : ""}${
-      graph.fallbackActionPolicyId ? `<div class="graph-meta">fallback=${escapeHtml(graph.fallbackActionPolicyId)}</div>` : ""
-    }`;
-  }
-  const action = policy.action;
-  return `<div class="graph-action">
-    <strong>${escapeHtml(action?.type ?? step.type)}</strong>
-    <span>policy=${escapeHtml(policy.id ?? graph.usedActionPolicyId ?? "-")}</span>
-    <span>priority=${escapeHtml(String(policy.priority ?? "-"))} · fallback=${escapeHtml(String(policy.fallback ?? false))} · reliability=${escapeHtml(policy.reliabilityHint ?? "-")}</span>
-    ${action?.params !== undefined ? `<code class="graph-json">params=${escapeHtml(formatUnknownValue(action.params))}</code>` : ""}
-    ${action?.coordinate !== undefined ? `<code class="graph-json">coordinate=${escapeHtml(formatUnknownValue(action.coordinate))}</code>` : ""}
-    ${action?.timing !== undefined ? `<code class="graph-json">timing=${escapeHtml(formatUnknownValue(action.timing))}</code>` : ""}
-    ${graph.fallbackActionPolicyId ? `<span>fallbackPolicy=${escapeHtml(graph.fallbackActionPolicyId)}</span>` : ""}
-  </div>`;
-}
-
-function renderSemanticLocatorEvidence(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return "";
-  }
-  const semantic = value as Record<string, unknown>;
-  const rows = [
-    textValue(semantic.relocatedBy) ? `resolvedBy=${textValue(semantic.relocatedBy)}` : "",
-    textValue(semantic.focusResolvedBy) ? `focus=${textValue(semantic.focusResolvedBy)}` : "",
-    textValue(semantic.fallback) ? `fallback=${textValue(semantic.fallback)}` : "",
-    textValue(semantic.targetText) ? `target=${textValue(semantic.targetText)}` : "",
-    typeof semantic.inputVerified === "boolean" ? `inputVerified=${semantic.inputVerified}` : "",
-    textValue(semantic.verificationStrategy) ? `verify=${textValue(semantic.verificationStrategy)}` : ""
-  ].filter(Boolean);
-  const visualCandidate = readSemanticObject(semantic.visualCandidate);
-  if (visualCandidate) {
-    rows.push(
-      [
-        "candidate",
-        textValue(visualCandidate.label),
-        textValue(visualCandidate.role),
-        typeof visualCandidate.score === "number" ? `score=${visualCandidate.score}` : "",
-        textValue(visualCandidate.semanticArea)
-      ].filter(Boolean).join(" · ")
-    );
-  }
-  const visualTemplate = readSemanticObject(semantic.visualTemplate);
-  if (visualTemplate) {
-    rows.push(
-      [
-        "template",
-        textValue(visualTemplate.hash) ? `hash=${textValue(visualTemplate.hash)}` : "",
-        typeof visualTemplate.similarity === "number" ? `similarity=${visualTemplate.similarity}` : ""
-      ].filter(Boolean).join(" · ")
-    );
-  }
-  const visualRelocation = readSemanticObject(semantic.visualRelocation);
-  if (visualRelocation) {
-    rows.push(
-      [
-        "relocation",
-        textValue(visualRelocation.reason),
-        typeof visualRelocation.minScore === "number" ? `min=${visualRelocation.minScore}` : "",
-        typeof visualRelocation.candidateCount === "number" ? `candidates=${visualRelocation.candidateCount}` : ""
-      ].filter(Boolean).join(" · ")
-    );
-  }
-  if (!rows.length) {
-    rows.push(formatUnknownValue(semantic));
-  }
-  return `<div class="graph-diagnostics semantic-locator-evidence"><div><strong>定位证据</strong><span>${escapeHtml(rows.join("；"))}</span></div></div>`;
-}
-
-function readSemanticObject(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function readJsonObject(value: string | undefined): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function textValue(value: unknown): string {
-  return typeof value === "string" && value.trim() ? value.trim() : "";
-}
-
-function renderGraphExpectationGroups(results: StepExpectationResult[], graph: GraphStepMetadata): string {
-  if (!results.length) {
-    return '<span class="muted">未配置</span>';
-  }
-  const overlayIds = overlayExpectationIds(graph);
-  return `<div class="expectation-chips">${results
-    .map((result) => {
-      const source = overlayIds.has(result.expectationId) ? "overlay" : isSystemGuardExpectationType(result.type) ? "guard" : "default";
-      const sourceLabel = source === "overlay" ? "动态预期" : source === "guard" ? "系统护栏" : "图谱默认";
-      return `<span>${renderExpectationChip(result)} <span class="graph-source ${source}">${sourceLabel}</span></span>`;
-    })
-    .join("")}</div>`;
-}
-
-function collectGraphSteps(run: TestRun): GraphStepReport[] {
-  return run.stepResults
-    .map((step) => ({ step, graph: readGraphMetadata(step.metadata) }))
-    .filter((item): item is GraphStepReport => Boolean(item.graph));
-}
-
-function readGraphMetadata(metadata: Record<string, unknown> | undefined): GraphStepMetadata | undefined {
-  const graph = metadata?.graph;
-  if (!graph || typeof graph !== "object" || Array.isArray(graph)) {
-    return undefined;
-  }
-  return graph as GraphStepMetadata;
-}
-
-function readStabilityMetadata(metadata: Record<string, unknown> | undefined): {
+ function readStabilityMetadata(metadata: Record<string, unknown> | undefined): {
   candidateLabel?: string;
   candidateSource?: string;
   currentPackage?: string;
@@ -790,60 +279,8 @@ function readStabilityMetadata(metadata: Record<string, unknown> | undefined): {
     : undefined;
 }
 
-function readAssetPatrolMetadata(metadata: Record<string, unknown> | undefined): {
-  kind?: string;
-  label?: string;
-  status?: string;
-  executionMode?: string;
-  pageModelName?: string;
-  skipReason?: string;
-  startPage?: { name?: string };
-} | undefined {
-  const value = metadata?.assetPatrol;
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as {
-        kind?: string;
-        label?: string;
-        status?: string;
-        executionMode?: string;
-        pageModelName?: string;
-        skipReason?: string;
-        startPage?: { name?: string };
-      })
-    : undefined;
-}
-
 function renderStepActionCell(step: StepResult): string {
-  const assetPatrol = readAssetPatrolMetadata(step.metadata);
-  if (!assetPatrol) {
-    return escapeHtml(step.type);
-  }
-  const label = assetPatrol.label || assetPatrol.kind || step.type;
-  const detail = [assetPatrol.kind, assetPatrol.status, assetPatrol.skipReason].filter(isNonEmptyString).join(" · ");
-  return `<strong>${escapeHtml(label)}</strong>${detail ? `<div class="graph-meta">${escapeHtml(detail)}</div>` : ""}`;
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function graphRouteNodes(graphSteps: GraphStepReport[]): string[] {
-  const nodes: string[] = [];
-  for (const { graph } of graphSteps) {
-    const from = graph.fromNodeName ?? graph.fromNodeId;
-    const to = graph.toNodeName ?? graph.toNodeId;
-    if (from && nodes.length === 0) {
-      nodes.push(from);
-    }
-    if (to && nodes.at(-1) !== to) {
-      nodes.push(to);
-    }
-  }
-  return nodes;
-}
-
-function overlayExpectationIds(graph: GraphStepMetadata): Set<string> {
-  return new Set([...(graph.runtimeOverlay?.targetExpectationIds ?? []), ...(graph.runtimeOverlay?.edgeExpectationIds ?? [])]);
+  return escapeHtml(step.type);
 }
 
 function renderExpectationDetails(run: TestRun): string {
@@ -949,9 +386,6 @@ function renderEvidenceLinks(artifacts: ArtifactRef[]): string {
   return `<div class="evidence-links">${artifacts.map((artifact) => `<a href="${escapeAttr(artifact.url)}">${escapeHtml(artifact.name)}</a>`).join("")}</div>`;
 }
 
-function uniqueStrings(values: Array<string | undefined>): string[] {
-  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
-}
 
 function passedExpectationCount(results: StepExpectationResult[]): number {
   return results.filter((result) => result.status === "passed").length;
@@ -1083,23 +517,6 @@ function escapeAttr(value: string): string {
   return escapeHtml(value);
 }
 
-function formatUnknownValue(value: unknown): string {
-  if (value === undefined) {
-    return "-";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function formatUnknown(value: unknown, fallback: unknown): string {
-  return formatUnknownValue(value ?? fallback);
-}
 
 function formatMaybe(value: number | undefined, suffix: string): string {
   return typeof value === "number" && Number.isFinite(value) ? `${Number(value.toFixed(1))}${suffix}` : "-";

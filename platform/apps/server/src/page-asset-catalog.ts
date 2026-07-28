@@ -66,7 +66,7 @@ export class StoragePageAssetCatalog implements PageAssetCatalog {
       return [];
     }
     const byId = new Map<string, PageElementLocator>();
-    for (const value of [page.node.metadata?.assetRecordingPageElements, page.node.metadata?.assetRecordingManualElements]) {
+    for (const value of [page.node.metadata?.assetRecordingManualElements]) {
       if (!Array.isArray(value)) {
         continue;
       }

@@ -58,7 +58,14 @@ const validPayload = {
   page: { name: "肿瘤百科", key: "encyclopedia", assetKind: "page", confidence: 0.9, riskNotes: [] },
   identityOcrTexts: [{ text: "鲸放肿瘤百科", confidence: 0.95 }],
   identityRegions: [{ id: "title", label: "标题区", x: 5, y: 10, width: 88, height: 6, semanticArea: "top" }],
-  elements: [{ elementLabel: "搜索入口", abilityType: "fixed_tap", actionKind: "tap", locator: "image-region:4,18,92,6", semanticArea: "top", confidence: 0.8, riskNotes: [] }]
+  elements: [{
+    elementLabel: "搜索入口",
+    locatorKind: "visual_locator",
+    region: { x: 4, y: 18, width: 92, height: 6 },
+    semanticArea: "top",
+    confidence: 0.8,
+    riskNotes: []
+  }]
 };
 const parseObservation = observationFixture({ ocrTexts: [{ text: "鲸放肿瘤百科" }, { text: "10:57" }] });
 
@@ -109,22 +116,38 @@ describe("parseAiPageDraftResponse", () => {
     expect(warnings.some((w) => w.includes("零面积"))).toBe(true);
   });
 
-  it("keeps strategy-less elements as manual-completion drafts and drops illegal ability types", () => {
+  it("ignores unsupported action fields and keeps every usable locator draft", () => {
     const payload = {
       ...validPayload,
       elements: [
         { elementLabel: "坏定位", abilityType: "fixed_tap", actionKind: "tap", locator: "xpath://Button", riskNotes: [] },
-        { elementLabel: "坏类型", abilityType: "magic_tap", actionKind: "tap", locator: "image-region:1,1,10,10", riskNotes: [] }
+        {
+          elementLabel: "坏类型",
+          locatorKind: "visual_locator",
+          region: { x: 1, y: 1, width: 10, height: 10 },
+          abilityType: "magic_tap",
+          actionKind: "tap",
+          riskNotes: []
+        }
       ]
     };
     const { suggestion, warnings } = parseAiPageDraftResponse(JSON.stringify(payload), parseObservation);
-    expect(suggestion.elements).toHaveLength(1);
+    expect(suggestion.elements).toHaveLength(2);
     expect(suggestion.elements[0]).toMatchObject({
       elementLabel: "坏定位",
       locator: "",
       needsManualCompletion: true
     });
-    expect(warnings).toHaveLength(2);
+    expect(suggestion.elements[1]).toMatchObject({
+      elementLabel: "坏类型",
+      locatorKind: "visual_locator",
+      locator: "image-region:1,1,10,10"
+    });
+    expect(suggestion.elements[0]).not.toHaveProperty("abilityType");
+    expect(suggestion.elements[0]).not.toHaveProperty("actionKind");
+    expect(suggestion.elements[1]).not.toHaveProperty("abilityType");
+    expect(suggestion.elements[1]).not.toHaveProperty("actionKind");
+    expect(warnings).toHaveLength(1);
   });
 
   it("falls back assetKind to page with warning", () => {
@@ -238,24 +261,24 @@ describe("parseAiPageDraftResponse locator strategies", () => {
     ]);
     expect(elements[0]).toMatchObject({
       locatorKind: "collection_item_locator",
-      abilityType: "grid_candidate",
       locator: "image-region:2,30,96,55",
       scrollProfile: {
         containerKind: "list",
         direction: "vertical",
         targetKind: "ocr_text",
-        targetQuery: "{{itemText}}",
-        afterFoundAction: "tap_item"
+        targetQuery: "{{itemText}}"
       },
       transitionKind: "parameterized",
       parameterMapping: { itemText: "dynamicRegion.item.titleText" }
     });
     expect(elements[0]!.scrollProfile).not.toHaveProperty("columns");
+    expect(elements[0]!.scrollProfile).not.toHaveProperty("afterFoundAction");
     expect(elements[0]).not.toHaveProperty("candidateIndex");
+    expect(elements[0]).not.toHaveProperty("abilityType");
+    expect(elements[0]).not.toHaveProperty("actionKind");
     expect(elements[0]!.dynamicRegion).toMatchObject({ kind: "grid", region: { x: 2, y: 30, width: 96, height: 55 } });
     expect(elements[0]!.itemTemplate).toMatchObject({ dynamicFields: [{ name: "itemText", role: "title" }] });
     expect(warnings.some((w) => w.includes("candidateIndex"))).toBe(true);
-    expect(warnings.some((w) => w.includes("grid_candidate"))).toBe(true);
   });
 
   it("builds whitelisted structural locators with verified anchor text", () => {

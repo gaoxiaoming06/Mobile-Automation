@@ -7,7 +7,14 @@ import {
   type ScriptStepRisk,
   type ScriptTarget
 } from "@mobile-automation/script-flow";
-import { nowIso, type ActionStep, type FlowStartStrategy, type RunMode, type TestRun } from "@mobile-automation/shared";
+import {
+  nowIso,
+  type ActionStep,
+  type AndroidAppMonitorConfig,
+  type FlowStartStrategy,
+  type RunMode,
+  type TestRun
+} from "@mobile-automation/shared";
 import type { AutomationDeviceDriver } from "./mobile-driver.js";
 import type { PageAssetPlatform } from "./page-asset-catalog.js";
 import type { PageStateService } from "./page-state-service.js";
@@ -27,6 +34,7 @@ export type ScriptFlowBackendStartInput = {
   pauseAfterEachStep?: boolean;
   startStrategy?: FlowStartStrategy;
   startAppPackageName?: string;
+  androidAppMonitor?: AndroidAppMonitorConfig;
   sourceSnapshot?: TestRun["sourceSnapshot"];
 };
 
@@ -41,7 +49,6 @@ export type StartScriptFlowRunInput = {
   flow: ScriptFlowDocument;
   deviceSerial: string;
   parameters?: Record<string, ScriptParameterValue>;
-  profileParameters?: Record<string, ScriptParameterValue>;
   confirmedRisks?: ScriptStepRisk[];
   resolveFlow?: CompileScriptFlowOptions["resolveFlow"];
   mode?: RunMode;
@@ -51,6 +58,7 @@ export type StartScriptFlowRunInput = {
   recordVideo?: boolean;
   keepVideoOnSuccess?: boolean;
   pauseAfterEachStep?: boolean;
+  androidAppMonitor?: AndroidAppMonitorConfig;
 };
 
 export type ScriptFlowRunnerDeps = {
@@ -68,10 +76,7 @@ export class ScriptFlowRunner {
       throw new Error(`Script platform ${input.flow.app.platform} does not match device platform ${device.platform}`);
     }
     const plan = compileScriptFlow(input.flow, {
-      parameters: {
-        ...(input.profileParameters ?? {}),
-        ...(input.parameters ?? {})
-      },
+      parameters: input.parameters ?? {},
       resolveFlow: input.resolveFlow
     });
     const missingRisks = plan.requiredRiskConfirmations.filter((risk) => !(input.confirmedRisks ?? []).includes(risk));
@@ -97,6 +102,7 @@ export class ScriptFlowRunner {
       recordVideo: input.recordVideo,
       keepVideoOnSuccess: input.keepVideoOnSuccess,
       pauseAfterEachStep: input.pauseAfterEachStep,
+      androidAppMonitor: input.androidAppMonitor,
       startStrategy: startStrategy(input.flow),
       startAppPackageName: input.flow.app.id,
       sourceSnapshot: {

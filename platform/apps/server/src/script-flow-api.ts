@@ -9,8 +9,8 @@ import {
   type ScriptStepRisk
 } from "@mobile-automation/script-flow";
 import type { ScriptFlow } from "@mobile-automation/shared";
-import { resolveParameterProfileRuntimeSnapshot } from "./asset-parameter-center.js";
 import type { Storage } from "./storage.js";
+import { readAndroidAppMonitorConfig } from "./android-app-monitor-request.js";
 import type { ScriptFlowRunner, StartScriptFlowRunInput } from "./script-flow-runner.js";
 
 export type ScriptFlowApiStorage = Pick<
@@ -20,8 +20,6 @@ export type ScriptFlowApiStorage = Pick<
   | "getScriptFlow"
   | "updateScriptFlow"
   | "deleteScriptFlow"
-  | "getParameterProfile"
-  | "listParameterDataRecords"
   | "getRun"
 >;
 
@@ -95,12 +93,11 @@ export function registerScriptFlowRoutes(
   app.post("/api/script-flows/:id/preview", (req, res) => {
     try {
       const flow = requireFlow(deps.storage, req.params.id);
-      const body = strictBody(req.body, ["parameters", "parameterProfileId"]);
+      const body = strictBody(req.body, ["parameters"]);
       const document = parseScriptFlow(flow.sourceYaml);
-      const profileParameters = readProfileParameters(deps.storage, flow, optionalString(body.parameterProfileId), document);
       const parameters = readParameters(body.parameters);
       const plan = compileScriptFlow(document, {
-        parameters: { ...profileParameters, ...parameters },
+        parameters,
         resolveFlow: flowResolver(deps.storage)
       });
       res.json({ flow, plan });
@@ -119,7 +116,6 @@ export function registerScriptFlowRoutes(
       const body = strictBody(req.body, [
         "deviceSerial",
         "parameters",
-        "parameterProfileId",
         "confirmedRisks",
         "mode",
         "repeatCount",
@@ -127,7 +123,8 @@ export function registerScriptFlowRoutes(
         "stopOnFailure",
         "recordVideo",
         "keepVideoOnSuccess",
-        "pauseAfterEachStep"
+        "pauseAfterEachStep",
+        "androidAppMonitor"
       ]);
       const document = parseScriptFlow(flow.sourceYaml);
       const input: StartScriptFlowRunInput = {
@@ -137,8 +134,8 @@ export function registerScriptFlowRoutes(
         flow: document,
         deviceSerial: requiredString(body.deviceSerial, "deviceSerial"),
         parameters: readParameters(body.parameters),
-        profileParameters: readProfileParameters(deps.storage, flow, optionalString(body.parameterProfileId), document),
         confirmedRisks: readConfirmedRisks(body.confirmedRisks),
+        androidAppMonitor: readAndroidAppMonitorConfig(body.androidAppMonitor),
         resolveFlow: flowResolver(deps.storage),
         ...runOptions(body)
       };
@@ -248,48 +245,6 @@ function readParameters(value: unknown): Record<string, ScriptParameterValue> {
       throw new ScriptFlowApiError(400, `parameters.${key} must be a scalar value`);
     }
     result[key] = item;
-  }
-  return result;
-}
-
-function readProfileParameters(
-  storage: ScriptFlowApiStorage,
-  flow: ScriptFlow,
-  profileId: string | undefined,
-  document: ScriptFlowDocument
-): Record<string, ScriptParameterValue> {
-  if (!profileId) {
-    return {};
-  }
-  if (flow.platform !== "android" && flow.platform !== "ios") {
-    throw new ScriptFlowApiError(400, `Parameter profiles are unavailable for ${flow.platform}`);
-  }
-  const profile = storage.getParameterProfile(profileId);
-  if (!profile) {
-    throw new ScriptFlowApiError(404, "Parameter profile not found");
-  }
-  const records = storage.listParameterDataRecords({ appId: flow.appId, platform: flow.platform });
-  const snapshot = resolveParameterProfileRuntimeSnapshot({ profile, records, appId: flow.appId, platform: flow.platform });
-  return coerceProfileParameters(snapshot.runtimeParams, document);
-}
-
-function coerceProfileParameters(values: Record<string, string>, document: ScriptFlowDocument): Record<string, ScriptParameterValue> {
-  const result: Record<string, ScriptParameterValue> = {};
-  for (const [key, value] of Object.entries(values)) {
-    const definition = document.parameters[key];
-    if (!definition || definition.type === "string" || definition.type === "datetime") {
-      result[key] = value;
-    } else if (definition.type === "number") {
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed)) {
-        throw new ScriptFlowApiError(400, `Profile parameter ${key} must be a number`);
-      }
-      result[key] = parsed;
-    } else if (value === "true" || value === "false") {
-      result[key] = value === "true";
-    } else {
-      throw new ScriptFlowApiError(400, `Profile parameter ${key} must be true or false`);
-    }
   }
   return result;
 }

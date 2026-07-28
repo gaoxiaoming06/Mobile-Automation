@@ -53,7 +53,6 @@ export type PageElementQualityInput = {
     elementId?: string;
     id?: string;
     locator: string;
-    actionKind?: string;
     elementLabel?: string;
     label?: string;
     targetText?: string;
@@ -70,7 +69,6 @@ export type PageElementQualityInput = {
     id?: string;
     label?: string;
     locator?: string;
-    actionKind?: string;
   }>;
 };
 
@@ -362,12 +360,11 @@ function qualityScore(input: {
 
 function hasDuplicateElement(input: PageElementQualityInput): boolean {
   const elementId = textValue(input.element.elementId) || textValue(input.element.id);
-  const actionKind = textValue(input.element.actionKind);
   return (input.existingElements ?? []).some((item) => {
     if (elementId && item.id === elementId) {
       return false;
     }
-    return item.locator === input.element.locator && (!actionKind || !item.actionKind || item.actionKind === actionKind);
+    return item.locator === input.element.locator;
   });
 }
 

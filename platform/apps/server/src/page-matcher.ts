@@ -460,12 +460,9 @@ export async function locateVisualTemplateInScreenshot(input: {
 }
 
 export function pageAssetOnlyGraphVersion(graphVersion: BusinessGraphVersion): BusinessGraphVersion {
-  const nodes = graphVersion.nodes.filter(isConfirmedPageAssetNode).map(withRuntimeScreenshotRegionMatchers);
-  const nodeIds = new Set(nodes.map((node) => node.id));
   return {
     ...graphVersion,
-    nodes,
-    edges: graphVersion.edges.filter((edge) => nodeIds.has(edge.fromNodeId) && nodeIds.has(edge.toNodeId))
+    nodes: graphVersion.nodes.filter(isConfirmedPageAssetNode).map(withRuntimeScreenshotRegionMatchers)
   };
 }
 

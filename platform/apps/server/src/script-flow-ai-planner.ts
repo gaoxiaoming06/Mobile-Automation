@@ -7,7 +7,7 @@ import {
 } from "@mobile-automation/script-flow";
 import type { ScriptFlow } from "@mobile-automation/shared";
 import { isCodexAppServerProvider, runAiJsonRequest, type AiClientFetch } from "./ai-client.js";
-import type { AiDiagnosisConfig } from "./ai-diagnosis.js";
+import type { AiModelConfig } from "./ai-model-settings.js";
 import type { PageAssetCatalog, PageAssetPlatform } from "./page-asset-catalog.js";
 
 export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
@@ -46,7 +46,7 @@ type ParsedScriptFlowAiDraft =
   | Omit<Extract<ScriptFlowAiDraft, { status: "needs_clarification" }>, "channel" | "model">;
 
 export async function generateScriptFlowDraft(input: {
-  config: AiDiagnosisConfig;
+  config: AiModelConfig;
   prompt: string;
   appId: string;
   platform: PageAssetPlatform;

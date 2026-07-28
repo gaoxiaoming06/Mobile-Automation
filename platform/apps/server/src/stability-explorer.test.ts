@@ -7,7 +7,6 @@ import {
 } from "./stability-explorer.js";
 import type { AutomationDeviceDriver, DeviceEventWatcher, MobileVideoRecording, ObservedDeviceEvent } from "./mobile-driver.js";
 import type { OcrLayoutResult, OcrService } from "./ocr.js";
-import type { BusinessGraph, BusinessGraphVersion, BusinessNode, OperationEdge, StateMatcher } from "@mobile-automation/graph-core";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 import {
   createId,
@@ -257,64 +256,6 @@ describe("StabilityExplorer", () => {
             action: { type: "tap", x: 1008, y: 116 }
           })
         ]
-      })
-    );
-  });
-
-  it("prioritizes saved stable page abilities over raw OCR exploration", async () => {
-    const graphVersion = graphVersionWithNodes([
-      pageNode({
-        id: "node-home",
-        key: "home",
-        name: "主页",
-        matchers: [matcher("package", "com.demo", 2), matcher("ocr_text", "主页", 3), matcher("ocr_text", "创建公开课", 2)],
-        metadata: {
-          assetRecordingManualElements: [
-            {
-              id: "manual-create-class",
-              label: "已录入创建班级入口",
-              locator: "image-region:4,18,40,12",
-              actionKind: "tap",
-              semanticArea: "content",
-              availability: "visible",
-              outcomeType: "navigate"
-            }
-          ]
-        }
-      })
-    ]);
-    const storage = new MemoryExplorerStorage({ graphVersion });
-    const driver = new ScriptedExplorerDriver();
-    const explorer = new StabilityExplorer(storage, driver, scriptedOcr([
-      [
-        { text: "主页", x: 180, y: 210, width: 120, height: 80 },
-        { text: "创建公开课", x: 520, y: 500, width: 220, height: 90 }
-      ]
-    ]));
-
-    const run = explorer.start({
-      deviceSerial: "device-1",
-      packageName: "com.demo",
-      maxActions: 1,
-      maxDurationMs: 30_000,
-      strategy: "conservative",
-      startMode: "launch_app",
-      allowedActions: ["tap"],
-      seed: "stable-seed"
-    });
-    await explorer.waitForRun(run.id);
-
-    const completed = storage.getRun(run.id)!;
-    expect(driver.actions).toEqual([
-      { type: "launch_app", packageName: "com.demo" },
-      { type: "tap", x: 259, y: 576 }
-    ]);
-    expect(completed.stepResults[0]?.metadata?.stabilityExploration).toEqual(
-      expect.objectContaining({
-        candidateLabel: "已录入创建班级入口",
-        candidateSource: "page_ability",
-        matchedPageName: "主页",
-        matchedPageNodeId: "node-home"
       })
     );
   });
@@ -718,25 +659,6 @@ class RuntimeInterceptorExplorerDriver extends ScriptedExplorerDriver {
 
 class MemoryExplorerStorage implements StabilityExplorerStorage {
   private readonly runs = new Map<string, TestRun>();
-  private readonly graph?: BusinessGraph;
-  private readonly graphVersion?: BusinessGraphVersion;
-
-  constructor(input: { graphVersion?: BusinessGraphVersion } = {}) {
-    this.graphVersion = input.graphVersion;
-    this.graph = input.graphVersion
-      ? {
-          id: input.graphVersion.graphId,
-          appId: "com.demo",
-          targetApp: { androidPackageName: "com.demo" },
-          platformScope: "android",
-          name: "Demo 图谱",
-          status: "active",
-          activeVersionId: input.graphVersion.id,
-          createdAt: nowIso(),
-          updatedAt: nowIso()
-        }
-      : undefined;
-  }
 
   createRun(input: { caseId?: string; caseName: string; deviceSerial: string; configJson: string; caseSnapshotJson: string; steps: ActionStep[] }): TestRun {
     const run: TestRun = {
@@ -806,62 +728,6 @@ class MemoryExplorerStorage implements StabilityExplorerStorage {
     return [];
   }
 
-  listBusinessGraphs(): BusinessGraph[] {
-    return this.graph ? [this.graph] : [];
-  }
-
-  getBusinessGraphVersion(id: string): BusinessGraphVersion | undefined {
-    return id === this.graphVersion?.id ? this.graphVersion : undefined;
-  }
-}
-
-function graphVersionWithNodes(nodes: BusinessNode[], edges: OperationEdge[] = []): BusinessGraphVersion {
-  return {
-    id: "graph-version-1",
-    graphId: "graph-1",
-    version: 1,
-    sourceSummary: [],
-    status: "active",
-    nodes,
-    edges,
-    createdAt: nowIso()
-  };
-}
-
-function pageNode(input: {
-  id: string;
-  key: string;
-  name: string;
-  matchers: StateMatcher[];
-  metadata?: Record<string, unknown>;
-}): BusinessNode {
-  return {
-    id: input.id,
-    graphVersionId: "graph-version-1",
-    key: input.key,
-    name: input.name,
-    nodeType: "page",
-    tags: ["page-asset", "asset-recording"],
-    status: "active",
-    matchers: input.matchers,
-    defaultExpectations: [],
-    platformScope: "android",
-    metadata: {
-      assetRecordingConfirmed: true,
-      ...input.metadata
-    }
-  };
-}
-
-function matcher(type: StateMatcher["type"], value: string, weight: number): StateMatcher {
-  return {
-    id: `matcher-${type}-${value}`,
-    type,
-    value,
-    weight,
-    critical: type !== "package",
-    platformScope: "android"
-  };
 }
 
 function homeHierarchy(): string {

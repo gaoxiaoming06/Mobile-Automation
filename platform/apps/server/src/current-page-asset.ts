@@ -20,7 +20,7 @@ import {
   type PageMatcherBaselineReader,
   type PageMatcherDiagnostics
 } from "./page-matcher.js";
-import { buildRuntimeUnknownNodeCandidate, mergeRuntimeUnknownNodeMetadata } from "./runtime-graph-candidate.js";
+import { buildRuntimeUnknownPageCandidate, mergeRuntimeUnknownPageMetadata } from "./runtime-page-candidate.js";
 
 export type CurrentPageAssetStorage = {
   findBusinessNodeByKey(graphVersionId: string, key: string): BusinessNode | undefined;
@@ -135,7 +135,7 @@ export async function identifyOrCreateCurrentPageDraft(input: {
     };
   }
 
-  const candidate = buildRuntimeUnknownNodeCandidate(input.graphVersion.id, observation, match);
+  const candidate = buildRuntimeUnknownPageCandidate(input.graphVersion.id, observation, match);
   if (input.assetOnly) {
     return {
       status: "draft_candidate",
@@ -151,7 +151,7 @@ export async function identifyOrCreateCurrentPageDraft(input: {
     : undefined;
   const existing = input.storage.findBusinessNodeByKey(input.graphVersion.id, candidate.key);
   if (existing) {
-    const metadata = mergeRuntimeUnknownNodeMetadata(existing.metadata, candidate.metadata, artifact?.id ?? createId("artifact_ref"));
+    const metadata = mergeRuntimeUnknownPageMetadata(existing.metadata, candidate.metadata, artifact?.id ?? createId("artifact_ref"));
     const node = input.storage.updateBusinessNodeMetadata(existing.id, metadata) ?? {
       ...existing,
       metadata
@@ -274,7 +274,7 @@ function buildConfirmedPageAssetInputSync(input: {
     metadata?: Record<string, unknown>;
   };
 }): Omit<BusinessNode, "id"> {
-  const candidate = buildRuntimeUnknownNodeCandidate(input.graphVersionId, input.observation, input.match);
+  const candidate = buildRuntimeUnknownPageCandidate(input.graphVersionId, input.observation, input.match);
   const metadata = enrichVisualSampleMetadata(enrichScreenshotRegionMetadata(input.draft.metadata, input.observation), input.observation);
   const explicitMatchers = confirmedMatchersFromMetadata(metadata, input.observation.platform);
   if (!explicitMatchers?.length) {
@@ -792,14 +792,9 @@ function assetPlatformScope(matchers: StateMatcher[], currentPlatform: BusinessN
 }
 
 function pageAssetOnlyGraphVersion(graphVersion: BusinessGraphVersion): BusinessGraphVersion {
-  const nodes = graphVersion.nodes.filter(isConfirmedPageAssetNode).map(withRuntimeScreenshotRegionMatchers);
   return {
     ...graphVersion,
-    nodes,
-    edges: graphVersion.edges.filter((edge) =>
-      nodes.some((node) => node.id === edge.fromNodeId) &&
-      nodes.some((node) => node.id === edge.toNodeId)
-    )
+    nodes: graphVersion.nodes.filter(isConfirmedPageAssetNode).map(withRuntimeScreenshotRegionMatchers)
   };
 }
 

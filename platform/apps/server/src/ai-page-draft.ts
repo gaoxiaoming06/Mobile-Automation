@@ -1,6 +1,6 @@
 import type { Observation } from "@mobile-automation/graph-core";
 import { isCodexAppServerProvider, runAiJsonRequest, type AiClientFetch, type AiJsonResult } from "./ai-client.js";
-import type { AiDiagnosisConfig } from "./ai-diagnosis.js";
+import type { AiModelConfig } from "./ai-model-settings.js";
 
 export const AI_PAGE_DRAFT_MAX_OCR_TEXTS = 120;
 export const AI_PAGE_DRAFT_MAX_UI_ELEMENTS = 80;
@@ -26,11 +26,11 @@ export type AiPageDraftEvidence = {
 };
 
 export const AI_PAGE_DRAFT_DEVELOPER_INSTRUCTIONS = [
-  "你是移动端页面资产录入助手。根据当前页面证据，生成 PageStateFlow 页面资产草稿建议，供人工确认后入库。",
+  "你是移动端页面资产录入助手。根据当前页面证据，生成页面身份和公共定位器草稿，供人工确认后入库。",
   "页面身份规则：只允许稳定业务文案（identityOcrTexts）和截图区域（identityRegions）作为身份；禁止状态栏内容（时间、电量、网速）、动态业务数据（数量、昵称、日期）、底部通用 Tab、resource-id、activity、包名进入身份建议。",
   "identityOcrTexts 的 text 必须逐字来自证据 ocrTexts，不得改写或臆造。",
   "identityRegions 用百分比矩形（x/y/width/height 均为 0-100），semanticArea 只能取 top/content/bottom/unknown；优先标题栏和页面主体稳定区域。",
-  "elements 描述页面可操作能力入口：elementLabel 用简洁中文；abilityType 取 fixed_tap/scroll_candidate/grid_candidate/conditional_tap。",
+  "elements 描述可跨脚本复用的公共定位器：elementLabel 用简洁中文，只描述如何找到目标，不描述点击、输入或跳转动作。",
   "每个元素必须选择 locatorKind（定位策略），按以下决策树判断：",
   "1. text_locator：文字按钮、菜单项、带稳定文字的入口。给 targetText（必须逐字来自证据 ocrTexts）。不需要 region。",
   "2. top_bar_icon_locator：顶部栏无文字图标（搜索/添加/更多/关闭/头像等）。给 role（search/add/more/close/back/avatar/settings/share/scan/message 等小写英文）、slot（left/right）、orderFromRight（从右数第几个，1 起）、region（图标所在小区域百分比矩形，必须在页面顶部）。",
@@ -49,12 +49,12 @@ const OUTPUT_SCHEMA_EXAMPLE = `{
   "identityOcrTexts": [ { "text": "鲸放肿瘤百科", "confidence": 0.95, "reason": "页面标题，稳定" } ],
   "identityRegions": [ { "id": "title-bar", "label": "标题区", "x": 5, "y": 10.5, "width": 88, "height": 5.5, "semanticArea": "top", "confidence": 0.9, "reason": "品牌标题，跨账号稳定" } ],
   "elements": [
-    { "elementLabel": "免费咨询", "locatorKind": "text_locator", "targetText": "免费咨询", "abilityType": "fixed_tap", "actionKind": "tap", "semanticArea": "content", "confidence": 0.9, "riskNotes": [] },
-    { "elementLabel": "搜索图标", "locatorKind": "top_bar_icon_locator", "role": "search", "slot": "right", "orderFromRight": 1, "region": { "x": 86, "y": 4.5, "width": 8, "height": 4 }, "abilityType": "fixed_tap", "actionKind": "tap", "confidence": 0.8, "riskNotes": [] },
-    { "elementLabel": "医生列表", "locatorKind": "collection_item_locator", "region": { "x": 2, "y": 30, "width": 96, "height": 55 }, "scroll": { "direction": "vertical", "containerKind": "list" }, "abilityType": "grid_candidate", "actionKind": "tap", "semanticArea": "content", "confidence": 0.85, "riskNotes": [] },
-    { "elementLabel": "消息免打扰开关", "locatorKind": "structural_locator", "structuralStrategy": "ocr_trailing_switch", "anchorText": "消息免打扰", "region": { "x": 4, "y": 42, "width": 92, "height": 6 }, "abilityType": "fixed_tap", "actionKind": "tap", "semanticArea": "content", "confidence": 0.8, "riskNotes": [] },
-    { "elementLabel": "会员中心右侧箭头", "locatorKind": "ocr_anchor_offset", "anchorText": "会员中心", "anchorOffsetPercent": { "x": 38, "y": 0 }, "region": { "x": 88, "y": 20, "width": 8, "height": 5 }, "abilityType": "fixed_tap", "actionKind": "tap", "semanticArea": "content", "confidence": 0.75, "riskNotes": [] },
-    { "elementLabel": "活动横幅", "locatorKind": "visual_locator", "region": { "x": 4, "y": 12, "width": 92, "height": 12 }, "dynamicMasks": [ { "kind": "image", "region": { "x": 4, "y": 12, "width": 30, "height": 12 }, "reason": "活动图轮换" } ], "abilityType": "conditional_tap", "actionKind": "tap", "semanticArea": "content", "confidence": 0.6, "riskNotes": ["横幅内容会随运营活动变化"] }
+    { "elementLabel": "免费咨询", "locatorKind": "text_locator", "targetText": "免费咨询", "semanticArea": "content", "confidence": 0.9, "riskNotes": [] },
+    { "elementLabel": "搜索图标", "locatorKind": "top_bar_icon_locator", "role": "search", "slot": "right", "orderFromRight": 1, "region": { "x": 86, "y": 4.5, "width": 8, "height": 4 }, "confidence": 0.8, "riskNotes": [] },
+    { "elementLabel": "医生列表", "locatorKind": "collection_item_locator", "region": { "x": 2, "y": 30, "width": 96, "height": 55 }, "scroll": { "direction": "vertical", "containerKind": "list" }, "semanticArea": "content", "confidence": 0.85, "riskNotes": [] },
+    { "elementLabel": "消息免打扰开关", "locatorKind": "structural_locator", "structuralStrategy": "ocr_trailing_switch", "anchorText": "消息免打扰", "region": { "x": 4, "y": 42, "width": 92, "height": 6 }, "semanticArea": "content", "confidence": 0.8, "riskNotes": [] },
+    { "elementLabel": "会员中心右侧箭头", "locatorKind": "ocr_anchor_offset", "anchorText": "会员中心", "anchorOffsetPercent": { "x": 38, "y": 0 }, "region": { "x": 88, "y": 20, "width": 8, "height": 5 }, "semanticArea": "content", "confidence": 0.75, "riskNotes": [] },
+    { "elementLabel": "活动横幅", "locatorKind": "visual_locator", "region": { "x": 4, "y": 12, "width": 92, "height": 12 }, "dynamicMasks": [ { "kind": "image", "region": { "x": 4, "y": 12, "width": 30, "height": 12 }, "reason": "活动图轮换" } ], "semanticArea": "content", "confidence": 0.6, "riskNotes": ["横幅内容会随运营活动变化"] }
   ]
 }`;
 
@@ -101,7 +101,7 @@ export function buildPageDraftPrompt(evidence: AiPageDraftEvidence): string {
     "- page.assetKind：整页用 page，弹层/浮层用 overlay。",
     "- identityOcrTexts：页面身份文案，必须逐字来自证据 ocrTexts。",
     "- identityRegions：页面身份截图区域（百分比矩形）。",
-    "- elements：页面可操作能力入口，每项按决策树给 locatorKind 与该策略的专属字段；region 是百分比参考区域。",
+    "- elements：公共定位器候选，每项按决策树给 locatorKind 与该策略的专属字段；region 是百分比参考区域。",
     "",
     "【页面证据】",
     JSON.stringify(evidence)
@@ -133,8 +133,6 @@ export type AiPageDraftRect = { x: number; y: number; width: number; height: num
 export type AiPageDraftElementSuggestion = {
   elementLabel: string;
   targetText?: string;
-  abilityType: "fixed_tap" | "scroll_candidate" | "grid_candidate" | "conditional_tap";
-  actionKind: "tap" | "scroll" | "long_press" | "input";
   locatorKind: AiPageDraftLocatorKind;
   /** 服务端按 locatorKind 生成的规范 locator（text:/top-bar-icon:/image-region:）；needsManualCompletion 时为空串 */
   locator: string;
@@ -152,7 +150,6 @@ export type AiPageDraftElementSuggestion = {
     direction: "vertical" | "horizontal";
     targetKind: "ocr_text";
     targetQuery: string;
-    afterFoundAction: "tap_item";
   };
   dynamicRegion?: Record<string, unknown>;
   itemTemplate?: Record<string, unknown>;
@@ -180,9 +177,6 @@ export type AiPageDraftSuggestion = {
 };
 
 const DYNAMIC_TEXT_PATTERN = /^(\d{1,2}:\d{2}(:\d{2})?|[\d.,]+\s*(KB|MB|GB)\/s|[\d.,]+%?|\d+)$/i;
-const IMAGE_REGION_LOCATOR_PATTERN = /^image-region:\d+(\.\d+)?,\d+(\.\d+)?,\d+(\.\d+)?,\d+(\.\d+)?$/;
-const ABILITY_TYPES = new Set(["fixed_tap", "scroll_candidate", "grid_candidate", "conditional_tap"]);
-const ACTION_KINDS = new Set(["tap", "scroll", "long_press", "input"]);
 const SEMANTIC_AREAS = new Set(["top", "content", "bottom", "unknown"]);
 
 export function parseAiPageDraftResponse(raw: string, observation: Observation): { suggestion: AiPageDraftSuggestion; warnings: string[] } {
@@ -281,8 +275,6 @@ export function parseAiPageDraftResponse(raw: string, observation: Observation):
 
 type SanitizedElementBase = {
   elementLabel: string;
-  abilityType: AiPageDraftElementSuggestion["abilityType"];
-  actionKind: AiPageDraftElementSuggestion["actionKind"];
   semanticArea?: AiPageDraftElementSuggestion["semanticArea"];
   confidence?: number;
   riskNotes: string[];
@@ -298,17 +290,10 @@ function sanitizeElementSuggestion(
   if (!elementLabel) {
     return undefined;
   }
-  if (!ABILITY_TYPES.has(String(record.abilityType)) || !ACTION_KINDS.has(String(record.actionKind))) {
-    warnings.push(`元素能力类型或动作不合法，已剔除：${elementLabel}`);
-    return undefined;
-  }
-  const legacyRegion = parseLegacyImageRegionLocator(readNonEmptyString(record.locator));
-  const region = readElementRegion(record.region) ?? legacyRegion;
-  const locatorKind = readAiLocatorKind(record.locatorKind) ?? (legacyRegion || region ? "visual_locator" : undefined);
+  const region = readElementRegion(record.region);
+  const locatorKind = readAiLocatorKind(record.locatorKind) ?? (region ? "visual_locator" : undefined);
   const base: SanitizedElementBase = {
     elementLabel,
-    abilityType: record.abilityType as AiPageDraftElementSuggestion["abilityType"],
-    actionKind: record.actionKind as AiPageDraftElementSuggestion["actionKind"],
     semanticArea: SEMANTIC_AREAS.has(String(record.semanticArea)) ? record.semanticArea as AiPageDraftElementSuggestion["semanticArea"] : undefined,
     confidence: readNumber(record.confidence),
     riskNotes: readStringArray(record.riskNotes),
@@ -450,13 +435,8 @@ function sanitizeCollectionElement(
   const parameterName = "itemText";
   const baseSlug = slugForAiAsset(base.elementLabel);
   const itemTemplateId = `item_template_ai_${baseSlug}`;
-  const abilityType = base.abilityType === "grid_candidate" ? base.abilityType : "grid_candidate";
-  if (base.abilityType !== "grid_candidate") {
-    warnings.push(`collection_item_locator 已将 abilityType 调整为 grid_candidate：${base.elementLabel}`);
-  }
   return {
     ...base,
-    abilityType,
     locatorKind: "collection_item_locator",
     locator: imageRegionLocatorForRect(base.region),
     coordinateSpace: "screen",
@@ -465,8 +445,7 @@ function sanitizeCollectionElement(
       containerKind,
       direction,
       targetKind: "ocr_text",
-      targetQuery: `{{${parameterName}}}`,
-      afterFoundAction: "tap_item"
+      targetQuery: `{{${parameterName}}}`
     },
     dynamicRegion: {
       id: `dynamic_region_ai_${baseSlug}`,
@@ -514,7 +493,7 @@ function sanitizeStructuralElement(
     : { strategy: "near_text", role: "checkbox", clickTarget: "leading_checkbox", anchorText };
   const riskNotes = [...base.riskNotes];
   if (strategy === "ocr_trailing_switch") {
-    riskNotes.push("开关型元素的状态设置需要在页面任务/元函数中以 toggle_set 使用，单独点按只会执行普通点击");
+    riskNotes.push("开关型定位器只负责找到控件；具体设置目标状态由 ScriptFlow 步骤描述");
   }
   return {
     ...base,
@@ -672,14 +651,6 @@ function readAiLocatorKind(value: unknown): AiPageDraftLocatorKind | undefined {
     : undefined;
 }
 
-function parseLegacyImageRegionLocator(locator: string | undefined): AiPageDraftRect | undefined {
-  if (!locator || !IMAGE_REGION_LOCATOR_PATTERN.test(locator)) {
-    return undefined;
-  }
-  const [x, y, width, height] = locator.replace("image-region:", "").split(",").map(Number);
-  return normalizeRect({ x, y, width, height });
-}
-
 function readElementRegion(value: unknown): AiPageDraftRect | undefined {
   const record = asRecord(value);
   const x = readNumber(record.x);
@@ -775,9 +746,9 @@ export type AiPageDraftResult = {
   visionUsed: boolean;
 };
 
-export async function generateAiPageDraft(input: { config: AiDiagnosisConfig; observation: Observation; fetchImpl?: AiClientFetch }): Promise<AiPageDraftResult> {
+export async function generateAiPageDraft(input: { config: AiModelConfig; observation: Observation; fetchImpl?: AiClientFetch }): Promise<AiPageDraftResult> {
   if (!input.config.enabled) {
-    throw new AiPageDraftError("not_configured", `AI 未启用（${input.config.reason}），请在 设置-AI 诊断 中配置模型`);
+    throw new AiPageDraftError("not_configured", `AI 未启用（${input.config.reason}），请在“系统设置 > AI 模型”中配置`);
   }
   const evidence = buildPageDraftEvidence(input.observation);
   const prompt = buildPageDraftPrompt(evidence);

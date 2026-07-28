@@ -1,4 +1,4 @@
-import type { ArtifactRef, Platform, TestRun } from "@mobile-automation/shared";
+import type { ArtifactRef, ScriptFlow, TestRun } from "@mobile-automation/shared";
 
 export {
   assertNoSecretInMcpToolDefinitions,
@@ -14,58 +14,28 @@ export type McpAdapterConfig = {
   fetch?: typeof fetch;
 };
 
-export type TargetNodeTestInput = {
-  deviceSerial: string;
-  graphId?: string;
-  graphVersionId?: string;
-  targetNodeId?: string;
-  target?: {
-    nodeId?: string;
-    key?: string;
-    name?: string;
-    text?: string;
-    intent?: string;
-    tags?: string[];
-    includeDraft?: boolean;
-    maxCandidates?: number;
-  };
-  startNodeId?: string;
-  platform?: Platform;
-  strategy?: "shortest" | "most_stable" | "smoke" | "performance";
-  startStrategy?: "keep_current" | "go_home" | "launch_app" | "restart_app" | "clear_data_and_launch";
-  stopOnFailure?: boolean;
-  overlay?: Record<string, unknown>;
+export type PageAssetApp = {
+  appId: string;
+  name: string;
+  platformScope?: string;
+  activeVersionId?: string;
 };
 
-export type GraphNodeSummary = {
+export type PageAssetSummary = {
   id: string;
   key: string;
   name: string;
-  nodeType?: string;
-  status?: string;
   platformScope?: string;
-  tags?: string[];
+  identityTexts: string[];
+  elementCount: number;
 };
 
-export type GraphRunToolResult = {
+export type ScriptFlowRunResult = {
   runId: string;
-  status: string;
-  active?: boolean;
+  status: TestRun["status"];
   reportUrl?: string;
-  targetNodeId?: string;
-  targetNodeName?: string;
-  route?: Array<Record<string, unknown>>;
-  failedAt?: unknown;
-  failureEvidence?: ArtifactRef[];
-  evidence?: unknown;
-  actual?: unknown;
-};
-
-export type GraphQualityToolResult = {
-  graphVersionId: string;
-  analyzedRunCount: number;
-  nodes: Array<Record<string, unknown>>;
-  edges: Array<Record<string, unknown>>;
+  failedSteps: Array<{ stepId: string; message?: string }>;
+  failureEvidence: ArtifactRef[];
 };
 
 const defaultServerUrl = "http://localhost:4010";
@@ -79,121 +49,82 @@ export class MobileAutomationMcpAdapter {
     this.fetchImpl = config.fetch ?? fetch;
   }
 
-  async listApps(): Promise<Array<{ appId: string; graphId: string; name: string; platformScope?: string; activeVersionId?: string }>> {
-    const payload = await this.request<{ graphs?: Array<Record<string, unknown>> }>("GET", "/api/graphs");
-    return (payload.graphs ?? []).map((graph) => ({
-      appId: stringValue(graph.appId),
-      graphId: stringValue(graph.id),
-      name: stringValue(graph.name),
-      platformScope: optionalString(graph.platformScope),
-      activeVersionId: optionalString(graph.activeVersionId)
-    })).filter((item) => item.appId && item.graphId);
+  async listApps(): Promise<PageAssetApp[]> {
+    const libraries = await this.listLibraries();
+    return libraries.map((library) => ({
+      appId: stringValue(library.appId),
+      name: stringValue(library.name),
+      platformScope: optionalString(library.platformScope),
+      activeVersionId: optionalString(readObject(library.activeVersion).id)
+    })).filter((app) => app.appId && app.activeVersionId);
   }
 
-  async listGraphNodes(input: { graphId?: string; graphVersionId?: string; platform?: Platform } = {}): Promise<GraphNodeSummary[]> {
-    const graphVersion = await this.resolveGraphVersion(input);
-    return readArray(graphVersion.nodes).map((node) => toGraphNodeSummary(node)).filter((node) => node.id && node.key);
+  async listPageAssets(input: { appId?: string; platform?: string } = {}): Promise<PageAssetSummary[]> {
+    const libraries = (await this.listLibraries()).filter((library) => {
+      if (input.appId && library.appId !== input.appId) return false;
+      const scope = optionalString(library.platformScope);
+      return !input.platform || !scope || scope === "mobile-both" || scope === input.platform;
+    });
+    const summaries = await Promise.all(libraries.map(async (library) => {
+      const versionId = optionalString(readObject(library.activeVersion).id);
+      if (!versionId) return [];
+      const payload = await this.request<Record<string, unknown>>("GET", `/api/page-assets/${encodeURIComponent(versionId)}/assets`);
+      return readArray(readObject(payload.assets).pageAssets).map(toPageAssetSummary);
+    }));
+    return summaries.flat();
   }
 
-  async getNodeDetail(input: { graphId?: string; graphVersionId?: string; nodeId?: string; key?: string; name?: string; platform?: Platform }): Promise<Record<string, unknown>> {
-    const graphVersion = await this.resolveGraphVersion(input);
-    const nodes = readArray(graphVersion.nodes);
-    const node = nodes.find((item) => matchesNodeQuery(item, input));
-    if (!node) {
-      throw new Error("Business graph node not found");
-    }
-    const edges = readArray(graphVersion.edges).filter((edge) => edge.fromNodeId === node.id || edge.toNodeId === node.id);
-    return {
-      graphVersionId: stringValue(graphVersion.id),
-      node,
-      incomingEdges: edges.filter((edge) => edge.toNodeId === node.id),
-      outgoingEdges: edges.filter((edge) => edge.fromNodeId === node.id)
-    };
+  async getPageAsset(input: { appId?: string; page: string; platform?: string }): Promise<PageAssetSummary> {
+    const assets = await this.listPageAssets(input);
+    const page = assets.find((asset) => asset.id === input.page || asset.key === input.page || asset.name === input.page);
+    if (!page) throw new Error(`Page asset not found: ${input.page}`);
+    return page;
   }
 
-  async triggerNodeTest(input: TargetNodeTestInput): Promise<GraphRunToolResult> {
-    const payload = await this.request<Record<string, unknown>>("POST", "/api/graph-runs", compactObject(input));
-    const result = readObject(payload.nodeTestResult);
-    if (Object.keys(result).length) {
-      return toGraphRunToolResult(this.serverUrl, result);
-    }
-    const run = readObject(payload.run);
-    return {
-      runId: stringValue(run.id),
-      status: stringValue(run.status),
-      active: booleanValue(payload.active),
-      targetNodeId: optionalString(payload.targetNodeId),
-      targetNodeName: readTargetName(payload.targetResolution),
-      reportUrl: run.reportHtmlPath ? `${this.serverUrl}/artifacts/${String(run.reportHtmlPath)}` : undefined
-    };
+  async listScriptFlows(input: { appId?: string; platform?: string; status?: ScriptFlow["status"] } = {}): Promise<ScriptFlow[]> {
+    const query = queryString(input);
+    const payload = await this.request<{ flows?: ScriptFlow[] }>("GET", `/api/script-flows${query}`);
+    return payload.flows ?? [];
   }
 
-  async getRunStatus(input: { runId: string }): Promise<GraphRunToolResult> {
-    const payload = await this.request<Record<string, unknown>>("GET", `/api/graph-runs/${encodeURIComponent(input.runId)}`);
-    const result = readObject(payload.nodeTestResult);
-    if (Object.keys(result).length) {
-      return toGraphRunToolResult(this.serverUrl, result);
-    }
-    const graphRun = readObject(payload.graphRun);
-    return {
-      runId: stringValue(graphRun.id),
-      status: stringValue(graphRun.status),
-      active: booleanValue(graphRun.active),
-      reportUrl: absoluteUrl(this.serverUrl, optionalString(graphRun.reportUrl)),
-      targetNodeId: optionalString(graphRun.targetNodeId),
-      targetNodeName: optionalString(graphRun.targetNodeName),
-      failedAt: graphRun.failedAt,
-      failureEvidence: readArray(graphRun.failureEvidence) as ArtifactRef[]
-    };
+  async getScriptFlow(input: { flowId: string }): Promise<ScriptFlow> {
+    const payload = await this.request<{ flow: ScriptFlow }>("GET", `/api/script-flows/${encodeURIComponent(input.flowId)}`);
+    return payload.flow;
+  }
+
+  async generateScriptFlow(input: { prompt: string; appId: string; platform: string }): Promise<unknown> {
+    const payload = await this.request<Record<string, unknown>>("POST", "/api/script-flow-drafts/generate", input);
+    return payload.draft;
+  }
+
+  async runScriptFlow(input: {
+    flowId: string;
+    deviceSerial: string;
+    parameters?: Record<string, string | number | boolean>;
+    confirmedRisks?: string[];
+  }): Promise<ScriptFlowRunResult> {
+    const payload = await this.request<{ run: TestRun }>(
+      "POST",
+      `/api/script-flows/${encodeURIComponent(input.flowId)}/runs`,
+      compactObject({ deviceSerial: input.deviceSerial, parameters: input.parameters, confirmedRisks: input.confirmedRisks })
+    );
+    return runResult(this.serverUrl, payload.run);
+  }
+
+  async getRun(input: { runId: string }): Promise<ScriptFlowRunResult> {
+    const payload = await this.request<{ run: TestRun }>("GET", `/api/runs/${encodeURIComponent(input.runId)}`);
+    if (payload.run.sourceSnapshot?.kind !== "script_flow") throw new Error("Run is not a ScriptFlow run");
+    return runResult(this.serverUrl, payload.run);
   }
 
   async getReport(input: { runId: string }): Promise<{ runId: string; reportUrl?: string; ready: boolean }> {
-    const status = await this.getRunStatus(input);
-    return {
-      runId: status.runId,
-      reportUrl: status.reportUrl,
-      ready: Boolean(status.reportUrl)
-    };
+    const run = await this.getRun(input);
+    return { runId: run.runId, reportUrl: run.reportUrl, ready: Boolean(run.reportUrl) };
   }
 
-  async getFailureEvidence(input: { runId: string }): Promise<{ runId: string; failedAt?: unknown; artifacts: ArtifactRef[] }> {
-    const payload = await this.request<Record<string, unknown>>("GET", `/api/graph-runs/${encodeURIComponent(input.runId)}`);
-    const graphRun = readObject(payload.graphRun);
-    return {
-      runId: stringValue(graphRun.id),
-      failedAt: graphRun.failedAt,
-      artifacts: readArray(graphRun.failureEvidence) as ArtifactRef[]
-    };
-  }
-
-  async getGraphQuality(input: { graphVersionId: string; limit?: number }): Promise<GraphQualityToolResult> {
-    const limit = Number.isFinite(input.limit) ? `?limit=${encodeURIComponent(String(input.limit))}` : "";
-    const payload = await this.request<Record<string, unknown>>("GET", `/api/graphs/${encodeURIComponent(input.graphVersionId)}/quality${limit}`);
-    const quality = readObject(payload.quality);
-    return {
-      graphVersionId: stringValue(quality.graphVersionId),
-      analyzedRunCount: numberValue(quality.analyzedRunCount),
-      nodes: readArray(quality.nodes),
-      edges: readArray(quality.edges)
-    };
-  }
-
-  private async resolveGraphVersion(input: { graphId?: string; graphVersionId?: string }): Promise<Record<string, unknown>> {
-    if (input.graphVersionId) {
-      const graphsPayload = await this.request<{ graphs?: Array<Record<string, unknown>> }>("GET", "/api/graphs");
-      const versions = (graphsPayload.graphs ?? []).map((graph) => readObject(graph.activeVersion)).filter((version) => stringValue(version.id) === input.graphVersionId);
-      if (versions[0]) {
-        return versions[0];
-      }
-      throw new Error(`Active graph version not found: ${input.graphVersionId}`);
-    }
-    const graphsPayload = await this.request<{ graphs?: Array<Record<string, unknown>> }>("GET", "/api/graphs");
-    const graph = (graphsPayload.graphs ?? []).find((item) => input.graphId ? item.id === input.graphId : Boolean(item.activeVersion));
-    const version = readObject(graph?.activeVersion);
-    if (!graph || !Object.keys(version).length) {
-      throw new Error(input.graphId ? `Active graph not found: ${input.graphId}` : "No active business graph is available");
-    }
-    return version;
+  private async listLibraries(): Promise<Array<Record<string, unknown>>> {
+    const payload = await this.request<{ libraries: Array<Record<string, unknown>> }>("GET", "/api/page-assets");
+    return payload.libraries;
   }
 
   private async request<T>(method: "GET" | "POST", path: string, body?: Record<string, unknown>): Promise<T> {
@@ -216,90 +147,44 @@ export function createMobileAutomationMcpAdapter(config?: McpAdapterConfig): Mob
   return new MobileAutomationMcpAdapter(config);
 }
 
-function toGraphRunToolResult(serverUrl: string, result: Record<string, unknown>): GraphRunToolResult {
-  const evidence = readObject(result.evidence);
-  const route = readArray(result.route);
-  const failureEvidence = readUrlArtifacts(evidence.failureArtifacts);
-  return compactObject({
-    runId: stringValue(result.runId),
-    status: stringValue(result.status),
-    active: booleanValue(result.active),
-    reportUrl: absoluteUrl(serverUrl, optionalString(result.reportUrl)),
-    targetNodeId: optionalString(result.targetNodeId),
-    targetNodeName: optionalString(result.targetNodeName),
-    route: route.length ? route : undefined,
-    failedAt: result.failedAt,
-    failureEvidence: failureEvidence.length ? failureEvidence : undefined,
-    evidence: result.evidence,
-    actual: result.actual
-  }) as GraphRunToolResult;
-}
-
-function readUrlArtifacts(value: unknown): ArtifactRef[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((item): item is string => typeof item === "string").map((url, index) => ({
-    id: `failure-${index + 1}`,
-    type: "screenshot",
-    name: url.split("/").pop() || url,
-    path: url,
-    url,
-    createdAt: ""
-  }));
-}
-
-function toGraphNodeSummary(node: Record<string, unknown>): GraphNodeSummary {
+function toPageAssetSummary(value: Record<string, unknown>): PageAssetSummary {
   return {
-    id: stringValue(node.id),
-    key: stringValue(node.key),
-    name: stringValue(node.name),
-    nodeType: optionalString(node.nodeType),
-    status: optionalString(node.status),
-    platformScope: optionalString(node.platformScope),
-    tags: Array.isArray(node.tags) ? node.tags.filter((tag): tag is string => typeof tag === "string") : undefined
+    id: stringValue(value.id),
+    key: stringValue(value.key),
+    name: stringValue(value.name),
+    platformScope: optionalString(value.platformScope),
+    identityTexts: stringArray(value.identityTexts),
+    elementCount: numberValue(value.elementCount)
   };
 }
 
-function matchesNodeQuery(node: Record<string, unknown>, query: { nodeId?: string; key?: string; name?: string }): boolean {
-  if (query.nodeId && node.id !== query.nodeId) {
-    return false;
-  }
-  if (query.key && node.key !== query.key) {
-    return false;
-  }
-  if (query.name && node.name !== query.name) {
-    return false;
-  }
-  return Boolean(query.nodeId || query.key || query.name);
+function runResult(serverUrl: string, run: TestRun): ScriptFlowRunResult {
+  return {
+    runId: run.id,
+    status: run.status,
+    reportUrl: run.reportHtmlPath ? `${serverUrl}/api/reports/${encodeURIComponent(run.id)}/html` : undefined,
+    failedSteps: run.stepResults.filter((step) => step.status === "failed" || step.status === "timeout").map((step) => ({ stepId: step.stepId, message: step.errorMessage })),
+    failureEvidence: run.artifacts.filter((artifact) => artifact.type === "screenshot" && !artifact.deletedAt)
+  };
 }
 
-function readTargetName(value: unknown): string | undefined {
-  const resolution = readObject(value);
-  const targetNode = readObject(resolution.targetNode);
-  return optionalString(targetNode.name);
-}
-
-function absoluteUrl(serverUrl: string, pathOrUrl: string | undefined): string | undefined {
-  if (!pathOrUrl) {
-    return undefined;
-  }
-  if (/^https?:\/\//.test(pathOrUrl)) {
-    return pathOrUrl;
-  }
-  return `${serverUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+function queryString(input: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) if (value !== undefined && value !== "") params.set(key, String(value));
+  const query = params.toString();
+  return query ? `?${query}` : "";
 }
 
 function compactObject(input: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined && value !== null && value !== ""));
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }
 
 function readArray(value: unknown): Array<Record<string, unknown>> {
-  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item)) : [];
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [];
 }
 
 function readObject(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function stringValue(value: unknown): string {
@@ -307,12 +192,11 @@ function stringValue(value: unknown): string {
 }
 
 function optionalString(value: unknown): string | undefined {
-  const text = stringValue(value).trim();
-  return text ? text : undefined;
+  return stringValue(value).trim() || undefined;
 }
 
-function booleanValue(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function numberValue(value: unknown): number {

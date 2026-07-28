@@ -8,12 +8,11 @@ import {
   Radar,
   Settings,
   Sparkles,
-  SlidersHorizontal,
   Smartphone,
   Workflow
 } from "lucide-react";
 
-export type AppNavItemId = "devices" | "assetRecording" | "pageAssets" | "scriptFlows" | "aiScriptFlows" | "parameterCenter" | "assetPatrol" | "stability" | "runs" | "settings";
+export type AppNavItemId = "devices" | "assetRecording" | "pageAssets" | "scriptFlows" | "aiScriptFlows" | "stability" | "runs" | "settings";
 
 type AppNavProps = {
   activeNavItem: AppNavItemId;
@@ -24,8 +23,6 @@ type AppNavProps = {
   openPageAssets: () => void;
   openScriptFlows: () => void;
   openAiScriptFlows: () => void;
-  openParameterCenter: () => void;
-  openAssetPatrol: () => void;
   openStability: () => void;
   openRuns: () => void;
   openSettings: () => void;
@@ -40,8 +37,6 @@ export function AppNav({
   openPageAssets,
   openScriptFlows,
   openAiScriptFlows,
-  openParameterCenter,
-  openAssetPatrol,
   openStability,
   openRuns,
   openSettings
@@ -72,14 +67,6 @@ export function AppNav({
         <button className={navButtonClass(activeNavItem, "aiScriptFlows")} onClick={openAiScriptFlows} title="AI 生成用例" type="button">
           <Sparkles size={18} />
           <span>AI 生成用例</span>
-        </button>
-        <button className={navButtonClass(activeNavItem, "parameterCenter")} onClick={openParameterCenter} title="参数中心" type="button">
-          <SlidersHorizontal size={18} />
-          <span>参数中心</span>
-        </button>
-        <button className={navButtonClass(activeNavItem, "assetPatrol")} onClick={openAssetPatrol} title="资产驱动巡检" type="button">
-          <Radar size={18} />
-          <span>资产驱动巡检</span>
         </button>
         <button className={navButtonClass(activeNavItem, "stability")} onClick={openStability} title="稳定性探索" type="button">
           <Radar size={18} />

@@ -6,7 +6,7 @@ import { AppNav } from "./AppNav.js";
 const noop = vi.fn();
 
 describe("AppNav", () => {
-  it("surfaces the asset workflow and hides legacy case, experiment, and device detail entries", () => {
+  it("surfaces page assets and ScriptFlow while hiding legacy graph workflows", () => {
     const markup = renderToStaticMarkup(
       React.createElement(AppNav, {
         activeNavItem: "devices",
@@ -17,8 +17,6 @@ describe("AppNav", () => {
         openPageAssets: noop,
         openScriptFlows: noop,
         openAiScriptFlows: noop,
-        openParameterCenter: noop,
-        openAssetPatrol: noop,
         openStability: noop,
         openRuns: noop,
         openSettings: noop
@@ -35,8 +33,8 @@ describe("AppNav", () => {
     expect(markup).toContain("AI 生成用例");
     expect(markup).not.toContain("资产用例");
     expect(markup).not.toContain("AI资产用例");
-    expect(markup).toContain("参数中心");
-    expect(markup).toContain("资产驱动巡检");
+    expect(markup).not.toContain("参数中心");
+    expect(markup).not.toContain("资产驱动巡检");
     expect(markup).toContain("稳定性探索");
     expect(markup).toContain("执行结果");
     expect(markup).not.toContain("实验能力");

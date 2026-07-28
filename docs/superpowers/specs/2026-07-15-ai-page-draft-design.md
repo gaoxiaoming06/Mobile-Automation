@@ -3,9 +3,11 @@
 日期：2026-07-15
 状态：已确认（方案一，用户授权按推荐方案执行）
 
+> 历史设计说明：页面身份录入能力仍保留，但执行模型已由 PageStateFlow 切换为 ScriptFlow v1。当前产品契约见 `docs/product/mobile-automation-platform/spec/script-flow-v1.md`。
+
 ## 背景与目标
 
-PageStateFlow 资产录入目前全靠人工：识别当前页后逐项填页名、勾 OCR 身份文案、圈身份区域、逐个录入 PageElement。真机试点实测一个页面需要 5-15 分钟，是平台经济模型的最大瓶颈（详见 `docs/product/mobile-automation-platform/spec/asset-driven-testing-requirements.md` 的 AI 优先录入方向）。
+页面资产录入原本全靠人工：识别当前页后逐项填页名、勾 OCR 身份文案、圈身份区域、逐个录入公共定位器。真机试点实测一个页面需要 5-15 分钟，是平台经济模型的主要瓶颈。
 
 本 MVP 把"手工填"变成"AI 预填 + 人工确认"：
 

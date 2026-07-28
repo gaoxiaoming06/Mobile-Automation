@@ -1,5 +1,5 @@
-# Graph Core
+# Page Identity Core
 
-Business Graph core models and pure planning utilities for target-node execution.
+Pure page identity models and matcher utilities used by PageStateService.
 
-This package is intentionally independent from server routes, storage, device drivers, and Dashboard state. It is the v2 kernel that can be tested without touching the legacy recorder / replay flow.
+Despite the historical package directory name, it no longer contains route planning or execution-edge behavior. ScriptFlow is the only executable test model.

@@ -1,106 +1,50 @@
 import { describe, expect, it } from "vitest";
 import { assertNoSecretInMcpToolDefinitions, createMobileAutomationMcpToolHandlers, mobileAutomationMcpTools } from "./mcp-wrapper.js";
 
-describe("mobile automation MCP wrapper", () => {
-  it("exposes stable tool definitions without secret-like schema fields", () => {
+describe("mobile automation MCP tools", () => {
+  it("exposes page identity and ScriptFlow tools only", () => {
     expect(mobileAutomationMcpTools.map((tool) => tool.name)).toEqual([
       "list_apps",
-      "list_graph_nodes",
-      "get_node_detail",
-      "trigger_node_test",
-      "get_run_status",
-      "get_report",
-      "get_failure_evidence",
-      "get_graph_quality"
+      "list_page_assets",
+      "get_page_asset",
+      "list_script_flows",
+      "get_script_flow",
+      "generate_script_flow",
+      "run_script_flow",
+      "get_run",
+      "get_report"
     ]);
     expect(() => assertNoSecretInMcpToolDefinitions()).not.toThrow();
+    expect(JSON.stringify(mobileAutomationMcpTools)).not.toContain("graph");
   });
 
-  it("maps MCP tool handlers to the REST-only adapter", async () => {
-    const requests: Array<{ method: string; path: string; body?: string }> = [];
+  it("maps handlers to ScriptFlow REST endpoints", async () => {
+    const requests: string[] = [];
     const handlers = createMobileAutomationMcpToolHandlers({
       serverUrl: "http://server.test",
       fetch: fakeFetch(requests, {
-        "POST /api/graph-runs": {
-          nodeTestResult: {
-            runId: "run-1",
-            status: "running",
-            active: true,
-            targetNodeId: "node-target",
-            targetNodeName: "目标页"
-          }
-        },
-        "GET /api/graph-runs/run-1": {
-          nodeTestResult: {
-            runId: "run-1",
-            status: "failed",
-            active: false,
-            failedAt: { phase: "expectation", message: "missing text" },
-            reportUrl: "/artifacts/runs/run-1/reports/report.html"
-          }
-        },
-        "GET /api/graphs/version-1/quality": {
-          quality: {
-            graphVersionId: "version-1",
-            analyzedRunCount: 0,
-            nodes: [],
-            edges: []
-          }
-        }
+        "POST /api/script-flow-drafts/generate": { draft: { status: "needs_clarification", clarification: "要打开哪个班级？" } },
+        "POST /api/script-flows/flow-1/runs": { run: { id: "run-1", status: "running", sourceSnapshot: { kind: "script_flow" }, stepResults: [], artifacts: [] } }
       })
     });
 
-    await expect(
-      handlers.trigger_node_test({
-        deviceSerial: "device-1",
-        graphId: "graph-1",
-        target: { key: "target" }
-      })
-    ).resolves.toEqual(
-      expect.objectContaining({
-        runId: "run-1",
-        status: "running",
-        targetNodeName: "目标页"
-      })
+    await expect(handlers.generate_script_flow({ prompt: "打开班级", appId: "cn.eeo.classin", platform: "android" })).resolves.toEqual(
+      { status: "needs_clarification", clarification: "要打开哪个班级？" }
     );
-    await expect(handlers.get_run_status({ runId: "run-1" })).resolves.toEqual(
-      expect.objectContaining({
-        status: "failed",
-        reportUrl: "http://server.test/artifacts/runs/run-1/reports/report.html"
-      })
+    await expect(handlers.run_script_flow({ flowId: "flow-1", deviceSerial: "device-1", parameters: { className: "班级四十二号" } })).resolves.toEqual(
+      expect.objectContaining({ runId: "run-1", status: "running" })
     );
-    await expect(handlers.get_graph_quality({ graphVersionId: "version-1" })).resolves.toEqual(
-      expect.objectContaining({
-        graphVersionId: "version-1",
-        analyzedRunCount: 0
-      })
-    );
-
-    expect(requests).toEqual([
-      expect.objectContaining({ method: "POST", path: "/api/graph-runs" }),
-      expect.objectContaining({ method: "GET", path: "/api/graph-runs/run-1" }),
-      expect.objectContaining({ method: "GET", path: "/api/graphs/version-1/quality" })
-    ]);
+    expect(requests).toEqual(["POST /api/script-flow-drafts/generate", "POST /api/script-flows/flow-1/runs"]);
   });
 });
 
-function fakeFetch(
-  requests: Array<{ method: string; path: string; body?: string }>,
-  responses: Record<string, unknown>
-): typeof fetch {
+function fakeFetch(requests: string[], responses: Record<string, unknown>): typeof fetch {
   return (async (url, init) => {
     const parsed = new URL(String(url));
     const method = init?.method ?? "GET";
-    requests.push({
-      method,
-      path: parsed.pathname,
-      body: typeof init?.body === "string" ? init.body : undefined
-    });
     const key = `${method} ${parsed.pathname}`;
+    requests.push(key);
     const payload = responses[key];
-    if (!payload) {
-      return new Response(JSON.stringify({ error: `No fake response for ${key}` }), { status: 404 });
-    }
-    return new Response(JSON.stringify(payload), { status: 200 });
+    return new Response(JSON.stringify(payload ?? { error: `No fake response for ${key}` }), { status: payload ? 200 : 404 });
   }) as typeof fetch;
 }

@@ -79,7 +79,12 @@ describe("ScriptFlow API", () => {
 
     const runResponse = await post(context.baseUrl, `/api/script-flows/${created.id}/runs`, {
       deviceSerial: "device-1",
-      parameters: { friendName: "张三" }
+      parameters: { friendName: "张三" },
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "cn.eeo.classin",
+        includeSubprocesses: true
+      }
     });
     expect(runResponse.status).toBe(202);
     expect(context.runner.inputs).toEqual([
@@ -88,7 +93,12 @@ describe("ScriptFlow API", () => {
         scriptVersion: 2,
         sourceYaml: updatedYaml,
         deviceSerial: "device-1",
-        parameters: { friendName: "张三" }
+        parameters: { friendName: "张三" },
+        androidAppMonitor: {
+          enabled: true,
+          packageName: "cn.eeo.classin",
+          includeSubprocesses: true
+        }
       })
     ]);
 
@@ -159,8 +169,6 @@ class MemoryScriptFlowStorage implements ScriptFlowApiStorage {
   }
 
   listScriptFlowVersions(id: string): ScriptFlowVersion[] { return this.versions.get(id) ?? []; }
-  getParameterProfile(): undefined { return undefined; }
-  listParameterDataRecords(): [] { return []; }
   getRun(id: string): TestRun | undefined { return this.runs.get(id); }
   saveRun(run: TestRun): void { this.runs.set(run.id, run); }
 }

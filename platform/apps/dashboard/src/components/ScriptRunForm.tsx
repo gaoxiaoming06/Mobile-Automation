@@ -22,6 +22,7 @@ type ScriptRunFormProps = {
   requiredRisks: string[];
   confirmedRisks: string[];
   busy: boolean;
+  disabled?: boolean;
   onValueChange: (key: string, value: ScriptParameterValue) => void;
   onDeviceChange: (serial: string) => void;
   onRiskChange: (risk: string, checked: boolean) => void;
@@ -36,6 +37,7 @@ export function ScriptRunForm({
   requiredRisks,
   confirmedRisks,
   busy,
+  disabled = false,
   onValueChange,
   onDeviceChange,
   onRiskChange,
@@ -87,7 +89,7 @@ export function ScriptRunForm({
           ))}
         </fieldset>
       ) : null}
-      <button className="primary-button script-run-button" type="button" onClick={onRun} disabled={busy || !deviceSerial || missingRequired || missingRisk}>
+      <button className="primary-button script-run-button" type="button" onClick={onRun} disabled={busy || disabled || !deviceSerial || missingRequired || missingRisk}>
         <Play size={16} />
         <span>{busy ? "启动中" : "开始执行"}</span>
       </button>

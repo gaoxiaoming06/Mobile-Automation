@@ -193,7 +193,6 @@ function graph(nodes: BusinessNode[]): BusinessGraphVersion {
     sourceSummary: [],
     status: "active",
     nodes,
-    edges: [],
     createdAt: "2026-07-28T00:00:00.000Z"
   };
 }

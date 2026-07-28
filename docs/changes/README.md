@@ -10,13 +10,7 @@ updated_at: 2026-06-08
 
 This directory stores lightweight delta workspaces for large feature changes.
 
-The main source of truth remains:
-
-- `docs/product/mobile-automation-platform/spec/requirements.md`
-- `docs/product/mobile-automation-platform/spec/design.md`
-- `docs/product/mobile-automation-platform/spec/tasks.md`
-- `docs/product/mobile-automation-platform/spec/acceptance.md`
-- `docs/product/mobile-automation-platform/spec/traceability.md`
+The current source of truth is `docs/product/mobile-automation-platform/spec/script-flow-v1.md` plus accepted ADRs.
 
 Use `docs/changes/<change-id>/` only when a change is large enough that reading or editing the full spec would make review noisy.
 
@@ -34,8 +28,7 @@ docs/changes/<change-id>/
 
 ## Rules
 
-- Keep stable ids from the main spec, such as `REQ-034`, `DES-034`, `T-049`, and `AC-031`.
-- Do not create a second numbering system.
+- Keep each change scoped to one product or architecture decision.
 - Do not move ADRs into this directory; architecture decisions stay in `docs/adr/`.
-- After implementation, merge accepted deltas back into the main spec files and record the result in the feature changelog.
+- After implementation, merge accepted behavior into the ScriptFlow contract or an ADR.
 - Small fixes and P0 regressions can skip `docs/changes/` and use the fast-track flow in `docs/guides/ai-development-workflow.md`.

@@ -5,26 +5,25 @@ import type { TestRun } from "@mobile-automation/shared";
 import { RunResultsPanel } from "./RunResultsPanel.js";
 
 describe("RunResultsPanel", () => {
-  it("groups child runs by the user-facing execution batch", () => {
+  it("renders each ScriptFlow execution as one run", () => {
     const runs = [
       run({
         id: "run-child-2",
-        caseName: "资产组合｜创建课堂但不发布｜填写表单",
+        caseName: "创建课堂但不发布",
         status: "failed",
-        itemOrder: 2
+        startedMinute: 2
       }),
       run({
         id: "run-child-1",
-        caseName: "资产组合｜创建课堂但不发布｜打开新建课堂",
+        caseName: "打开新建课堂",
         status: "passed",
-        itemOrder: 1
+        startedMinute: 1
       })
     ];
 
     const markup = renderToStaticMarkup(
       React.createElement(RunResultsPanel, {
         currentRun: null,
-        currentGraphRun: null,
         runs,
         runsLimit: 30,
         selectedSerial: "device-1",
@@ -37,11 +36,10 @@ describe("RunResultsPanel", () => {
       })
     );
 
-    expect(markup).toContain("1 条记录");
-    expect(markup).toContain("资产用例：创建课堂但不发布");
-    expect(markup).toContain("2 个子 Run");
-    expect(markup).not.toContain("资产组合｜创建课堂但不发布｜填写表单");
-    expect(markup).not.toContain("资产组合｜创建课堂但不发布｜打开新建课堂");
+    expect(markup).toContain("2 条记录");
+    expect(markup).toContain("创建课堂但不发布");
+    expect(markup).toContain("打开新建课堂");
+    expect(markup).not.toContain("子 Run");
   });
 
   it("renders current run app performance summary without exposing raw csv links", () => {
@@ -49,7 +47,7 @@ describe("RunResultsPanel", () => {
       id: "run-monitor",
       caseName: "资产巡检｜课程表",
       status: "passed",
-      itemOrder: 1,
+      startedMinute: 1,
       events: [androidAppMonitorEvent({ severity: "warning", incidents: 1 })],
       artifacts: [
         androidAppMonitorArtifact("artifact-summary", "report_json", "android-app-monitor-summary.json"),
@@ -60,7 +58,6 @@ describe("RunResultsPanel", () => {
     const markup = renderToStaticMarkup(
       React.createElement(RunResultsPanel, {
         currentRun,
-        currentGraphRun: null,
         runs: [currentRun],
         runsLimit: 30,
         selectedSerial: "device-1",
@@ -88,7 +85,7 @@ describe("RunResultsPanel", () => {
         id: "run-monitor-child",
         caseName: "资产组合｜创建课堂｜提交表单",
         status: "passed",
-        itemOrder: 1,
+        startedMinute: 1,
         events: [androidAppMonitorEvent({ severity: "info", incidents: 0 })]
       })
     ];
@@ -96,7 +93,6 @@ describe("RunResultsPanel", () => {
     const markup = renderToStaticMarkup(
       React.createElement(RunResultsPanel, {
         currentRun: null,
-        currentGraphRun: null,
         runs,
         runsLimit: 30,
         selectedSerial: "device-1",
@@ -117,7 +113,7 @@ function run(input: {
   id: string;
   caseName: string;
   status: TestRun["status"];
-  itemOrder: number;
+  startedMinute: number;
   events?: TestRun["events"];
   artifacts?: TestRun["artifacts"];
 }): TestRun {
@@ -134,22 +130,14 @@ function run(input: {
       stopOnFailure: true,
       recordVideo: true,
       keepVideoOnSuccess: false,
-      runKind: "business_graph",
-      executionContext: {
-        parentExecutionId: "asset-composite-execution-1",
-        parentExecutionType: "asset_composition",
-        parentExecutionName: "创建课堂但不发布",
-        executionItemId: `item-${input.itemOrder}`,
-        itemOrder: input.itemOrder,
-        itemLabel: input.caseName
-      }
-    } as TestRun["config"],
+      runKind: "script_flow"
+    },
     steps: [],
     stepResults: [],
     metrics: [],
     events: input.events ?? [],
     artifacts: input.artifacts ?? [],
-    startedAt: `2026-07-23T08:0${input.itemOrder}:00.000Z`
+    startedAt: `2026-07-23T08:0${input.startedMinute}:00.000Z`
   };
 }
 

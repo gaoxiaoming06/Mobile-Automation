@@ -7,7 +7,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "image-region:6,31,88,6",
-        actionKind: "input",
         elementLabel: "密码输入框",
         targetText: "请输入密码",
         semanticArea: "content",
@@ -49,7 +48,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "image-region:6,47,88,8",
-        actionKind: "tap",
         elementLabel: "创建学习方案",
         targetText: "创建",
         semanticArea: "content",
@@ -80,7 +78,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "text:作业",
-        actionKind: "tap",
         elementLabel: "作业",
         targetText: "作业",
         semanticArea: "content",
@@ -110,7 +107,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "image-region:49,50,1.2,0.8",
-        actionKind: "tap",
         elementLabel: "更多",
         semanticArea: "content",
         region: { x: 49, y: 50, width: 1.2, height: 0.8 }
@@ -136,7 +132,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "image-region:6,29.5,88,6",
-        actionKind: "input",
         elementLabel: "手机号输入框",
         targetText: "请输入手机号",
         semanticArea: "content",
@@ -146,8 +141,7 @@ describe("validatePageElementAssetQuality", () => {
         {
           id: "phone-input-old",
           label: "手机号输入框",
-          locator: "image-region:6,29.5,88,6",
-          actionKind: "input"
+          locator: "image-region:6,29.5,88,6"
         }
       ],
       observation: observation({
@@ -172,7 +166,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "image-region:6,15,88.77,8.78",
-        actionKind: "tap",
         elementLabel: "个人信息",
         semanticArea: "content",
         region: { x: 6, y: 15, width: 88.77, height: 8.78 }
@@ -193,7 +186,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "image-region:6,15,88.77,8.78",
-        actionKind: "tap",
         elementLabel: "个人信息",
         semanticArea: "content",
         region: { x: 6, y: 15, width: 88.77, height: 8.78 },
@@ -229,7 +221,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "image-region:6,15,88.77,8.78",
-        actionKind: "tap",
         elementLabel: "个人信息",
         semanticArea: "content",
         region: { x: 6, y: 15, width: 88.77, height: 8.78 },
@@ -255,7 +246,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "image-region:6,53.97,88.58,4.03",
-        actionKind: "tap",
         elementLabel: "账号与安全",
         targetText: "账号与安全",
         semanticArea: "content",
@@ -291,7 +281,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "image-region:6,53.97,88.58,4.03",
-        actionKind: "tap",
         elementLabel: "账号与安全",
         targetText: "账号与安全",
         semanticArea: "content",
@@ -320,7 +309,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "top-bar-icon:search",
-        actionKind: "tap",
         elementLabel: "搜索",
         semanticArea: "top",
         locatorKind: "top_bar_icon_locator",
@@ -352,7 +340,6 @@ describe("validatePageElementAssetQuality", () => {
     const missingCandidates = validatePageElementAssetQuality({
       element: {
         locator: "top-bar-icon:search",
-        actionKind: "tap",
         elementLabel: "搜索",
         semanticArea: "top",
         locatorKind: "top_bar_icon_locator",
@@ -371,7 +358,6 @@ describe("validatePageElementAssetQuality", () => {
     const missingRole = validatePageElementAssetQuality({
       element: {
         locator: "top-bar-icon:",
-        actionKind: "tap",
         elementLabel: "搜索",
         semanticArea: "top",
         locatorKind: "top_bar_icon_locator"
@@ -390,7 +376,6 @@ describe("validatePageElementAssetQuality", () => {
     const found = validatePageElementAssetQuality({
       element: {
         locator: "image-region:60,20,36,6",
-        actionKind: "tap",
         elementLabel: "会员中心右侧图标",
         targetText: "会员中心",
         semanticArea: "content",
@@ -408,7 +393,6 @@ describe("validatePageElementAssetQuality", () => {
     const missingAnchor = validatePageElementAssetQuality({
       element: {
         locator: "image-region:60,20,36,6",
-        actionKind: "tap",
         elementLabel: "会员中心右侧图标",
         semanticArea: "content",
         region: { x: 60, y: 20, width: 36, height: 6 },
@@ -428,7 +412,6 @@ describe("validatePageElementAssetQuality", () => {
     const result = validatePageElementAssetQuality({
       element: {
         locator: "image-region:60,20,36,6",
-        actionKind: "tap",
         elementLabel: "会员中心右侧图标",
         targetText: "会员中心",
         semanticArea: "content",

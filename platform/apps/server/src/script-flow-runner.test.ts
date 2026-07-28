@@ -26,10 +26,18 @@ describe("ScriptFlowRunner", () => {
       flow,
       deviceSerial: "device-1",
       parameters: { className: "班级四十二号" },
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "cn.eeo.classin"
+      },
       recordVideo: false
     });
 
     expect(backend.input?.steps).toHaveLength(1);
+    expect(backend.input?.androidAppMonitor).toEqual({
+      enabled: true,
+      packageName: "cn.eeo.classin"
+    });
     expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
       id: "open-class",
       type: "tap_on_text",
@@ -64,7 +72,7 @@ describe("ScriptFlowRunner", () => {
     }));
   });
 
-  it("merges profile values below this-run input and blocks unconfirmed risky actions", async () => {
+  it("uses typed run parameters and blocks unconfirmed risky actions", async () => {
     const backend = new CapturingBackend();
     const runner = runnerWith(backend);
     const flow = document([
@@ -77,7 +85,6 @@ describe("ScriptFlowRunner", () => {
       flowId: "flow-1",
       flow,
       deviceSerial: "device-1",
-      profileParameters: { lessonName: "Profile 课堂" },
       parameters: { lessonName: "本次课堂" },
       recordVideo: false
     })).rejects.toThrow("Risk confirmation required: publish");
@@ -86,7 +93,6 @@ describe("ScriptFlowRunner", () => {
       flowId: "flow-1",
       flow,
       deviceSerial: "device-1",
-      profileParameters: { lessonName: "Profile 课堂" },
       parameters: { lessonName: "本次课堂" },
       confirmedRisks: ["publish"],
       recordVideo: false

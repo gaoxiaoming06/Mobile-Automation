@@ -1079,7 +1079,6 @@ describe("identifyOrCreateCurrentPageDraft", () => {
           parentPageName: "主页",
           overlayType: "popup_menu",
           overlayBehavior: "blocking",
-          closeAction: "back",
           confirmedUiTexts: ["添加好友", "加入班级", "加入公开课", "扫一扫"],
           confirmedOcrTexts: ["添加好友"]
         }
@@ -1094,8 +1093,7 @@ describe("identifyOrCreateCurrentPageDraft", () => {
         parentPageId: "node-home",
         parentPageName: "主页",
         overlayType: "popup_menu",
-        overlayBehavior: "blocking",
-        closeAction: "back"
+        overlayBehavior: "blocking"
       })
     );
   });
@@ -1121,7 +1119,6 @@ describe("identifyOrCreateCurrentPageDraft", () => {
           parentPageName: "主页",
           overlayType: "attached_overlay",
           overlayBehavior: "non_blocking",
-          closeAction: "",
           confirmedUiTexts: ["上课"],
           confirmedOcrTexts: ["上课"]
         }
@@ -1140,59 +1137,6 @@ describe("identifyOrCreateCurrentPageDraft", () => {
     );
   });
 
-  it("clears stale close actions when an existing overlay becomes a page state", () => {
-    const storage = new MemoryCurrentPageStorage([
-      node({
-        id: "node-active-course-bar",
-        key: "classin.home.active_course_bar",
-        name: "主页-上课悬浮条",
-        nodeType: "business_state",
-        tags: ["page-overlay", "page-state", "asset-recording"],
-        status: "active",
-        matchers: [],
-        metadata: {
-          assetRecordingConfirmed: true,
-          assetKind: "overlay",
-          parentPageName: "主页",
-          overlayType: "attached_overlay",
-          overlayBehavior: "blocking",
-          closeAction: "back"
-        }
-      })
-    ]);
-
-    const updated = createConfirmedPageAssetFromCandidate({
-      graphVersionId: "version-1",
-      observation: observation({
-        resourceId: "cn.eeo.classin:id/active_course_bar",
-        text: "上课",
-        extraTexts: ["主页"]
-      }),
-      storage,
-      draft: {
-        key: "classin.home.active_course_bar",
-        name: "主页-上课状态",
-        tags: ["page-overlay", "page-state", "asset-recording"],
-        metadata: {
-          assetKind: "overlay",
-          parentPageName: "主页",
-          overlayType: "page_state",
-          overlayBehavior: "page_state",
-          closeAction: "",
-          confirmedUiTexts: ["上课"],
-          confirmedOcrTexts: ["上课"]
-        }
-      }
-    });
-
-    expect(updated.metadata).toEqual(
-      expect.objectContaining({
-        overlayType: "page_state",
-        overlayBehavior: "page_state"
-      })
-    );
-    expect(updated.metadata?.closeAction).toBe("");
-  });
 });
 
 class MemoryCurrentPageStorage {
@@ -1270,7 +1214,6 @@ function graph(nodes: BusinessNode[]): BusinessGraphVersion {
     sourceSummary: [],
     status: "active",
     nodes,
-    edges: [],
     createdAt: "2026-06-14T10:00:00.000Z"
   };
 }

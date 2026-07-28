@@ -17,8 +17,6 @@ export type AiSuggestionRect = { x: number; y: number; width: number; height: nu
 export type AiElementSuggestion = {
   elementLabel: string;
   targetText?: string;
-  abilityType: "fixed_tap" | "scroll_candidate" | "grid_candidate" | "conditional_tap";
-  actionKind: "tap" | "scroll" | "long_press" | "input";
   locatorKind: AiLocatorKind;
   locator: string;
   coordinateSpace: "screen" | "runtime";
@@ -35,12 +33,9 @@ export type AiElementSuggestion = {
     direction: "vertical" | "horizontal";
     targetKind: "ocr_text";
     targetQuery: string;
-    afterFoundAction: "tap_item";
   };
   dynamicRegion?: Record<string, unknown>;
   itemTemplate?: Record<string, unknown>;
-  transitionKind?: "parameterized";
-  parameterMapping?: Record<string, string>;
   dynamicMasks?: Array<{ kind: "avatar" | "text" | "image" | "number" | "custom"; label?: string; region: AiSuggestionRect; reason?: string }>;
   needsManualCompletion?: boolean;
   completionReason?: string;
@@ -113,9 +108,6 @@ export function mergeAiPageDraftIntoPage(page: AssetRecordingCurrentPage, respon
 export function aiElementSuggestionToDraft(suggestion: AiElementSuggestion, sourceNodeId: string | undefined): AssetRecordingPageElementDraft {
   return {
     sourceNodeId,
-    abilityType: suggestion.abilityType,
-    actionKind: suggestion.actionKind,
-    availability: "visible",
     locator: suggestion.locator,
     semanticArea: suggestion.semanticArea,
     coordinateSpace: suggestion.coordinateSpace,
@@ -128,8 +120,6 @@ export function aiElementSuggestionToDraft(suggestion: AiElementSuggestion, sour
     ...(suggestion.scrollProfile ? { scrollProfile: suggestion.scrollProfile } : {}),
     ...(suggestion.dynamicRegion ? { dynamicRegion: suggestion.dynamicRegion } : {}),
     ...(suggestion.itemTemplate ? { itemTemplate: suggestion.itemTemplate } : {}),
-    ...(suggestion.transitionKind ? { transitionKind: suggestion.transitionKind } : {}),
-    ...(suggestion.parameterMapping ? { parameterMapping: suggestion.parameterMapping } : {}),
     ...(suggestion.dynamicMasks?.length ? { dynamicMasks: suggestion.dynamicMasks } : {})
   };
 }
