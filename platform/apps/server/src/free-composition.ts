@@ -1,6 +1,7 @@
 import type {
   AssetCompositeCase,
   MetaFunction,
+  MetaFunctionParameter,
   Platform,
   RunMode
 } from "@mobile-automation/shared";
@@ -10,6 +11,7 @@ export type FreeCompositionCandidateKind =
   | "meta_function"
   | "page_task"
   | "page_transition"
+  | "page_goal"
   | "system_action"
   | "generated_flow";
 
@@ -22,6 +24,7 @@ export type FreeCompositionCandidate = {
   description?: string;
   parameterProfileId?: string;
   parameterKeys: string[];
+  parameters?: MetaFunctionParameter[];
   score: number;
   matchedTerms: string[];
   pageModelId?: string;
@@ -121,6 +124,7 @@ export type FreeCompositionPageTaskAsset = {
   pageTaskId: string;
   pageTaskName: string;
   parameterKeys: string[];
+  parameters?: MetaFunctionParameter[];
   status?: string;
 };
 
@@ -166,6 +170,8 @@ const NON_NAVIGATION_ACTION_TERMS = [
   "输入",
   "选择",
   "勾选",
+  "找到",
+  "查找",
   "点击",
   "点一下",
   "发起",
@@ -217,8 +223,8 @@ export function parseFreeCompositionIntent(prompt: string, aiPlanner?: FreeCompo
       ...riskTermsInText(aiPlanner?.normalizedPrompt ?? "")
     ]),
     runtimeOverrides: {
-      ...extractRuntimeOverridesFromPrompt(prompt),
-      ...normalizedAiRuntimeOverrides(aiPlanner?.runtimeOverrides)
+      ...normalizedAiRuntimeOverrides(aiPlanner?.runtimeOverrides),
+      ...extractRuntimeOverridesFromPrompt(prompt)
     }
   };
 }
@@ -317,18 +323,17 @@ export function resolveFreeComposition(
           "composite_case",
           compositeCase.steps
             .filter((step) => step.enabled)
-            .flatMap((step) => metaFunctionsById.get(step.metaFunctionId)?.parameters ?? [])
-            .map((parameter) => parameter.key),
+            .flatMap((step) => metaFunctionsById.get(step.metaFunctionId)?.parameters ?? []),
           matchingPrompt
         )
       ),
     ...activeMetaFunctions.map((metaFunction) =>
-      buildCandidate(
-        metaFunction,
-        "meta_function",
-        metaFunction.parameters.map((parameter) => parameter.key),
-        matchingPrompt
-      )
+        buildCandidate(
+          metaFunction,
+          "meta_function",
+          metaFunction.parameters,
+          matchingPrompt
+        )
     ),
     ...(input.pageTasks ?? [])
       .filter((pageTask) =>
@@ -348,6 +353,39 @@ export function resolveFreeComposition(
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name, "zh-CN"));
   const fixedRouteFlow = buildFixedStartRouteCandidate(matchingPrompt, input, baseCandidates);
+  const fixedRouteWithExplicitActionFlow = fixedRouteFlow
+    ? buildFixedRouteWithExplicitActionCandidate(prompt, fixedRouteFlow, baseCandidates)
+    : undefined;
+  const fixedRouteActionGapMessage = fixedRouteFlow && !fixedRouteWithExplicitActionFlow
+    ? fixedRouteMissingExplicitActionMessage(prompt, fixedRouteFlow, baseCandidates)
+    : undefined;
+  if (fixedRouteActionGapMessage) {
+    return withAiPlanner({
+      status: "missing_assets",
+      intent,
+      candidates: [],
+      message: fixedRouteActionGapMessage
+    }, input.aiPlanner);
+  }
+  const fixedRouteWithSystemActionFlow = fixedRouteFlow
+    ? buildFixedRouteWithSystemActionCandidate(matchingPrompt, fixedRouteWithExplicitActionFlow ?? fixedRouteFlow, baseCandidates)
+    : undefined;
+  if (fixedRouteWithSystemActionFlow && shouldPreferFixedRouteForPageEntry(prompt, input.aiPlanner, fixedRouteFlow!)) {
+    return withAiPlanner({
+      status: "ready",
+      intent,
+      candidates: [fixedRouteWithSystemActionFlow],
+      message: "已按固定流程线规划执行路径。执行时会根据当前设备页面动态接入流程线。"
+    }, input.aiPlanner);
+  }
+  if (fixedRouteWithExplicitActionFlow) {
+    return withAiPlanner({
+      status: "ready",
+      intent,
+      candidates: [fixedRouteWithExplicitActionFlow],
+      message: "已按固定流程线规划执行路径。执行时会根据当前设备页面动态接入流程线。"
+    }, input.aiPlanner);
+  }
   if (fixedRouteFlow && shouldPreferFixedRouteForPageEntry(prompt, input.aiPlanner, fixedRouteFlow)) {
     return withAiPlanner({
       status: "ready",
@@ -356,11 +394,17 @@ export function resolveFreeComposition(
       message: "已按固定流程线规划执行路径。执行时会根据当前设备页面动态接入流程线。"
     }, input.aiPlanner);
   }
-  const fixedRouteWithActionFlow = fixedRouteFlow
-    ? buildFixedRouteWithExplicitActionCandidate(prompt, fixedRouteFlow, baseCandidates)
-    : undefined;
+  const exactActionCandidate = exactActionCandidateForPrompt(prompt, baseCandidates);
+  if (exactActionCandidate) {
+    return withAiPlanner({
+      status: "ready",
+      intent,
+      candidates: [exactActionCandidate],
+      message: "已按需求生成临时执行流程。"
+    }, input.aiPlanner);
+  }
   const generatedFlow =
-    fixedRouteWithActionFlow ??
+    fixedRouteWithSystemActionFlow ??
     buildAiGeneratedFlowCandidate(input.aiPlanner, baseCandidates) ??
     buildGeneratedFlowCandidate(matchingPrompt, baseCandidates);
   if (!generatedFlow) {
@@ -373,7 +417,7 @@ export function resolveFreeComposition(
       }, input.aiPlanner);
     }
   }
-  const candidates = generatedFlow ? [generatedFlow, ...baseCandidates] : baseCandidates;
+  const candidates = generatedFlow ? [generatedFlow] : baseCandidates;
 
   if (candidates.length === 0) {
     const recordingIntent = missingAssetsRecordingIntent(matchingPrompt, input);
@@ -459,8 +503,16 @@ function normalizedAiRuntimeOverrides(overrides: Record<string, string> | undefi
     return {};
   }
   return Object.fromEntries(Object.entries(overrides)
-    .map(([key, value]) => [key.trim(), typeof value === "string" ? value.trim() : ""] as const)
+    .map(([key, value]) => [key.trim(), typeof value === "string" ? normalizedRuntimeOverrideValue(key, value) : ""] as const)
     .filter(([key, value]) => key && value));
+}
+
+function normalizedRuntimeOverrideValue(key: string, value: string): string {
+  const normalized = value.trim();
+  if (key === "duration" || key === "stageCount") {
+    return normalized.match(/\d+(?:\.\d+)?/)?.[0] ?? normalized;
+  }
+  return normalized;
 }
 
 function buildAiGeneratedFlowCandidate(
@@ -483,9 +535,11 @@ function buildAiGeneratedFlowCandidate(
     description: "由 AI 理解自然语言后，经系统资产校验生成的临时流程，不会保存为正式资产。",
     parameterProfileId: orderedCandidates.find((item) => item.parameterProfileId)?.parameterProfileId,
     parameterKeys: uniqueStrings(orderedCandidates.flatMap((item) => item.parameterKeys)).sort(),
+    parameters: mergeCandidateParameters(orderedCandidates),
     score: orderedCandidates.reduce((sum, item) => sum + item.score, 180),
     matchedTerms: uniqueStrings(orderedCandidates.flatMap((item) => item.matchedTerms)),
-    composedCandidateIds: orderedCandidates.map((item) => item.id)
+    composedCandidateIds: orderedCandidates.map((item) => item.id),
+    composedCandidates: orderedCandidates
   };
 }
 
@@ -555,6 +609,7 @@ function buildPageTransitionCandidate(pageTransition: FreeCompositionPageTransit
     name: `${pageTransition.sourcePageModelName} / ${pageTransition.pageElementLabel} → ${pageTransition.targetPageModelName}`,
     description: pageTransition.pageTransitionName,
     parameterKeys: uniqueStrings(pageTransition.parameterKeys ?? []),
+    parameters: uniqueStrings(pageTransition.parameterKeys ?? []).map(requiredStringParameter),
     score,
     matchedTerms: [...new Set(matchedTerms.filter(Boolean))],
     sourcePageModelId: pageTransition.sourcePageModelId,
@@ -579,6 +634,7 @@ function buildSystemActionCandidate(prompt: string, input: ResolveFreeCompositio
     name: "启动 App",
     description: "启动当前 App，不会保存为正式资产。",
     parameterKeys: [],
+    parameters: [],
     score: 160,
     matchedTerms: ["打开 App"],
     systemAction: "launch_app"
@@ -627,6 +683,7 @@ function buildPageTaskCandidate(pageTask: FreeCompositionPageTaskAsset, prompt: 
     platform: pageTask.platform,
     name: `${pageTask.pageModelName} / ${pageTask.pageTaskName}`,
     parameterKeys: uniqueStrings(pageTask.parameterKeys),
+    parameters: normalizeCandidateParameters(pageTask.parameters ?? pageTask.parameterKeys.map(requiredStringParameter)),
     score,
     matchedTerms: [...new Set(matchedTerms)],
     pageModelId: pageTask.pageModelId,
@@ -643,7 +700,7 @@ export function pageTaskCandidateId(pageModelId: string, pageTaskId: string): st
 function buildCandidate(
   source: AssetCompositeCase | MetaFunction,
   kind: FreeCompositionCandidateKind,
-  parameterKeys: string[],
+  parameters: MetaFunctionParameter[],
   prompt: string
 ): FreeCompositionCandidate {
   const normalizedPrompt = normalize(prompt);
@@ -701,7 +758,8 @@ function buildCandidate(
     name: source.name,
     description: source.description,
     parameterProfileId: kind === "composite_case" && "parameterProfileId" in source ? source.parameterProfileId : undefined,
-    parameterKeys: [...new Set(parameterKeys)],
+    parameterKeys: uniqueStrings(parameters.map((parameter) => parameter.key)),
+    parameters: normalizeCandidateParameters(parameters),
     score,
     matchedTerms: [...new Set(matchedTerms)]
   };
@@ -726,6 +784,52 @@ function requiresClarification(prompt: string, candidates: FreeCompositionCandid
 
 function isGenericCourseCreationIntent(normalizedPrompt: string): boolean {
   return /创建课堂|新建课堂|建课/.test(normalizedPrompt);
+}
+
+function exactActionCandidateForPrompt(
+  prompt: string,
+  candidates: FreeCompositionCandidate[]
+): FreeCompositionCandidate | undefined {
+  const requestedAction = normalize(prompt);
+  if (!requestedAction || hasExplicitSequence(prompt)) {
+    return undefined;
+  }
+  return candidates
+    .filter((candidate) => isExecutableActionCandidate(candidate))
+    .map((candidate) => ({
+      candidate,
+      score: exactActionCandidateScore(candidate, requestedAction)
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) =>
+      right.score - left.score ||
+      candidateKindPriority(left.candidate.kind) - candidateKindPriority(right.candidate.kind) ||
+      left.candidate.name.localeCompare(right.candidate.name, "zh-CN")
+    )[0]?.candidate;
+}
+
+function exactActionCandidateScore(candidate: FreeCompositionCandidate, requestedAction: string): number {
+  if (candidate.kind === "page_task" && normalize(candidate.pageTaskName ?? "") === requestedAction) {
+    return 300;
+  }
+  const candidateAction = normalize(candidate.kind === "page_task" ? candidate.pageTaskName ?? candidate.name : candidate.name);
+  if (candidateAction === requestedAction) {
+    return 200;
+  }
+  if (!candidateAction || !requestedAction.includes(candidateAction)) {
+    return 0;
+  }
+  if (candidate.kind === "composite_case") {
+    return 240;
+  }
+  if (candidate.kind === "meta_function") {
+    return 230;
+  }
+  return 220;
+}
+
+function hasExplicitSequence(prompt: string): boolean {
+  return /(?:先[\s\S]+(?:然后|再|接着|之后|随后)|(?:然后|接着|随后))/u.test(prompt);
 }
 
 function clampRepeatCount(value: number): number {
@@ -778,6 +882,51 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
+function requiredStringParameter(key: string): MetaFunctionParameter {
+  return { key, type: "string", required: true };
+}
+
+function normalizeCandidateParameters(parameters: MetaFunctionParameter[]): MetaFunctionParameter[] {
+  return mergeParameterDefinitions(parameters)
+    .sort((left, right) => Number(right.required === true) - Number(left.required === true));
+}
+
+function mergeCandidateParameters(candidates: FreeCompositionCandidate[]): MetaFunctionParameter[] {
+  return mergeParameterDefinitions(candidates.flatMap((candidate) =>
+    candidate.parameters ?? candidate.parameterKeys.map(requiredStringParameter)
+  ));
+}
+
+function mergeParameterDefinitions(parameters: MetaFunctionParameter[]): MetaFunctionParameter[] {
+  const merged = new Map<string, MetaFunctionParameter>();
+  for (const parameter of parameters) {
+    const key = parameter.key.trim();
+    if (!key) {
+      continue;
+    }
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, {
+        ...parameter,
+        key,
+        options: parameter.options?.map((option) => ({ ...option }))
+      });
+      continue;
+    }
+    merged.set(key, {
+      ...existing,
+      label: existing.label ?? parameter.label,
+      type: existing.type ?? parameter.type,
+      required: existing.required === true || parameter.required === true,
+      defaultValue: existing.defaultValue ?? parameter.defaultValue,
+      control: existing.control ?? parameter.control,
+      options: existing.options?.length ? existing.options : parameter.options?.map((option) => ({ ...option })),
+      advanced: existing.advanced === true && parameter.advanced === true
+    });
+  }
+  return [...merged.values()];
+}
+
 function buildGeneratedFlowCandidate(prompt: string, candidates: FreeCompositionCandidate[]): FreeCompositionCandidate | undefined {
   const segments = orderedPromptSegments(prompt);
   if (segments.length < 2) {
@@ -806,9 +955,11 @@ function buildGeneratedFlowCandidate(prompt: string, candidates: FreeComposition
     description: "由自然语言顺序生成的临时流程，不会保存为正式资产。",
     parameterProfileId: ordered.find((item) => item.parameterProfileId)?.parameterProfileId,
     parameterKeys: uniqueStrings(ordered.flatMap((item) => item.parameterKeys)).sort(),
+    parameters: mergeCandidateParameters(ordered),
     score: ordered.reduce((sum, item) => sum + item.score, 100),
     matchedTerms: uniqueStrings(ordered.flatMap((item) => item.matchedTerms)),
-    composedCandidateIds: ordered.map((item) => item.id)
+    composedCandidateIds: ordered.map((item) => item.id),
+    composedCandidates: ordered
   };
 }
 
@@ -829,23 +980,41 @@ function buildFixedStartRouteCandidate(
     return undefined;
   }
   if (targetPage.pageModelId === startPage.pageModelId) {
+    const pageGoal: FreeCompositionCandidate = {
+      id: `page_goal:${targetPage.pageModelId}`,
+      kind: "page_goal",
+      appId: input.appId,
+      platform: input.platform,
+      name: `到达${targetPage.pageModelName}`,
+      description: `执行时识别设备当前页面并动态规划到目标页“${targetPage.pageModelName}”。`,
+      parameterKeys: [],
+      parameters: [],
+      score: 240,
+      matchedTerms: [targetPage.pageModelName],
+      pageModelId: targetPage.pageModelId,
+      pageModelName: targetPage.pageModelName,
+      targetPageModelId: targetPage.pageModelId,
+      targetPageModelName: targetPage.pageModelName,
+      requiresExecution: true
+    };
     return {
-      id: `generated_flow:fixed_start:${targetPage.pageModelId}`,
+      id: `generated_flow:${pageGoal.id}`,
       kind: "generated_flow",
       appId: input.appId,
       platform: input.platform,
-      name: `固定起点已是${targetPage.pageModelName}`,
-      description: `目标页“${targetPage.pageModelName}”就是固定流程起点，无需额外资产步骤。`,
+      name: pageGoal.name,
+      description: pageGoal.description,
       parameterKeys: [],
+      parameters: [],
       score: 240,
       matchedTerms: [targetPage.pageModelName],
       pageModelId: startPage.pageModelId,
       pageModelName: startPage.pageModelName,
       targetPageModelId: targetPage.pageModelId,
       targetPageModelName: targetPage.pageModelName,
-      composedCandidateIds: [],
-      composedCandidates: [],
-      requiresExecution: false
+      composedCandidateIds: [pageGoal.id],
+      composedCandidates: [pageGoal],
+      requiresExecution: true
     };
   }
   const path = shortestPageTransitionPath(startPage.pageModelId, targetPage.pageModelId, input);
@@ -865,8 +1034,13 @@ function buildFixedStartRouteCandidate(
     description: `由固定流程起点“${startPage.pageModelName}”到目标页“${targetPage.pageModelName}”规划的临时流程。执行时会根据设备当前页面动态接入流程线。`,
     parameterProfileId: composedCandidates.find((item) => item.parameterProfileId)?.parameterProfileId,
     parameterKeys: uniqueStrings(composedCandidates.flatMap((item) => item.parameterKeys)).sort(),
+    parameters: mergeCandidateParameters(composedCandidates),
     score: composedCandidates.reduce((sum, item) => sum + item.score, 120),
     matchedTerms: uniqueStrings([targetPage.pageModelName, ...composedCandidates.flatMap((item) => item.matchedTerms)]),
+    pageModelId: startPage.pageModelId,
+    pageModelName: startPage.pageModelName,
+    targetPageModelId: targetPage.pageModelId,
+    targetPageModelName: targetPage.pageModelName,
     composedCandidateIds: composedCandidates.map((item) => item.id),
     composedCandidates
   };
@@ -920,6 +1094,7 @@ function buildFixedRouteWithExplicitActionCandidate(
     description: `由固定流程线进入“${targetPageName}”后接续用户明确要求的页面动作。`,
     parameterProfileId: ordered.find((item) => item.parameterProfileId)?.parameterProfileId,
     parameterKeys: uniqueStrings(ordered.flatMap((item) => item.parameterKeys)).sort(),
+    parameters: mergeCandidateParameters(ordered),
     score: fixedRouteFlow.score + actionCandidate.score + 80,
     matchedTerms: uniqueStrings([...fixedRouteFlow.matchedTerms, ...actionCandidate.matchedTerms]),
     targetPageModelId: fixedRouteFlow.targetPageModelId,
@@ -927,6 +1102,62 @@ function buildFixedRouteWithExplicitActionCandidate(
     composedCandidateIds: ordered.map((item) => item.id),
     composedCandidates: ordered
   };
+}
+
+function buildFixedRouteWithSystemActionCandidate(
+  prompt: string,
+  fixedRouteFlow: FreeCompositionCandidate,
+  candidates: FreeCompositionCandidate[]
+): FreeCompositionCandidate | undefined {
+  if (!containsAppLaunchIntent(prompt)) {
+    return undefined;
+  }
+  const systemAction = candidates.find((candidate) => candidate.kind === "system_action" && candidate.systemAction === "launch_app");
+  if (!systemAction) {
+    return undefined;
+  }
+  const ordered = uniqueCandidates([systemAction, ...composedCandidatesForFlow(fixedRouteFlow, candidates)]);
+  if (ordered.length < 2) {
+    return undefined;
+  }
+  return {
+    ...fixedRouteFlow,
+    id: "generated_flow:" + ordered.map((item) => item.id).join(">"),
+    name: ordered.map((item) => item.name).join(" → "),
+    description: `先启动目标 App，再${fixedRouteFlow.description ?? "执行固定流程线"}`,
+    parameterProfileId: ordered.find((item) => item.parameterProfileId)?.parameterProfileId,
+    parameterKeys: uniqueStrings(ordered.flatMap((item) => item.parameterKeys)).sort(),
+    parameters: mergeCandidateParameters(ordered),
+    score: fixedRouteFlow.score + systemAction.score + 40,
+    matchedTerms: uniqueStrings([...fixedRouteFlow.matchedTerms, ...systemAction.matchedTerms]),
+    composedCandidateIds: ordered.map((item) => item.id),
+    composedCandidates: ordered
+  };
+}
+
+function fixedRouteMissingExplicitActionMessage(
+  prompt: string,
+  fixedRouteFlow: FreeCompositionCandidate,
+  candidates: FreeCompositionCandidate[]
+): string | undefined {
+  const targetPageName = fixedRouteFlow.targetPageModelName ?? fixedRouteFlow.pageModelName ?? "";
+  if (!containsExplicitNonNavigationAction(prompt, targetPageName)) {
+    return undefined;
+  }
+  const routeCandidates = composedCandidatesForFlow(fixedRouteFlow, candidates);
+  const usedIds = new Set(routeCandidates.map((candidate) => candidate.id));
+  const actionCandidate = bestExplicitPageActionCandidate(
+    prompt,
+    targetPageName,
+    fixedRouteFlow.targetPageModelId ?? fixedRouteFlow.pageModelId,
+    candidates,
+    usedIds
+  );
+  if (actionCandidate) {
+    return undefined;
+  }
+  const actionText = explicitPageActionDescription(prompt, targetPageName);
+  return `已能规划到目标页“${targetPageName}”，但后续动作“${actionText}”没有匹配的页面任务或元功能。请先在资产录制中为该页面补齐对应页面任务/能力，或创建元功能后重试。`;
 }
 
 function composedCandidatesForFlow(
@@ -1003,6 +1234,17 @@ function isExecutableActionCandidate(candidate: FreeCompositionCandidate): boole
 
 function containsExplicitNonNavigationAction(prompt: string, targetPageName: string): boolean {
   return explicitActionTerms(actionTextWithoutNavigationTarget(prompt, targetPageName)).length > 0;
+}
+
+function explicitPageActionDescription(prompt: string, targetPageName: string): string {
+  const targetIndex = targetPageName ? prompt.indexOf(targetPageName) : -1;
+  const actionText = targetIndex >= 0
+    ? prompt.slice(targetIndex + targetPageName.length)
+    : actionTextWithoutNavigationTarget(prompt, targetPageName);
+  const normalized = actionText
+    .replace(/^[\s，,。；;]*(?:然后|再|接着|之后|随后)?/u, "")
+    .trim();
+  return normalized || "后续操作";
 }
 
 function actionTextWithoutNavigationTarget(prompt: string, targetPageName: string): string {
@@ -1336,7 +1578,7 @@ function textMatchScore(prompt: string, value: string): number {
 
 function isAppLaunchIntent(prompt: string): boolean {
   const normalized = normalize(prompt);
-  return /(?:打开|启动|拉起|运行|launch|start)(?:当前)?(?:[a-z0-9_.-]{0,32})?(?:app|应用|客户端|软件|程序)$/.test(normalized);
+  return /(?:打开|启动|重启|重新启动|重新打开|拉起|运行|launch|start)(?:当前)?(?:[a-z0-9_.-]{0,32})?(?:app|应用|客户端|软件|程序)$/.test(normalized);
 }
 
 function containsAppLaunchIntent(prompt: string): boolean {

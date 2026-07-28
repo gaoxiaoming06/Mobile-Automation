@@ -426,6 +426,58 @@ describe("compileAssetCompositeCase", () => {
     expect(result.issues.map((issue) => issue.assetId)).toEqual(expect.arrayContaining(["duration", "lessonName"]));
   });
 
+  it("does not require page-task parameters explicitly declared optional by the meta function", () => {
+    const version = graphVersion();
+    const createPage = version.nodes.find((node) => node.id === "page-create")!;
+    createPage.metadata = {
+      ...createPage.metadata,
+      assetRecordingPageTasks: [
+        {
+          id: "task-fill-lesson",
+          name: "填写课堂信息",
+          status: "active",
+          steps: [
+            { id: "task-step-title", order: 1, elementId: "manual-title", fieldType: "text_input", label: "课堂名称", valueParamKey: "lessonName" },
+            { id: "task-step-duration", order: 2, elementId: "manual-duration", fieldType: "picker_select", label: "课堂时长", valueParamKey: "duration" }
+          ]
+        }
+      ]
+    };
+    const result = compileAssetCompositeCase({
+      compositeCase: compositeCase(["meta-create"]),
+      metaFunctions: [{
+        ...createLessonMetaFunction(),
+        parameters: [
+          { key: "lessonName", type: "string", required: true },
+          { key: "duration", type: "number", required: false }
+        ]
+      }],
+      parameterProfile: {
+        ...parameterProfile(),
+        values: { lessonName: { type: "string", value: "自动化课堂" } }
+      },
+      graphVersion: version
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.requiredParameters).toEqual(["lessonName"]);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("keeps explicit runtime values ahead of meta-function defaults", () => {
+    const result = compileAssetCompositeCase({
+      compositeCase: compositeCase(["meta-create"]),
+      metaFunctions: [{
+        ...createLessonMetaFunction(),
+        parameters: [{ key: "duration", type: "number", required: false, defaultValue: 30 }]
+      }],
+      runtimeOverrides: { duration: 60 },
+      graphVersion: graphVersion()
+    });
+
+    expect(result.steps[0]?.runtimeParams.duration).toBe("60");
+  });
+
   it("applies case-step parameter overrides without mutating the profile", () => {
     const sourceProfile = parameterProfile();
     const testCase = compositeCase(["meta-enter"]);

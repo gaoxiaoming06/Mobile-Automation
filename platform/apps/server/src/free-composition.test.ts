@@ -64,6 +64,29 @@ describe("resolveFreeComposition", () => {
     expect(result.candidates[0]).toMatchObject({ id: "case_login", kind: "composite_case" });
   });
 
+  it("exposes structured parameter metadata for the selected flow", () => {
+    const result = resolveFreeComposition("账号密码登录", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [metaFunction({
+        parameters: [
+          { key: "phone", label: "手机号", type: "string", required: true },
+          { key: "rememberLogin", label: "记住登录", type: "boolean", required: false, defaultValue: true }
+        ]
+      })],
+      compositeCases: []
+    });
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      kind: "meta_function",
+      parameters: [
+        { key: "phone", label: "手机号", type: "string", required: true },
+        { key: "rememberLogin", label: "记住登录", type: "boolean", required: false, defaultValue: true }
+      ]
+    });
+  });
+
   it("parses a trailing count as repeat intent for natural test requests", () => {
     const result = resolveFreeComposition("测试进入新建课堂8次", {
       appId: "cn.eeo.classin",
@@ -100,6 +123,145 @@ describe("resolveFreeComposition", () => {
       "新建课堂",
       "新建公开课"
     ]);
+  });
+
+  it("uses the complete task for an exact creation request instead of a non-publishing partial flow", () => {
+    const result = resolveFreeComposition("创建课堂", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [
+        metaFunction({
+          id: "meta-create-without-publish",
+          name: "创建课堂但不发布",
+          description: "填写课堂表单后停留在发布前",
+          parameters: []
+        })
+      ],
+      compositeCases: [],
+      pageTasks: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-new-lesson",
+          pageModelName: "新建课堂",
+          pageTaskId: "task-fill-without-publish",
+          pageTaskName: "填写新建课堂表单（不发布）",
+          parameterKeys: ["lessonName"],
+          status: "active"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-new-lesson",
+          pageModelName: "新建课堂",
+          pageTaskId: "task-create-lesson",
+          pageTaskName: "创建课堂",
+          parameterKeys: ["lessonName"],
+          status: "active"
+        }
+      ],
+      aiPlanner: {
+        status: "used",
+        normalizedPrompt: "创建课堂",
+        orderedAssetIds: [
+          "page_task:page-new-lesson:task-fill-without-publish",
+          "meta-create-without-publish"
+        ],
+        orderedAssetNames: [
+          "新建课堂 / 填写新建课堂表单（不发布）",
+          "创建课堂但不发布"
+        ],
+        riskTerms: ["发布"]
+      }
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      kind: "page_task",
+      pageTaskId: "task-create-lesson",
+      pageTaskName: "创建课堂"
+    });
+    expect(result.intent.riskTerms).toEqual([]);
+  });
+
+  it("uses the complete creation flow when the request also contains parameter values", () => {
+    const complete = metaFunction({
+      id: "meta-create-lesson",
+      name: "创建课堂",
+      description: "填写课堂信息并发布",
+      parameters: [
+        { key: "className", label: "班级", type: "string", required: true },
+        { key: "lessonName", label: "课堂名称", type: "string", required: true },
+        { key: "duration", label: "课堂时长", type: "number", required: false, defaultValue: 30 }
+      ]
+    });
+    const result = resolveFreeComposition("创建课堂，课堂名称为自动化回归课堂，班级四十二号，时长60分钟", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [
+        complete,
+        metaFunction({ id: "meta-enter-class", name: "进入指定班级", parameters: [{ key: "className", type: "string", required: true }] })
+      ],
+      compositeCases: [],
+      pageTasks: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-new-lesson",
+          pageModelName: "新建课堂",
+          pageTaskId: "task-publish-lesson",
+          pageTaskName: "发布课堂",
+          parameterKeys: [],
+          status: "active"
+        },
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-new-lesson",
+          pageModelName: "新建课堂",
+          pageTaskId: "task-fill-lesson",
+          pageTaskName: "填写新建课堂表单（不发布）",
+          parameterKeys: ["lessonName", "duration"],
+          status: "active"
+        }
+      ],
+      aiPlanner: {
+        status: "used",
+        normalizedPrompt: "创建课堂并发布",
+        orderedAssetIds: ["meta-create-lesson", "meta-enter-class", "page_task:page-new-lesson:task-publish-lesson", "page_task:page-new-lesson:task-fill-lesson"],
+        runtimeOverrides: { className: "班级四十二号", lessonName: "自动化回归课堂", duration: "60分钟" }
+      }
+    });
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({ id: complete.id, kind: "meta_function", name: "创建课堂" });
+    expect(result.intent.runtimeOverrides).toMatchObject({ duration: "60" });
+  });
+
+  it("returns only the generated plan instead of exposing its internal asset candidates", () => {
+    const result = resolveFreeComposition("先登录然后进入主页", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [
+        metaFunction(),
+        metaFunction({ id: "meta-home", name: "进入主页", description: "进入主页", parameters: [] })
+      ],
+      compositeCases: [],
+      aiPlanner: {
+        status: "used",
+        normalizedPrompt: "先登录然后进入主页",
+        orderedAssetIds: ["meta_login", "meta-home"],
+        orderedAssetNames: ["账号密码登录", "进入主页"]
+      }
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      composedCandidateIds: ["meta_login", "meta-home"]
+    });
   });
 
   it("does not expose inactive assets as a candidate", () => {
@@ -262,6 +424,104 @@ describe("resolveFreeComposition", () => {
       name: "主页 / 打开空间 → 空间",
       composedCandidateIds: ["page_transition:page-home:open-space:page-space"]
     });
+  });
+
+  it("keeps a target equal to the fixed start page executable until runtime", () => {
+    const result = resolveFreeComposition("打开主页", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" }
+      ]
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "到达主页",
+      targetPageModelId: "page-home",
+      targetPageModelName: "主页",
+      requiresExecution: true
+    });
+    expect(result.message).toContain("执行时会根据当前设备页面动态接入流程线");
+  });
+
+  it("keeps an explicit app start before a fixed page route", () => {
+    const result = resolveFreeComposition("重启app，然后打开班级详情", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-detail", pageModelName: "班级详情", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-detail",
+          targetPageModelName: "班级详情",
+          pageElementId: "class-grid",
+          pageElementLabel: "班级列表",
+          pageTransitionId: "transition-home-detail",
+          pageTransitionName: "主页 -> 班级详情",
+          parameterKeys: ["className"],
+          status: "active"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.candidates[0]).toMatchObject({
+      kind: "generated_flow",
+      name: "启动 App → 主页 / 班级列表 → 班级详情",
+      composedCandidateIds: [
+        "system_action:launch_app",
+        "page_transition:page-home:class-grid:page-detail"
+      ],
+      parameterKeys: ["className"]
+    });
+  });
+
+  it("blocks a fixed route when the prompt contains an explicit page action without an executable asset", () => {
+    const result = resolveFreeComposition("重启app，打开班级详情，找到测验 7月24日 星期四然后点击", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      pageAssets: [
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" },
+        { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-detail", pageModelName: "班级详情", status: "active" }
+      ],
+      pageTransitions: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          sourcePageModelId: "page-home",
+          sourcePageModelName: "主页",
+          targetPageModelId: "page-detail",
+          targetPageModelName: "班级详情",
+          pageElementId: "class-grid",
+          pageElementLabel: "班级列表",
+          pageTransitionId: "transition-home-detail",
+          pageTransitionName: "主页 -> 班级详情",
+          parameterKeys: ["className"],
+          status: "active"
+        }
+      ]
+    });
+
+    expect(result.status).toBe("missing_assets");
+    expect(result.candidates).toEqual([]);
+    expect(result.message).toContain("已能规划到目标页“班级详情”");
+    expect(result.message).toContain("找到测验 7月24日 星期四然后点击");
+    expect(result.message).toContain("没有匹配的页面任务或元功能");
   });
 
   it("keeps a page-entry request on the fixed route even when AI selects a creation asset", () => {

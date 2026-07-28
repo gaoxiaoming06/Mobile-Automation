@@ -920,6 +920,82 @@ button:disabled {
   align-self: center;
 }
 
+.free-composition-parameter-editor {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 12px;
+}
+
+.free-composition-parameter-editor > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.free-composition-parameter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.free-composition-parameter-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-size: 13px;
+}
+
+.free-composition-parameter-field > span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.free-composition-parameter-field em,
+.free-composition-parameter-field small {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.free-composition-parameter-field.missing em {
+  color: #b42318;
+}
+
+.free-composition-parameter-field input,
+.free-composition-parameter-field select {
+  width: 100%;
+  min-height: 36px;
+}
+
+.free-composition-parameter-field.missing input,
+.free-composition-parameter-field.missing select {
+  border-color: #e46b65;
+}
+
+.free-composition-advanced-parameters {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 10px;
+}
+
+.free-composition-advanced-parameters summary {
+  cursor: pointer;
+  color: #334155;
+  font-weight: 700;
+}
+
+.free-composition-advanced-parameters[open] summary {
+  margin-bottom: 10px;
+}
+
 .free-composition-action-bar {
   border-bottom: 1px solid #e2e8f0;
   padding-bottom: 12px;
@@ -956,6 +1032,11 @@ button:disabled {
     max-height: none;
   }
   .free-composition-controls { grid-template-columns: 1fr; }
+  .free-composition-parameter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 640px) {
+  .free-composition-parameter-grid { grid-template-columns: 1fr; }
 }
 
 .device-module {

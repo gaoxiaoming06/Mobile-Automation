@@ -1,18 +1,19 @@
-import { Database, Play, RefreshCw, Search, Send } from "lucide-react";
+import { Database, Play, RefreshCw, Search } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AndroidAppMonitorConfig, ParameterProfile, Platform, RunMode } from "@mobile-automation/shared";
+import type { AndroidAppMonitorConfig, MetaFunctionParameter, ParameterProfile, Platform, RunMode } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api";
 import type { AssetRecordingIntent } from "./AssetRecordingPanel";
 
 type FreeCompositionCandidate = {
   id: string;
-  kind: "composite_case" | "meta_function" | "page_task" | "page_transition" | "system_action" | "generated_flow";
+  kind: "composite_case" | "meta_function" | "page_task" | "page_transition" | "page_goal" | "system_action" | "generated_flow";
   appId: string;
   platform: Platform;
   name: string;
   description?: string;
   parameterProfileId?: string;
   parameterKeys: string[];
+  parameters?: MetaFunctionParameter[];
   score: number;
   matchedTerms: string[];
   systemAction?: "launch_app";
@@ -126,6 +127,9 @@ export function FreeCompositionPanel({
   const [selectedSessionId, setSelectedSessionId] = useState(initialSession?.id ?? "");
   const [selectedCandidateId, setSelectedCandidateId] = useState(initialCandidate?.id ?? "");
   const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [parameterValues, setParameterValues] = useState<Record<string, string>>(() =>
+    initialSession ? parameterValuesForSession(initialSession, initialCandidate) : {}
+  );
   const [riskConfirmed, setRiskConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -143,10 +147,14 @@ export function FreeCompositionPanel({
   const targetSatisfied = selectedSession ? freeCompositionTargetSatisfied(selectedSession, activeCandidate) : false;
   const hasRisk = Boolean(selectedSession?.resolution.intent.riskTerms.length);
   const conversationMissingKeys = selectedSession ? missingParameterKeysForSession(selectedSession, activeCandidate) : [];
-  const replyingToMissingParameters = conversationMissingKeys.length > 0 && selectedSession?.resolution.status !== "missing_assets";
   const conversationMessages = selectedSession ? conversationMessagesForSession(selectedSession, activeCandidate) : [];
-  const availableProfiles = replyingToMissingParameters ? profiles.filter((profile) => profile.status === "active") : [];
-  const flowSelectLabel = targetSatisfied ? "当前状态" : activeCandidate?.kind === "generated_flow" ? "执行流程" : "候选流程";
+  const activeParameters = candidateParameters(activeCandidate, profiles);
+  const availableProfiles = activeParameters.length ? profiles.filter((profile) => profile.status === "active") : [];
+  const flowSelectLabel = targetSatisfied
+    ? "当前状态"
+    : selectedSession?.resolution.candidates.length === 1 || activeCandidate?.kind === "generated_flow"
+      ? "执行流程"
+      : "候选流程";
   const activeAndroidAppMonitor = androidAppMonitorForPackage?.(appId) ?? androidAppMonitor;
   const activeAndroidAppMonitorEnabled = androidAppMonitorEnabled ?? Boolean(activeAndroidAppMonitor);
   const currentPageBlocker = selectedSession ? currentPageRecognitionBlocker(selectedSession) : undefined;
@@ -155,6 +163,10 @@ export function FreeCompositionPanel({
     ? runModeSummaryLabel(selectedSession.resolution.intent.runMode, selectedSession.resolution.intent.repeatCount)
     : undefined;
   const activeAppId = (selectedSession?.appId || appId).trim();
+
+  useEffect(() => {
+    setParameterValues(selectedSession ? parameterValuesForSession(selectedSession, activeCandidate) : {});
+  }, [selectedSession?.id, selectedSession?.updatedAt, activeCandidateId]);
 
   useEffect(() => {
     if (!selectedSession?.executionId || selectedSession.status !== "running") {
@@ -227,9 +239,13 @@ export function FreeCompositionPanel({
     setSelectedCandidateId(candidateId);
     setBusy(true);
     try {
+      const candidate = selectedSession.resolution.candidates.find((item) => item.id === candidateId);
+      const parameters = candidateParameters(candidate, profiles);
+      const values = parameterValuesForSession(selectedSession, candidate);
       const body = {
         candidateId,
-        ...(activeProfileId ? { parameterProfileId: activeProfileId } : {})
+        ...(activeProfileId ? { parameterProfileId: activeProfileId } : {}),
+        runtimeOverrides: nonEmptyRuntimeOverrides(serializeParameterValues(parameters, values))
       };
       const response = await apiFetchJson<{ session: FreeCompositionSession; plan: CompositePlan }>(`/api/free-composition/sessions/${encodeURIComponent(selectedSession.id)}/selection`, {
         method: "POST",
@@ -249,33 +265,7 @@ export function FreeCompositionPanel({
   }
 
   async function sendMessage() {
-    if (replyingToMissingParameters) {
-      await replyToMissingParameters();
-      return;
-    }
     await analyzePrompt();
-  }
-
-  async function replyToMissingParameters() {
-    if (!selectedSession || !activeCandidateId) {
-      setMessage("请先选择AI资产用例会话");
-      return;
-    }
-    const reply = prompt.trim();
-    if (!reply) {
-      setMessage(availableProfiles.length ? "请选择参数集，或直接填写缺少的参数值。" : "请直接填写缺少的参数值。");
-      return;
-    }
-    const missingKeys = conversationMissingKeys.length ? conversationMissingKeys : missingParameterKeysForSession(selectedSession, activeCandidate);
-    const profileId = freeCompositionReplyProfileId(reply, profiles);
-    const runtimeOverrides = {
-      ...knownRuntimeParamsForSession(selectedSession),
-      ...freeCompositionReplyRuntimeOverrides(reply, missingKeys)
-    };
-    await submitMissingParameters({
-      profileId: profileId ?? activeProfileId,
-      runtimeOverrides
-    });
   }
 
   async function useParameterProfile(profileId: string) {
@@ -285,7 +275,14 @@ export function FreeCompositionPanel({
     }
     await submitMissingParameters({
       profileId,
-      runtimeOverrides: knownRuntimeParamsForSession(selectedSession)
+      runtimeOverrides: serializeParameterValues(activeParameters, parameterValues)
+    });
+  }
+
+  async function updateParameterPlan() {
+    await submitMissingParameters({
+      profileId: activeProfileId,
+      runtimeOverrides: serializeParameterValues(activeParameters, parameterValues)
     });
   }
 
@@ -397,10 +394,10 @@ export function FreeCompositionPanel({
           ) : null}
           <div className="free-composition-input-block">
             <label>
-              {replyingToMissingParameters ? "回复" : "测试目标"}
-              <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={replyingToMissingParameters ? "例如：eeo123 或 password=eeo123" : "例如：用教师账号测试登录流程，循环 3 次"} rows={5} />
+              测试目标
+              <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="例如：用教师账号测试登录流程，循环 3 次" rows={5} />
             </label>
-            <button className="primary-button" type="button" onClick={() => void sendMessage()} disabled={busy}>{replyingToMissingParameters ? <Send size={15} /> : <Search size={15} />}{replyingToMissingParameters ? "发送回复" : "分析需求"}</button>
+            <button className="primary-button" type="button" onClick={() => void sendMessage()} disabled={busy}><Search size={15} />分析需求</button>
           </div>
           <div className="composition-asset-list free-composition-session-list free-composition-session-feed">
             {sessions.map((session) => {
@@ -445,6 +442,14 @@ export function FreeCompositionPanel({
                 </select></label>
                 {hasRisk ? <label className="checkbox-field"><input type="checkbox" checked={riskConfirmed} onChange={(event) => setRiskConfirmed(event.target.checked)} />确认执行发布/提交等风险操作</label> : null}
               </div>
+              {activeParameters.length ? <ParameterEditor
+                parameters={activeParameters}
+                values={parameterValues}
+                missingKeys={conversationMissingKeys}
+                busy={busy}
+                onChange={(key, value) => setParameterValues((current) => ({ ...current, [key]: value }))}
+                onSubmit={() => void updateParameterPlan()}
+              /> : null}
               <AppMonitorExecutionToggle
                 enabled={activeAndroidAppMonitorEnabled}
                 packageName={appId}
@@ -500,6 +505,118 @@ function AppMonitorExecutionToggle({
   );
 }
 
+function ParameterEditor({
+  parameters,
+  values,
+  missingKeys,
+  busy,
+  onChange,
+  onSubmit
+}: {
+  parameters: MetaFunctionParameter[];
+  values: Record<string, string>;
+  missingKeys: string[];
+  busy: boolean;
+  onChange: (key: string, value: string) => void;
+  onSubmit: () => void;
+}) {
+  const basic = parameters.filter((parameter) => parameter.advanced !== true);
+  const advanced = parameters.filter((parameter) => parameter.advanced === true);
+  const missing = new Set(missingKeys);
+  return <section className="free-composition-parameter-editor">
+    <header>
+      <strong>执行参数</strong>
+      <button className="secondary-button" type="button" disabled={busy} onClick={onSubmit}>更新计划</button>
+    </header>
+    <div className="free-composition-parameter-grid">
+      {basic.map((parameter) => <ParameterField
+        key={parameter.key}
+        parameter={parameter}
+        value={values[parameter.key] ?? ""}
+        missing={missing.has(parameter.key)}
+        onChange={(value) => onChange(parameter.key, value)}
+      />)}
+    </div>
+    {advanced.length ? <details className="free-composition-advanced-parameters">
+      <summary>更多设置（{advanced.length}）</summary>
+      <div className="free-composition-parameter-grid">
+        {advanced.map((parameter) => <ParameterField
+          key={parameter.key}
+          parameter={parameter}
+          value={values[parameter.key] ?? ""}
+          missing={missing.has(parameter.key)}
+          onChange={(value) => onChange(parameter.key, value)}
+        />)}
+      </div>
+    </details> : null}
+  </section>;
+}
+
+function ParameterField({
+  parameter,
+  value,
+  missing,
+  onChange
+}: {
+  parameter: MetaFunctionParameter;
+  value: string;
+  missing: boolean;
+  onChange: (value: string) => void;
+}) {
+  const label = parameter.label?.trim() || humanizeParameterKey(parameter.key);
+  const control = parameter.control ?? defaultParameterControl(parameter);
+  const fieldClassName = `free-composition-parameter-field${missing ? " missing" : ""}`;
+  const marker = parameter.required ? <em>必填</em> : <small>可选</small>;
+
+  if (control === "toggle") {
+    return <label className={fieldClassName}>
+      <span>{label}{marker}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {!parameter.required ? <option value="">使用应用默认</option> : <option value="">请选择</option>}
+        <option value="true">开启</option>
+        <option value="false">关闭</option>
+      </select>
+    </label>;
+  }
+
+  if (control === "select" || parameter.options?.length) {
+    const options = parameter.options ?? [];
+    if (!options.length) {
+      return <label className={fieldClassName}>
+        <span>{label}{marker}</span>
+        <input
+          name={parameter.key}
+          type="text"
+          value={value}
+          placeholder="暂无可选项，请填写"
+          onChange={(event) => onChange(event.target.value)}
+          aria-invalid={missing || undefined}
+        />
+      </label>;
+    }
+    const knownOptionValues = new Set(options.map((option) => String(option.value)));
+    return <label className={fieldClassName}>
+      <span>{label}{marker}</span>
+      <select name={parameter.key} value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">{parameter.required ? "请选择" : "使用应用默认"}</option>
+        {value && !knownOptionValues.has(value) ? <option value={value}>{value}</option> : null}
+        {options.map((option) => <option value={String(option.value)} key={`${parameter.key}-${String(option.value)}`}>{option.label}</option>)}
+      </select>
+    </label>;
+  }
+
+  return <label className={fieldClassName}>
+    <span>{label}{marker}</span>
+    <input
+      name={parameter.key}
+      type={control === "datetime" ? "datetime-local" : control === "number" || parameter.type === "number" ? "number" : "text"}
+      value={control === "datetime" ? datetimeLocalValue(value) : value}
+      onChange={(event) => onChange(event.target.value)}
+      aria-invalid={missing || undefined}
+    />
+  </label>;
+}
+
 function PlanView({ plan }: { plan: CompositePlan }) {
   const runtimeParamSummary = runtimeParamsSummary(plan.runtimeParams);
   const missingPrompt = missingParameterPrompt(plan);
@@ -513,8 +630,8 @@ function PlanView({ plan }: { plan: CompositePlan }) {
   return <div className={`composition-plan ${plan.status}`}>
     <strong>{title}</strong>
     {missingPrompt ? <span>{missingPrompt}</span> : null}
-    {plan.requiredParameters.length ? <span>需要参数：{plan.requiredParameters.join("、")}</span> : null}
-    {runtimeParamSummary ? <span>本次参数：{runtimeParamSummary}</span> : null}
+    {plan.status !== "needs_parameters" && plan.requiredParameters.length ? <span>需要参数：{plan.requiredParameters.join("、")}</span> : null}
+    {plan.status !== "needs_parameters" && runtimeParamSummary ? <span>本次参数：{runtimeParamSummary}</span> : null}
     {plan.status !== "needs_parameters" ? plan.issues.map((item) => <span key={`${item.code}-${item.message}`}>{item.code} · {item.message}</span>) : null}
   </div>;
 }
@@ -640,7 +757,7 @@ function missingParameterPrompt(plan: CompositePlan): string | undefined {
     return undefined;
   }
   const missing = missingParameterKeys(plan);
-  return missing.length ? followUpQuestion(missing) : "需要补充参数";
+  return missing.length ? `还需要补充 ${missing.length} 项必填参数。` : "需要补充参数";
 }
 
 function missingParameterKeys(plan: CompositePlan): string[] {
@@ -692,10 +809,11 @@ function conversationMessagesForSession(
   }
   const missing = missingParameterKeysForSession(session, candidate);
   if (missing.length) {
-    const knownSummary = runtimeParamsSummary(knownRuntimeParamsForSession(session));
+    const knownCount = Object.keys(knownRuntimeParamsForSession(session)).length;
+    const labels = parameterLabels(candidate, missing);
     messages.push({
       role: "assistant",
-      text: [knownSummary ? `我已识别 ${knownSummary}。` : "", followUpQuestion(missing)].filter(Boolean).join("")
+      text: [knownCount ? `已识别 ${knownCount} 项参数。` : "", `还需要：${labels.join("、")}。请在右侧补充。`].filter(Boolean).join("")
     });
     return messages;
   }
@@ -719,6 +837,85 @@ function missingParameterKeysForSession(
   return (candidate?.parameterKeys ?? [])
     .filter((key) => !known[key]?.trim())
     .sort();
+}
+
+function candidateParameters(
+  candidate: FreeCompositionCandidate | undefined,
+  profiles: ParameterProfile[] = []
+): MetaFunctionParameter[] {
+  const parameters: MetaFunctionParameter[] = candidate?.parameters?.length
+    ? candidate.parameters
+    : (candidate?.parameterKeys ?? []).map((key) => ({ key, label: humanizeParameterKey(key), type: "string" as const, required: true }));
+  const seen = new Set<string>();
+  return parameters.filter((parameter) => {
+    const key = parameter.key.trim();
+    if (!key || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  }).map((parameter) => {
+    if (parameter.control !== "select" || parameter.options?.length) {
+      return parameter;
+    }
+    const values = [...new Set(profiles.flatMap((profile) => {
+      const value = profile.values[parameter.key]?.value;
+      return value === undefined ? [] : [value];
+    }).map(String).filter(Boolean))];
+    return values.length
+      ? { ...parameter, options: values.map((value) => ({ label: value, value })) }
+      : parameter;
+  });
+}
+
+function parameterValuesForSession(
+  session: FreeCompositionSession,
+  candidate: FreeCompositionCandidate | undefined
+): Record<string, string> {
+  const defaults = Object.fromEntries(candidateParameters(candidate)
+    .filter((parameter) => parameter.defaultValue !== undefined)
+    .map((parameter) => [parameter.key, String(parameter.defaultValue)]));
+  return {
+    ...defaults,
+    ...knownRuntimeParamsForSession(session)
+  };
+}
+
+function parameterLabels(candidate: FreeCompositionCandidate | undefined, keys: string[]): string[] {
+  const parameterByKey = new Map(candidateParameters(candidate).map((parameter) => [parameter.key, parameter]));
+  return keys.map((key) => parameterByKey.get(key)?.label?.trim() || humanizeParameterKey(key));
+}
+
+function serializeParameterValues(
+  parameters: MetaFunctionParameter[],
+  values: Record<string, string>
+): Record<string, string> {
+  const parameterByKey = new Map(parameters.map((parameter) => [parameter.key, parameter]));
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => {
+    const parameter = parameterByKey.get(key);
+    return [key, parameter?.control === "datetime" ? value.replace("T", " ") : value];
+  }));
+}
+
+function defaultParameterControl(parameter: MetaFunctionParameter): NonNullable<MetaFunctionParameter["control"]> {
+  if (parameter.type === "boolean") {
+    return "toggle";
+  }
+  if (parameter.type === "number") {
+    return "number";
+  }
+  return "text";
+}
+
+function datetimeLocalValue(value: string): string {
+  return value.trim().replace(" ", "T").slice(0, 16);
+}
+
+function humanizeParameterKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_.-]+/g, " ")
+    .trim();
 }
 
 function knownRuntimeParamsForSession(session: FreeCompositionSession): Record<string, string> {
@@ -773,9 +970,7 @@ function firstSentence(message: string): string {
 }
 
 function followUpQuestion(keys: string[]): string {
-  return keys.length === 1
-    ? `还需要 ${keys[0]}。直接回复 ${keys[0]} 的值。`
-    : `还需要 ${keys.join("、")}。请用 key=value 的方式回复。`;
+  return `还需要：${keys.join("、")}。请在参数区补充。`;
 }
 
 export function freeCompositionReplyRuntimeOverrides(reply: string, missingKeys: string[]): Record<string, string> {

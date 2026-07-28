@@ -5377,6 +5377,13 @@ function freeCompositionAssetsFromGraph(
   pageAbilities: FreeCompositionPageAbilityAsset[];
 } {
   const catalog = assetCompositionCatalog(graphVersion);
+  const parameterDefinitions = new Map(
+    buildAssetParameterManifest({
+      appId,
+      platform: platform === "ios" ? "ios" : "android",
+      graphVersion
+    }).definitions.map((definition) => [definition.key, definition])
+  );
   return {
     pageAssets: catalog.pages.map((page) => ({
       appId,
@@ -5432,10 +5439,41 @@ function freeCompositionAssetsFromGraph(
           pageTaskId: task.id,
           pageTaskName: task.name,
           parameterKeys: task.parameterKeys,
+          parameters: task.parameterKeys.map((key) => {
+            const definition = parameterDefinitions.get(key);
+            const usage = definition?.usages.find((item) => item.taskId === task.id);
+            return {
+              key,
+              label: definition?.label ?? usage?.stepLabel ?? key,
+              type: definition?.type ?? "string",
+              required: true,
+              control: freeCompositionParameterControl(key, definition?.type, usage?.fieldType)
+            } satisfies MetaFunctionParameter;
+          }),
           status: task.status
         }))
     )
   };
+}
+
+function freeCompositionParameterControl(
+  key: string,
+  type: MetaFunctionParameter["type"] | undefined,
+  fieldType: string | undefined
+): MetaFunctionParameter["control"] {
+  if (key === "startTime") {
+    return "datetime";
+  }
+  if (fieldType === "toggle_set" || type === "boolean") {
+    return "toggle";
+  }
+  if (fieldType === "subpage_edit") {
+    return "select";
+  }
+  if (type === "number") {
+    return "number";
+  }
+  return "text";
 }
 
 function assetCompositionFilter(value: unknown): { appId?: string; platform?: Platform } {
@@ -5582,12 +5620,31 @@ function readMetaFunctionParameters(value: unknown): MetaFunctionParameter[] {
     const defaultValue = typeof input.defaultValue === "string" || typeof input.defaultValue === "number" || typeof input.defaultValue === "boolean"
       ? input.defaultValue
       : undefined;
+    const control = input.control === "text" || input.control === "number" || input.control === "toggle" || input.control === "datetime" || input.control === "select"
+      ? input.control
+      : undefined;
+    const options = Array.isArray(input.options)
+      ? input.options.flatMap((item) => {
+        const option = recordBody(item);
+        const optionValue = option.value;
+        if (typeof optionValue !== "string" && typeof optionValue !== "number" && typeof optionValue !== "boolean") {
+          return [];
+        }
+        return [{
+          label: stringOrUndefined(option.label) ?? String(optionValue),
+          value: optionValue
+        }];
+      })
+      : undefined;
     return {
       key: requiredString(input.key, `parameters[${index}].key`),
       type,
       label: stringOrUndefined(input.label),
       required: input.required === true,
-      defaultValue
+      defaultValue,
+      control,
+      options,
+      advanced: input.advanced === true
     };
   });
 }

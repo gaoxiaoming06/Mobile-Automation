@@ -378,6 +378,57 @@ describe("free composition sessions", () => {
     expect(preview.plan.steps.map((step) => step.kind)).toEqual(["reach_page", "run_page_task"]);
   });
 
+  it("derives risk confirmation from the selected task's actual submit step", () => {
+    const resolution = resolveFreeComposition("创建课堂", {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      metaFunctions: [],
+      compositeCases: [],
+      pageTasks: [
+        {
+          appId: "cn.eeo.classin",
+          platform: "android",
+          pageModelId: "page-create-lesson",
+          pageModelName: "新建课堂",
+          pageTaskId: "task-create-lesson",
+          pageTaskName: "创建课堂",
+          parameterKeys: ["lessonName"],
+          status: "active"
+        }
+      ]
+    });
+    const session = createFreeCompositionSession({
+      appId: "cn.eeo.classin",
+      platform: "android",
+      prompt: "创建课堂",
+      resolution,
+      now
+    });
+    const selected = selectFreeCompositionCandidate({
+      session,
+      candidateId: "page_task:page-create-lesson:task-create-lesson",
+      metaFunctions: [],
+      compositeCases: [],
+      now
+    });
+
+    const preview = previewFreeCompositionSession({
+      session: selected,
+      metaFunctions: [],
+      parameterDataRecords: [],
+      graphVersion: creationTaskGraphVersion(),
+      runtimeOverrides: { lessonName: "自动化课堂" },
+      now
+    });
+
+    expect(preview.plan.status).toBe("ready");
+    expect(preview.session.resolution.intent.riskTerms).toEqual(["发布"]);
+    expect(() => assertFreeCompositionExecutionAllowed(preview.session, {
+      confirmed: true,
+      riskConfirmed: false
+    })).toThrow("该计划包含高风险操作：发布");
+  });
+
   it("wraps a selected page transition as a temporary meta function without saving one", () => {
     const resolution = resolveFreeComposition("打开新建公开课", {
       appId: "cn.eeo.classin",
@@ -699,16 +750,12 @@ describe("free composition sessions", () => {
     });
   });
 
-  it("does not allow executing a target-satisfied no-op plan", () => {
+  it("previews a fixed-start target as a runtime reach-page step", () => {
     const resolution = resolveFreeComposition("跳转到主页", {
       appId: "cn.eeo.classin",
       platform: "android",
       metaFunctions: [],
       compositeCases: [],
-      currentPage: {
-        pageModelId: "page-home",
-        pageModelName: "主页"
-      },
       pageAssets: [
         { appId: "cn.eeo.classin", platform: "android", pageModelId: "page-home", pageModelName: "主页", status: "active" }
       ]
@@ -731,19 +778,25 @@ describe("free composition sessions", () => {
       session: selected,
       metaFunctions: [],
       parameterDataRecords: [],
-      graphVersion: emptyGraphVersion(),
+      graphVersion: graphVersion(),
       now
     });
 
     expect(preview.plan.status).toBe("ready");
-    expect(preview.plan.steps).toHaveLength(0);
-    expect(preview.session.status).toBe("passed");
+    expect(preview.plan.steps).toMatchObject([
+      {
+        kind: "reach_page",
+        targetPageModelId: "page-home",
+        metaFunctionStepName: "执行时到达主页"
+      }
+    ]);
+    expect(preview.session.status).toBe("awaiting_confirmation");
     expect(() =>
       assertFreeCompositionExecutionAllowed(preview.session, {
         confirmed: true,
         riskConfirmed: false
       })
-    ).toThrow("当前目标已满足，无需执行。");
+    ).not.toThrow();
   });
 
   it("turns an explicit ordered multi-step request into one temporary composite case", () => {
@@ -878,6 +931,37 @@ function loginGraphVersionWithRequiredParams(): BusinessGraphVersion {
             steps: [
               { id: "task-step-phone", order: 1, elementId: "manual-phone", fieldType: "text_input", label: "手机号输入框", valueParamKey: "phone" },
               { id: "task-step-password", order: 2, elementId: "manual-password", fieldType: "text_input", label: "密码输入框", valueParamKey: "password" }
+            ]
+          }
+        ]
+      })
+    ],
+    edges: []
+  };
+}
+
+function creationTaskGraphVersion(): BusinessGraphVersion {
+  return {
+    id: "graph-version-create-lesson",
+    graphId: "graph",
+    version: 1,
+    status: "active",
+    sourceSummary: [],
+    createdAt: now,
+    nodes: [
+      pageNode("page-create-lesson", "新建课堂", {
+        assetRecordingPageElements: [
+          { id: "lesson-title", label: "课堂名称" },
+          { id: "lesson-publish", label: "发布课堂", targetText: "发布" }
+        ],
+        assetRecordingPageTasks: [
+          {
+            id: "task-create-lesson",
+            name: "创建课堂",
+            status: "active",
+            steps: [
+              { id: "task-title", order: 1, elementId: "lesson-title", fieldType: "text_input", label: "课堂名称", valueParamKey: "lessonName" },
+              { id: "task-publish", order: 2, elementId: "lesson-publish", fieldType: "submit", label: "发布课堂" }
             ]
           }
         ]

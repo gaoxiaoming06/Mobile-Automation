@@ -396,11 +396,15 @@ describe("FreeCompositionPanel", () => {
       })
     );
 
-    expect(markup).toContain("我已识别 phone=12133333302");
-    expect(markup).toContain("还需要 password");
-    expect(markup).toContain("直接回复 password 的值");
+    expect(markup).toContain("已识别 1 项参数");
+    expect(markup).toContain("还需要：password");
+    expect(markup).toContain("请在右侧补充");
     expect(markup).toContain("free-composition-profile-actions");
     expect(markup).toContain(">使用教师组合测试参数</button>");
+    expect(markup).toContain("free-composition-parameter-editor");
+    expect(markup).toContain("更新计划");
+    expect(markup).not.toContain("key=value");
+    expect(markup).not.toContain("发送回复");
     expect(markup).not.toContain("回复“使用参数集");
     expect(markup).toContain("phone");
     expect(markup).toContain("12133333302");
@@ -471,10 +475,94 @@ describe("FreeCompositionPanel", () => {
     );
 
     expect(markup).toContain("等待补参数");
-    expect(markup).toContain("还需要 password");
-    expect(markup).toContain("直接回复 password 的值");
+    expect(markup).toContain("还需要：password");
+    expect(markup).toContain("请在右侧补充");
     expect(markup).toContain("password");
+    expect(markup).toContain("更新计划");
+    expect(markup).toContain("执行流程");
+    expect(markup).not.toContain("候选流程");
+    expect(markup).not.toContain("需要参数：password、phone");
+    expect(markup).not.toContain("本次参数：phone=12133333302");
     expect(markup).not.toContain("预检未通过");
+  });
+
+  it("renders structured parameter controls instead of asking for key-value replies", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(FreeCompositionPanel, {
+        selectedSerial: "device-1",
+        selectedDeviceBusy: false,
+        defaultAppId: "cn.eeo.classin",
+        setMessage: vi.fn(),
+        initialData: {
+          sessions: [
+            {
+              id: "free_composition_create_lesson",
+              appId: "cn.eeo.classin",
+              platform: "android",
+              prompt: "创建课堂，课堂名称为自动化课堂，时长30分钟",
+              createdAt: "2026-07-28T00:00:00.000Z",
+              updatedAt: "2026-07-28T00:00:00.000Z",
+              status: "awaiting_parameters",
+              resolution: {
+                status: "ready",
+                message: "已按需求生成临时执行流程。",
+                intent: {
+                  prompt: "创建课堂，课堂名称为自动化课堂，时长30分钟",
+                  runMode: "once",
+                  repeatCount: 1,
+                  riskTerms: ["发布"],
+                  runtimeOverrides: { lessonName: "自动化课堂", duration: "30" }
+                },
+                candidates: [
+                  {
+                    id: "meta-create-lesson",
+                    kind: "meta_function",
+                    appId: "cn.eeo.classin",
+                    platform: "android",
+                    name: "创建课堂",
+                    parameterKeys: ["className", "lessonName", "startTime", "duration", "recordClassroom", "course"],
+                    parameters: [
+                      { key: "className", label: "班级", type: "string", required: true, control: "select" },
+                      { key: "lessonName", label: "课堂名称", type: "string", required: true },
+                      { key: "startTime", label: "开始时间", type: "string", required: true, control: "datetime" },
+                      { key: "duration", label: "课堂时长", type: "number", required: false, defaultValue: 30, control: "select", options: [{ label: "30 分钟", value: 30 }, { label: "60 分钟", value: 60 }] },
+                      { key: "recordClassroom", label: "录制ClassIn教室", type: "boolean", required: false, control: "toggle" },
+                      { key: "course", label: "课程", type: "string", required: false, control: "select", advanced: true, options: [{ label: "数学", value: "数学" }] }
+                    ],
+                    score: 200,
+                    matchedTerms: ["创建课堂"]
+                  }
+                ]
+              },
+              selectedCandidateId: "meta-create-lesson",
+              plan: {
+                status: "needs_parameters",
+                runtimeParams: { lessonName: "自动化课堂", duration: "30" },
+                requiredParameters: ["className", "lessonName", "startTime"],
+                steps: [],
+                issues: [
+                  { code: "MISSING_REQUIRED_PARAMETER", message: "缺少班级。", assetId: "className" },
+                  { code: "MISSING_REQUIRED_PARAMETER", message: "缺少开始时间。", assetId: "startTime" }
+                ]
+              }
+            }
+          ],
+          profiles: []
+        }
+      })
+    );
+
+    expect(markup).toContain("课堂名称");
+    expect(markup).toContain("开始时间");
+    expect(markup).toContain("课堂时长");
+    expect(markup).toContain("录制ClassIn教室");
+    expect(markup).toContain("更多设置");
+    expect(markup).toContain("课程");
+    expect(markup).toContain("更新计划");
+    expect(markup).toContain("name=\"className\"");
+    expect(markup).toContain("暂无可选项，请填写");
+    expect(markup).not.toContain("key=value");
+    expect(markup).not.toContain("发送回复");
   });
 
   it("maps a short reply to the single missing runtime parameter", () => {

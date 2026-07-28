@@ -226,16 +226,68 @@ export function previewFreeCompositionSession(
     graphVersion: input.graphVersion,
     runtimeOverrides
   });
+  const resolution: FreeCompositionResolution = {
+    ...input.session.resolution,
+    intent: {
+      ...input.session.resolution.intent,
+      riskTerms: [...new Set([
+        ...input.session.resolution.intent.riskTerms,
+        ...riskTermsForPlan(plan, input.graphVersion)
+      ])]
+    }
+  };
   return {
     plan,
     session: {
       ...input.session,
+      resolution,
       parameterProfileId: input.parameterProfile?.id ?? input.session.parameterProfileId,
       plan,
       status: freeCompositionStatusForPlan(plan),
       updatedAt: input.now ?? new Date().toISOString()
     }
   };
+}
+
+function riskTermsForPlan(plan: AssetCompositeExecutionPlan, graphVersion: BusinessGraphVersion): string[] {
+  const nodeById = new Map(graphVersion.nodes.map((node) => [node.id, node]));
+  const terms: string[] = [];
+  for (const step of plan.steps) {
+    if (step.kind !== "run_page_task" || !step.pageTaskId) {
+      continue;
+    }
+    const node = nodeById.get(step.targetPageModelId);
+    const task = metadataRecords(node?.metadata?.assetRecordingPageTasks)
+      .find((item) => item.id === step.pageTaskId);
+    for (const taskStep of metadataRecords(task?.steps)) {
+      if (taskStep.fieldType !== "submit") {
+        continue;
+      }
+      const elementId = typeof taskStep.elementId === "string" ? taskStep.elementId : "";
+      const element = pageElementRecords(node?.metadata).find((item) => item.id === elementId);
+      terms.push(...riskTermsInText([
+        stringValue(taskStep.label),
+        stringValue(element?.label),
+        stringValue(element?.targetText)
+      ].filter(Boolean).join("\n")));
+    }
+  }
+  return [...new Set(terms)];
+}
+
+function pageElementRecords(metadata: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  return [metadata?.assetRecordingPageElements, metadata?.assetRecordingManualElements]
+    .flatMap((value) => metadataRecords(value));
+}
+
+function metadataRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    : [];
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 export function markFreeCompositionSessionExecutionStarted(
@@ -303,6 +355,17 @@ function temporaryCompositeCaseForCandidate(
       }
       if (composedCandidate.kind === "page_transition") {
         const generatedMetaFunction = temporaryMetaFunctionForPageTransition(session, composedCandidate, now, String(index + 1));
+        generatedMetaFunctions.push(generatedMetaFunction);
+        steps.push({
+          id: `free_composition_step_${session.id}_${index + 1}`,
+          order: steps.length + 1,
+          metaFunctionId: generatedMetaFunction.id,
+          enabled: true
+        });
+        continue;
+      }
+      if (composedCandidate.kind === "page_goal") {
+        const generatedMetaFunction = temporaryMetaFunctionForPageGoal(session, composedCandidate, now, String(index + 1));
         generatedMetaFunctions.push(generatedMetaFunction);
         steps.push({
           id: `free_composition_step_${session.id}_${index + 1}`,
@@ -597,6 +660,42 @@ function temporaryMetaFunctionForPageTransition(
   };
 }
 
+function temporaryMetaFunctionForPageGoal(
+  session: FreeCompositionSession,
+  candidate: FreeCompositionCandidate,
+  now: string,
+  suffix = ""
+): MetaFunction {
+  const pageModelId = candidate.targetPageModelId ?? candidate.pageModelId;
+  const pageModelName = candidate.targetPageModelName ?? candidate.pageModelName;
+  if (!pageModelId || !pageModelName) {
+    throw new Error("页面目标候选缺少目标页面信息，请重新分析需求。");
+  }
+  const idSuffix = suffix ? `_${suffix}` : "";
+  return {
+    id: "free_composition_page_goal_meta_" + session.id + idSuffix,
+    appId: session.appId,
+    platform: session.platform,
+    name: `到达${pageModelName}`,
+    description: "执行时识别设备当前页面并动态规划到目标页，不会保存为正式元功能。",
+    parameters: [],
+    steps: [
+      {
+        id: "free_composition_reach_goal_" + session.id + idSuffix,
+        order: 1,
+        enabled: true,
+        name: `执行时到达${pageModelName}`,
+        kind: "reach_page",
+        targetPageModelId: pageModelId
+      }
+    ],
+    status: "active",
+    version: 1,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 function temporaryMetaFunctionForPageTask(
   session: FreeCompositionSession,
   candidate: FreeCompositionCandidate,
@@ -613,7 +712,7 @@ function temporaryMetaFunctionForPageTask(
     platform: session.platform,
     name: `${candidate.pageModelName} / ${candidate.pageTaskName}`,
     description: "由AI资产用例临时包装的页面任务，不会保存为正式元功能。",
-    parameters: [],
+    parameters: candidate.parameters ?? candidate.parameterKeys.map((key) => ({ key, type: "string", required: true })),
     steps: [
       {
         id: "free_composition_reach_page_" + session.id + idSuffix,

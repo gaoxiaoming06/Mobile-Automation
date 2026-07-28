@@ -347,12 +347,22 @@ export type ParameterProfile = {
 
 export type MetaFunctionStatus = "draft" | "active" | "deprecated";
 
+export type MetaFunctionParameterControl = "text" | "number" | "toggle" | "datetime" | "select";
+
+export type MetaFunctionParameterOption = {
+  label: string;
+  value: string | number | boolean;
+};
+
 export type MetaFunctionParameter = {
   key: string;
   type: AssetParameterValueType;
   label?: string;
   required?: boolean;
   defaultValue?: string | number | boolean;
+  control?: MetaFunctionParameterControl;
+  options?: MetaFunctionParameterOption[];
+  advanced?: boolean;
 };
 
 type MetaFunctionStepBase = {

@@ -158,8 +158,8 @@ export function compileAssetCompositeCase(input: {
     }
 
     const stepRuntimeParams = {
-      ...baseRuntimeParams,
       ...metaFunctionDefaultParams(metaFunction),
+      ...baseRuntimeParams,
       ...stringifyRuntimeParams(caseStep.parameterOverrides ?? {})
     };
     for (const parameter of metaFunction.parameters) {
@@ -319,8 +319,12 @@ function resolveMetaFunctionStep(input: {
     return undefined;
   }
   for (const parameterKey of task.parameterKeys) {
-    input.requiredParameters.add(parameterKey);
-    if (!hasRuntimeParam(input.runtimeParams, parameterKey)) {
+    const declaration = input.metaFunction.parameters.find((parameter) => parameter.key === parameterKey);
+    const required = declaration ? declaration.required === true : true;
+    if (required) {
+      input.requiredParameters.add(parameterKey);
+    }
+    if (required && !hasRuntimeParam(input.runtimeParams, parameterKey)) {
       pushMissingRequiredParameterIssue(input.issues, {
         ...issueForStep(
           "MISSING_REQUIRED_PARAMETER",
