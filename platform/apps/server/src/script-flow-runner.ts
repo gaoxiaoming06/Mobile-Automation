@@ -1,6 +1,7 @@
 import {
   compileScriptFlow,
   type CompileScriptFlowOptions,
+  type ScriptExecutionPlan,
   type ScriptExecutionPlanStep,
   type ScriptFlowDocument,
   type ScriptParameterValue,
@@ -15,7 +16,8 @@ import {
   type TestRun
 } from "@mobile-automation/shared";
 import type { AutomationDeviceDriver } from "./mobile-driver.js";
-import type { PageAssetPlatform } from "./page-asset-catalog.js";
+import type { PageAssetCatalog, PageAssetPlatform } from "./page-asset-catalog.js";
+import type { PageNavigationEdge, PageNavigationSegmentSnapshot } from "./page-navigation.js";
 import type { PageStateService } from "./page-state-service.js";
 import type { PageStateExpectationVerifier } from "./step-expectations.js";
 import { ScriptTargetResolver } from "./script-target-resolver.js";
@@ -47,11 +49,11 @@ export type StartScriptFlowRunInput = {
   scriptVersion?: number;
   planDigest: string;
   dependencies: NonNullable<TestRun["sourceSnapshot"]>["dependencies"];
+  navigationSegments?: PageNavigationSegmentSnapshot[];
   sourceYaml?: string;
   flow: ScriptFlowDocument;
   deviceSerial: string;
   parameters?: Record<string, ScriptParameterValue>;
-  confirmedRiskSteps?: string[];
   resolveFlow?: CompileScriptFlowOptions["resolveFlow"];
   mode?: RunMode;
   repeatCount?: number;
@@ -67,16 +69,19 @@ export type ScriptFlowRunnerDeps = {
   backend: ScriptFlowRunBackend;
   driver: Pick<AutomationDeviceDriver, "getDeviceInfo">;
   targetResolver: ScriptTargetResolver;
+  pageCatalog?: Pick<PageAssetCatalog, "resolvePage">;
 };
 
 export class ScriptFlowRunner {
   constructor(private readonly deps: ScriptFlowRunnerDeps) {}
 
-  async start(input: StartScriptFlowRunInput): Promise<TestRun> {
-    const device = await this.deps.driver.getDeviceInfo(input.deviceSerial);
-    if (!platformCanRun(input.flow.app.platform, device.platform)) {
-      throw new Error(`Script platform ${input.flow.app.platform} does not match device platform ${device.platform}`);
+  validatePlan(plan: ScriptExecutionPlan): void {
+    for (const step of plan.steps) {
+      this.resolveAction(step, plan.app.id, plan.app.platform, plan.parameters);
     }
+  }
+
+  async start(input: StartScriptFlowRunInput): Promise<TestRun> {
     const plan = compileScriptFlow(input.flow, {
       parameters: input.parameters ?? {},
       resolveFlow: input.resolveFlow
@@ -86,14 +91,10 @@ export class ScriptFlowRunner {
       resolveFlow: input.resolveFlow,
       redactSensitiveParameters: true
     });
-    const requiredRiskSteps = new Set(plan.riskConfirmations.map((confirmation) => confirmation.stepId));
-    const unknownConfirmations = (input.confirmedRiskSteps ?? []).filter((stepId) => !requiredRiskSteps.has(stepId));
-    if (unknownConfirmations.length) {
-      throw new Error(`Unknown risk confirmation step: ${unknownConfirmations.join(", ")}`);
-    }
-    const missingRisks = plan.riskConfirmations.filter((confirmation) => !(input.confirmedRiskSteps ?? []).includes(confirmation.stepId));
-    if (missingRisks.length) {
-      throw new Error(`Risk confirmation required: ${missingRisks.map((item) => `${item.stepId} (${item.risk})`).join(", ")}`);
+    this.validatePlan(plan);
+    const device = await this.deps.driver.getDeviceInfo(input.deviceSerial);
+    if (!platformCanRun(input.flow.app.platform, device.platform)) {
+      throw new Error(`Script platform ${input.flow.app.platform} does not match device platform ${device.platform}`);
     }
     const scriptParameters = visibleParameters(input.flow, plan.parameters);
     const stepContext = {
@@ -101,11 +102,19 @@ export class ScriptFlowRunner {
       scriptVersion: input.scriptVersion ?? 1,
       appId: input.flow.app.id,
       platform: input.flow.app.platform,
-      scriptParameters
+      scriptParameters,
+      resolutionParameters: plan.parameters
     };
-    const steps = plan.steps.map((step) => this.toActionStep(step, stepContext, nowIso()));
+    const persistedStepContext = {
+      ...stepContext,
+      resolutionParameters: persistedPlan.parameters
+    };
+    const createdAt = nowIso();
+    const navigationEdges = this.buildNavigationEdges(input.navigationSegments ?? [], stepContext, createdAt, false);
+    const persistedNavigationEdges = this.buildNavigationEdges(input.navigationSegments ?? [], persistedStepContext, createdAt, true);
+    const steps = plan.steps.map((step) => this.toActionStep(step, stepContext, createdAt, navigationEdges));
     const persistedCandidates = persistedPlan.steps.map((step, index) =>
-      this.toActionStep(step, stepContext, steps[index]?.createdAt ?? nowIso())
+      this.toActionStep(step, persistedStepContext, steps[index]?.createdAt ?? createdAt, persistedNavigationEdges)
     );
     const persistedSteps = maskPlanDifferences(steps, persistedCandidates);
     return this.deps.backend.start({
@@ -143,24 +152,31 @@ export class ScriptFlowRunner {
       appId: string;
       platform: PageAssetPlatform;
       scriptParameters: Record<string, ScriptParameterValue>;
+      resolutionParameters: Record<string, ScriptParameterValue>;
     },
-    createdAt: string
+    createdAt: string,
+    navigationEdges: PageNavigationEdge[] = []
   ): ActionStep {
-    const resolved = this.resolveAction(step, context.appId, context.platform);
+    const resolved = this.resolveAction(step, context.appId, context.platform, context.resolutionParameters);
     const metadata = {
       scriptFlowId: context.flowId,
       scriptVersion: context.scriptVersion,
       scriptStepId: step.id,
+      executionPhase: step.phase,
       sourceFlowName: step.source.flowName,
       ...(step.onPage ? { onPage: step.onPage } : {}),
       ...(step.expectPage ? { expectPage: step.expectPage } : {}),
       ...(resolved.strategy ? { locatorStrategy: resolved.strategy } : {}),
       scriptParameters: context.scriptParameters
     };
-    const expectedPage = step.action === "waitForPage" || step.action === "assertPage"
+    const expectedPage = step.action === "waitForPage" || step.action === "assertPage" || step.action === "reachPage"
       ? stringInput(step.input, "pageId")
       : step.expectPage;
-    const timeoutMs = step.timeoutMs ?? (step.action === "assertPage" ? 1 : 8_000);
+    const timeoutMs = step.timeoutMs ?? 15_000;
+    const expectations = [
+      ...(expectedPage ? [pageExpectation(`after:${step.id}`, expectedPage, context, timeoutMs, createdAt)] : []),
+      ...(step.action === "assertText" ? [textExpectation(`after:${step.id}`, step.input, timeoutMs, createdAt)] : [])
+    ];
     return {
       id: step.id,
       order: step.order,
@@ -169,17 +185,23 @@ export class ScriptFlowRunner {
       title: step.name ?? defaultStepTitle(step),
       params: {
         ...resolved.params,
+        ...(step.action === "reachPage" ? { navigationEdges } : {}),
         ...metadata
       },
       ...(resolved.coordinate ? { coordinate: resolved.coordinate } : {}),
       ...(step.onPage ? { preconditions: [pageExpectation(`before:${step.id}`, step.onPage, context, timeoutMs, createdAt)] } : {}),
-      ...(expectedPage ? { expectations: [pageExpectation(`after:${step.id}`, expectedPage, context, timeoutMs, createdAt)] } : {}),
+      ...(expectations.length ? { expectations } : {}),
       ...(step.timeoutMs ? { timing: { timeoutMs: step.timeoutMs } } : {}),
       createdAt
     };
   }
 
-  private resolveAction(step: ScriptExecutionPlanStep, appId: string, platform: PageAssetPlatform): {
+  private resolveAction(
+    step: ScriptExecutionPlanStep,
+    appId: string,
+    platform: PageAssetPlatform,
+    parameters: Record<string, ScriptParameterValue>
+  ): {
     type: ActionStep["type"];
     params: Record<string, unknown>;
     coordinate?: ActionStep["coordinate"];
@@ -191,12 +213,39 @@ export class ScriptFlowRunner {
     if (step.action === "swipe") {
       return swipeAction(step.input);
     }
+    if (step.action === "reachPage") {
+      const pageReference = stringInput(step.input, "pageId");
+      const targetPage = this.deps.pageCatalog?.resolvePage(pageReference, appId, platform);
+      return {
+        type: "reach_page",
+        params: {
+          pageId: pageReference,
+          targetPageId: targetPage?.id ?? pageReference,
+          ...(targetPage?.name ? { targetPageName: targetPage.name } : {}),
+          appId,
+          platform,
+          policy: stringInput(step.input, "policy") || "safe"
+        },
+        strategy: "runtime_page_navigation"
+      };
+    }
     if (step.action === "waitForPage" || step.action === "assertPage") {
       return { type: "wait", params: { durationMs: 0 }, strategy: "page_state" };
     }
+    if (step.action === "assertText") {
+      return { type: "wait", params: { durationMs: 0 }, strategy: "ocr_text_assertion" };
+    }
     const target = targetInput(step.input);
     if (step.action === "tap") {
-      return this.deps.targetResolver.resolve({ action: "tap", target, onPage: step.onPage, appId, platform });
+      return this.deps.targetResolver.resolve({
+        action: "tap",
+        target,
+        search: searchInput(step.input),
+        onPage: step.onPage,
+        appId,
+        platform,
+        parameters
+      });
     }
     if (step.action === "inputText") {
       return this.deps.targetResolver.resolve({
@@ -205,11 +254,12 @@ export class ScriptFlowRunner {
         onPage: step.onPage,
         appId,
         platform,
+        parameters,
         value: stringInput(step.input, "value")
       });
     }
     if (step.action === "clearText") {
-      return this.deps.targetResolver.resolve({ action: "clearText", target, onPage: step.onPage, appId, platform });
+      return this.deps.targetResolver.resolve({ action: "clearText", target, onPage: step.onPage, appId, platform, parameters });
     }
     if (step.action === "selectText") {
       return this.deps.targetResolver.resolve({
@@ -218,6 +268,7 @@ export class ScriptFlowRunner {
         onPage: step.onPage,
         appId,
         platform,
+        parameters,
         value: stringInput(step.input, "value"),
         confirmText: optionalStringInput(step.input, "confirmText")
       });
@@ -228,9 +279,87 @@ export class ScriptFlowRunner {
       onPage: step.onPage,
       appId,
       platform,
+      parameters,
       direction: verticalDirectionInput(step.input),
       maxSwipes: numberInput(step.input, "maxSwipes")
     });
+  }
+
+  private buildNavigationEdges(
+    segments: PageNavigationSegmentSnapshot[],
+    context: {
+      flowId: string;
+      scriptVersion: number;
+      appId: string;
+      platform: PageAssetPlatform;
+      scriptParameters: Record<string, ScriptParameterValue>;
+      resolutionParameters: Record<string, ScriptParameterValue>;
+    },
+    createdAt: string,
+    redactSensitiveParameters: boolean
+  ): PageNavigationEdge[] {
+    if (!this.deps.pageCatalog) return [];
+    const result: PageNavigationEdge[] = [];
+    const seen = new Set<string>();
+    for (const segment of segments) {
+      let plan: ScriptExecutionPlan;
+      try {
+        if (segment.appId !== context.appId || segment.platform !== context.platform) continue;
+        const document: ScriptFlowDocument = {
+          version: 1,
+          kind: "case",
+          name: segment.flowName,
+          app: { id: segment.appId, platform: segment.platform },
+          start: { strategy: "keepCurrent" },
+          parameters: segment.parameters,
+          steps: segment.steps,
+          tags: []
+        };
+        const parameters = Object.fromEntries(Object.keys(segment.parameters).flatMap((key) => {
+          const value = context.resolutionParameters[key];
+          return value === undefined ? [] : [[key, value]];
+        }));
+        plan = compileScriptFlow(document, { parameters, redactSensitiveParameters });
+      } catch {
+        continue;
+      }
+      if (!plan.steps.length || plan.steps.some((step) => step.risk !== "none" && step.risk !== "interaction")) continue;
+      const fromPage = this.deps.pageCatalog.resolvePage(segment.fromPage, context.appId, context.platform);
+      const toPage = this.deps.pageCatalog.resolvePage(segment.toPage, context.appId, context.platform);
+      if (!fromPage || !toPage) continue;
+      try {
+        const segmentContext = {
+          ...context,
+          flowId: segment.flowId,
+          scriptVersion: segment.flowVersion,
+          scriptParameters: visibleParameters({
+            version: 1,
+            kind: "case",
+            name: segment.flowName,
+            app: { id: segment.appId, platform: segment.platform },
+            parameters: segment.parameters,
+            steps: segment.steps,
+            tags: []
+          }, plan.parameters)
+        };
+        const actions = plan.steps.map((step) => this.toActionStep(step, segmentContext, createdAt));
+        const key = `${fromPage.id}:${toPage.id}:${JSON.stringify(actions.map((action) => [action.type, action.params, action.coordinate]))}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push({
+          fromPageId: fromPage.id,
+          toPageId: toPage.id,
+          flowId: segment.flowId,
+          flowName: segment.flowName,
+          segmentId: segment.id,
+          stepIds: segment.stepIds,
+          actions
+        });
+      } catch {
+        continue;
+      }
+    }
+    return result;
   }
 }
 
@@ -264,10 +393,19 @@ export function pageStateExpectationVerifier(pageState: PageStateService): PageS
       status: result.status,
       pageName: result.page?.name,
       candidateNames: result.candidates.map((candidate) => candidate.name),
+      observedText: observationTextSummary(result.observation?.ocrTexts.map((item) => item.text) ?? []),
       actualAppId: result.actualAppId,
       reason: result.reason
     };
   };
+}
+
+function observationTextSummary(values: string[]): string | undefined {
+  const unique = [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+  if (!unique.length) {
+    return undefined;
+  }
+  return unique.slice(0, 10).join("、").slice(0, 240);
 }
 
 function pageExpectation(
@@ -285,6 +423,27 @@ function pageExpectation(
       appId: context.appId,
       platform: context.platform,
       pageId,
+      timeoutMs,
+      blocking: true
+    },
+    createdAt
+  };
+}
+
+function textExpectation(
+  id: string,
+  input: Record<string, unknown>,
+  timeoutMs: number,
+  createdAt: string
+): NonNullable<ActionStep["expectations"]>[number] {
+  return {
+    id,
+    type: "text",
+    enabled: true,
+    params: {
+      expected: stringInput(input, "text"),
+      mode: stringInput(input, "match") === "exact" ? "equals" : "contains",
+      source: "ocr",
       timeoutMs,
       blocking: true
     },
@@ -321,6 +480,17 @@ function targetInput(input: Record<string, unknown>): ScriptTarget {
   return target as ScriptTarget;
 }
 
+function searchInput(input: Record<string, unknown>): import("@mobile-automation/script-flow").ScriptSearchPolicy | undefined {
+  const search = input.search;
+  if (search === undefined) {
+    return undefined;
+  }
+  if (typeof search !== "object" || search === null || Array.isArray(search)) {
+    throw new Error("Compiled script search policy is invalid");
+  }
+  return search as import("@mobile-automation/script-flow").ScriptSearchPolicy;
+}
+
 function visibleParameters(
   flow: ScriptFlowDocument,
   parameters: Record<string, ScriptParameterValue>
@@ -350,6 +520,12 @@ function defaultStepTitle(step: ScriptExecutionPlanStep): string {
   }
   if (step.action === "assertPage") {
     return `确认页面 ${stringInput(step.input, "pageId")}`;
+  }
+  if (step.action === "assertText") {
+    return `确认出现 ${stringInput(step.input, "text")}`;
+  }
+  if (step.action === "reachPage") {
+    return `到达页面 ${stringInput(step.input, "pageId")}`;
   }
   return step.action;
 }

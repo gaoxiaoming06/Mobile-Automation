@@ -6,6 +6,7 @@ describe("serializeScriptFlow", () => {
   it("round trips a validated document", () => {
     const source = serializeScriptFlow({
       version: 1,
+      kind: "case",
       name: "打开添加好友",
       app: { id: "cn.eeo.classin", platform: "android" },
       start: { strategy: "launchApp" },
@@ -15,7 +16,7 @@ describe("serializeScriptFlow", () => {
         name: "打开添加好友",
         onPage: "classin.home",
         expectPage: "classin.friend.add",
-        tap: { target: { ocrText: "添加好友" } }
+        tap: { target: { text: "添加好友" } }
       }],
       tags: ["ai-generated"]
     });

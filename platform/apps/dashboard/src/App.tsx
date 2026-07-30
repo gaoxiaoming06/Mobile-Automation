@@ -23,15 +23,12 @@ import {
 import { AppNav, type AppNavItemId } from "./components/AppNav";
 import {
   AssetRecordingPanel,
-  type AssetRecordingCurrentPage,
-  type AssetRecordingDynamicMask,
-  type AssetRecordingLocatorKind,
-  type AssetRecordingPageElementDraft
+  type AssetRecordingCurrentPage
 } from "./components/AssetRecordingPanel";
 import { PreviewPanel } from "./components/PreviewPanel";
 import { PageAssetsPanel } from "./components/PageAssetsPanel";
-import { ScriptFlowsPanel } from "./components/ScriptFlowsPanel";
-import { AiScriptFlowsPanel } from "./components/AiScriptFlowsPanel";
+import { CaseCenterPanel } from "./components/CaseCenterPanel";
+import { AiScriptFlowsPanel, type CaseRevision } from "./components/AiScriptFlowsPanel";
 import type { RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
 import { RunResultsPanel } from "./components/RunResultsPanel";
 import { ToolStatusBar } from "./components/ToolStatusBar";
@@ -312,7 +309,6 @@ type CurrentPageAssetApiResponse = {
       status: string;
       platformScope?: string;
       matcherCount?: number;
-      elementCount?: number;
       updatedAt?: string;
     }>;
   };
@@ -378,40 +374,6 @@ export function assetRecordingIdentificationStateAfter(
     inFlightCount,
     identifying: inFlightCount > 0
   };
-}
-
-export function assetPageElementRequestBody(
-  draft: AssetRecordingPageElementDraft,
-  context: { sourceNodeId: string; platformScope: "android" | "ios" | "mobile-both" }
-) {
-  return {
-    elementId: draft.elementId,
-    sourceNodeId: context.sourceNodeId,
-    locator: draft.locator,
-    semanticArea: draft.semanticArea,
-    coordinateSpace: draft.coordinateSpace,
-    elementLabel: draft.elementLabel,
-    targetText: draft.targetText,
-    platformScope: context.platformScope,
-    ...(draft.tapPointPercent ? { tapPointPercent: draft.tapPointPercent } : {}),
-    ...(draft.anchorOffsetPercent ? { anchorOffsetPercent: draft.anchorOffsetPercent } : {}),
-    ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {}),
-    ...(draft.quality ? { quality: draft.quality } : {}),
-    ...(draft.visualLocator ? { visualLocator: draft.visualLocator } : {}),
-    ...(draft.locatorKind ? { locatorKind: draft.locatorKind } : {}),
-    ...(draft.dynamicMasks?.length ? { dynamicMasks: draft.dynamicMasks } : {}),
-    ...(draft.structuralLocator ? { structuralLocator: draft.structuralLocator } : {}),
-    ...(draft.dynamicRegion ? { dynamicRegion: draft.dynamicRegion } : {}),
-    ...(draft.itemTemplate ? { itemTemplate: draft.itemTemplate } : {})
-  };
-}
-
-export function validateAssetPageElementDraftForSave(draft: AssetRecordingPageElementDraft): string | undefined {
-  const region = imageRegionMetadata(draft.locator);
-  if (region && isRegionTooSmallForPageElement(region)) {
-    return "圈选区域过小，请重新圈选完整的可识别元素区域";
-  }
-  return undefined;
 }
 
 export function stabilityExplorerRequestBody(input: {
@@ -590,13 +552,13 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(true);
   const [activeNavItem, setActiveNavItem] = useState<NavItemId>("devices");
-  const [pendingScriptDraft, setPendingScriptDraft] = useState("");
+  const [pendingCaseRevision, setPendingCaseRevision] = useState<CaseRevision>();
+  const [pendingCaseSelection, setPendingCaseSelection] = useState("");
   const [assetRecordingPreviewWidth, setAssetRecordingPreviewWidth] = useState(560);
   const [runtimeInterceptorRules, setRuntimeInterceptorRules] = useState<RuntimeInterceptorRule[]>([]);
   const [assetRecordingGraphVersionId, setAssetRecordingGraphVersionId] = useState("");
   const [assetRecordingPage, setAssetRecordingPage] = useState<AssetRecordingCurrentPage>({ status: "idle" });
   const [assetLibraryInitialization, setAssetLibraryInitialization] = useState<PageAssetLibraryInitialization>();
-  const [assetPageElementSaveError, setAssetPageElementSaveError] = useState<string>();
   const [assetRecordingIdentifying, setAssetRecordingIdentifying] = useState(false);
   const [assetRecordingAiIdentifying, setAssetRecordingAiIdentifying] = useState(false);
   const [stabilityPackageName, setStabilityPackageName] = useState("");
@@ -984,6 +946,7 @@ export function App() {
   }
 
   function openAiScriptFlows() {
+    setPendingCaseRevision(undefined);
     setActiveNavItem("aiScriptFlows");
   }
 
@@ -1217,7 +1180,7 @@ export function App() {
       setBusy(true);
       const assetPayload = {
         name: pageDraft.pageName,
-        key: pageDraft.targetRef,
+        key: pageDraft.pageKey,
         assetKind: "page",
         aliasText: pageDraft.aliasText,
         intentTagsText: pageDraft.intentTagsText,
@@ -1257,132 +1220,13 @@ export function App() {
         ...overrides,
         status: "matched",
         nodeId: json.node?.id ?? page.nodeId,
-        targetRef: page.targetRef ?? json.node?.key,
+        pageKey: page.pageKey ?? json.node?.key,
         pageName: pageDraft.pageName ?? json.node?.name ?? page.pageName,
         savedAssets: mapPageAssets(json.assets),
         message: "页面资产已确认"
       }));
       const action = mode === "create" ? "保存为新页面" : "更新已有页面";
       setMessage(`${action}成功：${json.node.name ?? pageDraft.pageName ?? "页面资产"}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function saveAssetPageElement(draft: AssetRecordingPageElementDraft): Promise<boolean> {
-    const graphVersionId = assetRecordingPage.graphVersionId;
-    const sourceNodeId = draft.sourceNodeId ?? assetRecordingPage.nodeId;
-    if (!graphVersionId || !sourceNodeId) {
-      const errorMessage = "当前页面还没有保存为页面资产，请先保存页面后再录入公共定位器";
-      setAssetPageElementSaveError(errorMessage);
-      setMessage(errorMessage);
-      return false;
-    }
-    const validationMessage = validateAssetPageElementDraftForSave(draft);
-    if (validationMessage) {
-      setAssetPageElementSaveError(validationMessage);
-      setMessage(validationMessage);
-      return false;
-    }
-    try {
-      setAssetPageElementSaveError(undefined);
-      setBusy(true);
-      const validationBody = assetPageElementRequestBody(draft, {
-        sourceNodeId,
-        platformScope: selectedDevice?.platform ?? "android"
-      });
-      const validationResponse = await fetch(`/api/page-assets/${encodeURIComponent(graphVersionId)}/assets/page-elements/validate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...validationBody,
-          ...(selectedSerial ? { deviceSerial: selectedSerial } : {}),
-          includeOcr: true
-        })
-      });
-      const validationJson = (await validationResponse.json().catch(() => ({}))) as {
-        quality?: AssetRecordingPageElementDraft["quality"];
-        visualLocator?: Record<string, unknown>;
-        error?: string;
-      };
-      if (!validationResponse.ok || !validationJson.quality) {
-        throw new Error(validationJson.error ?? "公共定位器质量校验失败");
-      }
-      if (validationJson.quality.status === "fail") {
-        throw new Error(validationJson.quality.warnings.find((warning) => warning.severity === "error")?.message ?? "公共定位器质量不满足保存要求");
-      }
-      const qualityCheckedDraft: AssetRecordingPageElementDraft = {
-        ...draft,
-        quality: validationJson.quality,
-        ...(validationJson.visualLocator ? { visualLocator: validationJson.visualLocator } : {})
-      };
-      const response = await fetch(`/api/page-assets/${encodeURIComponent(graphVersionId)}/assets/page-elements`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          assetPageElementRequestBody(qualityCheckedDraft, {
-            sourceNodeId,
-            platformScope: selectedDevice?.platform ?? "android"
-          })
-        )
-      });
-      const json = (await response.json().catch(() => ({}))) as {
-        result?: { status?: string; element?: Record<string, unknown> };
-        assets?: CurrentPageAssetApiResponse["assets"];
-        error?: string;
-      };
-      if (!response.ok || json.result?.status !== "saved") {
-        throw new Error(json.error ?? "公共定位器保存失败");
-      }
-      setAssetRecordingPage((page) => ({
-        ...page,
-        savedAssets: mapPageAssets(json.assets),
-        elements: mergeOperationElements(
-          [manualElementFromOperationDraft(qualityCheckedDraft, selectedDevice?.platform ?? "android", json.result?.element)],
-          page.elements ?? []
-        )
-      }));
-      setAssetPageElementSaveError(undefined);
-      setMessage(validationJson.quality.status === "needs_review" ? `已保存可操作元素：${draft.elementLabel}（建议复核定位质量）` : `已保存可操作元素：${draft.elementLabel}`);
-      return true;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      setAssetPageElementSaveError(errorMessage);
-      setMessage(errorMessage);
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function deleteAssetPageElement(element: NonNullable<AssetRecordingCurrentPage["elements"]>[number]) {
-    const graphVersionId = assetRecordingPage.graphVersionId;
-    const sourceNodeId = assetRecordingPage.nodeId;
-    if (!graphVersionId || !sourceNodeId || !element.id) {
-      setMessage("当前可操作元素缺少可删除的资产标识");
-      return;
-    }
-    try {
-      setBusy(true);
-      const response = await fetch(`/api/page-assets/${encodeURIComponent(graphVersionId)}/assets/page-elements/${encodeURIComponent(sourceNodeId)}/${encodeURIComponent(element.id)}`, {
-        method: "DELETE"
-      });
-      const json = (await response.json().catch(() => ({}))) as {
-        result?: { status?: string };
-        assets?: CurrentPageAssetApiResponse["assets"];
-        error?: string;
-      };
-      if (!response.ok || json.result?.status !== "deleted") {
-        throw new Error(json.error ?? "删除可操作元素失败");
-      }
-      setAssetRecordingPage((page) => ({
-        ...page,
-        savedAssets: mapPageAssets(json.assets),
-        elements: (page.elements ?? []).filter((item) => item.id !== element.id)
-      }));
-      setMessage(`已删除可操作元素：${element.label}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1601,9 +1445,6 @@ export function App() {
             onAiIdentify={requestAiPageDraft}
             aiIdentifying={assetRecordingAiIdentifying}
             onSaveCurrentPageAsset={saveCurrentPageAsset}
-            onSavePageElement={saveAssetPageElement}
-            pageElementSaveError={assetPageElementSaveError}
-            onDeletePageElement={deleteAssetPageElement}
             libraryInitialization={assetLibraryInitialization}
             onInitializePageAssetLibrary={initializePageAssetLibrary}
             onResizePointerDown={onAssetRecordingResizePointerDown}
@@ -1651,12 +1492,16 @@ export function App() {
         )}
 
         {activeNavItem === "scriptFlows" && (
-          <ScriptFlowsPanel
+          <CaseCenterPanel
             devices={selectableDevices}
             selectedSerial={selectedSerial}
-            initialSourceYaml={pendingScriptDraft || undefined}
-            onInitialSourceConsumed={() => setPendingScriptDraft("")}
+            initialSelectedFlowId={pendingCaseSelection || undefined}
             setMessage={setMessage}
+            onCreateCase={openAiScriptFlows}
+            onModifyCase={(flow) => {
+              setPendingCaseRevision({ flowId: flow.id, version: flow.version, name: flow.name });
+              setActiveNavItem("aiScriptFlows");
+            }}
             androidAppMonitorForApp={(appId) => keepCurrentAndroidAppMonitorForPackage(
               "script_flow",
               appId,
@@ -1671,11 +1516,25 @@ export function App() {
 
         {activeNavItem === "aiScriptFlows" && (
           <AiScriptFlowsPanel
+            key={pendingCaseRevision ? `${pendingCaseRevision.flowId}:${pendingCaseRevision.version}` : "new-case"}
             defaultAppId={DEFAULT_SCRIPT_APP_ID}
+            devices={selectableDevices}
+            selectedSerial={selectedSerial}
             setMessage={setMessage}
-            onUseDraft={(sourceYaml) => {
-              setPendingScriptDraft(sourceYaml);
+            revision={pendingCaseRevision}
+            androidAppMonitorForApp={(appId) => keepCurrentAndroidAppMonitorForPackage(
+              "script_flow",
+              appId,
+              androidAppMonitorExecutionOverrides.script_flow
+            )}
+            onSaved={(flow) => {
+              setPendingCaseSelection(flow.id);
+              setPendingCaseRevision(undefined);
               openScriptFlows();
+            }}
+            onOpenRun={(runId) => {
+              setCurrentRunId(runId);
+              openRuns({ keepCurrentRun: true });
             }}
           />
         )}
@@ -2676,7 +2535,6 @@ export function mapCurrentPageAssetResponse(response: CurrentPageAssetApiRespons
       missedMatchers: summarizeEvidenceDiagnostics(result.matcherDiagnostics?.missingEvidence),
       uiTexts: summarizeObservationTexts(result.observation, "ui"),
       ocrTexts: summarizeObservationTexts(result.observation, "ocr"),
-      elements: summarizeObservationElements(result.observation),
       aiDescription: message,
       savedAssets: mapPageAssets(response.assets)
     };
@@ -2702,7 +2560,7 @@ export function mapCurrentPageAssetResponse(response: CurrentPageAssetApiRespons
     visualPageName,
     matchedAssetName: isMatchedAsset && node?.name && node.name !== pageName ? node.name : undefined,
     matchedAssetKey: isMatchedAsset ? node?.key : undefined,
-    targetRef: node?.key,
+    pageKey: node?.key,
     aliasText: arrayMetadata(nodeMetadata, "alias").join("，"),
     intentTagsText: arrayMetadata(nodeMetadata, "intentTags").join("，"),
     matchScore: result.match.score || candidate?.score,
@@ -2717,7 +2575,6 @@ export function mapCurrentPageAssetResponse(response: CurrentPageAssetApiRespons
     confirmedOcrTexts: arrayMetadata(nodeMetadata, "confirmedOcrTexts"),
     uiTexts: summarizeObservationTexts(observation, "ui"),
     ocrTexts: summarizeObservationTexts(observation, "ocr"),
-    elements: mergeOperationElements(manualOperationElementsMetadata(nodeMetadata, observation?.resolution), summarizeObservationElements(observation)),
     aiDescription: stringMetadata(nodeMetadata, "aiDescription") ?? summarizeAssetAiDescription(mappedStatus, pageName, observation),
     savedAssets: mapPageAssets(response.assets)
   };
@@ -2731,7 +2588,6 @@ function mapPageAssets(assets: CurrentPageAssetApiResponse["assets"]): AssetReco
     status: asset.status,
     platformScope: asset.platformScope,
     matcherCount: asset.matcherCount,
-    elementCount: asset.elementCount,
     updatedAt: asset.updatedAt
   }));
 }
@@ -2839,330 +2695,6 @@ function numberMetadata(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function manualOperationElementsMetadata(metadata: Record<string, unknown> | undefined, resolution: AssetObservation["resolution"]): NonNullable<AssetRecordingCurrentPage["elements"]> {
-  type PageElement = NonNullable<AssetRecordingCurrentPage["elements"]>[number];
-  const value = metadata?.assetRecordingManualElements;
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const elements = value
-    .map((item): PageElement | undefined => {
-      if (!item || typeof item !== "object") {
-        return undefined;
-      }
-      const element = item as Record<string, unknown>;
-      const label = stringMetadata(element, "label");
-      const locator = stringMetadata(element, "locator");
-      if (!label || !locator) {
-        return undefined;
-      }
-      const id = stringMetadata(element, "id");
-      const semanticArea = visualSemanticAreaMetadata(element.semanticArea);
-      const coordinateSpace = coordinateSpaceMetadata(element.coordinateSpace);
-      const region = rectMetadata(element.region);
-      const scrollProfile = scrollProfileMetadata(element.scrollProfile);
-      const targetText = stringMetadata(element, "targetText");
-      const quality = pageElementQualityMetadata(element.quality);
-      const visualLocator = visualLocatorMetadata(element.visualLocator);
-      const locatorKind = locatorKindMetadata(element.locatorKind);
-      const dynamicMasks = dynamicMasksMetadata(element.dynamicMasks);
-      const structuralLocator = recordMetadata(element.structuralLocator);
-      const dynamicRegionId = stringMetadata(element, "dynamicRegionId");
-      const itemTemplateId = stringMetadata(element, "itemTemplateId");
-      return {
-        ...(id ? { id } : {}),
-        label,
-        locator,
-        ...(locatorKind ? { locatorKind } : {}),
-        ...(semanticArea ? { semanticArea } : {}),
-        ...(coordinateSpace ? { coordinateSpace } : {}),
-        source: "manual",
-        ...(region ? { region } : {}),
-        ...(resolution ? { viewport: resolution } : {}),
-        ...(targetText ? { targetText } : {}),
-        ...(quality ? { quality } : {}),
-        ...(visualLocator ? { visualLocator } : {}),
-        ...(dynamicMasks?.length ? { dynamicMasks } : {}),
-        ...(structuralLocator ? { structuralLocator } : {}),
-        ...(dynamicRegionId ? { dynamicRegionId } : {}),
-        ...(itemTemplateId ? { itemTemplateId } : {}),
-        ...(scrollProfile ? { scrollProfile } : {})
-      };
-    })
-    .filter((item): item is PageElement => Boolean(item));
-  return dedupeManualOperationElements(elements);
-}
-
-function mergeOperationElements(
-  manualElements: NonNullable<AssetRecordingCurrentPage["elements"]>,
-  candidateElements: NonNullable<AssetRecordingCurrentPage["elements"]>
-): NonNullable<AssetRecordingCurrentPage["elements"]> {
-  const manualKeys = new Set(manualElements.map((element) => element.locator));
-  const manualIds = new Set(manualElements.map((element) => element.id).filter(Boolean));
-  return dedupeManualOperationElements([
-    ...manualElements,
-    ...candidateElements.filter((element) => !manualKeys.has(element.locator) && (!element.id || !manualIds.has(element.id)))
-  ]);
-}
-
-function dedupeManualOperationElements(
-  elements: NonNullable<AssetRecordingCurrentPage["elements"]>
-): NonNullable<AssetRecordingCurrentPage["elements"]> {
-  const result: NonNullable<AssetRecordingCurrentPage["elements"]> = [];
-  for (const element of elements) {
-    const duplicateIndex = result.findIndex((existing) => manualOperationElementsRepresentSameTarget(existing, element));
-    if (duplicateIndex < 0) {
-      result.push(element);
-      continue;
-    }
-    const existing = result[duplicateIndex]!;
-    if (manualOperationElementPriority(element) >= manualOperationElementPriority(existing)) {
-      result[duplicateIndex] = element;
-    }
-  }
-  return result;
-}
-
-function manualOperationElementsRepresentSameTarget(
-  left: NonNullable<AssetRecordingCurrentPage["elements"]>[number],
-  right: NonNullable<AssetRecordingCurrentPage["elements"]>[number]
-): boolean {
-  if (left.source !== "manual" || right.source !== "manual") {
-    return false;
-  }
-  if (!left.label || !right.label || left.label !== right.label) {
-    return false;
-  }
-  if (left.locator === right.locator) {
-    return true;
-  }
-  return Boolean(left.region && right.region && rectsRepresentSameMarkedTarget(left.region, right.region));
-}
-
-function rectsRepresentSameMarkedTarget(
-  left: { x: number; y: number; width: number; height: number },
-  right: { x: number; y: number; width: number; height: number }
-): boolean {
-  const overlapWidth = Math.max(0, Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
-  const overlapHeight = Math.max(0, Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y));
-  const overlapArea = overlapWidth * overlapHeight;
-  const minArea = Math.max(1, Math.min(left.width * left.height, right.width * right.height));
-  return overlapArea / minArea >= 0.45 || rectCenterInside(left, right) || rectCenterInside(right, left);
-}
-
-function rectCenterInside(
-  rect: { x: number; y: number; width: number; height: number },
-  container: { x: number; y: number; width: number; height: number }
-): boolean {
-  const centerX = rect.x + rect.width / 2;
-  const centerY = rect.y + rect.height / 2;
-  return centerX >= container.x && centerX <= container.x + container.width && centerY >= container.y && centerY <= container.y + container.height;
-}
-
-function manualOperationElementPriority(element: NonNullable<AssetRecordingCurrentPage["elements"]>[number]): number {
-  let score = 0;
-  if (element.visualLocator) {
-    score += 8;
-  }
-  if (element.quality) {
-    score += 4;
-  }
-  if (element.tapPointPercent) {
-    score += 2;
-  }
-  if (element.region) {
-    score += 1;
-  }
-  return score;
-}
-
-function manualElementFromOperationDraft(
-  draft: AssetRecordingPageElementDraft,
-  _platformScope: string,
-  persistedElement?: Record<string, unknown>
-): NonNullable<AssetRecordingCurrentPage["elements"]>[number] {
-  const region = imageRegionMetadata(draft.locator);
-  const id = stringMetadata(persistedElement, "id");
-  const targetText = stringMetadata(persistedElement, "targetText") ?? draft.targetText;
-  const semanticArea = visualSemanticAreaMetadata(persistedElement?.semanticArea) ?? draft.semanticArea;
-  const coordinateSpace = coordinateSpaceMetadata(persistedElement?.coordinateSpace) ?? draft.coordinateSpace;
-  const quality = pageElementQualityMetadata(persistedElement?.quality) ?? draft.quality;
-  const visualLocator = visualLocatorMetadata(persistedElement?.visualLocator) ?? draft.visualLocator;
-  const locatorKind = locatorKindMetadata(persistedElement?.locatorKind) ?? draft.locatorKind;
-  const dynamicMasks = dynamicMasksMetadata(persistedElement?.dynamicMasks) ?? draft.dynamicMasks;
-  const structuralLocator = recordMetadata(persistedElement?.structuralLocator) ?? draft.structuralLocator;
-  const dynamicRegionId = stringMetadata(persistedElement, "dynamicRegionId") ?? stringMetadata(recordMetadata(draft.dynamicRegion), "id");
-  const itemTemplateId = stringMetadata(persistedElement, "itemTemplateId") ?? stringMetadata(recordMetadata(draft.itemTemplate), "id");
-  return {
-    ...(id ?? draft.elementId ? { id: id ?? draft.elementId } : {}),
-    label: draft.elementLabel,
-    locator: draft.locator,
-    ...(locatorKind ? { locatorKind } : {}),
-    ...(semanticArea ? { semanticArea } : {}),
-    ...(coordinateSpace ? { coordinateSpace } : {}),
-    source: "manual",
-    ...(region ? { region } : {}),
-    ...(targetText ? { targetText } : {}),
-    ...(quality ? { quality } : {}),
-    ...(visualLocator ? { visualLocator } : {}),
-    ...(dynamicMasks?.length ? { dynamicMasks } : {}),
-    ...(structuralLocator ? { structuralLocator } : {}),
-    ...(dynamicRegionId ? { dynamicRegionId } : {}),
-    ...(itemTemplateId ? { itemTemplateId } : {}),
-    ...(draft.scrollProfile ? { scrollProfile: draft.scrollProfile } : {})
-  };
-}
-
-function imageRegionMetadata(locator: string): { x: number; y: number; width: number; height: number } | undefined {
-  if (!locator.startsWith("image-region:")) {
-    return undefined;
-  }
-  const [x, y, width, height] = locator
-    .replace(/^image-region:\s*/, "")
-    .split(",")
-    .map((part) => Number(part.trim()));
-  if (![x, y, width, height].every((value) => Number.isFinite(value)) || width <= 0 || height <= 0) {
-    return undefined;
-  }
-  return { x, y, width, height };
-}
-
-function isRegionTooSmallForPageElement(region: { width: number; height: number }): boolean {
-  return region.width < 2 || region.height < 1.5 || region.width * region.height < 8;
-}
-
-function pageElementQualityMetadata(value: unknown): NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["quality"]> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  const status = input.status === "pass" || input.status === "needs_review" || input.status === "fail" ? input.status : undefined;
-  const score = numberMetadata(input.score);
-  if (!status || score === undefined) {
-    return undefined;
-  }
-  return {
-    status,
-    score,
-    warnings: Array.isArray(input.warnings) ? input.warnings.filter((item): item is any => Boolean(item) && typeof item === "object") : [],
-    candidates: Array.isArray(input.candidates) ? input.candidates.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [],
-    evidence: input.evidence && typeof input.evidence === "object" && !Array.isArray(input.evidence) ? input.evidence as Record<string, unknown> : {}
-  };
-}
-
-function recordMetadata(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function visualLocatorMetadata(value: unknown): Record<string, unknown> | undefined {
-  return recordMetadata(value);
-}
-
-function locatorKindMetadata(value: unknown): AssetRecordingLocatorKind | undefined {
-  return value === "text_locator" ||
-    value === "visual_locator" ||
-    value === "structural_locator" ||
-    value === "collection_item_locator" ||
-    value === "top_bar_icon_locator" ||
-    value === "ocr_anchor_offset"
-    ? value
-    : undefined;
-}
-
-function dynamicMasksMetadata(value: unknown): AssetRecordingDynamicMask[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const masks = value
-    .map((item): AssetRecordingDynamicMask | undefined => {
-      const input = recordMetadata(item);
-      const kind = dynamicMaskKindMetadata(input?.kind);
-      const region = rectMetadata(input?.region);
-      if (!kind || !region) {
-        return undefined;
-      }
-      const label = stringMetadata(input, "label");
-      const reason = stringMetadata(input, "reason");
-      return {
-        kind,
-        region,
-        ...(label ? { label } : {}),
-        ...(reason ? { reason } : {})
-      };
-    })
-    .filter((item): item is AssetRecordingDynamicMask => Boolean(item));
-  return masks.length ? masks : undefined;
-}
-
-function dynamicMaskKindMetadata(value: unknown): AssetRecordingDynamicMask["kind"] | undefined {
-  return value === "avatar" ||
-    value === "text" ||
-    value === "image" ||
-    value === "number" ||
-    value === "custom"
-    ? value
-    : undefined;
-}
-
-function rectMetadata(value: unknown): { x: number; y: number; width: number; height: number } | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  const x = numberMetadata(input.x);
-  const y = numberMetadata(input.y);
-  const width = numberMetadata(input.width);
-  const height = numberMetadata(input.height);
-  if (x === undefined || y === undefined || width === undefined || height === undefined || width <= 0 || height <= 0) {
-    return undefined;
-  }
-  return { x, y, width, height };
-}
-
-function visualSemanticAreaMetadata(value: unknown): NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["semanticArea"]> | undefined {
-  return value === "top" ||
-    value === "content" ||
-    value === "bottom" ||
-    value === "unknown"
-    ? value
-    : undefined;
-}
-
-function coordinateSpaceMetadata(value: unknown): "screen" | "app_viewport" | "region" | "runtime" | undefined {
-  return value === "screen" || value === "app_viewport" || value === "region" || value === "runtime" ? value : undefined;
-}
-
-function scrollProfileMetadata(value: unknown): NonNullable<NonNullable<AssetRecordingCurrentPage["elements"]>[number]["scrollProfile"]> | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  return {
-    containerKind: input.containerKind === "grid_list" || input.containerKind === "tab_bar" || input.containerKind === "carousel" || input.containerKind === "scroll_area" ? input.containerKind : "list",
-    direction: input.direction === "horizontal" ? "horizontal" : "vertical",
-    columns: numberMetadata(input.columns),
-    targetKind: input.targetKind === "ocr_text" || input.targetKind === "semantic_label" || input.targetKind === "nth_item" || input.targetKind === "image_region" ? input.targetKind : "item_text",
-    targetQuery: stringMetadata(input, "targetQuery"),
-    candidateItemHeightPercent: numberMetadata(input.candidateItemHeightPercent),
-    clickSafePoint: clickSafePointMetadata(input.clickSafePoint),
-    scrollStepPercent: numberMetadata(input.scrollStepPercent),
-    failureStrategy: input.failureStrategy === "none" || input.failureStrategy === "try_next_candidate" || input.failureStrategy === "back_and_try_next_candidate" ? input.failureStrategy : undefined
-  };
-}
-
-function clickSafePointMetadata(value: unknown): { xPercent: number; yPercent: number } | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  const xPercent = numberMetadata(input.xPercent);
-  const yPercent = numberMetadata(input.yPercent);
-  if (xPercent === undefined || yPercent === undefined) {
-    return undefined;
-  }
-  return { xPercent, yPercent };
-}
-
 function summarizeMatcherResults(
   matcherResults: Array<{ type?: string; expected?: string; actual?: string; matched?: boolean }> | undefined,
   matched: boolean
@@ -3182,36 +2714,8 @@ function summarizeEvidenceDiagnostics(evidence: CurrentPageMatcherEvidenceApi[] 
     .map((result) => `${result.type ?? "matcher"}:${result.expected ?? result.actual ?? "unknown"}`);
 }
 
-function summarizeObservationElements(_observation: AssetObservation | undefined): NonNullable<AssetRecordingCurrentPage["elements"]> {
-  return [];
-}
-
 function clampPercent(value: number, min = 0, max = 100): number {
   return Math.min(max, Math.max(min, Math.round(value * 100) / 100));
-}
-
-function hasStableOperationSignal(element: AssetObservation["uiElements"][number]): boolean {
-  if (element.scrollable && (element.resourceId || element.accessibilityId || element.contentDesc || element.text)) {
-    return true;
-  }
-  return Boolean(element.resourceId || element.accessibilityId || element.contentDesc || element.text);
-}
-
-function summarizeElementActionKind(element: AssetObservation["uiElements"][number]): "tap" | "scroll" | "long_press" {
-  if (element.scrollable) {
-    return "scroll";
-  }
-  if (element.longClickable) {
-    return "long_press";
-  }
-  return "tap";
-}
-
-function summarizeElementAvailability(element: AssetObservation["uiElements"][number]): "visible" | "conditional" {
-  if (element.clickable || element.scrollable || element.longClickable) {
-    return "visible";
-  }
-  return "conditional";
 }
 
 function summarizeObservationTexts(observation: AssetObservation | undefined, source: "ui" | "ocr"): string[] {

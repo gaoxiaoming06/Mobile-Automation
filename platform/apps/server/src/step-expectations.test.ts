@@ -145,6 +145,40 @@ describe("StepExpectationEvaluator", () => {
     }));
   });
 
+  it("reports observed OCR text instead of presenting rejected candidates as the current page", async () => {
+    const evaluator = new StepExpectationEvaluator({
+      ocr: new FakeOcrService(""),
+      collectLogs: async () => "",
+      writeLog: async () => artifact("artifact-log", "log"),
+      captureExpectationScreenshot: async () => screenshot("artifact-retry", "retry"),
+      verifyPageState: async () => ({
+        status: "unknown",
+        candidateNames: ["主页", "待办"],
+        observedText: "搜索、请输入搜索内容、全部、班级、联系人",
+        reason: "page_not_matched"
+      })
+    });
+
+    const results = await evaluator.evaluate({
+      runId: "run-1",
+      serial: "device-1",
+      stepResultId: "step-result-1",
+      step: actionStep([expectation("state_is", {
+        appId: "cn.eeo.classin",
+        platform: "android",
+        pageId: "classin.home"
+      })]),
+      afterScreenshot: screenshot("artifact-after", "after"),
+      runtimeFailure: false
+    });
+
+    expect(results[0]).toEqual(expect.objectContaining({
+      status: "failed",
+      actual: "搜索、请输入搜索内容、全部、班级、联系人",
+      reason: "page_not_matched"
+    }));
+  });
+
   it("evaluates metric, log, and OCR text expectations with injected dependencies", async () => {
     const logArtifact = artifact("artifact-log", "log");
     const evaluator = new StepExpectationEvaluator({
@@ -175,6 +209,37 @@ describe("StepExpectationEvaluator", () => {
     ]);
     expect(results[1]?.evidenceArtifactIds).toEqual([logArtifact.id]);
     expect(results[2]?.evidenceArtifactIds).toEqual(["artifact-after"]);
+  });
+
+  it("does not dump the UI hierarchy for an OCR-only text assertion", async () => {
+    let hierarchyCalls = 0;
+    const evaluator = new StepExpectationEvaluator({
+      ocr: new FakeOcrService("教学方案列表"),
+      collectLogs: async () => "",
+      writeLog: async () => artifact("artifact-log", "log"),
+      dumpUiHierarchy: async () => {
+        hierarchyCalls += 1;
+        return hierarchy("com.demo:id/title");
+      },
+      captureExpectationScreenshot: async () => screenshot("artifact-retry", "retry")
+    });
+
+    const results = await evaluator.evaluate({
+      runId: "run-1",
+      serial: "device-1",
+      stepResultId: "step-result-1",
+      step: actionStep([expectation("text", {
+        expected: "教学方案列表",
+        mode: "contains",
+        source: "ocr",
+        blocking: true
+      })]),
+      afterScreenshot: screenshot("artifact-after", "after"),
+      runtimeFailure: false
+    });
+
+    expect(hierarchyCalls).toBe(0);
+    expect(results[0]).toEqual(expect.objectContaining({ status: "passed", actual: "教学方案列表" }));
   });
 
   it("passes text expectations that use foreground activity as a state anchor", async () => {

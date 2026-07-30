@@ -40,12 +40,12 @@ describe("dashboard styles", () => {
     expect(saveBarRule).not.toContain("backdrop-filter");
   });
 
-  it("keeps every ScriptFlow pane in the mobile document flow", () => {
+  it("keeps every use case center pane in the mobile document flow", () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "styles.css"), "utf8");
-    const mobileRule = css.slice(css.indexOf("@media (max-width: 900px)"));
-    const headerRule = mobileRule.slice(mobileRule.indexOf(".script-flows-header {"), mobileRule.indexOf(".script-flows-toolbar {"));
-    const workbenchRule = mobileRule.slice(mobileRule.indexOf(".script-flows-workbench {"), mobileRule.indexOf(".script-flow-list {"));
-    const inspectorRule = mobileRule.slice(mobileRule.indexOf(".script-flow-inspector {"), mobileRule.indexOf(".script-flow-inspector {") + 180);
+    const mobileRule = css.slice(css.lastIndexOf("@media (max-width: 900px)"));
+    const headerRule = mobileRule.slice(mobileRule.indexOf(".case-center-header {"), mobileRule.indexOf(".case-center-toolbar {"));
+    const workbenchRule = mobileRule.slice(mobileRule.indexOf(".case-center-layout {"), mobileRule.indexOf(".case-list {"));
+    const inspectorRule = mobileRule.slice(mobileRule.indexOf(".case-run-panel {"), mobileRule.indexOf(".case-run-panel {") + 180);
 
     expect(headerRule).toContain("flex: none");
     expect(workbenchRule).toContain("flex: none");

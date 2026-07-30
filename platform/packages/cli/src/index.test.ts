@@ -15,8 +15,7 @@ describe("ScriptFlow CLI", () => {
         expectedVersion: 3,
         planDigest: "a".repeat(64),
         deviceSerial: "device-1",
-        parameters: { className: "班级四十二号", repeat: 2 },
-        confirmedRiskSteps: ["publish-lesson", "submit-form"]
+        parameters: { className: "班级四十二号", repeat: 2 }
       }
     });
   });

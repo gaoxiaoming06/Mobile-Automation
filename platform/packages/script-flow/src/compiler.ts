@@ -27,10 +27,12 @@ type ExpansionContext = {
   prefix: string;
 };
 
+type CompiledBodyStep = Omit<ScriptExecutionPlanStep, "order" | "phase">;
+
 export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScriptFlowOptions = {}): ScriptExecutionPlan {
   const parameters = resolveParameters(flow.parameters, options.parameters ?? {});
   const redactSensitiveParameters = options.redactSensitiveParameters === true;
-  const steps = expandSteps(flow.steps, {
+  const bodySteps = expandSteps(flow.steps, {
     flow,
     parameters,
     renderedParameters: redactSensitiveParameters ? redactParameters(flow.parameters, parameters) : parameters,
@@ -38,24 +40,35 @@ export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScri
     redactSensitiveParameters,
     stack: [flow.name],
     prefix: ""
-  }).map((step, index) => ({ ...step, order: index + 1 }));
-  const riskConfirmations = steps.flatMap((step) => step.risk === "none" ? [] : [{
-    stepId: step.id,
-    risk: step.risk,
-    ...(step.name ? { stepName: step.name } : {})
-  }]);
+  }).map((step) => ({ ...step, phase: "test" as const }));
+  const firstStep = bodySteps[0];
+  const entryPage = flow.entry?.page;
+  const entryAlreadyExplicit = firstStep?.action === "reachPage" && firstStep.input.pageId === entryPage;
+  const preparationSteps: Omit<ScriptExecutionPlanStep, "order">[] = entryPage && !entryAlreadyExplicit ? [{
+    id: "__prepare.entry-page",
+    phase: "preparation",
+    name: `准备进入 ${entryPage}`,
+    action: "reachPage",
+    input: { pageId: entryPage, policy: "safe" },
+    risk: "none",
+    source: { flowName: flow.name, stepId: "__prepare.entry-page" }
+  }] : [];
+  const steps = [...preparationSteps, ...bodySteps].map((step, index) => ({ ...step, order: index + 1 }));
   return {
     flowName: flow.name,
+    kind: flow.kind,
     app: flow.app,
     ...(flow.start ? { start: flow.start } : {}),
+    ...(flow.entry ? { entry: flow.entry } : {}),
+    ...(flow.outcome ? { outcome: flow.outcome } : {}),
     parameters,
     steps,
-    riskConfirmations
+    riskConfirmations: []
   };
 }
 
-function expandSteps(steps: ScriptStep[], context: ExpansionContext): Omit<ScriptExecutionPlanStep, "order">[] {
-  const result: Omit<ScriptExecutionPlanStep, "order">[] = [];
+function expandSteps(steps: ScriptStep[], context: ExpansionContext): CompiledBodyStep[] {
+  const result: CompiledBodyStep[] = [];
   for (const step of steps) {
     const expandedId = joinId(context.prefix, step.id);
     if ("repeat" in step) {
@@ -91,7 +104,7 @@ function expandChildFlow(
   step: Extract<ScriptStep, { runFlow: string }>,
   expandedId: string,
   context: ExpansionContext
-): Omit<ScriptExecutionPlanStep, "order">[] {
+): CompiledBodyStep[] {
   if (context.stack.includes(step.runFlow)) {
     throw new ScriptFlowCompileError(`Recursive runFlow reference: ${[...context.stack, step.runFlow].join(" -> ")}`);
   }
@@ -105,6 +118,13 @@ function expandChildFlow(
   const rawBindings = step.with ?? {};
   const bindings: Record<string, ScriptParameterValue> = {};
   const renderedBindings: Record<string, ScriptParameterValue> = {};
+  for (const key of Object.keys(child.parameters)) {
+    if (key in rawBindings) continue;
+    const value = context.parameters[key];
+    const rendered = context.renderedParameters[key];
+    if (value !== undefined) bindings[key] = value;
+    if (rendered !== undefined) renderedBindings[key] = rendered;
+  }
   for (const [key, value] of Object.entries(rawBindings)) {
     const resolved = interpolateBindingValue(value, context.parameters);
     const rendered = interpolateBindingValue(value, context.renderedParameters);
@@ -143,7 +163,7 @@ function compileExecutableStep(
   step: Exclude<ScriptStep, { repeat: unknown } | { when: unknown } | { runFlow: string }>,
   id: string,
   context: ExpansionContext
-): Omit<ScriptExecutionPlanStep, "order"> {
+): CompiledBodyStep {
   const { action, input } = executableAction(step, context.renderedParameters);
   const onPage = step.onPage ? interpolateString(step.onPage, context.renderedParameters) : undefined;
   const expectPage = step.expectPage ? interpolateString(step.expectPage, context.renderedParameters) : undefined;
@@ -189,6 +209,15 @@ function executableAction(
   if ("scrollUntilVisible" in step) {
     return { action: "scrollUntilVisible", input: interpolateRecord(step.scrollUntilVisible, parameters) };
   }
+  if ("reachPage" in step) {
+    return {
+      action: "reachPage",
+      input: {
+        pageId: interpolateString(step.reachPage.page, parameters),
+        policy: step.reachPage.policy ?? "safe"
+      }
+    };
+  }
   if ("waitForPage" in step) {
     return {
       action: "waitForPage",
@@ -197,6 +226,9 @@ function executableAction(
         ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {})
       }
     };
+  }
+  if ("assertText" in step) {
+    return { action: "assertText", input: interpolateRecord(step.assertText, parameters) };
   }
   return {
     action: "assertPage",

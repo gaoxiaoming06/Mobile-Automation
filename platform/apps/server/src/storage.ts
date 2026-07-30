@@ -10,7 +10,7 @@ import type {
   PlatformScope,
   StateMatcher
 } from "@mobile-automation/graph-core";
-import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
+import { parseScriptFlow, type ScriptFlowDocument } from "@mobile-automation/script-flow";
 import {
   createId,
   nowIso,
@@ -25,6 +25,10 @@ import {
 } from "@mobile-automation/shared";
 import { artifactRoot, dataRoot } from "./artifacts.js";
 import { previewAiModelSettingsUpdate, type AiModelSettingsUpdateInput, type AiModelStoredSettings } from "./ai-model-settings.js";
+import {
+  derivePageNavigationSegments,
+  type PageNavigationSegmentSnapshot
+} from "./page-navigation.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 
 const dbPath = path.join(dataRoot, "mobile-automation.sqlite");
@@ -135,6 +139,7 @@ export class Storage {
         flow.updatedAt
       );
       this.insertScriptFlowVersion(flow);
+      this.replacePageNavigationSegments(flow, input.document);
       this.db.prepare("COMMIT").run();
     } catch (error) {
       this.db.prepare("ROLLBACK").run();
@@ -197,6 +202,7 @@ export class Storage {
         next.id
       );
       this.insertScriptFlowVersion(next);
+      this.replacePageNavigationSegments(next, input.document);
       this.db.prepare("COMMIT").run();
     } catch (error) {
       this.db.prepare("ROLLBACK").run();
@@ -214,6 +220,18 @@ export class Storage {
 
   deleteScriptFlow(id: string): boolean {
     return this.db.prepare("DELETE FROM script_flows WHERE id = ?").run(id).changes > 0;
+  }
+
+  listPageNavigationSegments(filter: {
+    appId: string;
+    platform: ScriptFlow["platform"];
+  }): PageNavigationSegmentSnapshot[] {
+    const rows = this.db.prepare(
+      `SELECT * FROM script_navigation_segments
+       WHERE app_id = ? AND platform = ?
+       ORDER BY from_page ASC, to_page ASC, flow_id ASC, segment_order ASC`
+    ).all(filter.appId, filter.platform) as Row[];
+    return rows.map(rowToPageNavigationSegment);
   }
 
 
@@ -977,6 +995,22 @@ export class Storage {
         UNIQUE(flow_id, version)
       );
 
+      CREATE TABLE IF NOT EXISTS script_navigation_segments (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        from_page TEXT NOT NULL,
+        to_page TEXT NOT NULL,
+        flow_id TEXT NOT NULL REFERENCES script_flows(id) ON DELETE CASCADE,
+        flow_version INTEGER NOT NULL,
+        flow_name TEXT NOT NULL,
+        segment_order INTEGER NOT NULL,
+        parameters_json TEXT NOT NULL DEFAULT '{}',
+        step_ids_json TEXT NOT NULL DEFAULT '[]',
+        steps_json TEXT NOT NULL DEFAULT '[]',
+        updated_at TEXT NOT NULL
+      );
+
 
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
@@ -1074,6 +1108,8 @@ export class Storage {
 
       CREATE INDEX IF NOT EXISTS idx_script_flows_app ON script_flows(app_id, platform, status, updated_at);
       CREATE INDEX IF NOT EXISTS idx_script_flow_versions_flow ON script_flow_versions(flow_id, version);
+      CREATE INDEX IF NOT EXISTS idx_script_navigation_route ON script_navigation_segments(app_id, platform, from_page, to_page);
+      CREATE INDEX IF NOT EXISTS idx_script_navigation_flow ON script_navigation_segments(flow_id, flow_version);
       CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
       CREATE INDEX IF NOT EXISTS idx_step_results_run ON step_results(run_id, iteration_index, step_order);
       CREATE INDEX IF NOT EXISTS idx_artifacts_run_type ON artifacts(run_id, type);
@@ -1137,7 +1173,63 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_graph_versions_graph ON business_graph_versions(graph_id, version);
       CREATE INDEX IF NOT EXISTS idx_business_nodes_version ON business_nodes(graph_version_id, status);
     `);
+    this.refreshPageNavigationIndex();
     this.sanitizeAiModelSettings();
+  }
+
+  private replacePageNavigationSegments(flow: ScriptFlow, document: ScriptFlowDocument): void {
+    this.db.prepare("DELETE FROM script_navigation_segments WHERE flow_id = ?").run(flow.id);
+    if (flow.status !== "active") return;
+    const insert = this.db.prepare(
+      `INSERT INTO script_navigation_segments
+        (id, app_id, platform, from_page, to_page, flow_id, flow_version, flow_name, segment_order,
+         parameters_json, step_ids_json, steps_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const segments = derivePageNavigationSegments({
+      flowId: flow.id,
+      flowVersion: flow.version,
+      document
+    });
+    segments.forEach((segment, index) => {
+      insert.run(
+        segment.id,
+        segment.appId,
+        segment.platform,
+        segment.fromPage,
+        segment.toPage,
+        segment.flowId,
+        segment.flowVersion,
+        segment.flowName,
+        index + 1,
+        JSON.stringify(segment.parameters),
+        JSON.stringify(segment.stepIds),
+        JSON.stringify(segment.steps),
+        flow.updatedAt
+      );
+    });
+  }
+
+  private refreshPageNavigationIndex(): void {
+    const activeFlows = this.listScriptFlows({ status: "active" });
+    const activeIds = new Set(activeFlows.map((flow) => flow.id));
+    const indexedRows = this.db.prepare(
+      "SELECT flow_id, MAX(flow_version) AS flow_version FROM script_navigation_segments GROUP BY flow_id"
+    ).all() as Row[];
+    const indexedVersions = new Map(indexedRows.map((row) => [String(row.flow_id), Number(row.flow_version)]));
+    for (const flowId of indexedVersions.keys()) {
+      if (!activeIds.has(flowId)) {
+        this.db.prepare("DELETE FROM script_navigation_segments WHERE flow_id = ?").run(flowId);
+      }
+    }
+    for (const flow of activeFlows) {
+      if (indexedVersions.get(flow.id) === flow.version) continue;
+      try {
+        this.replacePageNavigationSegments(flow, parseScriptFlow(flow.sourceYaml));
+      } catch {
+        this.db.prepare("DELETE FROM script_navigation_segments WHERE flow_id = ?").run(flow.id);
+      }
+    }
   }
 
   private sanitizeAiModelSettings(): void {
@@ -1203,6 +1295,22 @@ function runtimeInterceptorRuleFromRow(row: Row): RuntimeInterceptorRule {
     action,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)
+  };
+}
+
+function rowToPageNavigationSegment(row: Row): PageNavigationSegmentSnapshot {
+  return {
+    id: String(row.id),
+    appId: String(row.app_id),
+    platform: String(row.platform) as PageNavigationSegmentSnapshot["platform"],
+    fromPage: String(row.from_page),
+    toPage: String(row.to_page),
+    flowId: String(row.flow_id),
+    flowVersion: Number(row.flow_version),
+    flowName: String(row.flow_name),
+    parameters: JSON.parse(String(row.parameters_json ?? "{}")),
+    stepIds: JSON.parse(String(row.step_ids_json ?? "[]")),
+    steps: JSON.parse(String(row.steps_json ?? "[]"))
   };
 }
 

@@ -68,6 +68,7 @@ export type ActionType =
   | "tap_on_image"
   | "input_text_to_element"
   | "scroll_until_visible"
+  | "reach_page"
   | "wait_until_state";
 
 export type StepExpectationType =

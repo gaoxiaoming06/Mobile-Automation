@@ -15,7 +15,7 @@ export function normalizeRunConfig(config: Partial<RunConfig> & { deviceSerial: 
     repeatCount,
     stepIntervalMs: Math.max(0, Math.floor(config.stepIntervalMs ?? 400)),
     stopOnFailure: config.stopOnFailure ?? true,
-    recordVideo: config.recordVideo ?? true,
+    recordVideo: config.recordVideo ?? false,
     keepVideoOnSuccess: config.keepVideoOnSuccess ?? true,
     pauseAfterEachStep: config.pauseAfterEachStep ?? false,
     startStrategy: config.startStrategy ?? "keep_current",

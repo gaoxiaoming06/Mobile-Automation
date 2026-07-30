@@ -15,12 +15,9 @@ describe("ScriptRunForm", () => {
         values={{ className: "班级四十二号", duration: 30, publish: false }}
         devices={[{ serial: "device-1", name: "YAL-AL10" }]}
         deviceSerial="device-1"
-        riskConfirmations={[{ stepId: "publish-lesson", risk: "publish", stepName: "发布课堂" }]}
-        confirmedRiskSteps={[]}
         busy={false}
         onValueChange={vi.fn()}
         onDeviceChange={vi.fn()}
-        onRiskChange={vi.fn()}
         onRun={vi.fn()}
       />
     );
@@ -29,7 +26,7 @@ describe("ScriptRunForm", () => {
     expect(markup).toContain("班级");
     expect(markup).toContain("四十二号");
     expect(markup).toContain("可选参数");
-    expect(markup).toContain("风险确认");
+    expect(markup).not.toContain("风险确认");
     expect(markup).not.toContain("key=value");
   });
 
@@ -40,13 +37,10 @@ describe("ScriptRunForm", () => {
         values={{}}
         devices={[{ serial: "device-1", name: "YAL-AL10" }]}
         deviceSerial="device-1"
-        riskConfirmations={[]}
-        confirmedRiskSteps={[]}
         busy={false}
         disabled
         onValueChange={vi.fn()}
         onDeviceChange={vi.fn()}
-        onRiskChange={vi.fn()}
         onRun={vi.fn()}
       />
     );

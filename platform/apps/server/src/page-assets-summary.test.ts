@@ -3,12 +3,11 @@ import type { BusinessGraphVersion, BusinessNode } from "@mobile-automation/grap
 import { buildPageAssetLibrarySummary } from "./page-assets-summary.js";
 
 describe("buildPageAssetLibrarySummary", () => {
-  it("returns only confirmed page identity and locator counts", () => {
+  it("returns only confirmed page identity", () => {
     const summary = buildPageAssetLibrarySummary(graph([
       page("home", "主页", {
         assetRecordingConfirmed: true,
-        confirmedOcrTexts: ["全部班级"],
-        assetRecordingManualElements: [{ id: "search" }]
+        confirmedOcrTexts: ["全部班级"]
       }),
       page("draft", "草稿页", {})
     ]));
@@ -18,7 +17,6 @@ describe("buildPageAssetLibrarySummary", () => {
       pageAssets: [expect.objectContaining({
         id: "home",
         name: "主页",
-        elementCount: 1,
         identityTexts: expect.arrayContaining(["全部班级"])
       })]
     });

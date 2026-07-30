@@ -16,23 +16,10 @@ export type PageAsset = PageAssetSummary & {
   node: BusinessNode;
 };
 
-export type PageElementLocator = {
-  id: string;
-  label: string;
-  locatorKind?: string;
-  locator?: string;
-  targetText?: string;
-  visualLocator?: Record<string, unknown>;
-  structuralLocator?: Record<string, unknown>;
-  requiresUiTree: boolean;
-  raw: Record<string, unknown>;
-};
-
 export interface PageAssetCatalog {
   listPages(appId: string, platform: PageAssetPlatform): PageAssetSummary[];
   getPage(pageId: string): PageAsset | undefined;
   resolvePage(reference: string, appId: string, platform: PageAssetPlatform): PageAsset | undefined;
-  listLocators(pageId: string): PageElementLocator[];
   findConfusablePages(pageId: string): PageAssetSummary[];
 }
 
@@ -70,26 +57,6 @@ export class StoragePageAssetCatalog implements PageAssetCatalog {
     const normalizedReference = normalize(reference);
     const nameMatches = pages.filter((page) => normalize(page.name) === normalizedReference);
     return nameMatches.length === 1 ? this.getPage(nameMatches[0].id) : undefined;
-  }
-
-  listLocators(pageId: string): PageElementLocator[] {
-    const page = this.getPage(pageId);
-    if (!page) {
-      return [];
-    }
-    const byId = new Map<string, PageElementLocator>();
-    for (const value of [page.node.metadata?.assetRecordingManualElements]) {
-      if (!Array.isArray(value)) {
-        continue;
-      }
-      for (const raw of value) {
-        const locator = readLocator(raw);
-        if (locator) {
-          byId.set(locator.id, locator);
-        }
-      }
-    }
-    return [...byId.values()];
   }
 
   findConfusablePages(pageId: string): PageAssetSummary[] {
@@ -156,25 +123,6 @@ function identitySignatures(matchers: StateMatcher[]): Set<string> {
   return signatures;
 }
 
-function readLocator(value: unknown): PageElementLocator | undefined {
-  if (!isRecord(value) || typeof value.id !== "string" || !value.id.trim()) {
-    return undefined;
-  }
-  const locatorKind = optionalString(value.locatorKind);
-  const structuralLocator = isRecord(value.structuralLocator) ? value.structuralLocator : undefined;
-  return {
-    id: value.id.trim(),
-    label: optionalString(value.label) ?? optionalString(value.name) ?? value.id.trim(),
-    ...(locatorKind ? { locatorKind } : {}),
-    ...stringProperty(value.locator, "locator"),
-    ...stringProperty(value.targetText, "targetText"),
-    ...(isRecord(value.visualLocator) ? { visualLocator: value.visualLocator } : {}),
-    ...(structuralLocator ? { structuralLocator } : {}),
-    requiresUiTree: locatorKind === "structural_locator" || Boolean(structuralLocator),
-    raw: value
-  };
-}
-
 function intersects(left: Set<string>, right: Set<string>): boolean {
   return [...left].some((value) => right.has(value));
 }
@@ -189,17 +137,4 @@ function safeDecode(value: string): string {
   } catch {
     return value;
   }
-}
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function stringProperty<K extends string>(value: unknown, key: K): Partial<Record<K, string>> {
-  const text = optionalString(value);
-  return text ? { [key]: text } as Record<K, string> : {};
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -14,7 +14,6 @@ export type PageAssetSummary = {
   tags: string[];
   matcherCount: number;
   criticalMatcherCount: number;
-  elementCount: number;
   identityTexts: string[];
   confirmedMatchers: string[];
   confirmedUiTexts: string[];
@@ -64,7 +63,6 @@ function summarizePageAsset(node: BusinessNode): PageAssetSummary {
     tags: node.tags,
     matcherCount: node.matchers.length,
     criticalMatcherCount: node.matchers.filter((matcher) => matcher.critical).length,
-    elementCount: recordArray(node.metadata, "assetRecordingManualElements").length,
     identityTexts: identityTexts(node, confirmedMatchers, confirmedOcrTexts, screenshotRegions),
     confirmedMatchers,
     confirmedUiTexts,
@@ -142,13 +140,6 @@ function summarizeScreenshotRegions(metadata: Record<string, unknown> | undefine
       };
     })
     .filter((item): item is PageAssetScreenshotRegionSummary => Boolean(item));
-}
-
-function recordArray(record: Record<string, unknown> | undefined, key: string): Record<string, unknown>[] {
-  const value = record?.[key];
-  return Array.isArray(value)
-    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
-    : [];
 }
 
 function stringArray(record: Record<string, unknown> | undefined, key: string): string[] {

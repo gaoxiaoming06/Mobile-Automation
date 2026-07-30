@@ -29,8 +29,23 @@ describe("AI model settings", () => {
 
   it("supports the local Codex provider without an API key", () => {
     const config = resolveAiModelConfig({}, { enabled: true, model: "gpt-5.4" });
-    expect(config).toEqual({ enabled: true, baseURL: "codex://app-server", model: "gpt-5.4", timeoutMs: 30_000 });
+    expect(config).toEqual({ enabled: true, baseURL: "codex://app-server", model: "gpt-5.4", timeoutMs: 120_000 });
     expect(isCodexAppServerProvider(config.enabled ? config.baseURL : "")).toBe(true);
+  });
+
+  it("keeps the shorter default for an external HTTP provider", () => {
+    expect(resolveAiModelConfig({
+      AI_MODEL_ENABLED: "true",
+      AI_MODEL_BASE_URL: "https://model.example/v1",
+      AI_MODEL_API_KEY: "secret",
+      AI_MODEL_NAME: "vision-model"
+    })).toEqual({
+      enabled: true,
+      baseURL: "https://model.example/v1",
+      apiKey: "secret",
+      model: "vision-model",
+      timeoutMs: 30_000
+    });
   });
 
   it("allows an operator-managed HTTP provider only through environment variables", () => {

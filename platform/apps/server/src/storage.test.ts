@@ -128,6 +128,48 @@ describe("Storage", () => {
     expect(context.storage.getRun(run.id)?.sourceSnapshot).toEqual(expect.objectContaining({ sourceYaml: secondYaml }));
   });
 
+  it("maintains navigation segments incrementally for active use cases", async () => {
+    context = await createStorageContext();
+    const first = navigationFlowDocument("classin.add_friend");
+    const created = context.storage.createScriptFlow({
+      sourceYaml: JSON.stringify(first),
+      document: first,
+      status: "active"
+    });
+
+    expect(context.storage.listPageNavigationSegments({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+      expect.objectContaining({
+        flowId: created.id,
+        flowVersion: 1,
+        fromPage: "classin.home",
+        toPage: "classin.add_friend",
+        stepIds: ["open-more-menu", "open-target"]
+      })
+    ]);
+
+    const second = navigationFlowDocument("classin.settings");
+    context.storage.updateScriptFlow(created.id, {
+      sourceYaml: JSON.stringify(second),
+      document: second,
+      status: "active"
+    });
+    expect(context.storage.listPageNavigationSegments({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+      expect.objectContaining({
+        flowId: created.id,
+        flowVersion: 2,
+        fromPage: "classin.home",
+        toPage: "classin.settings"
+      })
+    ]);
+
+    context.storage.updateScriptFlow(created.id, {
+      sourceYaml: JSON.stringify(second),
+      document: second,
+      status: "archived"
+    });
+    expect(context.storage.listPageNavigationSegments({ appId: "cn.eeo.classin", platform: "android" })).toEqual([]);
+  });
+
   it("persists page identity assets without operation edges", async () => {
     context = await createStorageContext();
     const graph = context.storage.createBusinessGraph({
@@ -257,12 +299,37 @@ async function createStorageContext(existingRoot?: string): Promise<StorageConte
 function scriptFlowDocument(name: string): ScriptFlowDocument {
   return {
     version: 1,
+    kind: "case",
     name,
     app: { id: "cn.eeo.classin", platform: "android" },
     start: { strategy: "keepCurrent" },
     parameters: {},
     steps: [],
     tags: ["teacher"]
+  };
+}
+
+function navigationFlowDocument(targetPage: string): ScriptFlowDocument {
+  return {
+    version: 1,
+    kind: "case",
+    name: "主页导航",
+    app: { id: "cn.eeo.classin", platform: "android" },
+    start: { strategy: "keepCurrent" },
+    parameters: {},
+    steps: [
+      {
+        id: "open-more-menu",
+        onPage: "classin.home",
+        tap: { target: { icon: "add", area: "topBar", position: "trailing" } }
+      },
+      {
+        id: "open-target",
+        tap: { target: { text: targetPage === "classin.settings" ? "设置" : "添加好友" } },
+        expectPage: targetPage
+      }
+    ],
+    tags: []
   };
 }
 

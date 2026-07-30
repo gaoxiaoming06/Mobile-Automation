@@ -1,12 +1,15 @@
 import { parseDocument } from "yaml";
 import type {
   ScriptFlowDocument,
+  ScriptFlowKind,
   ScriptFlowPlatform,
+  ScriptFlowState,
   ScriptFlowStartStrategy,
   ScriptParameterDefinition,
   ScriptParameterOption,
   ScriptParameterType,
   ScriptParameterValue,
+  ScriptSearchPolicy,
   ScriptStep,
   ScriptStepRisk,
   ScriptTarget
@@ -24,7 +27,7 @@ export class ScriptFlowValidationError extends Error {
   }
 }
 
-const rootFields = new Set(["version", "name", "description", "app", "start", "parameters", "steps", "tags"]);
+const rootFields = new Set(["version", "kind", "name", "description", "app", "start", "entry", "outcome", "parameters", "steps", "tags"]);
 const stepBaseFields = new Set(["id", "name", "onPage", "expectPage", "timeoutMs", "risk", "with"]);
 const actionFields = [
   "launchApp",
@@ -34,13 +37,15 @@ const actionFields = [
   "selectText",
   "swipe",
   "scrollUntilVisible",
+  "reachPage",
   "waitForPage",
   "assertPage",
+  "assertText",
   "runFlow",
   "repeat",
   "when"
 ] as const;
-const targetFields = new Set(["ocrText", "pageElement"]);
+const targetFields = new Set(["text", "semantic", "icon", "control", "area", "position", "nearText", "match"]);
 const parameterReferencePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 export function parseScriptFlow(source: string): ScriptFlowDocument {
@@ -62,10 +67,13 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
   if (root.version !== 1) {
     issues.push({ path: "version", message: "ScriptFlow version must be 1" });
   }
+  const kind = readKind(root.kind, issues);
   const name = requiredString(root.name, "name", issues);
   const description = optionalString(root.description, "description", issues);
   const app = readApp(root.app, issues);
   const start = readStart(root.start, issues);
+  const entry = readFlowState(root.entry, "entry", issues);
+  const outcome = readFlowState(root.outcome, "outcome", issues);
   const parameters = readParameters(root.parameters, issues);
   const steps = readSteps(root.steps, "steps", issues);
   const tags = readStringArray(root.tags, "tags", issues, []);
@@ -79,13 +87,52 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
 
   return {
     version: 1,
+    kind,
     name,
     ...(description ? { description } : {}),
     app,
     ...(start ? { start } : {}),
+    ...(entry ? { entry } : {}),
+    ...(outcome ? { outcome } : {}),
     parameters,
     steps,
     tags
+  };
+}
+
+function readKind(value: unknown, issues: ScriptFlowValidationIssue[]): ScriptFlowKind {
+  if (value === undefined) {
+    return "case";
+  }
+  if (value === "case" || value === "scenario") {
+    return value;
+  }
+  issues.push({ path: "kind", message: "Test kind must be case or scenario" });
+  return "case";
+}
+
+function readFlowState(value: unknown, path: "entry" | "outcome", issues: ScriptFlowValidationIssue[]): ScriptFlowState | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const state = recordAt(value, path, issues);
+  rejectUnknownFields(state, new Set(["page", "session", "role"]), path, issues);
+  const page = optionalString(state.page, `${path}.page`, issues);
+  const session = optionalString(state.session, `${path}.session`, issues);
+  const role = optionalString(state.role, `${path}.role`, issues);
+  if (session && session !== "authenticated" && session !== "unauthenticated") {
+    issues.push({ path: `${path}.session`, message: "Session must be authenticated or unauthenticated" });
+  }
+  if (!page && !session) {
+    issues.push({ path, message: "State requires a page or session" });
+  }
+  if (role && session !== "authenticated") {
+    issues.push({ path: `${path}.role`, message: "Role requires an authenticated session" });
+  }
+  return {
+    ...(page ? { page } : {}),
+    ...(session === "authenticated" || session === "unauthenticated" ? { session } : {}),
+    ...(role ? { role } : {})
   };
 }
 
@@ -248,7 +295,7 @@ function readStep(value: unknown, path: string, issues: ScriptFlowValidationIssu
     case "launchApp":
       return { ...base, launchApp: readLaunchApp(step.launchApp, `${path}.launchApp`, issues) };
     case "tap":
-      return { ...base, tap: readTargetAction(step.tap, `${path}.tap`, issues) };
+      return { ...base, tap: readTapAction(step.tap, `${path}.tap`, issues) };
     case "inputText":
       return { ...base, inputText: readValueAction(step.inputText, `${path}.inputText`, issues) };
     case "clearText":
@@ -259,10 +306,14 @@ function readStep(value: unknown, path: string, issues: ScriptFlowValidationIssu
       return { ...base, swipe: readSwipe(step.swipe, `${path}.swipe`, issues) };
     case "scrollUntilVisible":
       return { ...base, scrollUntilVisible: readScroll(step.scrollUntilVisible, `${path}.scrollUntilVisible`, issues) };
+    case "reachPage":
+      return { ...base, reachPage: readReachPage(step.reachPage, `${path}.reachPage`, issues) };
     case "waitForPage":
       return { ...base, waitForPage: requiredString(step.waitForPage, `${path}.waitForPage`, issues) };
     case "assertPage":
       return { ...base, assertPage: requiredString(step.assertPage, `${path}.assertPage`, issues) };
+    case "assertText":
+      return { ...base, assertText: readAssertText(step.assertText, `${path}.assertText`, issues) };
     case "runFlow":
       return {
         ...base,
@@ -274,6 +325,24 @@ function readStep(value: unknown, path: string, issues: ScriptFlowValidationIssu
     case "when":
       return { ...base, when: readWhen(step.when, `${path}.when`, issues) };
   }
+}
+
+function readAssertText(
+  value: unknown,
+  path: string,
+  issues: ScriptFlowValidationIssue[]
+): { text: string; match?: "contains" | "exact" } {
+  const assertion = recordAt(value, path, issues);
+  rejectUnknownFields(assertion, new Set(["text", "match"]), path, issues);
+  const text = requiredString(assertion.text, `${path}.text`, issues);
+  const match = optionalString(assertion.match, `${path}.match`, issues);
+  if (match && match !== "contains" && match !== "exact") {
+    issues.push({ path: `${path}.match`, message: "Text assertion match must be contains or exact" });
+  }
+  return {
+    text,
+    ...(match === "contains" || match === "exact" ? { match } : {})
+  };
 }
 
 function readRisk(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Exclude<ScriptStepRisk, "none"> | undefined {
@@ -292,6 +361,16 @@ function readLaunchApp(value: unknown, path: string, issues: ScriptFlowValidatio
   rejectUnknownFields(action, new Set(["appId"]), path, issues);
   const appId = optionalString(action.appId, `${path}.appId`, issues);
   return appId ? { appId } : {};
+}
+
+function readTapAction(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { target: ScriptTarget; search?: ScriptSearchPolicy } {
+  const action = recordAt(value, path, issues);
+  rejectUnknownFields(action, new Set(["target", "search"]), path, issues);
+  const search = readSearchPolicy(action.search, `${path}.search`, issues);
+  return {
+    target: readTarget(action.target, `${path}.target`, issues),
+    ...(search ? { search } : {})
+  };
 }
 
 function readTargetAction(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { target: ScriptTarget } {
@@ -349,6 +428,20 @@ function readScroll(value: unknown, path: string, issues: ScriptFlowValidationIs
   };
 }
 
+function readReachPage(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { page: string; policy?: "safe" } {
+  const action = recordAt(value, path, issues);
+  rejectUnknownFields(action, new Set(["page", "policy"]), path, issues);
+  const page = requiredString(action.page, `${path}.page`, issues);
+  const policy = optionalString(action.policy, `${path}.policy`, issues);
+  if (policy && policy !== "safe") {
+    issues.push({ path: `${path}.policy`, message: "reachPage policy must be safe" });
+  }
+  return {
+    page,
+    ...(policy === "safe" ? { policy } : {})
+  };
+}
+
 function readRepeat(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { times: number | string; steps: ScriptStep[] } {
   const repeat = recordAt(value, path, issues);
   rejectUnknownFields(repeat, new Set(["times", "steps"]), path, issues);
@@ -390,13 +483,110 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
     }
   }
   const result: ScriptTarget = {
-    ...optionalStringProperty(target.ocrText, `${path}.ocrText`, "ocrText", issues),
-    ...optionalStringProperty(target.pageElement, `${path}.pageElement`, "pageElement", issues)
+    ...optionalStringProperty(target.text, `${path}.text`, "text", issues),
+    ...optionalStringProperty(target.semantic, `${path}.semantic`, "semantic", issues),
+    ...optionalStringProperty(target.icon, `${path}.icon`, "icon", issues),
+    ...readTargetControl(target.control, `${path}.control`, issues),
+    ...readTargetArea(target.area, `${path}.area`, issues),
+    ...readTargetPosition(target.position, `${path}.position`, issues),
+    ...optionalStringProperty(target.nearText, `${path}.nearText`, "nearText", issues),
+    ...readTargetMatch(target.match, `${path}.match`, issues)
   };
-  if ([result.ocrText, result.pageElement].filter(Boolean).length !== 1) {
-    issues.push({ path, message: "Target requires exactly one of ocrText or pageElement" });
+  if ([result.text, result.semantic, result.icon, result.control].filter(Boolean).length !== 1) {
+    issues.push({ path, message: "Target requires exactly one of text, semantic, icon, or control" });
+  }
+  if (result.icon && (!result.area || !result.position)) {
+    issues.push({ path, message: "Icon targets require area and position" });
+  }
+  if (result.icon && result.area === "bottomBar") {
+    issues.push({ path: `${path}.area`, message: "Bottom bar icon targets are not supported yet" });
+  }
+  if (result.icon && result.area === "content" && result.icon.trim().toLowerCase() !== "add") {
+    issues.push({ path: `${path}.icon`, message: "Content icon targets currently support only the standard add icon" });
+  }
+  if (result.position && !result.icon) {
+    issues.push({ path: `${path}.position`, message: "Position is only supported for icon targets" });
+  }
+  if (result.match && !result.text) {
+    issues.push({ path: `${path}.match`, message: "Match is only supported for text targets" });
+  }
+  if (result.control && (!result.nearText || result.area !== "content")) {
+    issues.push({ path, message: "Control targets require nearText and area content" });
   }
   return result;
+}
+
+function readSearchPolicy(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): ScriptSearchPolicy | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const search = recordAt(value, path, issues);
+  rejectUnknownFields(search, new Set(["mode", "direction", "maxSwipes", "resetToTop", "container"]), path, issues);
+  const mode = optionalString(search.mode, `${path}.mode`, issues);
+  if (mode && mode !== "auto" && mode !== "visibleOnly" && mode !== "scroll") {
+    issues.push({ path: `${path}.mode`, message: "Search mode must be auto, visibleOnly, or scroll" });
+  }
+  const direction = optionalString(search.direction, `${path}.direction`, issues);
+  if (direction && direction !== "up" && direction !== "down" && direction !== "both") {
+    issues.push({ path: `${path}.direction`, message: "Search direction must be up, down, or both" });
+  }
+  const maxSwipes = optionalInteger(search.maxSwipes, `${path}.maxSwipes`, issues, 1, 50);
+  const resetToTop = optionalBoolean(search.resetToTop, `${path}.resetToTop`, issues);
+  const container = optionalString(search.container, `${path}.container`, issues);
+  if (container && container !== "content") {
+    issues.push({ path: `${path}.container`, message: "Search container must be content" });
+  }
+  return {
+    ...(mode === "auto" || mode === "visibleOnly" || mode === "scroll" ? { mode } : {}),
+    ...(direction === "up" || direction === "down" || direction === "both" ? { direction } : {}),
+    ...(maxSwipes !== undefined ? { maxSwipes } : {}),
+    ...(resetToTop !== undefined ? { resetToTop } : {}),
+    ...(container === "content" ? { container } : {})
+  };
+}
+
+function readTargetArea(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Pick<ScriptTarget, "area"> {
+  if (value === undefined) {
+    return {};
+  }
+  if (value === "topBar" || value === "content" || value === "bottomBar") {
+    return { area: value };
+  }
+  issues.push({ path, message: "Target area must be topBar, content, or bottomBar" });
+  return {};
+}
+
+function readTargetPosition(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Pick<ScriptTarget, "position"> {
+  if (value === undefined) {
+    return {};
+  }
+  if (value === "leading" || value === "trailing") {
+    return { position: value };
+  }
+  issues.push({ path, message: "Target position must be leading or trailing" });
+  return {};
+}
+
+function readTargetControl(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Pick<ScriptTarget, "control"> {
+  if (value === undefined) {
+    return {};
+  }
+  if (value === "checkbox") {
+    return { control: value };
+  }
+  issues.push({ path, message: "Target control must be checkbox" });
+  return {};
+}
+
+function readTargetMatch(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Pick<ScriptTarget, "match"> {
+  if (value === undefined) {
+    return {};
+  }
+  if (value === "contains" || value === "exact") {
+    return { match: value };
+  }
+  issues.push({ path, message: "Target match must be contains or exact" });
+  return {};
 }
 
 function readParameterBindings(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Record<string, ScriptParameterValue> {
@@ -516,6 +706,17 @@ function optionalString(value: unknown, path: string, issues: ScriptFlowValidati
     return undefined;
   }
   return requiredString(value, path, issues) || undefined;
+}
+
+function optionalBoolean(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    issues.push({ path, message: "Expected a boolean" });
+    return undefined;
+  }
+  return value;
 }
 
 function scalarAsString(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): string {

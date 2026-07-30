@@ -95,7 +95,7 @@ describe("AndroidVideoRecorder", () => {
       expect(recording.processGroupPid).toBe(1234);
       expect(vi.mocked(spawn)).toHaveBeenCalledWith(
         "scrcpy",
-        ["--serial", "device-1", "--no-playback", "--no-audio", "--record", path.join(tempDir, "run-2.mp4")],
+        ["--serial", "device-1", "--no-window", "--no-audio", "--record", path.join(tempDir, "run-2.mp4")],
         { detached: true, stdio: "pipe" }
       );
     } finally {

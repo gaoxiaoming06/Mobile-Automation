@@ -3,8 +3,10 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
 import type { ScriptFlow, ScriptFlowVersion, TestRun } from "@mobile-automation/shared";
+import { derivePageNavigationSegments } from "./page-navigation.js";
 import { registerScriptFlowRoutes, type ScriptFlowApiStorage } from "./script-flow-api.js";
 import type { StartScriptFlowRunInput } from "./script-flow-runner.js";
+import { ScriptTargetResolutionError } from "./script-target-resolver.js";
 
 const sourceYaml = `
 version: 1
@@ -22,7 +24,7 @@ steps:
     onPage: classin.home
     tap:
       target:
-        ocrText: 添加好友
+        text: 添加好友
     expectPage: classin.friend.add
 tags: [friend]
 `;
@@ -64,7 +66,7 @@ describe("ScriptFlow API", () => {
     expect((listResponse.body as { flows: ScriptFlow[] }).flows).toHaveLength(1);
 
     const updatedYaml = sourceYaml.replace("打开添加好友", "打开添加好友页面");
-    const updatedResponse = await put(context.baseUrl, `/api/script-flows/${created.id}`, { sourceYaml: updatedYaml, status: "active" });
+    const updatedResponse = await put(context.baseUrl, `/api/script-flows/${created.id}`, { sourceYaml: updatedYaml, status: "active", expectedVersion: 1 });
     expect(updatedResponse.body).toEqual({
       flow: expect.objectContaining({ version: 2, name: "打开添加好友页面", status: "active" })
     });
@@ -85,7 +87,6 @@ describe("ScriptFlow API", () => {
       planDigest,
       deviceSerial: "device-1",
       parameters: { friendName: "张三" },
-      confirmedRiskSteps: ["open-add-friend"],
       androidAppMonitor: {
         enabled: true,
         packageName: "cn.eeo.classin",
@@ -101,7 +102,6 @@ describe("ScriptFlow API", () => {
         sourceYaml: updatedYaml,
         deviceSerial: "device-1",
         parameters: { friendName: "张三" },
-        confirmedRiskSteps: ["open-add-friend"],
         androidAppMonitor: {
           enabled: true,
           packageName: "cn.eeo.classin",
@@ -123,7 +123,7 @@ describe("ScriptFlow API", () => {
   it("rejects preview and execution when the client version is stale", async () => {
     const context = await apiContext(servers);
     const created = ((await post(context.baseUrl, "/api/script-flows", { sourceYaml })).body as { flow: ScriptFlow }).flow;
-    await put(context.baseUrl, `/api/script-flows/${created.id}`, { sourceYaml: sourceYaml.replace("打开添加好友", "打开添加好友页面") });
+    await put(context.baseUrl, `/api/script-flows/${created.id}`, { sourceYaml: sourceYaml.replace("打开添加好友", "打开添加好友页面"), expectedVersion: 1 });
 
     const preview = await post(context.baseUrl, `/api/script-flows/${created.id}/preview`, {
       expectedVersion: 1,
@@ -138,6 +138,114 @@ describe("ScriptFlow API", () => {
     expect(preview).toEqual({ status: 409, body: { error: "ScriptFlow version changed; reload before continuing" } });
     expect(run).toEqual({ status: 409, body: { error: "ScriptFlow version changed; reload before continuing" } });
     expect(context.runner.inputs).toEqual([]);
+  });
+
+  it("previews and runs an unsaved draft without adding it to the use case center", async () => {
+    const context = await apiContext(servers);
+
+    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
+      sourceYaml,
+      parameters: { friendName: "张三" }
+    });
+    expect(preview.status).toBe(200);
+    const planDigest = (preview.body as { planDigest: string }).planDigest;
+
+    const started = await post(context.baseUrl, "/api/script-flow-drafts/runs", {
+      sourceYaml,
+      planDigest,
+      deviceSerial: "device-1",
+      parameters: { friendName: "张三" }
+    });
+
+    expect(started.status).toBe(202);
+    expect(context.storage.listScriptFlows()).toEqual([]);
+    expect(context.runner.inputs).toEqual([
+      expect.objectContaining({
+        flowId: expect.stringMatching(/^temporary:/),
+        scriptVersion: 1,
+        sourceYaml,
+        deviceSerial: "device-1"
+      })
+    ]);
+  });
+
+  it("freezes the derived navigation index without copying active use case sources into dependencies", async () => {
+    const context = await apiContext(servers);
+    const route = ((await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: navigationSource("从详情到主页"),
+      status: "active"
+    })).body as { flow: ScriptFlow }).flow;
+
+    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
+      sourceYaml: reachHomeSource(),
+      parameters: {}
+    });
+
+    expect(preview.status).toBe(200);
+    expect(preview.body).toEqual(expect.objectContaining({
+      plan: expect.objectContaining({
+        steps: [expect.objectContaining({ action: "reachPage", input: { pageId: "classin.home", policy: "safe" } })]
+      }),
+      dependencies: [],
+      navigationIndex: expect.objectContaining({
+        segmentCount: 1,
+        digest: expect.stringMatching(/^[a-f0-9]{64}$/)
+      })
+    }));
+    expect(route.status).toBe("active");
+  });
+
+  it("loads the navigation index for an entry page added by the compiler", async () => {
+    const context = await apiContext(servers);
+    await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: navigationSource("从详情到主页"),
+      status: "active"
+    });
+
+    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
+      sourceYaml: entryHomeSource(),
+      parameters: {}
+    });
+
+    expect(preview.status).toBe(200);
+    expect(preview.body).toEqual(expect.objectContaining({
+      plan: expect.objectContaining({
+        steps: [
+          expect.objectContaining({ id: "__prepare.entry-page", phase: "preparation", action: "reachPage" }),
+          expect.objectContaining({ id: "verify-home", phase: "test", action: "assertPage" })
+        ]
+      }),
+      navigationIndex: expect.objectContaining({ segmentCount: 1 })
+    }));
+  });
+
+  it("rejects saving an AI revision over a newer use case version", async () => {
+    const context = await apiContext(servers);
+    const created = ((await post(context.baseUrl, "/api/script-flows", { sourceYaml, status: "active" })).body as { flow: ScriptFlow }).flow;
+
+    const stale = await put(context.baseUrl, `/api/script-flows/${created.id}`, {
+      sourceYaml: sourceYaml.replace("打开添加好友", "教师登录"),
+      status: "active",
+      expectedVersion: created.version + 1
+    });
+
+    expect(stale).toEqual({ status: 409, body: { error: "ScriptFlow version changed; reload before continuing" } });
+  });
+
+  it("returns a validation error when a page element is missing a runtime parameter", async () => {
+    const context = await apiContext(servers);
+    const created = ((await post(context.baseUrl, "/api/script-flows", { sourceYaml })).body as { flow: ScriptFlow }).flow;
+    context.runner.validationError = new ScriptTargetResolutionError("页面元素“班级列表”需要参数 className（班级名称）");
+
+    const preview = await post(context.baseUrl, `/api/script-flows/${created.id}/preview`, {
+      expectedVersion: created.version,
+      parameters: { friendName: "张三" }
+    });
+
+    expect(preview).toEqual({
+      status: 400,
+      body: { error: "页面元素“班级列表”需要参数 className（班级名称）" }
+    });
   });
 
   it("rejects execution when a previewed runFlow dependency changes", async () => {
@@ -155,13 +263,12 @@ describe("ScriptFlow API", () => {
       dependencies: [{ flowId: child.id, version: 1, sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/) }]
     }));
 
-    await put(context.baseUrl, `/api/script-flows/${child.id}`, { sourceYaml: childSource("打开新主页") });
+    await put(context.baseUrl, `/api/script-flows/${child.id}`, { sourceYaml: childSource("打开新主页"), expectedVersion: child.version });
     const run = await post(context.baseUrl, `/api/script-flows/${parent.id}/runs`, {
       expectedVersion: parent.version,
       planDigest: (preview.body as { planDigest: string }).planDigest,
       deviceSerial: "device-1",
-      parameters: {},
-      confirmedRiskSteps: ["child.open-home"]
+      parameters: {}
     });
 
     expect(run).toEqual({ status: 409, body: { error: "Execution plan changed; preview again" } });
@@ -208,6 +315,14 @@ class MemoryScriptFlowStorage implements ScriptFlowApiStorage {
       .filter((flow) => !filter.status || flow.status === filter.status);
   }
 
+  listPageNavigationSegments(filter: { appId: string; platform: ScriptFlow["platform"] }) {
+    return this.listScriptFlows({ ...filter, status: "active" }).flatMap((flow) => derivePageNavigationSegments({
+      flowId: flow.id,
+      flowVersion: flow.version,
+      document: flow.parsed as unknown as ScriptFlowDocument
+    }));
+  }
+
   getScriptFlow(id: string): ScriptFlow | undefined { return this.flows.get(id); }
 
   updateScriptFlow(id: string, input: { sourceYaml: string; document: ScriptFlowDocument; status?: ScriptFlow["status"] }): ScriptFlow {
@@ -236,7 +351,7 @@ name: ${name}
 app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: open-home
-    tap: { target: { ocrText: 主页 } }
+    tap: { target: { text: 主页 } }
 `;
 }
 
@@ -251,9 +366,51 @@ steps:
 `;
 }
 
+function reachHomeSource(): string {
+  return `
+version: 1
+name: 到达主页
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: reach-home
+    reachPage: { page: classin.home, policy: safe }
+`;
+}
+
+function entryHomeSource(): string {
+  return `
+version: 1
+kind: case
+name: 校验主页
+app: { id: cn.eeo.classin, platform: android }
+entry: { page: classin.home }
+steps:
+  - id: verify-home
+    assertPage: classin.home
+`;
+}
+
+function navigationSource(name: string): string {
+  return `
+version: 1
+name: ${name}
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open-home
+    onPage: classin.detail
+    tap: { target: { text: 主页 } }
+    expectPage: classin.home
+`;
+}
+
 class CapturingScriptFlowRunner {
   readonly inputs: StartScriptFlowRunInput[] = [];
+  validationError?: Error;
   constructor(private readonly storage: MemoryScriptFlowStorage) {}
+
+  validatePlan(): void {
+    if (this.validationError) throw this.validationError;
+  }
 
   async start(input: StartScriptFlowRunInput): Promise<TestRun> {
     this.inputs.push(input);

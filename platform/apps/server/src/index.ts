@@ -23,19 +23,8 @@ import { pageAssetLibraryTargetMismatchMessage } from "./page-asset-library-targ
 import { registerPageAssetLibraryRoutes } from "./page-asset-library-api.js";
 import { buildConfirmedPageAssetInput, identifyOrCreateCurrentPageDraft, readCurrentPageCollectionOptions } from "./current-page-asset.js";
 import { buildPageAssetLibrarySummary } from "./page-assets-summary.js";
-import { createVisualLocatorTemplate } from "./page-matcher.js";
 import { scaleLocatorCoordinate } from "./locator-coordinate.js";
 import { MobileDriver } from "./mobile-driver.js";
-import {
-  deletePageElementAsset,
-  persistPageElementAsset,
-  type PageElementDynamicMask,
-  type PageElementDynamicRegion,
-  type PageElementItemTemplate,
-  type PageElementLocatorKind,
-  type PageElementScrollProfile
-} from "./page-element-assets.js";
-import { validatePageElementAssetQuality, type PageElementQualityResult } from "./page-element-quality.js";
 import { ScrcpyStreamBridge } from "./scrcpy-stream.js";
 import { resolveServerHost } from "./server-network.js";
 import { Storage } from "./storage.js";
@@ -92,12 +81,14 @@ const pageStateService = new DefaultPageStateService(pageAssetCatalog, observati
 const deviceExecutionLease = new DeviceExecutionLease();
 const runner = new AutomationRunner(storage, driver, ocr, {
   verifyPageState: pageStateExpectationVerifier(pageStateService),
+  pageStateService,
   executionLease: deviceExecutionLease
 });
 const scriptFlowRunner = new ScriptFlowRunner({
   backend: runner,
   driver,
-  targetResolver: new ScriptTargetResolver(pageAssetCatalog)
+  targetResolver: new ScriptTargetResolver(),
+  pageCatalog: pageAssetCatalog
 });
 const stabilityExplorer = new StabilityExplorer(storage, driver, ocr, deviceExecutionLease);
 const scrcpyStreamBridge = new ScrcpyStreamBridge();
@@ -123,11 +114,13 @@ app.get("/api/health", (_req, res) => {
 registerScriptFlowRoutes(app, { storage, runner: scriptFlowRunner });
 registerPageAssetLibraryRoutes(app, { storage });
 registerScriptFlowAiRoutes(app, {
-  generateDraft: ({ prompt, appId, platform }) => generateScriptFlowDraft({
+  getFlow: (id) => storage.getScriptFlow(id),
+  generateDraft: ({ prompt, appId, platform, existingFlow }) => generateScriptFlowDraft({
     config: resolveAiModelConfig(process.env, storage.getAiModelSettings()),
     prompt,
     appId,
     platform,
+    existingFlow,
     pageCatalog: pageAssetCatalog,
     flows: storage.listScriptFlows({ appId, platform })
   })
@@ -613,103 +606,6 @@ app.post("/api/page-assets/:versionId/assets/nodes", async (req, res) => {
   }
 });
 
-app.post("/api/page-assets/:versionId/assets/page-elements", (req, res) => {
-  try {
-    const graphVersion = storage.getBusinessGraphVersion(req.params.versionId);
-    if (!graphVersion) {
-      res.status(404).json({ error: "Page asset library version not found" });
-      return;
-    }
-    const body = readManualPageElementRequest(req.body);
-    const result = persistPageElementAsset({
-      graphVersionId: graphVersion.id,
-      storage,
-      ...body,
-      label: body.elementLabel
-    });
-    if (result.status === "skipped") {
-      res.status(422).json(result);
-      return;
-    }
-    const latestGraphVersion = storage.getBusinessGraphVersion(req.params.versionId) ?? graphVersion;
-    res.status(200).json({
-      result,
-      assets: buildPageAssetLibrarySummary(latestGraphVersion)
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-app.post("/api/page-assets/:versionId/assets/page-elements/validate", async (req, res) => {
-  try {
-    const graphVersion = storage.getBusinessGraphVersion(req.params.versionId);
-    if (!graphVersion) {
-      res.status(404).json({ error: "Page asset library version not found" });
-      return;
-    }
-    const body = readManualPageElementRequest(req.body);
-    const observation = await resolvePageElementQualityObservation(req.body);
-    if (!observation) {
-      res.status(400).json({ error: "observation or deviceSerial is required" });
-      return;
-    }
-    if (sendPageAssetLibraryTargetMismatch(res, graphVersion, observation)) {
-      return;
-    }
-    const sourceNode = storage.findBusinessNodeById(graphVersion.id, body.sourceNodeId);
-    const region = parsePercentRegionFromLocator(body.locator);
-    const quality = validatePageElementAssetQuality({
-      element: {
-        elementId: body.elementId,
-        locator: body.locator,
-        elementLabel: body.elementLabel,
-        targetText: body.targetText,
-        semanticArea: body.semanticArea,
-        region,
-        locatorKind: body.locatorKind,
-        structuralLocator: body.structuralLocator,
-        visualLocator: body.visualLocator,
-        dynamicMasks: body.dynamicMasks,
-        anchorOffsetPercent: body.anchorOffsetPercent
-      },
-      observation,
-      existingElements: readManualElementsForQuality(sourceNode?.metadata?.assetRecordingManualElements)
-    });
-    const visualLocator = region ? await createPageElementVisualLocator(observation, region) : undefined;
-    res.json({ quality, visualLocator, observation });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-app.delete("/api/page-assets/:versionId/assets/page-elements/:sourceNodeId/:elementId", (req, res) => {
-  try {
-    const graphVersion = storage.getBusinessGraphVersion(req.params.versionId);
-    if (!graphVersion) {
-      res.status(404).json({ error: "Page asset library version not found" });
-      return;
-    }
-    const result = deletePageElementAsset({
-      graphVersionId: graphVersion.id,
-      storage,
-      sourceNodeId: req.params.sourceNodeId,
-      elementId: req.params.elementId
-    });
-    if (result.status === "skipped") {
-      res.status(404).json(result);
-      return;
-    }
-    const latestGraphVersion = storage.getBusinessGraphVersion(req.params.versionId) ?? graphVersion;
-    res.json({
-      result,
-      assets: buildPageAssetLibrarySummary(latestGraphVersion)
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
 app.delete("/api/page-assets/:versionId/assets/nodes/:nodeId", (req, res) => {
   try {
     const graphVersion = storage.getBusinessGraphVersion(req.params.versionId);
@@ -1088,397 +984,6 @@ function parsePositiveInt(value: unknown, fallback: number, min: number, max: nu
   return Math.min(max, Math.max(min, parsed));
 }
 
-function readManualPageElementRequest(body: unknown): {
-  elementId?: string;
-  sourceNodeId: string;
-  locator: string;
-  semanticArea?: "top" | "content" | "bottom" | "unknown";
-  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
-  elementLabel: string;
-  targetText?: string;
-  platformScope?: Platform | "mobile-both";
-  scrollProfile?: PageElementScrollProfile;
-  tapPointPercent?: { x: number; y: number };
-  anchorOffsetPercent?: { x: number; y: number };
-  quality?: PageElementQualityResult;
-  visualLocator?: Record<string, unknown>;
-  locatorKind?: PageElementLocatorKind;
-  dynamicMasks?: PageElementDynamicMask[];
-  structuralLocator?: Record<string, unknown>;
-  dynamicRegion?: PageElementDynamicRegion;
-  itemTemplate?: PageElementItemTemplate;
-} {
-  const input = (body ?? {}) as {
-    elementId?: string;
-    sourceNodeId?: string;
-    locator?: string;
-    semanticArea?: string;
-    coordinateSpace?: string;
-    elementLabel?: string;
-    targetText?: string;
-    platformScope?: Platform | "mobile-both";
-    scrollProfile?: unknown;
-    tapPointPercent?: unknown;
-    anchorOffsetPercent?: unknown;
-    quality?: unknown;
-    visualLocator?: unknown;
-    locatorKind?: unknown;
-    dynamicMasks?: unknown;
-    structuralLocator?: unknown;
-    dynamicRegion?: unknown;
-    itemTemplate?: unknown;
-  };
-  const sourceNodeId = input.sourceNodeId?.trim();
-  const locator = input.locator?.trim();
-  const elementLabel = input.elementLabel?.trim();
-  if (!sourceNodeId) {
-    throw new Error("sourceNodeId is required");
-  }
-  if (!locator) {
-    throw new Error("locator is required");
-  }
-  return {
-    elementId: input.elementId?.trim() || undefined,
-    sourceNodeId,
-    locator,
-    semanticArea: readVisualSemanticArea(input.semanticArea),
-    coordinateSpace: readCoordinateSpace(input.coordinateSpace),
-    elementLabel: elementLabel || locator,
-    targetText: input.targetText?.trim() || undefined,
-    platformScope: input.platformScope === "ios" || input.platformScope === "mobile-both" ? input.platformScope : "android",
-    scrollProfile: readManualScrollProfile(input.scrollProfile),
-    tapPointPercent: readManualTapPointPercent(input.tapPointPercent),
-    anchorOffsetPercent: readManualSignedPercentPoint(input.anchorOffsetPercent),
-    quality: readPageElementQuality(input.quality),
-    visualLocator: readPlainRecord(input.visualLocator),
-    locatorKind: readManualLocatorKind(input.locatorKind),
-    dynamicMasks: readManualDynamicMasks(input.dynamicMasks),
-    structuralLocator: readPlainRecord(input.structuralLocator),
-    dynamicRegion: readManualDynamicRegion(input.dynamicRegion),
-    itemTemplate: readManualItemTemplate(input.itemTemplate)
-  };
-}
-
-async function createPageElementVisualLocator(
-  observation: Observation | undefined,
-  region: { x: number; y: number; width: number; height: number }
-): Promise<Record<string, unknown> | undefined> {
-  const screenshotBase64 = observation?.raw?.screenshotBase64;
-  if (typeof screenshotBase64 !== "string" || !screenshotBase64) {
-    return undefined;
-  }
-  const template = await createVisualLocatorTemplate({
-    screenshot: Buffer.from(screenshotBase64, "base64"),
-    percentRegion: region,
-    resolution: observation.resolution,
-    sampleSize: 16
-  });
-  if (!template) {
-    return undefined;
-  }
-  return {
-    version: 1,
-    strategy: "recorded_crop_template",
-    minTemplateSimilarity: 0.82,
-    template
-  };
-}
-
-async function resolvePageElementQualityObservation(body: unknown): Promise<Observation | undefined> {
-  const input = (body ?? {}) as {
-    observation?: Observation;
-    deviceSerial?: string;
-    includeOcr?: boolean;
-    lang?: string;
-  };
-  if (input.observation && typeof input.observation === "object") {
-    return input.observation;
-  }
-  const deviceSerial = input.deviceSerial?.trim();
-  if (!deviceSerial) {
-    return undefined;
-  }
-  return observationService.collect(deviceSerial, {
-    includeScreenshot: true,
-    includeUiTree: true,
-    includeOcr: input.includeOcr ?? true,
-    lang: input.lang
-  });
-}
-
-function readManualElementsForQuality(value: unknown): Array<{ id?: string; label?: string; locator?: string }> {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((item): { id?: string; label?: string; locator?: string } | undefined => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        return undefined;
-      }
-      const record = item as Record<string, unknown>;
-      return {
-        id: nonEmptyString(record.id),
-        label: nonEmptyString(record.label),
-        locator: nonEmptyString(record.locator)
-      };
-    })
-    .filter((item): item is { id?: string; label?: string; locator?: string } => Boolean(item));
-}
-
-function readPageElementQuality(value: unknown): PageElementQualityResult | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  const status = input.status === "pass" || input.status === "needs_review" || input.status === "fail" ? input.status : undefined;
-  const score = typeof input.score === "number" && Number.isFinite(input.score) ? input.score : undefined;
-  if (!status || score === undefined) {
-    return undefined;
-  }
-  return {
-    status,
-    score,
-    warnings: Array.isArray(input.warnings) ? input.warnings.filter(isQualityWarning) : [],
-    candidates: Array.isArray(input.candidates) ? input.candidates.filter(isQualityCandidate) : [],
-    evidence: input.evidence && typeof input.evidence === "object" && !Array.isArray(input.evidence) ? input.evidence as PageElementQualityResult["evidence"] : {
-      uniqueCandidate: false,
-      candidateCount: 0
-    }
-  };
-}
-
-function readPlainRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function readPlainRecordArray(value: unknown): Record<string, unknown>[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const records = value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
-  return records.length ? records : undefined;
-}
-
-function readManualLocatorKind(value: unknown): PageElementLocatorKind | undefined {
-  return value === "text_locator" ||
-    value === "visual_locator" ||
-    value === "structural_locator" ||
-    value === "collection_item_locator" ||
-    value === "top_bar_icon_locator" ||
-    value === "ocr_anchor_offset"
-    ? value
-    : undefined;
-}
-
-function readPercentRect(value: unknown): { x: number; y: number; width: number; height: number } | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  const x = readManualPercent(input.x);
-  const y = readManualPercent(input.y);
-  const width = readManualPercent(input.width);
-  const height = readManualPercent(input.height);
-  if (x === undefined || y === undefined || width === undefined || height === undefined || width <= 0 || height <= 0) {
-    return undefined;
-  }
-  return { x, y, width, height };
-}
-
-function readManualDynamicMasks(value: unknown): PageElementDynamicMask[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const masks = value
-    .map((item): PageElementDynamicMask | undefined => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        return undefined;
-      }
-      const input = item as Record<string, unknown>;
-      const region = readPercentRect(input.region);
-      if (!region) {
-        return undefined;
-      }
-      return {
-        kind: readDynamicMaskKind(input.kind),
-        label: typeof input.label === "string" && input.label.trim() ? input.label.trim() : undefined,
-        region,
-        reason: typeof input.reason === "string" && input.reason.trim() ? input.reason.trim() : undefined
-      };
-    })
-    .filter((item): item is PageElementDynamicMask => Boolean(item));
-  return masks.length ? masks : undefined;
-}
-
-function readDynamicMaskKind(value: unknown): PageElementDynamicMask["kind"] {
-  return value === "avatar" || value === "text" || value === "image" || value === "number" ? value : "custom";
-}
-
-function readManualDynamicRegion(value: unknown): PageElementDynamicRegion | undefined {
-  const input = readPlainRecord(value);
-  const id = typeof input?.id === "string" ? input.id.trim() : "";
-  const label = typeof input?.label === "string" ? input.label.trim() : "";
-  const region = readPercentRect(input?.region);
-  if (!input || !id || !label || !region) {
-    return undefined;
-  }
-  const itemTemplateId = typeof input.itemTemplateId === "string" && input.itemTemplateId.trim() ? input.itemTemplateId.trim() : undefined;
-  return {
-    id,
-    label,
-    kind: readManualDynamicRegionKind(input.kind),
-    region,
-    ...(itemTemplateId ? { itemTemplateId } : {}),
-    ...(readPlainRecordArray(input.dynamicFieldRules) ? { dynamicFieldRules: readPlainRecordArray(input.dynamicFieldRules) } : {})
-  };
-}
-
-function readManualDynamicRegionKind(value: unknown): PageElementDynamicRegion["kind"] {
-  return value === "grid" || value === "feed" || value === "form_group" ? value : "list";
-}
-
-function readManualItemTemplate(value: unknown): PageElementItemTemplate | undefined {
-  const input = readPlainRecord(value);
-  const id = typeof input?.id === "string" ? input.id.trim() : "";
-  const label = typeof input?.label === "string" ? input.label.trim() : "";
-  if (!input || !id || !label) {
-    return undefined;
-  }
-  return {
-    id,
-    label,
-    ...(readPercentRect(input.region) ? { region: readPercentRect(input.region) } : {}),
-    ...(readPercentRect(input.actionArea) ? { actionArea: readPercentRect(input.actionArea) } : {}),
-    ...(readPlainRecord(input.stableStructure) ? { stableStructure: readPlainRecord(input.stableStructure) } : {}),
-    ...(readPlainRecordArray(input.stableAnchors) ? { stableAnchors: readPlainRecordArray(input.stableAnchors) } : {}),
-    ...(readPlainRecordArray(input.dynamicFields) ? { dynamicFields: readPlainRecordArray(input.dynamicFields) } : {})
-  };
-}
-
-function isQualityWarning(value: unknown): value is PageElementQualityResult["warnings"][number] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const input = value as Record<string, unknown>;
-  return typeof input.code === "string" && typeof input.message === "string" && (input.severity === "info" || input.severity === "warning" || input.severity === "error");
-}
-
-function isQualityCandidate(value: unknown): value is PageElementQualityResult["candidates"][number] {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function parsePercentRegionFromLocator(locator: string): { x: number; y: number; width: number; height: number } | undefined {
-  if (!locator.startsWith("image-region:")) {
-    return undefined;
-  }
-  const [x, y, width, height] = locator
-    .replace(/^image-region:\s*/, "")
-    .split(",")
-    .map((part) => Number(part.trim()));
-  if (![x, y, width, height].every((value) => Number.isFinite(value)) || width <= 0 || height <= 0) {
-    return undefined;
-  }
-  return { x, y, width, height };
-}
-
-function readVisualSemanticArea(value: unknown): "top" | "content" | "bottom" | "unknown" | undefined {
-  return value === "top" ||
-    value === "content" ||
-    value === "bottom" ||
-    value === "unknown"
-    ? value
-    : undefined;
-}
-
-function readCoordinateSpace(value: unknown): "screen" | "app_viewport" | "region" | "runtime" | undefined {
-  return value === "screen" || value === "app_viewport" || value === "region" || value === "runtime" ? value : undefined;
-}
-
-function readManualScrollProfile(value: unknown): PageElementScrollProfile | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  return {
-    containerKind: readManualScrollContainerKind(input.containerKind),
-    direction: input.direction === "horizontal" ? "horizontal" : "vertical",
-    columns: readManualScrollColumns(input.columns),
-    targetKind: readManualScrollTargetKind(input.targetKind),
-    targetQuery: typeof input.targetQuery === "string" && input.targetQuery.trim() ? input.targetQuery.trim() : undefined,
-    candidateItemHeightPercent: readManualPercent(input.candidateItemHeightPercent),
-    clickSafePoint: readManualClickSafePoint(input.clickSafePoint),
-    scrollStepPercent: readManualPercent(input.scrollStepPercent),
-    failureStrategy: readManualCandidateFailureStrategy(input.failureStrategy)
-  };
-}
-
-function readManualScrollContainerKind(value: unknown): PageElementScrollProfile["containerKind"] {
-  return value === "grid_list" || value === "tab_bar" || value === "carousel" || value === "scroll_area" ? value : "list";
-}
-
-function readManualScrollTargetKind(value: unknown): PageElementScrollProfile["targetKind"] {
-  return value === "ocr_text" || value === "semantic_label" || value === "nth_item" || value === "image_region" ? value : "item_text";
-}
-
-function readManualScrollColumns(value: unknown): number | undefined {
-  const numberValue = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : undefined;
-  if (!Number.isFinite(numberValue) || numberValue! < 1) {
-    return undefined;
-  }
-  return Math.min(6, Math.floor(numberValue!));
-}
-
-function readManualPercent(value: unknown): number | undefined {
-  const numberValue = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : undefined;
-  if (!Number.isFinite(numberValue)) {
-    return undefined;
-  }
-  return Math.max(0, Math.min(100, numberValue!));
-}
-
-function readManualTapPointPercent(value: unknown): { x: number; y: number } | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  const x = readManualPercent(input.x);
-  const y = readManualPercent(input.y);
-  if (x === undefined || y === undefined) {
-    return undefined;
-  }
-  return { x, y };
-}
-
-function readManualSignedPercentPoint(value: unknown): { x: number; y: number } | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  const x = typeof input.x === "number" && Number.isFinite(input.x) ? Math.max(-100, Math.min(100, input.x)) : undefined;
-  const y = typeof input.y === "number" && Number.isFinite(input.y) ? Math.max(-100, Math.min(100, input.y)) : undefined;
-  if (x === undefined || y === undefined) {
-    return undefined;
-  }
-  return { x, y };
-}
-
-function readManualClickSafePoint(value: unknown): { xPercent: number; yPercent: number } | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  const xPercent = readManualPercent(input.xPercent);
-  const yPercent = readManualPercent(input.yPercent);
-  if (xPercent === undefined || yPercent === undefined) {
-    return undefined;
-  }
-  return { xPercent, yPercent };
-}
-
-function readManualCandidateFailureStrategy(value: unknown): PageElementScrollProfile["failureStrategy"] {
-  return value === "none" || value === "try_next_candidate" || value === "back_and_try_next_candidate" ? value : undefined;
-}
-
 function readRuntimeInterceptorRuleInput(body: unknown): Omit<RuntimeInterceptorRule, "id" | "createdAt" | "updatedAt"> & { id?: string } {
   const input = readRuntimeInterceptorRuleShape(body);
   if (!input.name?.trim()) {
@@ -1762,12 +1267,13 @@ async function writePageAssetBaselineArtifact(relativePath: string, bytes: Buffe
   return artifact;
 }
 
-async function readPageAssetBaselineArtifact(artifactId: string): Promise<Buffer | undefined> {
+async function readPageAssetBaselineArtifact(artifactId: string, fallbackPath?: string): Promise<Buffer | undefined> {
   const artifact = storage.getArtifact(artifactId);
-  if (!artifact) {
+  const relativePath = artifact?.path ?? fallbackPath;
+  if (!relativePath) {
     return undefined;
   }
-  return readFile(artifactFilePath(artifact.path));
+  return readFile(artifactFilePath(relativePath)).catch(() => undefined);
 }
 
 function stringOrUndefined(value: unknown): string | undefined {

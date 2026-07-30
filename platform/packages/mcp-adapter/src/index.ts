@@ -121,12 +121,11 @@ export class MobileAutomationMcpAdapter {
     planDigest: string;
     deviceSerial: string;
     parameters?: Record<string, string | number | boolean>;
-    confirmedRiskSteps?: string[];
   }): Promise<ScriptFlowRunResult> {
     const payload = await this.request<{ run: TestRun }>(
       "POST",
       `/api/script-flows/${encodeURIComponent(input.flowId)}/runs`,
-      compactObject({ expectedVersion: input.expectedVersion, planDigest: input.planDigest, deviceSerial: input.deviceSerial, parameters: input.parameters, confirmedRiskSteps: input.confirmedRiskSteps })
+      compactObject({ expectedVersion: input.expectedVersion, planDigest: input.planDigest, deviceSerial: input.deviceSerial, parameters: input.parameters })
     );
     return runResult(this.serverUrl, payload.run);
   }

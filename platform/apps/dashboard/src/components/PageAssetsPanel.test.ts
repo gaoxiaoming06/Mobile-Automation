@@ -24,7 +24,6 @@ const asset = {
   tags: [],
   matcherCount: 3,
   criticalMatcherCount: 1,
-  elementCount: 1,
   visibleTexts: ["主页", "消息"],
   resourceIds: [],
   accessibilityIds: [],
@@ -42,7 +41,7 @@ const asset = {
 };
 
 describe("PageAssetsPanel", () => {
-  it("renders page identity and public locator information only", () => {
+  it("renders page identity information only", () => {
     const markup = renderToStaticMarkup(React.createElement(PageAssetsPanel, {
       libraries: [library],
       assetsByVersionId: {
@@ -54,7 +53,7 @@ describe("PageAssetsPanel", () => {
 
     expect(markup).toContain("已保存页面资产");
     expect(markup).toContain("页面身份");
-    expect(markup).toContain("公共定位器");
+    expect(markup).not.toContain("公共定位器");
     expect(markup).not.toContain("页面任务");
     expect(markup).not.toContain("连接边");
   });

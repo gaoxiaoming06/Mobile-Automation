@@ -56,6 +56,11 @@ describe("runner-core", () => {
     expect(shouldRecordVideoForDevice({ ...config, recordVideo: false }, { capabilities: androidCapabilities })).toBe(false);
   });
 
+  it("disables video recording unless a run explicitly enables it", () => {
+    expect(normalizeRunConfig({ deviceSerial: "serial" }).recordVideo).toBe(false);
+    expect(normalizeRunConfig({ deviceSerial: "serial", recordVideo: true }).recordVideo).toBe(true);
+  });
+
   it("keeps successful run videos by default as test evidence", () => {
     expect(normalizeRunConfig({ deviceSerial: "serial" }).keepVideoOnSuccess).toBe(true);
     expect(normalizeRunConfig({ deviceSerial: "serial", keepVideoOnSuccess: false }).keepVideoOnSuccess).toBe(false);

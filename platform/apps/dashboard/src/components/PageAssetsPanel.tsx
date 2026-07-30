@@ -23,7 +23,6 @@ type PageAssetSummary = {
   tags: string[];
   matcherCount: number;
   criticalMatcherCount: number;
-  elementCount: number;
   identityTexts?: string[];
   confirmedMatchers?: string[];
   confirmedUiTexts?: string[];
@@ -217,7 +216,6 @@ export async function loadPageAssetsSnapshot(fetchJson: typeof apiFetchJson = ap
 type PageAssetLibraryStats = {
   pages: number;
   matchers: number;
-  elements: number;
   regions: number;
 };
 
@@ -233,10 +231,6 @@ function PageAssetLibraryStats({ stats }: { stats: PageAssetLibraryStats }) {
         <span>匹配依据</span>
       </div>
       <div>
-        <strong>{stats.elements}</strong>
-        <span>公共定位器</span>
-      </div>
-      <div>
         <strong>{stats.regions}</strong>
         <span>重点区域</span>
       </div>
@@ -249,10 +243,9 @@ function pageAssetLibraryStats(assets: DecoratedPageAsset[]): PageAssetLibrarySt
     (stats, asset) => ({
       pages: stats.pages + 1,
       matchers: stats.matchers + (asset.criticalMatcherCount || asset.matcherCount),
-      elements: stats.elements + asset.elementCount,
       regions: stats.regions + (asset.screenshotRegions?.length ?? 0)
     }),
-    { pages: 0, matchers: 0, elements: 0, regions: 0 }
+    { pages: 0, matchers: 0, regions: 0 }
   );
 }
 
@@ -299,10 +292,6 @@ function PageAssetList({
               <strong>{asset.criticalMatcherCount || asset.matcherCount}</strong>
               匹配依据
             </span>
-            <span>
-              <strong>{asset.elementCount}</strong>
-              公共定位器
-            </span>
           </div>
           <div className="page-asset-row-actions">
             <button className="page-asset-action detail" type="button" disabled={busy} onClick={() => onSelectAsset(asset.id)}>
@@ -328,7 +317,7 @@ function PageAssetDetailPanel({ asset }: { asset: DecoratedPageAsset }) {
       <div className="page-asset-detail-head">
         <div>
           <h3>{asset.name}</h3>
-          <span>{assetGraphSummary(asset)} · {platformLabel(asset.platformScope)} · {asset.elementCount} 个公共定位器</span>
+          <span>{assetGraphSummary(asset)} · {platformLabel(asset.platformScope)}</span>
         </div>
       </div>
 
@@ -343,10 +332,6 @@ function PageAssetDetailPanel({ asset }: { asset: DecoratedPageAsset }) {
             <div>
               <dt>重点区域</dt>
               <dd>{screenshotRegions.length}</dd>
-            </div>
-            <div>
-              <dt>公共定位器</dt>
-              <dd>{asset.elementCount}</dd>
             </div>
             <div>
               <dt>状态</dt>
@@ -384,11 +369,6 @@ function PageAssetDetailPanel({ asset }: { asset: DecoratedPageAsset }) {
             ) : (
               <p>暂无截图重点区域。</p>
             )}
-          </div>
-
-          <div className="page-asset-detail-section">
-            <h4>公共定位器</h4>
-            <p>{asset.elementCount > 0 ? `已录入 ${asset.elementCount} 个可复用定位器；临时动作可以直接写在 ScriptFlow 中。` : "暂无公共定位器；脚本仍可使用 OCR 或语义目标执行临时动作。"}</p>
           </div>
 
           <div className="page-asset-detail-section page-asset-identity-card">

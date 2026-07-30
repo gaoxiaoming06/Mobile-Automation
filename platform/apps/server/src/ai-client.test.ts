@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { isCodexAppServerProvider, runAiJsonRequest } from "./ai-client.js";
+import { isCodexAppServerProvider, resolveCodexExecutable, runAiJsonRequest } from "./ai-client.js";
 
 const config = { baseURL: "https://llm.example.com/v1", apiKey: "sk-test", model: "test-model", timeoutMs: 5000 };
 
@@ -13,6 +13,21 @@ function okResponse(content: string): Response {
 }
 
 describe("ai-client", () => {
+  it("prefers an explicitly configured Codex executable", () => {
+    expect(resolveCodexExecutable({ configuredPath: "/custom/bin/codex" })).toBe("/custom/bin/codex");
+  });
+
+  it("finds the Codex binary bundled in the macOS desktop app when PATH does not contain it", () => {
+    expect(resolveCodexExecutable({
+      platform: "darwin",
+      fileExists: (candidate) => candidate === "/Applications/ChatGPT.app/Contents/Resources/codex"
+    })).toBe("/Applications/ChatGPT.app/Contents/Resources/codex");
+  });
+
+  it("falls back to PATH lookup outside a bundled desktop installation", () => {
+    expect(resolveCodexExecutable({ platform: "linux", fileExists: () => false })).toBe("codex");
+  });
+
   it("identifies codex app-server provider", () => {
     expect(isCodexAppServerProvider("codex://app-server")).toBe(true);
     expect(isCodexAppServerProvider("https://llm.example.com/v1")).toBe(false);

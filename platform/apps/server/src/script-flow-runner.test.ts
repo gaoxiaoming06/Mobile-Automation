@@ -2,10 +2,43 @@ import { describe, expect, it, vi } from "vitest";
 import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
 import type { DeviceInfo, TestRun } from "@mobile-automation/shared";
 import type { PageAssetCatalog, PageAssetSummary } from "./page-asset-catalog.js";
-import { ScriptFlowRunner, type ScriptFlowRunBackend } from "./script-flow-runner.js";
+import type { PageStateService } from "./page-state-service.js";
+import { ScriptFlowRunner, pageStateExpectationVerifier, type ScriptFlowRunBackend } from "./script-flow-runner.js";
 import { ScriptTargetResolver } from "./script-target-resolver.js";
 
 describe("ScriptFlowRunner", () => {
+  it("includes observed OCR text when an expected page does not match", async () => {
+    const pageState: PageStateService = {
+      identifyCurrentPage: async () => ({ status: "unknown", candidates: [], reason: "page_not_matched" }),
+      verifyExpectedPage: async () => ({ status: "unknown", candidates: [], reason: "page_not_matched" }),
+      waitForExpectedPage: async () => ({
+        status: "unknown",
+        candidates: [{ id: "page-home", key: "classin.home", name: "主页", appId: "cn.eeo.classin", graphVersionId: "v1", matcherCount: 2 }],
+        observation: {
+          platform: "android",
+          capturedAt: "2026-07-28T00:00:00.000Z",
+          uiElements: [],
+          ocrTexts: [{ text: "搜索" }, { text: "请输入搜索内容" }, { text: "搜索" }]
+        },
+        reason: "page_not_matched"
+      })
+    };
+    const verifier = pageStateExpectationVerifier(pageState);
+
+    await expect(verifier({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageId: "classin.home",
+      timeoutMs: 1
+    })).resolves.toMatchObject({
+      status: "unknown",
+      candidateNames: ["主页"],
+      observedText: "搜索、请输入搜索内容",
+      reason: "page_not_matched"
+    });
+  });
+
   it("compiles one business action with page precondition and result verification", async () => {
     const backend = new CapturingBackend();
     const runner = runnerWith(backend);
@@ -15,7 +48,7 @@ describe("ScriptFlowRunner", () => {
         name: "打开指定班级",
         onPage: "classin.home",
         expectPage: "classin.class.detail",
-        tap: { target: { ocrText: "${className}" } }
+        tap: { target: { text: "${className}" } }
       }
     ], {
       className: { type: "string", required: true }
@@ -27,7 +60,6 @@ describe("ScriptFlowRunner", () => {
       flow,
       deviceSerial: "device-1",
       parameters: { className: "班级四十二号" },
-      confirmedRiskSteps: ["open-class"],
       androidAppMonitor: {
         enabled: true,
         packageName: "cn.eeo.classin"
@@ -48,10 +80,13 @@ describe("ScriptFlowRunner", () => {
         text: "班级四十二号",
         scriptFlowId: "flow-1",
         scriptStepId: "open-class",
-        locatorStrategy: "ocr_text"
+        locatorStrategy: "semantic_text"
       }),
       preconditions: [expect.objectContaining({ type: "state_is", params: expect.objectContaining({ pageId: "classin.home" }) })],
-      expectations: [expect.objectContaining({ type: "state_is", params: expect.objectContaining({ pageId: "classin.class.detail" }) })]
+      expectations: [expect.objectContaining({
+        type: "state_is",
+        params: expect.objectContaining({ pageId: "classin.class.detail", timeoutMs: 15_000 })
+      })]
     }));
   });
 
@@ -75,34 +110,138 @@ describe("ScriptFlowRunner", () => {
     }));
   });
 
-  it("uses typed run parameters and confirms each risky step independently", async () => {
+  it("executes assertText as one blocking OCR result assertion", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-assert-text",
+      flow: document([{
+        id: "verify-teaching-plan",
+        name: "确认进入教学方案页",
+        timeoutMs: 6000,
+        assertText: { text: "教学方案列表", match: "exact" }
+      }]),
+      deviceSerial: "device-1",
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps).toHaveLength(1);
+    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
+      id: "verify-teaching-plan",
+      type: "wait",
+      title: "确认进入教学方案页",
+      params: expect.objectContaining({ durationMs: 0, locatorStrategy: "ocr_text_assertion" }),
+      expectations: [expect.objectContaining({
+        type: "text",
+        params: expect.objectContaining({
+          expected: "教学方案列表",
+          mode: "equals",
+          source: "ocr",
+          blocking: true,
+          timeoutMs: 6000
+        })
+      })]
+    }));
+  });
+
+  it("keeps reachPage as one runtime navigation step with target-page verification", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-reach-home",
+      flow: document([{ id: "reach-home", name: "到达主页", reachPage: { page: "classin.home", policy: "safe" } }]),
+      deviceSerial: "device-1",
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps).toHaveLength(1);
+    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
+      id: "reach-home",
+      type: "reach_page",
+      title: "到达主页",
+      params: expect.objectContaining({ pageId: "classin.home", policy: "safe" }),
+      expectations: [expect.objectContaining({
+        type: "state_is",
+        params: expect.objectContaining({ pageId: "classin.home" })
+      })]
+    }));
+  });
+
+  it("compiles a frozen multi-action navigation segment without reading use case source dependencies", async () => {
+    const backend = new CapturingBackend();
+    const catalog = new NavigationCatalog();
+    const runner = new ScriptFlowRunner({
+      backend,
+      driver: { getDeviceInfo: async () => device("android") },
+      targetResolver: new ScriptTargetResolver(),
+      pageCatalog: catalog
+    });
+    await runner.start({
+      ...previewBinding,
+      navigationSegments: [{
+        id: "navigation:flow-detail-home:3:1",
+        appId: "cn.eeo.classin",
+        platform: "android",
+        fromPage: "classin.detail",
+        toPage: "classin.home",
+        flowId: "flow-detail-home",
+        flowVersion: 3,
+        flowName: "详情返回主页",
+        parameters: {},
+        stepIds: ["open-menu", "open-home-tab"],
+        steps: [
+          {
+            id: "open-menu",
+            onPage: "classin.detail",
+            tap: { target: { text: "更多" }, search: { mode: "visibleOnly" } }
+          },
+          {
+            id: "open-home-tab",
+            tap: { target: { text: "主页", area: "bottomBar" }, search: { mode: "visibleOnly" } },
+            expectPage: "classin.home"
+          }
+        ]
+      }],
+      flowId: "flow-reach-home",
+      flow: document([{ id: "reach-home", reachPage: { page: "classin.home", policy: "safe" } }]),
+      deviceSerial: "device-1",
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps?.[0]?.params.navigationEdges).toEqual([
+      expect.objectContaining({
+        fromPageId: "page-detail",
+        toPageId: "page-home",
+        flowId: "flow-detail-home",
+        segmentId: "navigation:flow-detail-home:3:1",
+        stepIds: ["open-menu", "open-home-tab"],
+        actions: [
+          expect.objectContaining({
+            type: "tap_on_text",
+            params: expect.objectContaining({ text: "更多", scriptVersion: 3 })
+          }),
+          expect.objectContaining({
+            type: "tap_on_text",
+            params: expect.objectContaining({ text: "主页", scriptVersion: 3 })
+          })
+        ]
+      })
+    ]);
+  });
+
+  it("uses typed run parameters without blocking on risk metadata", async () => {
     const backend = new CapturingBackend();
     const runner = runnerWith(backend);
     const flow = document([
-      { id: "publish-primary", tap: { target: { ocrText: "发布" } } },
-      { id: "publish-copy", tap: { target: { ocrText: "再次发布" } } }
+      { id: "publish-primary", tap: { target: { text: "发布" } } },
+      { id: "publish-copy", tap: { target: { text: "再次发布" } } }
     ], {
       lessonName: { type: "string", required: true }
     });
-
-    await expect(runner.start({
-      ...previewBinding,
-      flowId: "flow-1",
-      flow,
-      deviceSerial: "device-1",
-      parameters: { lessonName: "本次课堂" },
-      recordVideo: false
-    })).rejects.toThrow("Risk confirmation required: publish-primary (publish), publish-copy (publish)");
-
-    await expect(runner.start({
-      ...previewBinding,
-      flowId: "flow-1",
-      flow,
-      deviceSerial: "device-1",
-      parameters: { lessonName: "本次课堂" },
-      confirmedRiskSteps: ["publish-primary"],
-      recordVideo: false
-    })).rejects.toThrow("Risk confirmation required: publish-copy (publish)");
 
     await runner.start({
       ...previewBinding,
@@ -110,7 +249,6 @@ describe("ScriptFlowRunner", () => {
       flow,
       deviceSerial: "device-1",
       parameters: { lessonName: "本次课堂" },
-      confirmedRiskSteps: ["publish-primary", "publish-copy"],
       recordVideo: false
     });
     expect(backend.input?.steps?.[0]?.params.scriptParameters).toEqual({ lessonName: "本次课堂" });
@@ -123,7 +261,7 @@ describe("ScriptFlowRunner", () => {
     await expect(runner.start({
       ...previewBinding,
       flowId: "flow-1",
-      flow: document([{ id: "open", tap: { target: { ocrText: "主页" } } }]),
+      flow: document([{ id: "open", tap: { target: { text: "主页" } } }]),
       deviceSerial: "device-1"
     })).rejects.toThrow("Script platform android does not match device platform ios");
   });
@@ -137,7 +275,7 @@ describe("ScriptFlowRunner", () => {
       flowId: "flow-sensitive",
       flow: document([{
         id: "password",
-        inputText: { target: { ocrText: "密码" }, value: "${password}" }
+        inputText: { target: { text: "密码" }, value: "${password}" }
       }], {
         password: { type: "string", required: true, sensitive: true }
       }),
@@ -159,9 +297,9 @@ describe("ScriptFlowRunner", () => {
       ...previewBinding,
       flowId: "flow-sensitive-scalars",
       flow: document([
-        { id: "step-1", inputText: { target: { ocrText: "短码" }, value: "${token}" } },
-        { id: "step-number", inputText: { target: { ocrText: "数字" }, value: "${pin}" } },
-        { id: "step-boolean", inputText: { target: { ocrText: "开关" }, value: "${enabled}" } }
+        { id: "step-1", inputText: { target: { text: "短码" }, value: "${token}" } },
+        { id: "step-number", inputText: { target: { text: "数字" }, value: "${pin}" } },
+        { id: "step-boolean", inputText: { target: { text: "开关" }, value: "${enabled}" } }
       ], {
         token: { type: "string", required: true, sensitive: true },
         pin: { type: "number", required: true, sensitive: true },
@@ -197,7 +335,7 @@ describe("ScriptFlowRunner", () => {
         flowId: "flow-sensitive-time",
         flow: document([{
           id: "password",
-          inputText: { target: { ocrText: "密码" }, value: "${password}" }
+          inputText: { target: { text: "密码" }, value: "${password}" }
         }], {
           password: { type: "string", required: true, sensitive: true }
         }),
@@ -213,7 +351,7 @@ describe("ScriptFlowRunner", () => {
   });
 });
 
-const previewBinding = { planDigest: "a".repeat(64), dependencies: [] };
+const previewBinding = { planDigest: "a".repeat(64), dependencies: [], navigationSegments: [] };
 
 function runnerWith(backend: CapturingBackend, platform: DeviceInfo["platform"] = "android"): ScriptFlowRunner {
   return new ScriptFlowRunner({
@@ -221,7 +359,7 @@ function runnerWith(backend: CapturingBackend, platform: DeviceInfo["platform"] 
     driver: {
       getDeviceInfo: async () => device(platform)
     },
-    targetResolver: new ScriptTargetResolver(new EmptyCatalog())
+    targetResolver: new ScriptTargetResolver()
   });
 }
 
@@ -249,9 +387,25 @@ class CapturingBackend implements ScriptFlowRunBackend {
 class EmptyCatalog implements PageAssetCatalog {
   listPages(): PageAssetSummary[] { return []; }
   getPage(): undefined { return undefined; }
-  resolvePage(): undefined { return undefined; }
-  listLocators(): [] { return []; }
+  resolvePage(_reference: string, _appId: string, _platform: "android" | "ios" | "harmony" | "flutter"): ReturnType<PageAssetCatalog["resolvePage"]> { return undefined; }
   findConfusablePages(): PageAssetSummary[] { return []; }
+}
+
+class NavigationCatalog extends EmptyCatalog {
+  override resolvePage(reference: string, _appId: string, _platform: "android" | "ios" | "harmony" | "flutter"): ReturnType<PageAssetCatalog["resolvePage"]> {
+    const pages = [
+      { id: "page-home", key: "classin.home", name: "主页" },
+      { id: "page-detail", key: "classin.detail", name: "详情" }
+    ];
+    const page = pages.find((candidate) => candidate.id === reference || candidate.key === reference || candidate.name === reference);
+    return page ? {
+      ...page,
+      appId: "cn.eeo.classin",
+      graphVersionId: "v1",
+      matcherCount: 1,
+      node: {} as never
+    } : undefined;
+  }
 }
 
 function document(
@@ -260,6 +414,7 @@ function document(
 ): ScriptFlowDocument {
   return {
     version: 1,
+    kind: "case",
     name: "创建课堂",
     app: { id: "cn.eeo.classin", platform: "android" },
     start: { strategy: "keepCurrent" },

@@ -68,7 +68,7 @@ export class AndroidVideoRecorder {
       throw new Error("scrcpy is unavailable and Android screenrecord is unavailable on this device");
     }
 
-    const process = spawn("scrcpy", ["--serial", serial, "--no-playback", "--no-audio", "--record", localPath], {
+    const process = spawn("scrcpy", ["--serial", serial, "--no-window", "--no-audio", "--record", localPath], {
       detached: true,
       stdio: "pipe"
     });

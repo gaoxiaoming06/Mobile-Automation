@@ -19,13 +19,11 @@ type ScriptRunFormProps = {
   values: Record<string, ScriptParameterValue>;
   devices: Array<{ serial: string; name?: string }>;
   deviceSerial: string;
-  riskConfirmations: Array<{ stepId: string; risk: string; stepName?: string }>;
-  confirmedRiskSteps: string[];
   busy: boolean;
   disabled?: boolean;
+  buttonLabel?: string;
   onValueChange: (key: string, value: ScriptParameterValue) => void;
   onDeviceChange: (serial: string) => void;
-  onRiskChange: (stepId: string, checked: boolean) => void;
   onRun: () => void;
 };
 
@@ -34,20 +32,17 @@ export function ScriptRunForm({
   values,
   devices,
   deviceSerial,
-  riskConfirmations,
-  confirmedRiskSteps,
   busy,
   disabled = false,
+  buttonLabel = "开始执行",
   onValueChange,
   onDeviceChange,
-  onRiskChange,
   onRun
 }: ScriptRunFormProps) {
   const entries = Object.entries(parameters);
   const primary = entries.filter(([, definition]) => definition.required || !definition.advanced);
   const optional = entries.filter(([, definition]) => !definition.required && definition.advanced);
   const missingRequired = entries.some(([key, definition]) => definition.required && isMissing(values[key]));
-  const missingRisk = riskConfirmations.some((confirmation) => !confirmedRiskSteps.includes(confirmation.stepId));
 
   return (
     <section className="script-run-form">
@@ -74,24 +69,9 @@ export function ScriptRunForm({
           </div>
         </details>
       ) : null}
-      {riskConfirmations.length ? (
-        <fieldset className="script-risk-confirmations">
-          <legend>风险确认</legend>
-          {riskConfirmations.map((confirmation) => (
-            <label key={confirmation.stepId}>
-              <input
-                type="checkbox"
-                checked={confirmedRiskSteps.includes(confirmation.stepId)}
-                onChange={(event) => onRiskChange(confirmation.stepId, event.target.checked)}
-              />
-              <span>{riskLabel(confirmation)}</span>
-            </label>
-          ))}
-        </fieldset>
-      ) : null}
-      <button className="primary-button script-run-button" type="button" onClick={onRun} disabled={busy || disabled || !deviceSerial || missingRequired || missingRisk}>
+      <button className="primary-button script-run-button" type="button" onClick={onRun} disabled={busy || disabled || !deviceSerial || missingRequired}>
         <Play size={16} />
-        <span>{busy ? "启动中" : "开始执行"}</span>
+        <span>{busy ? "启动中" : buttonLabel}</span>
       </button>
     </section>
   );
@@ -149,9 +129,4 @@ function scalarInputValue(value: ScriptParameterValue | undefined): string {
 
 function isMissing(value: ScriptParameterValue | undefined): boolean {
   return value === undefined || value === "";
-}
-
-function riskLabel(confirmation: { stepId: string; risk: string; stepName?: string }): string {
-  const labels: Record<string, string> = { interaction: "交互", publish: "发布", submit: "提交", delete: "删除", payment: "支付" };
-  return `确认执行${labels[confirmation.risk] ?? confirmation.risk}：${confirmation.stepName ?? confirmation.stepId}`;
 }

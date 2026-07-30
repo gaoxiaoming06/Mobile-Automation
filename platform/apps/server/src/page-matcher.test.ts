@@ -646,6 +646,105 @@ describe("PageMatcher", () => {
     ]));
   });
 
+  it("falls back to visible region text when the visual baseline index is missing", async () => {
+    const home = node({
+      id: "node-home",
+      key: "classin.home",
+      name: "主页",
+      tags: ["page-asset", "asset-recording"],
+      metadata: {
+        assetRecordingConfirmed: true,
+        screenshotRegions: [
+          {
+            id: "home-bottom-selected-tab",
+            label: "主页底栏选中态",
+            x: 0,
+            y: 85,
+            width: 30,
+            height: 15,
+            signature: "screenshot-region:home-bottom-selected-tab:%E4%B8%BB%E9%A1%B5%7Chome_selected_tab",
+            baselineArtifactId: "missing-artifact"
+          }
+        ]
+      }
+    });
+
+    const result = await matchCurrentPage({
+      graphVersion: graph([home]),
+      observation: observation({
+        screenshotBase64: pgm(2, 2, [255, 255, 255, 255]).toString("base64"),
+        resolution: { width: 1080, height: 2340 },
+        ocrTextRegions: [
+          { text: "主页", region: { x: 50, y: 2200, width: 80, height: 45 } }
+        ]
+      }),
+      baselineReader: async () => undefined,
+      promoteLocalState: false
+    });
+
+    expect(result.match.status).toBe("matched");
+    expect(result.match.node?.id).toBe("node-home");
+    expect(result.observation.imageRegions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        value: "screenshot-region:home-bottom-selected-tab:%E4%B8%BB%E9%A1%B5%7Chome_selected_tab",
+        similarity: 1
+      })
+    ]));
+  });
+
+  it("reads a saved visual baseline by its metadata path when the artifact index is missing", async () => {
+    const baseline = pgm(2, 2, [10, 220, 220, 10]);
+    const baselinePath = "assets/page-regions/classin.add-friend-title.png";
+    let receivedFallbackPath: string | undefined;
+    const addFriend = node({
+      id: "node-add-friend",
+      key: "classin.add_friend",
+      name: "添加好友",
+      tags: ["page-asset", "asset-recording"],
+      matchers: [
+        {
+          ...matcher("image_region", "screenshot-region:add-friend-title:%E6%B7%BB%E5%8A%A0%E5%A5%BD%E5%8F%8B", 3, true, "mobile-both"),
+          threshold: 0.9,
+          region: { x: 0, y: 0, width: 100, height: 100 },
+          source: { sourceType: "manual_edit", artifactId: "missing-artifact" }
+        }
+      ],
+      metadata: {
+        assetRecordingConfirmed: true,
+        screenshotRegions: [
+          {
+            id: "add-friend-title",
+            label: "添加好友标题",
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            signature: "screenshot-region:add-friend-title:%E6%B7%BB%E5%8A%A0%E5%A5%BD%E5%8F%8B",
+            baselineArtifactId: "missing-artifact",
+            baselinePath
+          }
+        ]
+      }
+    });
+
+    const result = await matchCurrentPage({
+      graphVersion: graph([addFriend]),
+      observation: observation({
+        screenshotBase64: baseline.toString("base64"),
+        resolution: { width: 2, height: 2 }
+      }),
+      baselineReader: async (_artifactId: string, fallbackPath?: string) => {
+        receivedFallbackPath = fallbackPath;
+        return fallbackPath === baselinePath ? baseline : undefined;
+      },
+      promoteLocalState: false
+    });
+
+    expect(receivedFallbackPath).toBe(baselinePath);
+    expect(result.match.status).toBe("matched");
+    expect(result.match.node?.id).toBe("node-add-friend");
+  });
+
   it("automatically ignores overlapping system bar pixels when comparing visual regions", async () => {
     const baseline = pgm(4, 4, [
       10, 10, 10, 10,

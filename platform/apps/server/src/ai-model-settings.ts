@@ -34,7 +34,8 @@ export type PublicAiModelSettings = {
 type EnvLike = Record<string, string | undefined>;
 
 const CODEX_PROVIDER = "codex://app-server";
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_CODEX_TIMEOUT_MS = 120_000;
+const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 
 export function resolveAiModelConfig(env: EnvLike = process.env, settings?: AiModelStoredSettings): AiModelConfig {
   if (settings) {
@@ -49,7 +50,7 @@ export function resolveAiModelConfig(env: EnvLike = process.env, settings?: AiMo
       enabled: true,
       baseURL: CODEX_PROVIDER,
       model,
-      timeoutMs: positiveInteger(settings.timeoutMs) ?? DEFAULT_TIMEOUT_MS
+      timeoutMs: positiveInteger(settings.timeoutMs) ?? DEFAULT_CODEX_TIMEOUT_MS
     };
   }
 
@@ -67,7 +68,7 @@ export function resolveAiModelConfig(env: EnvLike = process.env, settings?: AiMo
     baseURL,
     apiKey,
     model,
-    timeoutMs: positiveInteger(env.AI_MODEL_TIMEOUT_MS) ?? DEFAULT_TIMEOUT_MS
+    timeoutMs: positiveInteger(env.AI_MODEL_TIMEOUT_MS) ?? (isCodexAppServerProvider(baseURL) ? DEFAULT_CODEX_TIMEOUT_MS : DEFAULT_HTTP_TIMEOUT_MS)
   }) as AiModelConfig;
 }
 
@@ -77,7 +78,7 @@ export function publicAiModelSettings(env: EnvLike = process.env, settings?: AiM
       enabled: settings.enabled,
       baseURL: CODEX_PROVIDER,
       model: settings.model ?? "",
-      timeoutMs: positiveInteger(settings.timeoutMs) ?? DEFAULT_TIMEOUT_MS,
+      timeoutMs: positiveInteger(settings.timeoutMs) ?? DEFAULT_CODEX_TIMEOUT_MS,
       apiKeyConfigured: false,
       source: "stored"
     };
@@ -90,7 +91,7 @@ export function publicAiModelSettings(env: EnvLike = process.env, settings?: AiM
     enabled,
     baseURL,
     model,
-    timeoutMs: positiveInteger(env.AI_MODEL_TIMEOUT_MS) ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: positiveInteger(env.AI_MODEL_TIMEOUT_MS) ?? (isCodexAppServerProvider(baseURL) ? DEFAULT_CODEX_TIMEOUT_MS : DEFAULT_HTTP_TIMEOUT_MS),
     apiKeyConfigured,
     source: enabled || baseURL || model || apiKeyConfigured ? "environment" : "none"
   };

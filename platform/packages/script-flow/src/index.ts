@@ -12,14 +12,22 @@ export type {
   ScriptExecutionPlan,
   ScriptExecutionPlanStep,
   ScriptFlowDocument,
+  ScriptFlowKind,
   ScriptFlowPlatform,
+  ScriptFlowState,
+  ScriptSessionState,
   ScriptFlowStartStrategy,
   ScriptParameterDefinition,
   ScriptParameterOption,
   ScriptParameterType,
   ScriptParameterValue,
   ScriptRiskConfirmation,
+  ScriptAssertTextStep,
+  ScriptReachPageStep,
+  ScriptSearchPolicy,
   ScriptStep,
   ScriptStepRisk,
-  ScriptTarget
+  ScriptTarget,
+  ScriptTargetArea,
+  ScriptTargetPosition
 } from "./types.js";

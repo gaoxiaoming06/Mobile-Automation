@@ -41,6 +41,9 @@ import { RunArtifactService } from "./run-artifact-service.js";
 import { RuntimeInterceptor, type RuntimeInterceptorRecord } from "./runtime-interceptor.js";
 import { SemanticStepResolver } from "./semantic-locator.js";
 import { DeviceExecutionLease } from "./device-execution-lease.js";
+import type { PageAssetPlatform } from "./page-asset-catalog.js";
+import type { PageStateService } from "./page-state-service.js";
+import { findPageNavigationPath, readPageNavigationEdges } from "./page-navigation.js";
 
 export type RunnerStorage = Pick<
   Storage,
@@ -60,6 +63,7 @@ export type RunnerStorage = Pick<
 
 export type AutomationRunnerOptions = {
   verifyPageState?: PageStateExpectationVerifier;
+  pageStateService?: PageStateService;
   executionLease?: DeviceExecutionLease;
 };
 
@@ -118,6 +122,7 @@ export class AutomationRunner {
   private readonly semanticStepResolver: SemanticStepResolver;
   private readonly observationService: ObservationService;
   private readonly executionLease: DeviceExecutionLease;
+  private readonly pageStateService?: PageStateService;
 
   constructor(
     private readonly storage: RunnerStorage,
@@ -157,6 +162,7 @@ export class AutomationRunner {
     });
     this.observationService = new ObservationService(this.driver, this.ocr);
     this.executionLease = options.executionLease ?? new DeviceExecutionLease();
+    this.pageStateService = options.pageStateService;
   }
 
   start(input: StartRunInput): TestRun {
@@ -169,7 +175,7 @@ export class AutomationRunner {
       repeatCount: input.repeatCount ?? 1,
       stepIntervalMs: input.stepIntervalMs ?? 400,
       stopOnFailure: input.stopOnFailure ?? true,
-      recordVideo: input.recordVideo ?? true,
+      recordVideo: input.recordVideo ?? false,
       keepVideoOnSuccess: input.keepVideoOnSuccess ?? true,
       pauseAfterEachStep: input.pauseAfterEachStep ?? false,
       startStrategy: input.startStrategy ?? defaultStartStrategy,
@@ -535,53 +541,72 @@ export class AutomationRunner {
       if (beforeScreenshot) {
         result.artifacts.push(beforeScreenshot.artifact);
       }
-      const conditionalOutcome = await this.conditionalStepExecutor.executeIfNeeded({
-        runId,
-        stepResultId: result.id,
-        step,
-        serial: config.deviceSerial,
-        deviceSize
-      });
-      if (conditionalOutcome) {
-        result.metadata = {
-          ...(result.metadata ?? {}),
-          condition: conditionalOutcome.metadata
-        };
-        for (const artifact of conditionalOutcome.artifacts) {
-          result.artifacts.push(artifact);
-        }
-        if (!conditionalOutcome.performed) {
-          result.status = "skipped";
-          result.errorCode = "CONDITION_NOT_MET";
-          result.errorMessage = conditionalOutcome.message;
+      if (step.type === "reach_page") {
+        const navigation = await this.executeReachPage({
+          runId,
+          stepResultId: result.id,
+          step,
+          serial: config.deviceSerial,
+          deviceSize,
+          signal
+        });
+        result.metadata = { ...(result.metadata ?? {}), pageNavigation: navigation.metadata };
+        result.artifacts.push(...navigation.artifacts);
+        if (!navigation.passed) {
+          result.status = "failed";
+          result.errorCode = "PAGE_NAVIGATION_FAILED";
+          result.errorMessage = navigation.message;
           return result;
         }
       } else {
-        const semanticOutcome = await this.semanticStepResolver.resolveIfNeeded({
+        const conditionalOutcome = await this.conditionalStepExecutor.executeIfNeeded({
           runId,
           stepResultId: result.id,
           step,
           serial: config.deviceSerial,
           deviceSize
         });
-        if (semanticOutcome) {
+        if (conditionalOutcome) {
           result.metadata = {
             ...(result.metadata ?? {}),
-            semantic: semanticOutcome.metadata,
-            actionBackend: semanticOutcome.actionResult
+            condition: conditionalOutcome.metadata
           };
-          for (const artifact of semanticOutcome.artifacts) {
+          for (const artifact of conditionalOutcome.artifacts) {
             result.artifacts.push(artifact);
           }
-          if (!semanticOutcome.resolved) {
-            result.status = "failed";
-            result.errorCode = semanticOutcome.supported ? "SEMANTIC_TARGET_NOT_FOUND" : "SEMANTIC_ACTION_UNSUPPORTED";
-            result.errorMessage = semanticOutcome.message;
+          if (!conditionalOutcome.performed) {
+            result.status = "skipped";
+            result.errorCode = "CONDITION_NOT_MET";
+            result.errorMessage = conditionalOutcome.message;
             return result;
-        }
-      } else {
-          const actionResult = await this.driver.performAction(config.deviceSerial, stepToAction(step, deviceSize));
-          result.metadata = mergeActionBackendMetadata(result.metadata, actionResult);
+          }
+        } else {
+          const semanticOutcome = await this.semanticStepResolver.resolveIfNeeded({
+            runId,
+            stepResultId: result.id,
+            step,
+            serial: config.deviceSerial,
+            deviceSize
+          });
+          if (semanticOutcome) {
+            result.metadata = {
+              ...(result.metadata ?? {}),
+              semantic: semanticOutcome.metadata,
+              actionBackend: semanticOutcome.actionResult
+            };
+            for (const artifact of semanticOutcome.artifacts) {
+              result.artifacts.push(artifact);
+            }
+            if (!semanticOutcome.resolved) {
+              result.status = "failed";
+              result.errorCode = semanticOutcome.supported ? "SEMANTIC_TARGET_NOT_FOUND" : "SEMANTIC_ACTION_UNSUPPORTED";
+              result.errorMessage = semanticOutcome.message;
+              return result;
+            }
+          } else {
+            const actionResult = await this.driver.performAction(config.deviceSerial, stepToAction(step, deviceSize));
+            result.metadata = mergeActionBackendMetadata(result.metadata, actionResult);
+          }
         }
       }
       result.metadata = mergeRuntimeInterceptorMetadata(
@@ -671,6 +696,170 @@ export class AutomationRunner {
     }
 
     return result;
+  }
+
+  private async executeReachPage(input: {
+    runId: string;
+    stepResultId: string;
+    step: ActionStep;
+    serial: string;
+    deviceSize: { width: number; height: number } | undefined;
+    signal: AbortSignal;
+  }): Promise<{
+    passed: boolean;
+    message?: string;
+    artifacts: ArtifactRef[];
+    metadata: Record<string, unknown>;
+  }> {
+    const pageState = this.pageStateService;
+    const appId = navigationString(input.step.params.appId);
+    const platform = navigationPlatform(input.step.params.platform);
+    const targetPageId = navigationString(input.step.params.targetPageId) || navigationString(input.step.params.pageId);
+    const targetPageName = navigationString(input.step.params.targetPageName) || targetPageId;
+    const policy = navigationString(input.step.params.policy) || "safe";
+    const baseMetadata = { targetPageId, targetPageName, policy, route: [] as Record<string, unknown>[] };
+    if (!pageState || !appId || !platform || !targetPageId) {
+      return {
+        passed: false,
+        message: "页面导航运行环境不完整，无法识别或到达目标页面。",
+        artifacts: [],
+        metadata: { ...baseMetadata, status: "unavailable" }
+      };
+    }
+    if (policy !== "safe") {
+      return {
+        passed: false,
+        message: `不支持的页面导航策略：${policy}`,
+        artifacts: [],
+        metadata: { ...baseMetadata, status: "unsupported_policy" }
+      };
+    }
+    const navigationEdges = readPageNavigationEdges(input.step.params.navigationEdges);
+    const maxRecoveryBacks = navigationInteger(input.step.params.maxRecoveryBacks, 6, 0, 12);
+    const recoveryDelayMs = navigationInteger(input.step.params.recoveryDelayMs, 250, 0, 2_000);
+    let current = await pageState.identifyCurrentPage({ serial: input.serial, appId, platform });
+    const initialStatus = current.status;
+    let recoveryActions = 0;
+    let path = current.status === "matched" && current.page
+      ? findPageNavigationPath(navigationEdges, current.page.id, targetPageId)
+      : undefined;
+
+    while (true) {
+      if (current.status === "matched" && current.page?.id === targetPageId) {
+        return {
+          passed: true,
+          artifacts: [],
+          metadata: {
+            ...baseMetadata,
+            status: recoveryActions ? "recovered_to_target" : "already_on_target",
+            currentPageId: current.page.id,
+            recoveryActions,
+            initialStatus
+          }
+        };
+      }
+      if (path) break;
+      if (recoveryActions >= maxRecoveryBacks) {
+        const currentPageName = current.status === "matched" && current.page ? `“${current.page.name}”` : "未识别页面";
+        return {
+          passed: false,
+          message: `有限恢复后仍没有从${currentPageName}到目标页面“${targetPageName}”的可靠路径。`,
+          artifacts: [],
+          metadata: {
+            ...baseMetadata,
+            status: "recovery_exhausted",
+            currentStatus: current.status,
+            ...(current.status === "matched" && current.page ? { currentPageId: current.page.id } : {}),
+            recoveryActions,
+            initialStatus
+          }
+        };
+      }
+      throwIfStopped(input.signal);
+      await this.driver.performAction(input.serial, { type: "back" });
+      recoveryActions += 1;
+      if (recoveryDelayMs) await sleepInterruptibly(recoveryDelayMs, input.signal);
+      current = await pageState.identifyCurrentPage({ serial: input.serial, appId, platform });
+      path = current.status === "matched" && current.page
+        ? findPageNavigationPath(navigationEdges, current.page.id, targetPageId)
+        : undefined;
+    }
+    if (current.status !== "matched" || !current.page) {
+      return {
+        passed: false,
+        message: `未能稳定识别当前设备页面，无法规划到目标页面“${targetPageName}”。`,
+        artifacts: [],
+        metadata: { ...baseMetadata, status: "current_page_unknown", currentStatus: current.status, recoveryActions, initialStatus }
+      };
+    }
+    const artifacts: ArtifactRef[] = [];
+    const route: Record<string, unknown>[] = [];
+    for (const edge of path) {
+      throwIfStopped(input.signal);
+      const actionBackends: DeviceActionResult[] = [];
+      for (const action of edge.actions) {
+        throwIfStopped(input.signal);
+        const semanticOutcome = await this.semanticStepResolver.resolveIfNeeded({
+          runId: input.runId,
+          stepResultId: input.stepResultId,
+          step: action,
+          serial: input.serial,
+          deviceSize: input.deviceSize
+        });
+        let actionBackend: DeviceActionResult | undefined;
+        if (semanticOutcome) {
+          artifacts.push(...semanticOutcome.artifacts);
+          if (!semanticOutcome.resolved) {
+            return {
+              passed: false,
+              message: `导航步骤“${edge.flowName} / ${action.title ?? action.id}”执行失败：${semanticOutcome.message}`,
+              artifacts,
+              metadata: {
+                ...baseMetadata,
+                status: "route_action_failed",
+                currentPageId: current.page.id,
+                failedSegmentId: edge.segmentId,
+                failedActionId: action.id,
+                route
+              }
+            };
+          }
+          actionBackend = semanticOutcome.actionResult;
+        } else {
+          actionBackend = await this.driver.performAction(input.serial, stepToAction(action, input.deviceSize)) ?? undefined;
+        }
+        if (actionBackend) actionBackends.push(actionBackend);
+      }
+      const reached = await pageState.waitForExpectedPage({
+        serial: input.serial,
+        appId,
+        platform,
+        pageId: edge.toPageId,
+        timeoutMs: edge.actions.at(-1)?.timing?.timeoutMs ?? 15_000
+      });
+      route.push({
+        fromPageId: edge.fromPageId,
+        toPageId: edge.toPageId,
+        flowId: edge.flowId,
+        flowName: edge.flowName,
+        segmentId: edge.segmentId,
+        stepIds: edge.stepIds,
+        ...(actionBackends.length ? { actionBackends } : {})
+      });
+      if (reached.status !== "matched") {
+        return {
+          passed: false,
+          message: `导航片段“${edge.flowName}”执行后未到达预期页面。`,
+          artifacts,
+          metadata: { ...baseMetadata, status: "route_verification_failed", currentPageId: current.page.id, route }
+        };
+      }
+    }
+    return {
+      passed: true,
+      artifacts,
+      metadata: { ...baseMetadata, status: "reached", currentPageId: current.page.id, route, recoveryActions, initialStatus }
+    };
   }
 
   private async handleRuntimeInterceptors(input: {
@@ -905,8 +1094,20 @@ function errorToString(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function navigationString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function navigationPlatform(value: unknown): PageAssetPlatform | undefined {
+  return value === "android" || value === "ios" || value === "harmony" || value === "flutter" ? value : undefined;
+}
+
+function navigationInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
+}
+
 function scriptStepResultMetadata(params: Record<string, unknown>): Record<string, unknown> | undefined {
-  const keys = ["scriptFlowId", "scriptVersion", "scriptStepId", "sourceFlowName", "onPage", "expectPage", "locatorStrategy"];
+  const keys = ["scriptFlowId", "scriptVersion", "scriptStepId", "sourceFlowName", "executionPhase", "onPage", "expectPage", "locatorStrategy"];
   const entries = keys.flatMap((key) => params[key] === undefined ? [] : [[key, params[key]] as const]);
   return entries.length ? Object.fromEntries(entries) : undefined;
 }

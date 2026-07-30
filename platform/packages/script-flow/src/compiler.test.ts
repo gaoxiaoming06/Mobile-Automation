@@ -2,6 +2,41 @@ import { describe, expect, it } from "vitest";
 import { ScriptFlowCompileError, compileScriptFlow, parseScriptFlow } from "./index.js";
 
 describe("compileScriptFlow", () => {
+  it("adds the declared entry page as a preparation step outside the test body", () => {
+    const flow = parseScriptFlow(`
+version: 1
+kind: case
+name: teacher login
+app: { id: cn.eeo.classin, platform: android }
+entry: { page: classin.teacher.login, session: unauthenticated }
+outcome: { page: classin.teacher.classes, session: authenticated, role: teacher }
+parameters:
+  account: { type: string, required: true }
+steps:
+  - id: input-account
+    inputText:
+      target: { text: 手机号或邮箱, area: content }
+      value: "\${account}"
+`);
+
+    const plan = compileScriptFlow(flow, { parameters: { account: "teacher@example.com" } });
+
+    expect(plan).toMatchObject({
+      kind: "case",
+      entry: { page: "classin.teacher.login", session: "unauthenticated" },
+      outcome: { page: "classin.teacher.classes", session: "authenticated", role: "teacher" }
+    });
+    expect(plan.steps).toEqual([
+      expect.objectContaining({
+        id: "__prepare.entry-page",
+        phase: "preparation",
+        action: "reachPage",
+        input: { pageId: "classin.teacher.login", policy: "safe" }
+      }),
+      expect.objectContaining({ id: "input-account", phase: "test", action: "inputText" })
+    ]);
+  });
+
   it("resolves runtime parameters and defaults into a linear execution plan", () => {
     const flow = parseScriptFlow(`
 version: 1
@@ -13,13 +48,13 @@ parameters:
 steps:
   - id: open-class
     onPage: home
-    tap: { target: { ocrText: "\${className}" } }
+    tap: { target: { text: "\${className}" }, search: { mode: auto } }
     expectPage: class-detail
   - id: select-duration
     onPage: lesson-create
     risk: interaction
     selectText:
-      target: { pageElement: duration-picker }
+      target: { text: 课堂时长, area: content }
       value: "\${duration}"
 `);
 
@@ -33,13 +68,79 @@ steps:
       action: "tap",
       onPage: "home",
       expectPage: "class-detail",
-      input: { target: { ocrText: "班级四十二号" } }
+      input: { target: { text: "班级四十二号" }, search: { mode: "auto" } }
     });
     expect(plan.steps[1]).toMatchObject({
       order: 2,
       id: "select-duration",
       action: "selectText",
       input: { value: "30" }
+    });
+  });
+
+  it("compiles reachPage as one goal-directed and non-risky execution step", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: reach home
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: reach-home
+    name: 到达主页
+    reachPage: { page: classin.home, policy: safe }
+`);
+
+    const plan = compileScriptFlow(flow);
+
+    expect(plan.steps).toEqual([
+      expect.objectContaining({
+        id: "reach-home",
+        action: "reachPage",
+        input: { pageId: "classin.home", policy: "safe" },
+        risk: "none"
+      })
+    ]);
+    expect(plan.riskConfirmations).toEqual([]);
+  });
+
+  it("preserves semantic targets in the execution plan", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: open teaching plan
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open-teaching-plan
+    tap:
+      target: { semantic: 进入教学方案的入口, area: content }
+      search: { mode: auto }
+`);
+
+    expect(compileScriptFlow(flow).steps[0]).toMatchObject({
+      action: "tap",
+      input: {
+        target: { semantic: "进入教学方案的入口", area: "content" },
+        search: { mode: "auto" }
+      }
+    });
+  });
+
+  it("compiles a stable-text result assertion as a non-risky step", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: verify unrecorded page
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: verify-result
+    name: 确认进入教学方案页
+    timeoutMs: 6000
+    assertText: { text: 教学方案列表, match: exact }
+`);
+
+    expect(compileScriptFlow(flow).steps[0]).toMatchObject({
+      id: "verify-result",
+      action: "assertText",
+      input: { text: "教学方案列表", match: "exact" },
+      timeoutMs: 6000,
+      risk: "none"
     });
   });
 
@@ -57,14 +158,14 @@ steps:
       times: "\${count}"
       steps:
         - id: back
-          tap: { target: { ocrText: 返回 } }
+          tap: { target: { text: 返回 } }
   - id: optional-search
     when:
       parameter: shouldSearch
       equals: true
       steps:
         - id: search
-          tap: { target: { ocrText: 搜索 } }
+          tap: { target: { text: 搜索 } }
 `);
 
     const plan = compileScriptFlow(flow);
@@ -82,7 +183,7 @@ parameters:
   targetClass: { type: string, required: true }
 steps:
   - id: tap-class
-    tap: { target: { ocrText: "\${targetClass}" } }
+    tap: { target: { text: "\${targetClass}" } }
 `);
     const parent = parseScriptFlow(`
 version: 1
@@ -106,9 +207,43 @@ steps:
     expect(plan.steps[0]).toMatchObject({
       id: "open-class.tap-class",
       action: "tap",
-      input: { target: { ocrText: "班级四十二号" } },
+      input: { target: { text: "班级四十二号" } },
       source: { flowName: "open class", stepId: "tap-class" }
     });
+  });
+
+  it("inherits same-named parent parameters when runFlow omits explicit bindings", () => {
+    const child = parseScriptFlow(`
+version: 1
+name: teacher login
+app: { id: cn.eeo.classin, platform: android }
+parameters:
+  account: { type: string, required: true, sensitive: true }
+  password: { type: string, required: true, sensitive: true }
+steps:
+  - id: input-account
+    inputText: { target: { text: 手机号或邮箱, area: content }, value: "\${account}" }
+  - id: input-password
+    inputText: { target: { text: 密码, area: content }, value: "\${password}" }
+`);
+    const parent = parseScriptFlow(`
+version: 1
+name: relogin
+app: { id: cn.eeo.classin, platform: android }
+parameters:
+  account: { type: string, required: true, sensitive: true }
+  password: { type: string, required: true, sensitive: true }
+steps:
+  - id: login
+    runFlow: teacher-login
+`);
+
+    const plan = compileScriptFlow(parent, {
+      parameters: { account: "teacher@example.com", password: "secret" },
+      resolveFlow: (id) => id === "teacher-login" ? child : undefined
+    });
+
+    expect(plan.steps.map((step) => step.input.value)).toEqual(["teacher@example.com", "secret"]);
   });
 
   it("preserves number and boolean values in runFlow parameter bindings", () => {
@@ -127,7 +262,7 @@ steps:
       steps:
         - id: duration
           selectText:
-            target: { ocrText: 课堂时长 }
+            target: { text: 课堂时长 }
             value: "\${duration}"
 `);
     const parent = parseScriptFlow(`
@@ -187,31 +322,27 @@ steps:
     expect(() => compileScriptFlow(flow, { parameters: { count: "two" } })).toThrow(/parameter count must be number/i);
   });
 
-  it("marks publish and delete actions as confirmation risks", () => {
+  it("classifies risky actions without requiring run-time confirmation", () => {
     const flow = parseScriptFlow(`
 version: 1
 name: risky
 app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: publish
-    tap: { target: { ocrText: 发布 } }
+    tap: { target: { text: 发布 } }
   - id: delete
-    tap: { target: { ocrText: 删除当前课堂 } }
+    tap: { target: { text: 删除当前课堂 } }
   - id: safe
-    tap: { target: { ocrText: 返回 } }
+    tap: { target: { text: 返回 } }
 `);
 
     const plan = compileScriptFlow(flow);
 
     expect(plan.steps.map((step) => step.risk)).toEqual(["publish", "delete", "interaction"]);
-    expect(plan.riskConfirmations).toEqual([
-      { stepId: "publish", risk: "publish" },
-      { stepId: "delete", risk: "delete" },
-      { stepId: "safe", risk: "interaction" }
-    ]);
+    expect(plan.riskConfirmations).toEqual([]);
   });
 
-  it("binds explicit pageElement risk confirmation to its exact step", () => {
+  it("preserves explicit risk metadata without requiring confirmation", () => {
     const flow = parseScriptFlow(`
 version: 1
 name: publish once
@@ -221,14 +352,12 @@ steps:
     name: 发布课堂
     onPage: lesson-create
     risk: publish
-    tap: { target: { pageElement: publish-button } }
+    tap: { target: { text: 发布, area: content, match: exact } }
 `);
 
     const plan = compileScriptFlow(flow);
 
     expect(plan.steps[0].risk).toBe("publish");
-    expect(plan.riskConfirmations).toEqual([
-      { stepId: "publish-lesson", risk: "publish", stepName: "发布课堂" }
-    ]);
+    expect(plan.riskConfirmations).toEqual([]);
   });
 });

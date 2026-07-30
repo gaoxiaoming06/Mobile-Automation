@@ -7,10 +7,8 @@ import {
   actionStrategyForWorkspace,
   aiModelSettingsRequestBody,
   androidAppMonitorDefaultEnabled,
-  assetPageElementRequestBody,
   pageAssetLibraryInitialization,
   previewWorkspaceKey,
-  validateAssetPageElementDraftForSave,
   workspaceStyleForNav
 } from "./App.js";
 
@@ -19,8 +17,9 @@ describe("App shell", () => {
     const markup = renderToStaticMarkup(React.createElement(App));
     expect(markup).toContain("自动化测试平台");
     expect(markup).toContain("设备管理");
-    expect(markup).toContain("脚本用例");
-    expect(markup).toContain("AI 生成用例");
+    expect(markup).toContain("用例中心");
+    expect(markup).not.toContain("脚本用例");
+    expect(markup).toContain("AI 生成测试");
     expect(markup).not.toContain("资产用例");
   });
 
@@ -48,33 +47,6 @@ describe("App shell", () => {
       model: "gpt-5.4",
       timeoutMs: 15_000
     });
-  });
-
-  it("persists a public locator without transition or task fields", () => {
-    const body = assetPageElementRequestBody({
-      sourceNodeId: "page-home",
-      locator: "text:添加好友",
-      elementLabel: "添加好友",
-      targetText: "添加好友"
-    }, { sourceNodeId: "page-home", platformScope: "android" });
-
-    expect(body).toEqual(expect.objectContaining({
-      sourceNodeId: "page-home",
-      locator: "text:添加好友",
-      elementLabel: "添加好友"
-    }));
-    expect(body).not.toHaveProperty("outcomeType");
-    expect(body).not.toHaveProperty("targetNodeId");
-    expect(body).not.toHaveProperty("transitionKind");
-    expect(body).not.toHaveProperty("parameterMapping");
-  });
-
-  it("rejects screenshot regions that are too small to relocate", () => {
-    expect(validateAssetPageElementDraftForSave({
-      sourceNodeId: "page-home",
-      locator: "image-region:10,10,0.1,0.1",
-      elementLabel: "按钮"
-    })).toContain("圈选区域过小");
   });
 
   it("builds first-library initialization from the observed foreground app", () => {

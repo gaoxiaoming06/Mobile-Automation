@@ -29,27 +29,6 @@ describe("StoragePageAssetCatalog", () => {
     expect(catalog.listPages("other.app", "android")).toEqual([]);
   });
 
-  it("reads optional public locators", () => {
-    const home = page({
-      id: "home",
-      key: "classin.home",
-      name: "主页",
-      metadata: {
-        assetRecordingConfirmed: true,
-        assetRecordingManualElements: [
-          { id: "search", label: "全局搜索", targetText: "搜索", locatorKind: "text_locator" },
-          { id: "class-grid", label: "班级列表", structuralLocator: { role: "grid" }, locatorKind: "structural_locator" }
-        ]
-      }
-    });
-    const catalog = new StoragePageAssetCatalog(new MemoryCatalogStorage(graph([home])));
-
-    expect(catalog.listLocators("home")).toEqual([
-      expect.objectContaining({ id: "search", label: "全局搜索", requiresUiTree: false }),
-      expect.objectContaining({ id: "class-grid", label: "班级列表", requiresUiTree: true })
-    ]);
-  });
-
   it("resolves stable page keys and unique names inside the requested app and platform", () => {
     const home = page({ id: "node-home", key: "classin.home", name: "主页", metadata: { assetRecordingConfirmed: true } });
     const ios = page({

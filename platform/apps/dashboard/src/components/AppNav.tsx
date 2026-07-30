@@ -60,13 +60,13 @@ export function AppNav({
           <FileText size={18} />
           <span>页面资产库</span>
         </button>
-        <button className={navButtonClass(activeNavItem, "scriptFlows")} onClick={openScriptFlows} title="脚本用例" type="button">
+        <button className={navButtonClass(activeNavItem, "scriptFlows")} onClick={openScriptFlows} title="用例中心" type="button">
           <Workflow size={18} />
-          <span>脚本用例</span>
+          <span>用例中心</span>
         </button>
-        <button className={navButtonClass(activeNavItem, "aiScriptFlows")} onClick={openAiScriptFlows} title="AI 生成用例" type="button">
+        <button className={navButtonClass(activeNavItem, "aiScriptFlows")} onClick={openAiScriptFlows} title="AI 生成测试" type="button">
           <Sparkles size={18} />
-          <span>AI 生成用例</span>
+          <span>AI 生成测试</span>
         </button>
         <button className={navButtonClass(activeNavItem, "stability")} onClick={openStability} title="稳定性探索" type="button">
           <Radar size={18} />

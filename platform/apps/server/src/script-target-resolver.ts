@@ -1,6 +1,6 @@
 import type { ActionStep } from "@mobile-automation/shared";
-import type { ScriptTarget } from "@mobile-automation/script-flow";
-import type { PageAssetCatalog, PageAssetPlatform, PageElementLocator } from "./page-asset-catalog.js";
+import type { ScriptParameterValue, ScriptSearchPolicy, ScriptTarget } from "@mobile-automation/script-flow";
+import type { PageAssetPlatform } from "./page-asset-catalog.js";
 
 export type ScriptTargetAction = "tap" | "inputText" | "clearText" | "selectText" | "scrollUntilVisible";
 
@@ -14,6 +14,8 @@ export type ScriptTargetResolutionInput = {
   confirmText?: string;
   direction?: "up" | "down";
   maxSwipes?: number;
+  search?: ScriptSearchPolicy;
+  parameters?: Record<string, ScriptParameterValue>;
 };
 
 export type ResolvedScriptTarget = {
@@ -30,76 +32,50 @@ export class ScriptTargetResolutionError extends Error {
 }
 
 export class ScriptTargetResolver {
-  constructor(private readonly catalog: PageAssetCatalog) {}
-
   resolve(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
-    if (input.target.pageElement) {
-      return this.resolvePageElement(input);
+    if (input.target.text) {
+      return this.resolveRuntimeText(input, input.target.text);
     }
-    if (input.target.ocrText) {
-      return this.resolveRuntimeText(input, input.target.ocrText, "ocr_text");
+    if (input.target.semantic) {
+      return this.resolveSemanticQuery(input, input.target.semantic);
     }
-    throw new ScriptTargetResolutionError("Target has no executable OCR or page-element evidence");
+    if (input.target.icon) {
+      return this.resolveSemanticIcon(input);
+    }
+    if (input.target.control) {
+      return this.resolveSemanticControl(input);
+    }
+    throw new ScriptTargetResolutionError("Target has no executable text, semantic query, icon, or control");
   }
 
-  private resolvePageElement(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
-    if (!input.onPage) {
-      throw new ScriptTargetResolutionError(`pageElement ${input.target.pageElement} requires onPage`);
-    }
-    const page = this.catalog.resolvePage(input.onPage, input.appId, input.platform);
-    const locator = page && this.catalog.listLocators(page.id).find((candidate) => candidate.id === input.target.pageElement);
-    if (!locator) {
-      throw new ScriptTargetResolutionError(`Page element not found: ${input.onPage}/${input.target.pageElement}`);
-    }
-    const params = locatorParams(locator);
-    const strategy = `page_element:${locator.locatorKind ?? "visual"}`;
-    if (input.action === "tap") {
-      if (locator.locatorKind === "text_locator" && locator.targetText) {
-        return { type: "tap_on_text", strategy, params: { text: locator.targetText, mode: "contains" } };
-      }
-      if (isStableElementLocator(locator.raw.locator)) {
-        return { type: "tap_on_element", strategy, params };
-      }
-      return { type: "tap_on_image", strategy, params };
-    }
-    if (input.action === "inputText" || input.action === "clearText") {
-      return {
-        type: "input_text_to_element",
-        strategy,
-        params: {
-          ...params,
-          text: input.value ?? "",
-          clearFirst: true,
-          ...(input.action === "clearText" ? { clearOnly: true } : {})
-        }
-      };
-    }
-    if (input.action === "selectText") {
-      return {
-        type: "tap_on_image",
-        strategy,
-        params: {
-          ...params,
-          fieldType: "picker_select",
-          selectedValue: requiredValue(input),
-          ...(input.confirmText ? { confirmText: input.confirmText } : {})
-        }
-      };
+  private resolveSemanticQuery(input: ScriptTargetResolutionInput, query: string): ResolvedScriptTarget {
+    if (input.action !== "tap") {
+      throw new ScriptTargetResolutionError(`Semantic targets do not support ${input.action}`);
     }
     return {
-      type: "scroll_until_visible",
-      strategy,
+      type: "tap_on_text",
+      strategy: "semantic_query",
       params: {
-        ...params,
-        direction: input.direction ?? "up",
-        maxSwipes: input.maxSwipes ?? 5
+        text: query,
+        mode: "semantic",
+        ...searchParams(input.target, input.search)
       }
     };
   }
 
-  private resolveRuntimeText(input: ScriptTargetResolutionInput, text: string, strategy: "ocr_text"): ResolvedScriptTarget {
+  private resolveRuntimeText(input: ScriptTargetResolutionInput, text: string): ResolvedScriptTarget {
+    const strategy = "semantic_text";
+    const search = searchParams(input.target, input.search);
     if (input.action === "tap") {
-      return { type: "tap_on_text", strategy, params: { text, mode: "contains" } };
+      return {
+        type: "tap_on_text",
+        strategy,
+        params: {
+          text,
+          mode: input.target.match === "exact" ? "equals" : "contains",
+          ...search
+        }
+      };
     }
     if (input.action === "inputText" || input.action === "clearText") {
       return {
@@ -115,6 +91,7 @@ export class ScriptTargetResolver {
             strategy: "ocr_or_edittext",
             text
           },
+          ...search,
           allowRegionFallback: false
         }
       };
@@ -133,6 +110,7 @@ export class ScriptTargetResolver {
             strategy: "ocr_runtime_picker",
             text
           },
+          ...search,
           allowRegionFallback: false
         }
       };
@@ -147,22 +125,89 @@ export class ScriptTargetResolver {
       }
     };
   }
+
+  private resolveSemanticIcon(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
+    if (input.action !== "tap") {
+      throw new ScriptTargetResolutionError(`Icon targets do not support ${input.action}`);
+    }
+    const semanticArea = semanticAreaParam(input.target.area);
+    const role = (input.target.icon ?? "").trim().toLowerCase();
+    if (semanticArea !== "top" && !(semanticArea === "content" && role === "add")) {
+      throw new ScriptTargetResolutionError("Standard icon target is not supported in this area");
+    }
+    return {
+      type: "tap_on_image",
+      strategy: "semantic_icon",
+      params: {
+        locatorKind: "semantic_icon_locator",
+        role,
+        slot: input.target.position,
+        orderFromRight: iconOrderFromRight(input.target.icon ?? "", input.target.position),
+        semanticArea,
+        ...(input.target.nearText ? { anchorText: input.target.nearText } : {}),
+        ...searchParams(input.target, input.search),
+        allowRegionFallback: false
+      }
+    };
+  }
+
+  private resolveSemanticControl(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
+    if (input.action !== "tap") {
+      throw new ScriptTargetResolutionError(`Control targets do not support ${input.action}`);
+    }
+    if (input.target.control !== "checkbox" || !input.target.nearText) {
+      throw new ScriptTargetResolutionError("Checkbox targets require nearText");
+    }
+    return {
+      type: "tap_on_image",
+      strategy: "semantic_control",
+      params: {
+        locatorKind: "structural_locator",
+        structuralLocator: {
+          strategy: "near_text",
+          role: "checkbox",
+          anchorText: input.target.nearText,
+          clickTarget: "leading_checkbox"
+        },
+        ...searchParams(input.target, input.search),
+        allowRegionFallback: false
+      }
+    };
+  }
 }
 
-function locatorParams(locator: PageElementLocator): Record<string, unknown> {
-  const { id: _id, ...raw } = locator.raw;
+function searchParams(target: ScriptTarget, policy: ScriptSearchPolicy | undefined): Record<string, unknown> {
+  const semanticArea = semanticAreaParam(target.area);
+  const requestedMode = policy?.mode ?? "auto";
+  const searchMode = semanticArea === "top" || semanticArea === "bottom" ? "visibleOnly" : requestedMode;
+  if (searchMode === "visibleOnly") {
+    return {
+      ...(semanticArea ? { semanticArea } : {}),
+      searchMode
+    };
+  }
   return {
-    ...raw,
-    allowRegionFallback: false
+    ...(semanticArea ? { semanticArea } : {}),
+    searchMode,
+    searchDirection: policy?.direction ?? "down",
+    maxSwipes: policy?.maxSwipes ?? 6,
+    resetToTop: policy?.resetToTop ?? true,
+    ...(policy?.container ? { searchContainer: policy.container } : {})
   };
 }
 
-function isStableElementLocator(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
+function semanticAreaParam(area: ScriptTarget["area"]): "top" | "content" | "bottom" | undefined {
+  if (area === "topBar") return "top";
+  if (area === "bottomBar") return "bottom";
+  if (area === "content") return "content";
+  return undefined;
+}
+
+function iconOrderFromRight(icon: string, position: ScriptTarget["position"]): number {
+  if (position !== "trailing") {
+    return 1;
   }
-  const locator = value as Record<string, unknown>;
-  return [locator.resourceId, locator.contentDesc, locator.text].some((item) => typeof item === "string" && item.trim());
+  return icon.trim().toLowerCase() === "search" ? 2 : 1;
 }
 
 function requiredValue(input: ScriptTargetResolutionInput): string {

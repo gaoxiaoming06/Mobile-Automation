@@ -32,6 +32,7 @@ export type PageStateExpectationOutcome = {
   status: "matched" | "multiple_candidates" | "unknown" | "outside_app" | "capture_failed";
   pageName?: string;
   candidateNames?: string[];
+  observedText?: string;
   actualAppId?: string;
   reason?: string;
 };
@@ -314,7 +315,7 @@ export class StepExpectationEvaluator {
       });
     }
 
-    if (!region) {
+    if (!region && expectation.params.source !== "ocr") {
       const hierarchyResult = await this.evaluateTextExpectationFromUiHierarchy(expectation, serial, expected, mode, screenshot);
       if (hierarchyResult?.status === "passed") {
         return hierarchyResult;
@@ -522,10 +523,15 @@ export class StepExpectationEvaluator {
       screenshot: screenshot?.png
     });
     const passed = outcome.status === "matched";
+    const actual = outcome.pageName
+      ?? (outcome.status === "multiple_candidates" ? outcome.candidateNames?.join(", ") : outcome.observedText)
+      ?? outcome.candidateNames?.join(", ")
+      ?? outcome.actualAppId
+      ?? outcome.status;
     return this.createExpectationResult(expectation, {
       status: passed ? "passed" : "failed",
       expected: `Page ${pageId}`,
-      actual: outcome.pageName ?? outcome.candidateNames?.join(", ") ?? outcome.actualAppId ?? outcome.status,
+      actual,
       reason: passed ? undefined : outcome.reason ?? outcome.status,
       evidenceArtifactIds: screenshot ? [screenshot.artifact.id] : []
     });

@@ -29,8 +29,9 @@ describe("AppNav", () => {
     expect(markup).not.toContain("用例录制");
     expect(markup).toContain("资产录制");
     expect(markup).toContain("页面资产库");
-    expect(markup).toContain("脚本用例");
-    expect(markup).toContain("AI 生成用例");
+    expect(markup).toContain("用例中心");
+    expect(markup).not.toContain("脚本用例");
+    expect(markup).toContain("AI 生成测试");
     expect(markup).not.toContain("资产用例");
     expect(markup).not.toContain("AI资产用例");
     expect(markup).not.toContain("参数中心");

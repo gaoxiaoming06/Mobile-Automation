@@ -53,7 +53,7 @@ export const mobileAutomationMcpTools: MobileAutomationMcpToolDefinition[] = [
   },
   {
     name: "preview_script_flow",
-    description: "Compile a saved ScriptFlow into an immutable preview and return its plan digest and required confirmations.",
+    description: "Compile a saved ScriptFlow into an immutable preview and return its plan digest.",
     inputSchema: objectSchema({
       flowId: stringSchema(),
       expectedVersion: integerSchema(),
@@ -62,14 +62,13 @@ export const mobileAutomationMcpTools: MobileAutomationMcpToolDefinition[] = [
   },
   {
     name: "run_script_flow",
-    description: "Run a saved ScriptFlow on a device with typed parameters and explicit risk confirmations.",
+    description: "Run a saved ScriptFlow on a device with typed parameters.",
     inputSchema: objectSchema({
       flowId: stringSchema(),
       expectedVersion: integerSchema(),
       planDigest: stringSchema(),
       deviceSerial: stringSchema(),
-      parameters: objectSchema({}, [], true),
-      confirmedRiskSteps: arraySchema(stringSchema())
+      parameters: objectSchema({}, [], true)
     }, ["flowId", "expectedVersion", "planDigest", "deviceSerial"])
   },
   { name: "get_run", description: "Get ScriptFlow run status and failure evidence.", inputSchema: objectSchema({ runId: stringSchema() }, ["runId"]) },
@@ -103,8 +102,7 @@ export function createMobileAutomationMcpToolHandlers(config: McpAdapterConfig =
       expectedVersion: positiveInteger(input.expectedVersion, "expectedVersion"),
       planDigest: requiredString(input.planDigest, "planDigest"),
       deviceSerial: requiredString(input.deviceSerial, "deviceSerial"),
-      parameters: scalarRecord(input.parameters),
-      confirmedRiskSteps: stringArray(input.confirmedRiskSteps)
+      parameters: scalarRecord(input.parameters)
     }),
     get_run: (input) => adapter.getRun({ runId: requiredString(input.runId, "runId") }),
     get_report: (input) => adapter.getReport({ runId: requiredString(input.runId, "runId") })
@@ -124,10 +122,6 @@ function objectSchema(properties: Record<string, JsonSchema>, required: string[]
 
 function stringSchema(): JsonSchema {
   return { type: "string" };
-}
-
-function arraySchema(items: JsonSchema): JsonSchema {
-  return { type: "array", items };
 }
 
 function integerSchema(): JsonSchema {
@@ -162,10 +156,4 @@ function scalarRecord(value: unknown): Record<string, string | number | boolean>
   const entries = Object.entries(value).filter(([, item]) => typeof item === "string" || typeof item === "number" || typeof item === "boolean");
   if (entries.length !== Object.keys(value).length) throw new Error("parameters values must be scalar");
   return Object.fromEntries(entries) as Record<string, string | number | boolean>;
-}
-
-function stringArray(value: unknown): string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("confirmedRiskSteps must be a string array");
-  return value as string[];
 }

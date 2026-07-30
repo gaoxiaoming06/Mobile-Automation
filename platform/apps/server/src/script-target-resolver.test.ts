@@ -1,60 +1,33 @@
 import { describe, expect, it } from "vitest";
-import type { PageAsset, PageAssetCatalog, PageAssetSummary, PageElementLocator } from "./page-asset-catalog.js";
 import { ScriptTargetResolutionError, ScriptTargetResolver } from "./script-target-resolver.js";
 
 describe("ScriptTargetResolver", () => {
-  it("prefers a public page locator and disables recorded-region center fallback", () => {
-    const resolver = new ScriptTargetResolver(new MemoryCatalog([
-      {
-        id: "add-friend",
-        label: "添加好友",
-        locatorKind: "top_bar_icon_locator",
-        locator: "top-bar-icon:add",
-        targetText: "主页",
-        visualLocator: { candidates: [{ label: "加号" }] },
-        requiresUiTree: false,
-        raw: {
-          id: "add-friend",
-          label: "添加好友",
-          locatorKind: "top_bar_icon_locator",
-          locator: "top-bar-icon:add",
-          targetText: "主页",
-          region: { x: 80, y: 0, width: 20, height: 15 },
-          visualLocator: { candidates: [{ label: "加号" }] }
-        }
-      }
-    ]));
+  it("turns text targets and search policy into runtime visual actions without coordinates", () => {
+    const resolver = new ScriptTargetResolver();
 
-    const result = resolver.resolve({
+    expect(resolver.resolve({
       action: "tap",
-      target: { pageElement: "add-friend" },
-      onPage: "classin.home",
+      target: { text: "添加好友", area: "content", match: "exact" },
+      search: { mode: "auto", direction: "down", maxSwipes: 8 },
       appId: "cn.eeo.classin",
       platform: "android"
-    });
-
-    expect(result).toEqual(expect.objectContaining({
-      type: "tap_on_image",
-      strategy: "page_element:top_bar_icon_locator",
-      params: expect.objectContaining({
-        locator: "top-bar-icon:add",
-        allowRegionFallback: false
-      })
-    }));
-  });
-
-  it("turns OCR targets into runtime visual actions without coordinates", () => {
-    const resolver = new ScriptTargetResolver(new MemoryCatalog([]));
-
-    expect(resolver.resolve({ action: "tap", target: { ocrText: "添加好友" }, appId: "cn.eeo.classin", platform: "android" })).toEqual({
+    })).toEqual({
       type: "tap_on_text",
-      strategy: "ocr_text",
-      params: { text: "添加好友", mode: "contains" }
+      strategy: "semantic_text",
+      params: {
+        text: "添加好友",
+        mode: "equals",
+        semanticArea: "content",
+        searchMode: "auto",
+        searchDirection: "down",
+        maxSwipes: 8,
+        resetToTop: true
+      }
     });
-    expect(resolver.resolve({ action: "inputText", target: { ocrText: "课堂名称输入框" }, value: "自动化课堂", appId: "cn.eeo.classin", platform: "android" }))
+    expect(resolver.resolve({ action: "inputText", target: { text: "课堂名称输入框" }, value: "自动化课堂", appId: "cn.eeo.classin", platform: "android" }))
       .toEqual(expect.objectContaining({
         type: "input_text_to_element",
-        strategy: "ocr_text",
+        strategy: "semantic_text",
         params: expect.objectContaining({
           text: "自动化课堂",
           targetText: "课堂名称输入框",
@@ -64,12 +37,36 @@ describe("ScriptTargetResolver", () => {
       }));
   });
 
+  it("turns a semantic target into an outcome-aware OCR grounding request", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: { semantic: "进入教学方案的入口", area: "content" },
+      search: { mode: "auto", direction: "down", maxSwipes: 6 },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "tap_on_text",
+      strategy: "semantic_query",
+      params: {
+        text: "进入教学方案的入口",
+        mode: "semantic",
+        semanticArea: "content",
+        searchMode: "auto",
+        searchDirection: "down",
+        maxSwipes: 6,
+        resetToTop: true
+      }
+    });
+  });
+
   it("models picker selection as one compound runtime action", () => {
-    const resolver = new ScriptTargetResolver(new MemoryCatalog([]));
+    const resolver = new ScriptTargetResolver();
 
     const result = resolver.resolve({
       action: "selectText",
-      target: { ocrText: "课程时长" },
+      target: { text: "课程时长" },
       value: "30分钟",
       appId: "cn.eeo.classin",
       platform: "android"
@@ -87,30 +84,89 @@ describe("ScriptTargetResolver", () => {
     }));
   });
 
-  it("requires onPage for pageElement", () => {
-    const resolver = new ScriptTargetResolver(new MemoryCatalog([]));
+  it("resolves a standard top-bar icon without consulting the page locator catalog", () => {
+    const resolver = new ScriptTargetResolver();
 
-    expect(() => resolver.resolve({ action: "tap", target: { pageElement: "missing" }, appId: "cn.eeo.classin", platform: "android" }))
-      .toThrow(ScriptTargetResolutionError);
+    expect(resolver.resolve({
+      action: "tap",
+      target: { icon: "add", area: "topBar", position: "trailing" },
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "tap_on_image",
+      strategy: "semantic_icon",
+      params: {
+        locatorKind: "semantic_icon_locator",
+        role: "add",
+        slot: "trailing",
+        orderFromRight: 1,
+        semanticArea: "top",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      }
+    });
+  });
+
+  it("resolves a standard floating add icon without consulting the page locator catalog", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: { icon: "add", area: "content", position: "trailing" },
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "tap_on_image",
+      strategy: "semantic_icon",
+      params: {
+        locatorKind: "semantic_icon_locator",
+        role: "add",
+        slot: "trailing",
+        orderFromRight: 1,
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      }
+    });
+  });
+
+  it("resolves a checkbox from nearby text without a page element asset or region", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: { control: "checkbox", area: "content", nearText: "我已阅读并同意" },
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "tap_on_image",
+      strategy: "semantic_control",
+      params: {
+        locatorKind: "structural_locator",
+        structuralLocator: {
+          strategy: "near_text",
+          role: "checkbox",
+          anchorText: "我已阅读并同意",
+          clickTarget: "leading_checkbox"
+        },
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      }
+    });
+  });
+
+  it("rejects unsupported actions for checkbox targets", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(() => resolver.resolve({
+      action: "inputText",
+      target: { control: "checkbox", area: "content", nearText: "我已阅读并同意" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toThrow(ScriptTargetResolutionError);
   });
 });
-
-class MemoryCatalog implements PageAssetCatalog {
-  constructor(private readonly locators: PageElementLocator[]) {}
-  listPages(): PageAssetSummary[] { return []; }
-  getPage(): undefined { return undefined; }
-  resolvePage(reference: string): PageAsset | undefined {
-    if (reference !== "home" && reference !== "classin.home") return undefined;
-    return {
-      id: "home",
-      key: "classin.home",
-      name: "主页",
-      appId: "cn.eeo.classin",
-      graphVersionId: "version",
-      matcherCount: 0,
-      node: {} as PageAsset["node"]
-    };
-  }
-  listLocators(pageId: string): PageElementLocator[] { return pageId === "home" ? this.locators : []; }
-  findConfusablePages(): PageAssetSummary[] { return []; }
-}

@@ -84,6 +84,155 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("grounds a semantic query to one unambiguous visible OCR candidate", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("教学方案", "学习方案")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-semantic",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: tapOnTextStep("进入教学方案的入口", 0, 0, {
+        mode: "semantic",
+        semanticArea: "content",
+        searchMode: "auto"
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 730, y: 1615 }]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({ actual: "教学方案", matchStrategy: "semantic" })
+    }));
+  });
+
+  it("searches a scrollable page from the top until a text target becomes visible", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        layout("页面中部"),
+        layout("页面顶部"),
+        layout("页面顶部"),
+        layout("创建教学方案")
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-scroll-text",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: tapOnTextStep("创建教学方案", 0, 0, {
+        searchMode: "auto",
+        searchDirection: "down",
+        resetToTop: true,
+        maxSwipes: 4,
+        intervalMs: 1
+      })
+    });
+
+    expect(actions.slice(0, 3)).toEqual([
+      { type: "swipe", startX: 540, startY: 600, endX: 540, endY: 1800, durationMs: 450 },
+      { type: "swipe", startX: 540, startY: 600, endX: 540, endY: 1800, durationMs: 450 },
+      { type: "swipe", startX: 540, startY: 1800, endX: 540, endY: 600, durationMs: 450 }
+    ]);
+    expect(actions.at(-1)).toEqual({ type: "tap", x: 730, y: 1615 });
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        search: expect.objectContaining({ resetSwipes: 2, scanSwipes: 1 })
+      })
+    }));
+  });
+
+  it("treats the same OCR content with shifted boxes as a scroll boundary", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const top = layout("页面顶部");
+    const shiftedTop = {
+      ...top,
+      boxes: top.boxes.map((box) => ({ ...box, y: box.y - 96 }))
+    };
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        top,
+        shiftedTop,
+        layout("教学方案")
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-shift-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-shifted-boundary",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: tapOnTextStep("教学方案", 0, 0, {
+        searchMode: "auto",
+        searchDirection: "down",
+        resetToTop: true,
+        maxSwipes: 4,
+        intervalMs: 1
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "swipe", startX: 540, startY: 600, endX: 540, endY: 1800, durationMs: 450 },
+      { type: "swipe", startX: 540, startY: 1800, endX: 540, endY: 600, durationMs: 450 },
+      { type: "tap", x: 730, y: 1615 }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        search: expect.objectContaining({ resetSwipes: 1, scanSwipes: 1 })
+      })
+    }));
+  });
+
+  it("does not scroll when a text target uses visibleOnly search", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("页面中部")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-visible-only",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: tapOnTextStep("创建教学方案", 0, 0, {
+        searchMode: "visibleOnly",
+        timeoutMs: 1,
+        intervalMs: 1
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: false,
+      metadata: expect.objectContaining({
+        search: expect.objectContaining({ mode: "visibleOnly", resetSwipes: 0, scanSwipes: 0 })
+      })
+    }));
+  });
+
   it("rejects legacy grid candidate index taps without a semantic target", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -395,6 +544,84 @@ describe("SemanticStepResolver", () => {
         relocatedBy: "top_bar_current_visual"
       })
     );
+  });
+
+  it("resolves a standard trailing top-bar icon without a recorded visual candidate", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(topBarLayout()),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: topBarIconScreenshot(1200, 2000, [
+          { role: "search", centerX: 985, centerY: 210 },
+          { role: "add", centerX: 1064, centerY: 214 }
+        ])
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-semantic-add",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "add",
+        slot: "trailing",
+        orderFromRight: 1,
+        semanticArea: "top",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 1065, y: 215 }]);
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      role: "add",
+      relocatedBy: "top_bar_current_visual",
+      recordedCandidateUsed: false
+    }));
+  });
+
+  it("resolves a standard floating add icon in page content without a recorded region", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("班级详情")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: floatingAddIconScreenshot(1000, 2000, { centerX: 875, centerY: 1600, radius: 70 })
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-floating-add",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "add",
+        slot: "trailing",
+        orderFromRight: 1,
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 876, y: 1601 }]);
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      role: "add",
+      semanticArea: "content",
+      relocatedBy: "content_current_visual",
+      recordedCandidateUsed: false
+    }));
   });
 
   it("uses the current top bar visual order when a recorded search candidate is stale", async () => {
@@ -3948,6 +4175,65 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("searches the semantic content area when a collection target has no recorded region", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "主页\n班级四十二号",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: [
+          {
+            text: "班级四十二号",
+            confidence: 0.95,
+            x: 600,
+            y: 735,
+            width: 100,
+            height: 50
+          }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "image-region:3.06,30.44,93.99,59.13",
+        locatorKind: "collection_item_locator",
+        abilityType: "grid_candidate",
+        scrollProfile: {
+          containerKind: "grid_list",
+          direction: "vertical",
+          columns: 2,
+          targetKind: "item_text",
+          targetQuery: "班级四十二号",
+          candidateItemHeightPercent: 24.5,
+          scrollStepPercent: 65
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 650, y: 760 }]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        targetQuery: "班级四十二号",
+        relocatedBy: "ocr_text_in_grid",
+        regionSource: "semantic_content"
+      })
+    }));
+  });
+
   it("taps the OCR matched collection item instead of a stale recorded grid column", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -4474,6 +4760,24 @@ function topBarIconScreenshot(
       drawLine(pixels, width, height, icon.centerX + 9, icon.centerY + 9, icon.centerX + 24, icon.centerY + 24, 5, 20);
     }
   }
+  return pgm(width, height, pixels);
+}
+
+function floatingAddIconScreenshot(
+  width: number,
+  height: number,
+  icon: { centerX: number; centerY: number; radius: number }
+): Buffer {
+  const pixels = Array.from({ length: width * height }, () => 255);
+  for (let y = icon.centerY - icon.radius; y <= icon.centerY + icon.radius; y += 1) {
+    for (let x = icon.centerX - icon.radius; x <= icon.centerX + icon.radius; x += 1) {
+      if (x >= 0 && x < width && y >= 0 && y < height && Math.hypot(x - icon.centerX, y - icon.centerY) <= icon.radius) {
+        pixels[y * width + x] = 20;
+      }
+    }
+  }
+  drawLine(pixels, width, height, icon.centerX - 24, icon.centerY, icon.centerX + 24, icon.centerY, 10, 255);
+  drawLine(pixels, width, height, icon.centerX, icon.centerY - 24, icon.centerX, icon.centerY + 24, 10, 255);
   return pgm(width, height, pixels);
 }
 

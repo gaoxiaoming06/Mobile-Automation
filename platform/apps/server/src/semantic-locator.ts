@@ -112,8 +112,8 @@ export class SemanticStepResolver {
     serial: string;
     deviceSize?: { width: number; height: number };
   }): Promise<SemanticResolutionOutcome> {
-    if (isTopBarIconLocator(input.step.params)) {
-      return this.resolveTopBarIconTap(input);
+    if (isSemanticIconLocator(input.step.params)) {
+      return this.resolveSemanticIconTap(input);
     }
     if (isOcrAnchorOffsetLocator(input.step.params)) {
       return this.resolveOcrAnchorOffsetTap(input);
@@ -127,7 +127,17 @@ export class SemanticStepResolver {
     if (input.step.params.fieldType === "subpage_edit" && isRuntimeOptionSelectionLocator(input.step.params)) {
       return this.resolveRuntimeOptionSelection(input);
     }
-    const region = readPercentRegion(input.step.params.region) ?? readGridCandidateSearchHintRegion(input.step.params);
+    const recordedRegion = readPercentRegion(input.step.params.region);
+    const searchHintRegion = readGridCandidateSearchHintRegion(input.step.params);
+    const semanticCollectionRegion = readGridCandidateSemanticRegion(input.step.params);
+    const region = recordedRegion ?? searchHintRegion ?? semanticCollectionRegion;
+    const regionSource = recordedRegion
+      ? "recorded_region"
+      : searchHintRegion
+        ? "search_hint"
+        : semanticCollectionRegion
+          ? "semantic_content"
+          : undefined;
     if (!region && isRuntimeTapStructuralLocator(input.step.params)) {
       return this.resolveRuntimeStructuralTap(input);
     }
@@ -164,7 +174,13 @@ export class SemanticStepResolver {
     if (input.step.params.abilityType === "grid_candidate") {
       const gridOutcome = await this.tryResolveGridCandidateByOcr(input, region);
       if (gridOutcome) {
-        return gridOutcome;
+        return {
+          ...gridOutcome,
+          metadata: {
+            ...gridOutcome.metadata,
+            ...(regionSource ? { regionSource } : {})
+          }
+        };
       }
       if (gridCandidateRequiresTargetQuery(input.step.params)) {
         const scrollProfile = readScrollProfile(input.step.params.scrollProfile);
@@ -179,7 +195,8 @@ export class SemanticStepResolver {
             abilityType: "grid_candidate",
             reason: "target_not_found",
             targetQuery: scrollProfile.targetQuery,
-            region
+            region,
+            ...(regionSource ? { regionSource } : {})
           }
         };
       }
@@ -196,7 +213,8 @@ export class SemanticStepResolver {
             abilityType: "grid_candidate",
             reason: "deprecated_grid_candidate_without_target",
             targetKind: scrollProfile.targetKind,
-            region
+            region,
+            ...(regionSource ? { regionSource } : {})
           }
         };
       }
@@ -545,7 +563,11 @@ export class SemanticStepResolver {
 
     const visualLocator = readRecord(params.visualLocator);
     const candidates = readVisualImageRegionCandidates(visualLocator?.candidates);
-    const selected = selectTopBarIconCandidate(candidates, {
+    const recordedCandidateUsed = candidates.length > 0;
+    const candidatePool = recordedCandidateUsed
+      ? candidates
+      : [genericTopBarIconSearchCandidate({ role, slot, semanticArea })];
+    const selected = selectTopBarIconCandidate(candidatePool, {
       role,
       slot,
       orderFromRight,
@@ -605,10 +627,11 @@ export class SemanticStepResolver {
           anchor,
           anchorPoint,
           semanticArea,
-          visualCandidate: selected.candidate,
-          visualRelocation: selected.diagnostic,
-          currentVisual: currentVisual.diagnostic,
-          fallback: "candidate_center_disabled"
+        visualCandidate: selected.candidate,
+        visualRelocation: selected.diagnostic,
+        currentVisual: currentVisual.diagnostic,
+        recordedCandidateUsed,
+        fallback: "candidate_center_disabled"
         }
       };
     }
@@ -639,6 +662,92 @@ export class SemanticStepResolver {
         visualCandidate: selected.candidate,
         visualRelocation: selected.diagnostic,
         currentVisual: currentVisual.diagnostic,
+        recordedCandidateUsed,
+        currentVisualRegion: currentVisual.selected.region,
+        center: action,
+        driverChannel: actionResult?.driverChannel
+      }
+    };
+  }
+
+  private async resolveSemanticIconTap(input: {
+    runId: string;
+    stepResultId: string;
+    step: ActionStep;
+    serial: string;
+    deviceSize?: { width: number; height: number };
+  }): Promise<SemanticResolutionOutcome> {
+    const semanticArea = readSemanticArea(input.step.params.semanticArea) ?? "top";
+    if (semanticArea === "top") {
+      return this.resolveTopBarIconTap(input);
+    }
+    return this.resolveContentIconTap(input, semanticArea);
+  }
+
+  private async resolveContentIconTap(
+    input: {
+      runId: string;
+      stepResultId: string;
+      step: ActionStep;
+      serial: string;
+      deviceSize?: { width: number; height: number };
+    },
+    semanticArea: VisualSemanticArea
+  ): Promise<SemanticResolutionOutcome> {
+    const params = input.step.params ?? {};
+    const role = topBarIconRole(params).trim().toLowerCase();
+    const slot = readTopBarSlot(params.slot) ?? "trailing";
+    if (!input.deviceSize) {
+      return semanticIconFailure(role, slot, semanticArea, "missing_device_size", "Semantic icon target requires device size.");
+    }
+    if (semanticArea !== "content" || role !== "add") {
+      return semanticIconFailure(role, slot, semanticArea, "unsupported_icon", `Semantic icon "${role}" is not supported in ${semanticArea}.`);
+    }
+
+    const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, 1);
+    const currentVisual = await locateCurrentContentAddIconInScreenshot({
+      screenshot: screenshot.png,
+      slot,
+      deviceSize: input.deviceSize
+    });
+    if (!currentVisual.selected) {
+      return {
+        supported: true,
+        resolved: false,
+        message: "Standard floating add icon could not be visually located in the current screenshot.",
+        artifacts: [screenshot.artifact],
+        metadata: {
+          type: "semantic_icon_locator",
+          action: "fail",
+          reason: "current_visual_icon_not_found",
+          role,
+          slot,
+          semanticArea,
+          currentVisual: currentVisual.diagnostic,
+          recordedCandidateUsed: false
+        }
+      };
+    }
+
+    const action = { type: "tap", x: currentVisual.selected.point.x, y: currentVisual.selected.point.y } satisfies DeviceActionRequest;
+    const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+    return {
+      supported: true,
+      resolved: true,
+      action,
+      actionResult,
+      message: "Resolved the standard floating add icon in the current screenshot.",
+      artifacts: [screenshot.artifact],
+      metadata: {
+        type: "semantic_icon_locator",
+        action: "tap",
+        ...pageTaskSemanticMetadata(params),
+        role,
+        slot,
+        semanticArea,
+        relocatedBy: "content_current_visual",
+        currentVisual: currentVisual.diagnostic,
+        recordedCandidateUsed: false,
         currentVisualRegion: currentVisual.selected.region,
         center: action,
         driverChannel: actionResult?.driverChannel
@@ -2553,14 +2662,21 @@ export class SemanticStepResolver {
     deviceSize?: { width: number; height: number };
   }): Promise<SemanticResolutionOutcome> {
     const expectedTargets = tapTextTargets(input.step.params);
-    const expected = expectedTargets[0] ?? "";
+    const semanticMatch = input.step.params.mode === "semantic";
     const mode = tapTextMatchMode(input.step.params.mode);
     const timeoutMs = positiveNumberParam(input.step.params.timeoutMs, 3000);
     const intervalMs = positiveNumberParam(input.step.params.intervalMs, 500);
-    const started = Date.now();
+    const searchMode = readTextSearchMode(input.step.params.searchMode);
+    const searchDirection = readTextSearchDirection(input.step.params.searchDirection);
+    const maxSwipes = Math.max(1, Math.floor(positiveNumberParam(input.step.params.maxSwipes, 6)));
+    const semanticArea = readSemanticArea(input.step.params.semanticArea);
+    const resetToTop = searchMode !== "visibleOnly" && input.step.params.resetToTop !== false && searchDirection !== "up";
     let attempt = 0;
     let latestLayout: OcrLayoutResult | undefined;
     let latestCandidate: TextLocatorCandidate | undefined;
+    let resetSwipes = 0;
+    let scanSwipes = 0;
+    let reachedBoundary = false;
     const artifacts: ArtifactRef[] = [];
 
     if (!expectedTargets.length) {
@@ -2592,51 +2708,126 @@ export class SemanticStepResolver {
         }
       };
     }
+    const locateText = this.deps.ocr.locateText.bind(this.deps.ocr);
 
-    while (Date.now() - started <= timeoutMs) {
+    const inspectViewport = async (): Promise<{ layout: OcrLayoutResult; candidate?: TextLocatorCandidate; signature: string }> => {
       attempt += 1;
       const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
       artifacts.push(screenshot.artifact);
-      latestLayout = await this.deps.ocr.locateText({
+      latestLayout = await locateText({
         image: screenshot.png,
         lang: textParam(input.step.params.lang) || undefined,
         mode
       });
-      latestCandidate = findTextCandidateFromTargets(latestLayout, expectedTargets, {
-        mode,
-        preferredPoint: recordedPoint(input.step, input.deviceSize)
-      });
-      if (latestCandidate) {
-        const action = {
-          type: "tap",
-          x: scaleCoordinate(latestCandidate.centerX, latestLayout.width, input.deviceSize?.width),
-          y: scaleCoordinate(latestCandidate.centerY, latestLayout.height, input.deviceSize?.height)
-        } satisfies DeviceActionRequest;
-        const actionResult = (await this.deps.performAction(input.serial, action)) ?? undefined;
-        return {
-          supported: true,
-          resolved: true,
-          action,
-          actionResult,
-          message: `Resolved text "${latestCandidate.text}" for "${expectedTargets.join(" / ")}" after ${attempt} OCR attempt(s).`,
-          artifacts,
-          metadata: {
-            type: "text",
-            expected: expectedTargets,
-            actual: latestCandidate.text,
-            action: "tap",
-            attempts: attempt,
-            locator: latestCandidate,
-            evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
+      latestCandidate = semanticMatch
+        ? findSemanticTextCandidate(latestLayout, expectedTargets[0] ?? "", {
+            preferredPoint: recordedPoint(input.step, input.deviceSize),
+            semanticArea,
+            deviceSize: input.deviceSize
+          })
+        : findTextCandidateFromTargets(latestLayout, expectedTargets, {
+            mode,
+            preferredPoint: recordedPoint(input.step, input.deviceSize),
+            semanticArea,
+            deviceSize: input.deviceSize
+          });
+      return {
+        layout: latestLayout,
+        candidate: latestCandidate,
+        signature: textSearchLayoutSignature(latestLayout, semanticArea, input.deviceSize)
+      };
+    };
+
+    const tapCandidate = async (candidate: TextLocatorCandidate, layout: OcrLayoutResult): Promise<SemanticResolutionOutcome> => {
+      const action = {
+        type: "tap",
+        x: scaleCoordinate(candidate.centerX, layout.width, input.deviceSize?.width),
+        y: scaleCoordinate(candidate.centerY, layout.height, input.deviceSize?.height)
+      } satisfies DeviceActionRequest;
+      const actionResult = (await this.deps.performAction(input.serial, action)) ?? undefined;
+      return {
+        supported: true,
+        resolved: true,
+        action,
+        actionResult,
+        message: `Resolved text "${candidate.text}" for "${expectedTargets.join(" / ")}" after ${attempt} OCR attempt(s).`,
+        artifacts,
+        metadata: {
+          type: "text",
+          expected: expectedTargets,
+          actual: candidate.text,
+          action: "tap",
+          matchStrategy: semanticMatch ? "semantic" : mode,
+          attempts: attempt,
+          locator: candidate,
+          search: {
+            mode: searchMode,
+            direction: searchDirection,
+            resetToTop,
+            maxSwipes,
+            resetSwipes,
+            scanSwipes,
+            reachedBoundary
+          },
+          evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
+        }
+      };
+    };
+
+    if (searchMode === "visibleOnly") {
+      const started = Date.now();
+      while (Date.now() - started <= timeoutMs) {
+        const current = await inspectViewport();
+        if (current.candidate) {
+          return tapCandidate(current.candidate, current.layout);
+        }
+
+        const elapsed = Date.now() - started;
+        if (elapsed >= timeoutMs) {
+          break;
+        }
+        await sleep(Math.min(intervalMs, timeoutMs - elapsed));
+      }
+    } else {
+      let current = await inspectViewport();
+      if (current.candidate) {
+        return tapCandidate(current.candidate, current.layout);
+      }
+      let previousSignature = current.signature;
+
+      if (resetToTop) {
+        for (let swipe = 0; swipe < maxSwipes; swipe += 1) {
+          await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+          resetSwipes += 1;
+          await sleep(intervalMs);
+          current = await inspectViewport();
+          if (current.candidate) {
+            return tapCandidate(current.candidate, current.layout);
           }
-        };
+          if (current.signature === previousSignature) {
+            reachedBoundary = true;
+            break;
+          }
+          previousSignature = current.signature;
+        }
       }
 
-      const elapsed = Date.now() - started;
-      if (elapsed >= timeoutMs) {
-        break;
+      const direction = searchDirection === "up" ? "up" : "down";
+      reachedBoundary = false;
+      for (let swipe = 0; swipe < maxSwipes; swipe += 1) {
+        await this.deps.performAction(input.serial, scrollSwipeAction(direction, input.deviceSize));
+        scanSwipes += 1;
+        await sleep(intervalMs);
+        current = await inspectViewport();
+        if (current.candidate) {
+          return tapCandidate(current.candidate, current.layout);
+        }
+        if (current.signature === previousSignature) {
+          reachedBoundary = true;
+          break;
+        }
+        previousSignature = current.signature;
       }
-      await sleep(Math.min(intervalMs, timeoutMs - elapsed));
     }
 
     return {
@@ -2652,6 +2843,15 @@ export class SemanticStepResolver {
         attempts: attempt,
         candidateCount: latestLayout?.boxes.length ?? 0,
         nearestCandidate: latestCandidate,
+        search: {
+          mode: searchMode,
+          direction: searchDirection,
+          resetToTop,
+          maxSwipes,
+          resetSwipes,
+          scanSwipes,
+          reachedBoundary
+        },
         evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
       }
     };
@@ -3808,6 +4008,60 @@ export function findTextCandidate(
     .sort((left, right) => candidateScore(right) - candidateScore(left))[0];
 }
 
+function findSemanticTextCandidate(
+  layout: OcrLayoutResult,
+  query: string,
+  options: {
+    preferredPoint?: { x: number; y: number };
+    semanticArea?: VisualSemanticArea;
+    deviceSize?: { width: number; height: number };
+  } = {}
+): TextLocatorCandidate | undefined {
+  const normalizedQuery = normalizeSemanticText(query);
+  if (!normalizedQuery) return undefined;
+  const ranked = layout.boxes
+    .map((box) => toCandidate(box, options.preferredPoint))
+    .filter((candidate) => candidate.text)
+    .filter((candidate) => !options.semanticArea || options.semanticArea === "unknown" || textCandidateSemanticArea(candidate, layout, options.deviceSize) === options.semanticArea)
+    .map((candidate) => ({ candidate, score: semanticTextScore(normalizedQuery, normalizeSemanticText(candidate.text)) }))
+    .filter((entry) => entry.score >= 0.72)
+    .sort((left, right) => right.score - left.score || candidateScore(right.candidate) - candidateScore(left.candidate));
+  const best = ranked[0];
+  if (!best) return undefined;
+  const second = ranked[1];
+  if (best.score < 0.999 && second && best.score - second.score < 0.12) return undefined;
+  return best.candidate;
+}
+
+function normalizeSemanticText(value: string): string {
+  let normalized = normalizeOcrText(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  for (const phrase of ["请", "找到", "查找", "寻找", "然后", "并且", "点击", "点开", "打开", "进入", "前往", "跳转到", "跳转", "选择", "选中", "对应的", "对应", "入口", "按钮", "图标", "页面", "界面"]) {
+    normalized = normalized.replaceAll(phrase, "");
+  }
+  return normalized.replace(/的/g, "");
+}
+
+function semanticTextScore(query: string, candidate: string): number {
+  if (!query || !candidate) return 0;
+  if (query === candidate) return 1;
+  if (query.includes(candidate) || candidate.includes(query)) {
+    return 0.82 + 0.15 * (Math.min(query.length, candidate.length) / Math.max(query.length, candidate.length));
+  }
+  const queryBigrams = characterBigrams(query);
+  const candidateBigrams = characterBigrams(candidate);
+  if (!queryBigrams.size || !candidateBigrams.size) return 0;
+  const overlap = [...queryBigrams].filter((item) => candidateBigrams.has(item)).length;
+  return (2 * overlap) / (queryBigrams.size + candidateBigrams.size);
+}
+
+function characterBigrams(value: string): Set<string> {
+  const result = new Set<string>();
+  for (let index = 0; index < value.length - 1; index += 1) {
+    result.add(value.slice(index, index + 2));
+  }
+  return result;
+}
+
 function findPickerValueCandidate(
   layout: OcrLayoutResult,
   expected: string,
@@ -4446,6 +4700,28 @@ function tapTextMatchMode(value: unknown): "contains" | "equals" {
   return textExpectationMode(value) === "equals" ? "equals" : "contains";
 }
 
+function readTextSearchMode(value: unknown): "auto" | "visibleOnly" | "scroll" {
+  return value === "auto" || value === "scroll" ? value : "visibleOnly";
+}
+
+function readTextSearchDirection(value: unknown): "up" | "down" | "both" {
+  return value === "up" || value === "both" ? value : "down";
+}
+
+function textSearchLayoutSignature(
+  layout: OcrLayoutResult,
+  semanticArea: VisualSemanticArea | undefined,
+  deviceSize: { width: number; height: number } | undefined
+): string {
+  return layout.boxes
+    .map((box) => toCandidate(box))
+    .filter((candidate) => !semanticArea || semanticArea === "unknown" || textCandidateSemanticArea(candidate, layout, deviceSize) === semanticArea)
+    .map((candidate) => normalizeOcrText(candidate.text))
+    .filter(Boolean)
+    .sort()
+    .join("|");
+}
+
 function normalizeToggleState(value: unknown): "on" | "off" | undefined {
   const text = textParam(value).trim().toLowerCase();
   if (["on", "true", "1", "yes", "enabled", "checked", "open", "开启", "打开", "选中"].includes(text)) {
@@ -4585,6 +4861,15 @@ function readGridCandidateSearchHintRegion(params: Record<string, unknown>): { x
   }
   const structuralLocator = readRecord(params.structuralLocator);
   return readPercentRegion(structuralLocator?.searchHintRegion ?? params.searchHintRegion);
+}
+
+function readGridCandidateSemanticRegion(params: Record<string, unknown>): { x: number; y: number; width: number; height: number } | undefined {
+  if (!gridCandidateRequiresTargetQuery(params)) return undefined;
+  const semanticArea = readSemanticArea(params.semanticArea) ?? "content";
+  if (semanticArea === "top") return { x: 0, y: 0, width: 100, height: 14 };
+  if (semanticArea === "bottom") return { x: 0, y: 88, width: 100, height: 12 };
+  if (semanticArea === "unknown") return { x: 0, y: 0, width: 100, height: 100 };
+  return { x: 0, y: 14, width: 100, height: 74 };
 }
 
 function readScrollProfile(value: unknown): GridScrollProfile {
@@ -5205,8 +5490,49 @@ type VisualImageRegionCandidate = {
 
 type TopBarIconSlot = "leading" | "trailing";
 
-function isTopBarIconLocator(params: Record<string, unknown>): boolean {
-  return textParam(params.locatorKind).trim() === "top_bar_icon_locator" || textParam(params.locator).trim().startsWith("top-bar-icon:");
+function isSemanticIconLocator(params: Record<string, unknown>): boolean {
+  const locatorKind = textParam(params.locatorKind).trim();
+  return locatorKind === "top_bar_icon_locator" || locatorKind === "semantic_icon_locator" || textParam(params.locator).trim().startsWith("top-bar-icon:");
+}
+
+function semanticIconFailure(
+  role: string,
+  slot: TopBarIconSlot,
+  semanticArea: VisualSemanticArea,
+  reason: string,
+  message: string
+): SemanticResolutionOutcome {
+  return {
+    supported: true,
+    resolved: false,
+    message,
+    artifacts: [],
+    metadata: {
+      type: "semantic_icon_locator",
+      action: "fail",
+      reason,
+      role,
+      slot,
+      semanticArea
+    }
+  };
+}
+
+function genericTopBarIconSearchCandidate(input: {
+  role: string;
+  slot: TopBarIconSlot;
+  semanticArea: VisualSemanticArea;
+}): VisualImageRegionCandidate {
+  return {
+    source: "runtime_semantic_icon",
+    label: input.role || `${input.slot} icon`,
+    role: input.role || undefined,
+    score: 1,
+    semanticArea: input.semanticArea,
+    region: input.slot === "trailing"
+      ? { x: 90, y: 7, width: 4, height: 4 }
+      : { x: 5, y: 7, width: 4, height: 4 }
+  };
 }
 
 function topBarIconRole(params: Record<string, unknown>): string {
@@ -5381,6 +5707,136 @@ async function locateCurrentTopBarIconInScreenshot(input: {
     },
     diagnostic
   };
+}
+
+async function locateCurrentContentAddIconInScreenshot(input: {
+  screenshot: Buffer;
+  slot: TopBarIconSlot;
+  deviceSize: { width: number; height: number };
+}): Promise<{
+  selected?: {
+    point: { x: number; y: number };
+    region: { x: number; y: number; width: number; height: number };
+  };
+  diagnostic: Record<string, unknown>;
+}> {
+  const sample = await imageSampleNativeBestEffort(input.screenshot);
+  if (!sample) {
+    return { diagnostic: { reason: "image_sample_unavailable" } };
+  }
+  const searchRegion = input.slot === "trailing"
+    ? { x: 55, y: 14, width: 45, height: 75 }
+    : { x: 0, y: 14, width: 45, height: 75 };
+  const pixelSearchRegion = percentRegionToSampleRect(searchRegion, sample);
+  if (!pixelSearchRegion) {
+    return { diagnostic: { reason: "invalid_search_region", searchRegion } };
+  }
+  const candidates = findContentAddIconComponents(sample, pixelSearchRegion)
+    .map((component) => ({
+      ...component,
+      score: contentAddIconScore(component, sample, input.slot)
+    }))
+    .filter((component) => component.score >= 0.58)
+    .sort((left, right) => right.score - left.score || (
+      input.slot === "trailing" ? right.center.x - left.center.x : left.center.x - right.center.x
+    ));
+  const selected = candidates[0];
+  const diagnostic = {
+    reason: selected ? "current_visual_icon_selected" : "current_visual_icon_not_found",
+    strategy: "floating_add_shape",
+    slot: input.slot,
+    searchRegion,
+    componentCount: candidates.length,
+    bestScore: selected ? roundPercent(selected.score) : undefined,
+    selectedBounds: selected?.bounds
+  };
+  if (!selected) {
+    return { diagnostic };
+  }
+  return {
+    selected: {
+      point: {
+        x: scaleCoordinate(selected.center.x, sample.width, input.deviceSize.width),
+        y: scaleCoordinate(selected.center.y, sample.height, input.deviceSize.height)
+      },
+      region: sampleRectToPercent(selected.bounds, sample)
+    },
+    diagnostic
+  };
+}
+
+function findContentAddIconComponents(
+  sample: ImageSample,
+  rect: { x: number; y: number; width: number; height: number }
+): TopBarIconVisualComponent[] {
+  const startX = Math.max(0, Math.floor(rect.x));
+  const startY = Math.max(0, Math.floor(rect.y));
+  const endX = Math.min(sample.width, Math.ceil(rect.x + rect.width));
+  const endY = Math.min(sample.height, Math.ceil(rect.y + rect.height));
+  const visited = new Uint8Array(sample.width * sample.height);
+  const components: TopBarIconVisualComponent[] = [];
+  const baseSize = Math.min(sample.width, sample.height);
+  const minSize = Math.max(24, Math.round(baseSize * 0.035));
+  const maxSize = Math.max(120, Math.round(baseSize * 0.2));
+  for (let y = startY; y < endY; y += 1) {
+    for (let x = startX; x < endX; x += 1) {
+      const index = y * sample.width + x;
+      if (visited[index] || !isTopBarIconDarkPixel(sample.pixels[index])) {
+        continue;
+      }
+      const component = floodFillDarkComponent(sample, { startX, startY, endX, endY }, x, y, visited);
+      if (!component) {
+        continue;
+      }
+      const { width, height } = component.bounds;
+      const aspect = width / Math.max(1, height);
+      const density = component.darkPixelCount / Math.max(1, width * height);
+      if (width < minSize || height < minSize || width > maxSize || height > maxSize || aspect < 0.68 || aspect > 1.32 || density < 0.36) {
+        continue;
+      }
+      components.push(component);
+    }
+  }
+  return components;
+}
+
+function contentAddIconScore(component: TopBarIconVisualComponent, sample: ImageSample, slot: TopBarIconSlot): number {
+  const { width, height } = component.bounds;
+  const baseSize = Math.min(sample.width, sample.height);
+  const sizeRatio = Math.min(width, height) / Math.max(1, baseSize);
+  const sizeScore = 1 - Math.min(1, Math.abs(sizeRatio - 0.13) / 0.1);
+  const aspectScore = 1 - Math.min(1, Math.abs(width / Math.max(1, height) - 1) / 0.32);
+  const density = component.darkPixelCount / Math.max(1, width * height);
+  const densityScore = Math.max(0, Math.min(1, (density - 0.36) / 0.35));
+  const horizontalPosition = component.center.x / Math.max(1, sample.width);
+  const positionScore = slot === "trailing" ? horizontalPosition : 1 - horizontalPosition;
+  const plusScore = centeredLightCrossScore(component, sample);
+  return 0.32 * plusScore + 0.24 * aspectScore + 0.2 * densityScore + 0.14 * sizeScore + 0.1 * positionScore;
+}
+
+function centeredLightCrossScore(component: TopBarIconVisualComponent, sample: ImageSample): number {
+  const radius = Math.max(4, Math.round(Math.min(component.bounds.width, component.bounds.height) * 0.24));
+  const stroke = Math.max(1, Math.round(radius * 0.16));
+  let light = 0;
+  let sampled = 0;
+  for (let offset = -radius; offset <= radius; offset += 1) {
+    for (let thickness = -stroke; thickness <= stroke; thickness += 1) {
+      const points = [
+        { x: component.center.x + offset, y: component.center.y + thickness },
+        { x: component.center.x + thickness, y: component.center.y + offset }
+      ];
+      for (const point of points) {
+        if (point.x < 0 || point.x >= sample.width || point.y < 0 || point.y >= sample.height) {
+          continue;
+        }
+        sampled += 1;
+        if ((sample.pixels[point.y * sample.width + point.x] ?? 0) >= 180) {
+          light += 1;
+        }
+      }
+    }
+  }
+  return sampled ? light / sampled : 0;
 }
 
 function selectCurrentTopBarIconComponent(

@@ -6,8 +6,7 @@ import {
   applyEditedEvidenceValue,
   applySemanticAreaOverrideToRegion,
   clientPointToImagePercent,
-  pageNameDraftPatch,
-  updateEditableScreenshotRegion
+  pageNameDraftPatch
 } from "./AssetRecordingPanel.js";
 
 const commonProps = {
@@ -24,38 +23,6 @@ describe("AssetRecordingPanel", () => {
       { clientX: 400, clientY: 500 },
       { left: 250, top: 100, width: 300, height: 600 }
     )).toEqual({ x: 50, y: 66.67 });
-  });
-
-  it("draws, moves, and resizes screenshot evidence regions", () => {
-    expect(updateEditableScreenshotRegion({
-      type: "draw",
-      start: { x: 60, y: 40 },
-      region: { id: "region", label: "身份区域", x: 60, y: 40, width: 0, height: 0 }
-    }, { x: 50, y: 55 })).toEqual({
-      id: "region",
-      label: "身份区域",
-      x: 50,
-      y: 40,
-      width: 10,
-      height: 15,
-      semanticArea: "content",
-      coordinateSpace: "screen"
-    });
-
-    expect(updateEditableScreenshotRegion({
-      type: "move",
-      start: { x: 15, y: 25 },
-      region: { id: "region", label: "身份区域", x: 10, y: 20, width: 30, height: 15 }
-    }, { x: 95, y: 90 })).toEqual({
-      id: "region",
-      label: "身份区域",
-      x: 70,
-      y: 85,
-      width: 30,
-      height: 15,
-      semanticArea: "bottom",
-      coordinateSpace: "screen"
-    });
   });
 
   it("keeps an explicit semantic area override", () => {
@@ -86,7 +53,7 @@ describe("AssetRecordingPanel", () => {
     });
   });
 
-  it("renders only page identity and public locator tabs", () => {
+  it("renders only page identity controls", () => {
     const markup = renderToStaticMarkup(React.createElement(AssetRecordingPanel, {
       ...commonProps,
       currentPage: {
@@ -95,14 +62,13 @@ describe("AssetRecordingPanel", () => {
         nodeId: "page-home",
         pageName: "主页",
         packageName: "cn.eeo.classin",
-        confirmedOcrTexts: ["主页"],
-        elements: []
+        confirmedOcrTexts: ["主页"]
       }
     }));
 
     expect(markup).toContain("页面匹配");
-    expect(markup).toContain("公共定位器");
     expect(markup).toContain("重新识别当前页");
+    expect(markup).not.toContain("公共定位器");
     expect(markup).not.toContain("连接边");
     expect(markup).not.toContain("页面任务");
     expect(markup).not.toContain("自动探索");
@@ -126,31 +92,6 @@ describe("AssetRecordingPanel", () => {
     expect(markup).toContain("创建并识别当前页");
     expect(markup).not.toContain("页面匹配");
     expect(markup).not.toContain("公共定位器");
-  });
-
-  it("shows reusable locators without navigation outcomes", () => {
-    const markup = renderToStaticMarkup(React.createElement(AssetRecordingPanel, {
-      ...commonProps,
-      initialDetailTab: "actions",
-      currentPage: {
-        status: "matched",
-        graphVersionId: "version-1",
-        nodeId: "page-home",
-        pageName: "主页",
-        elements: [{
-          id: "home-add",
-          label: "右上角加号",
-          locator: "text:+",
-          locatorKind: "text_locator",
-          source: "manual"
-        }]
-      }
-    }));
-
-    expect(markup).toContain("公共定位器");
-    expect(markup).toContain("右上角加号");
-    expect(markup).not.toContain("目标页面");
-    expect(markup).not.toContain("结果类型");
   });
 
   it("normalizes page names before saving", () => {

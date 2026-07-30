@@ -23,8 +23,125 @@ import { DeviceExecutionBusyError, DeviceExecutionLease } from "./device-executi
 import type { DeviceEventWatcher, MobileAppMonitorSession, ObservedDeviceEvent } from "./mobile-driver.js";
 import type { OcrInput, OcrResult, OcrService } from "./ocr.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
+import type { PageStateService } from "./page-state-service.js";
 
 describe("AutomationRunner regression flow", () => {
+  it("passes reach_page without device actions when the target page is already active", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const pageState = pageStateSequence(["page-home"]);
+    const runner = new AutomationRunner(storage, driver, undefined, { pageStateService: pageState });
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      steps: [reachPageStep("page-home", [])],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([]);
+    expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
+      status: "already_on_target",
+      targetPageId: "page-home",
+      route: []
+    }));
+  });
+
+  it("executes every action in a frozen navigation segment before verifying its target page", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const pageState = pageStateSequence(["page-detail", "page-home"]);
+    const openMenu: ActionStep = {
+      id: "navigate:open-menu",
+      order: 1,
+      type: "back",
+      enabled: true,
+      params: {},
+      createdAt: nowIso()
+    };
+    const openHome: ActionStep = {
+      id: "navigate:open-home",
+      order: 2,
+      type: "tap",
+      enabled: true,
+      params: {},
+      coordinate: { x: 120, y: 240 },
+      createdAt: nowIso()
+    };
+    const runner = new AutomationRunner(storage, driver, undefined, { pageStateService: pageState });
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      steps: [reachPageStep("page-home", [{
+        fromPageId: "page-detail",
+        toPageId: "page-home",
+        flowId: "flow-detail-home",
+        flowName: "返回主页",
+        segmentId: "detail-home",
+        stepIds: ["open-menu", "open-home"],
+        actions: [openMenu, openHome]
+      }])],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "back" }, { type: "tap", x: 120, y: 240 }]);
+    expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
+      status: "reached",
+      route: [expect.objectContaining({ flowId: "flow-detail-home", segmentId: "detail-home" })]
+    }));
+  });
+
+  it("uses bounded back recovery during preparation and stops as soon as the target page is recognized", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    let identifyCount = 0;
+    const runner = new AutomationRunner(storage, driver, undefined, {
+      pageStateService: {
+        identifyCurrentPage: async () => {
+          identifyCount += 1;
+          if (identifyCount === 1) return { status: "unknown", candidates: [] };
+          return {
+            status: "matched",
+            page: {
+              id: "page-home",
+              key: "page-home",
+              name: "主页",
+              appId: "cn.eeo.classin",
+              graphVersionId: "v1",
+              matcherCount: 1
+            },
+            candidates: []
+          };
+        },
+        verifyExpectedPage: async () => ({ status: "unknown", candidates: [] }),
+        waitForExpectedPage: async () => ({ status: "unknown", candidates: [] })
+      }
+    });
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      steps: [reachPageStep("page-home", [])],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "back" }]);
+    expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
+      status: "recovered_to_target",
+      recoveryActions: 1
+    }));
+  });
+
   it("persists redacted steps while executing the in-memory runtime steps", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
@@ -438,7 +555,31 @@ describe("AutomationRunner regression flow", () => {
     );
   });
 
-  it("keeps successful run video by default as test evidence", async () => {
+  it("does not start video recording unless explicitly enabled", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "mobile-automation-video-"));
+    try {
+      const storage = new MemoryRunnerStorage();
+      const driver = new VideoMockDriver(tempDir);
+      const runner = new AutomationRunner(storage, driver);
+
+      const started = runner.start({
+        deviceSerial: driver.device.serial,
+        caseName: "No Video By Default",
+        steps: [driver.createTapStep(120, 240)],
+        stepIntervalMs: 0
+      });
+      const run = await waitForRun(runner, storage, started.id);
+
+      expect(run.status).toBe("passed");
+      expect(run.config.recordVideo).toBe(false);
+      expect(driver.recordings).toHaveLength(0);
+      expect(run.artifacts.some((artifact) => artifact.type === "video")).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps successful run video when explicitly enabled", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "mobile-automation-video-"));
     try {
       const storage = new MemoryRunnerStorage();
@@ -1384,6 +1525,52 @@ describe("AutomationRunner regression flow", () => {
     );
   });
 });
+
+function reachPageStep(targetPageId: string, navigationEdges: unknown[]): ActionStep {
+  return {
+    id: "reach-page",
+    order: 1,
+    type: "reach_page",
+    enabled: true,
+    title: "到达目标页",
+    params: {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageId: targetPageId,
+      targetPageId,
+      policy: "safe",
+      navigationEdges
+    },
+    createdAt: nowIso()
+  };
+}
+
+function pageStateSequence(pageIds: string[]): PageStateService {
+  let current = 0;
+  const result = () => {
+    const pageId = pageIds[Math.min(current, pageIds.length - 1)] ?? "page-unknown";
+    return {
+      status: "matched" as const,
+      page: {
+        id: pageId,
+        key: pageId,
+        name: pageId,
+        appId: "cn.eeo.classin",
+        graphVersionId: "v1",
+        matcherCount: 1
+      },
+      candidates: []
+    };
+  };
+  return {
+    identifyCurrentPage: async () => result(),
+    verifyExpectedPage: async () => result(),
+    waitForExpectedPage: async () => {
+      current += 1;
+      return result();
+    }
+  };
+}
 
 function createExpectation(type: StepExpectation["type"], params: Record<string, unknown> = {}): StepExpectation {
   return {

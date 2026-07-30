@@ -71,7 +71,6 @@ export function buildRequest(parsed: ParsedCli): CliRequest {
         planDigest: requiredOption(parsed.options.plan, "--plan"),
         deviceSerial: requiredOption(parsed.options.device, "--device"),
         parameters: jsonObjectOption(parsed.options.params, "--params"),
-        confirmedRiskSteps: csvOption(parsed.options.confirmStep),
         mode: stringOption(parsed.options.mode),
         repeatCount: numberOption(parsed.options.repeat),
         stepIntervalMs: numberOption(parsed.options.interval)
@@ -135,7 +134,7 @@ function helpText(): string {
     "  pnpm cli -- devices",
     "  pnpm cli -- flows [--app cn.eeo.classin] [--platform android]",
     "  pnpm cli -- preview-flow --flow <flowId> --version <version> [--params '{\"className\":\"班级四十二号\"}']",
-    "  pnpm cli -- run-flow --flow <flowId> --version <version> --plan <planDigest> --device <serial> [--params '{\"className\":\"班级四十二号\"}'] [--confirmStep open-class]",
+    "  pnpm cli -- run-flow --flow <flowId> --version <version> --plan <planDigest> --device <serial> [--params '{\"className\":\"班级四十二号\"}']",
     "  pnpm cli -- runs --limit 20",
     "  pnpm cli -- status --run <runId>",
     "  pnpm cli -- report --run <runId>",
@@ -174,11 +173,6 @@ function jsonObjectOption(value: string | boolean | undefined, name: string): Re
   const parsed = JSON.parse(raw) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${name} must be a JSON object`);
   return parsed as Record<string, unknown>;
-}
-
-function csvOption(value: string | boolean | undefined): string[] | undefined {
-  const raw = stringOption(value);
-  return raw ? raw.split(",").map((item) => item.trim()).filter(Boolean) : undefined;
 }
 
 function queryString(values: Record<string, string | undefined>): string {

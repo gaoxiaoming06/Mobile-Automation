@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface, type Interface } from "node:readline";
@@ -31,6 +33,26 @@ export type AiJsonResult = {
 
 export function isCodexAppServerProvider(baseURL?: string): boolean {
   return baseURL?.trim().toLowerCase() === CODEX_PROVIDER_BASE_URL;
+}
+
+export function resolveCodexExecutable(options: {
+  configuredPath?: string;
+  platform?: NodeJS.Platform;
+  fileExists?: (candidate: string) => boolean;
+  homeDirectory?: string;
+} = {}): string {
+  const configuredPath = options.configuredPath?.trim() || process.env.CODEX_CLI_PATH?.trim();
+  if (configuredPath) return configuredPath;
+  if ((options.platform ?? process.platform) !== "darwin") return "codex";
+  const fileExists = options.fileExists ?? existsSync;
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const bundledCandidates = [
+    "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "/Applications/Codex.app/Contents/Resources/codex",
+    path.join(homeDirectory, "Applications/ChatGPT.app/Contents/Resources/codex"),
+    path.join(homeDirectory, "Applications/Codex.app/Contents/Resources/codex")
+  ];
+  return bundledCandidates.find(fileExists) ?? "codex";
 }
 
 export async function runAiJsonRequest(config: AiClientConfig, request: AiJsonRequest, fetchImpl: AiClientFetch = fetch): Promise<AiJsonResult> {
@@ -238,7 +260,8 @@ type CodexConnection = {
 };
 
 async function createCodexConnection(): Promise<CodexConnection> {
-  const child = spawn("codex", ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
+  const executable = resolveCodexExecutable();
+  const child = spawn(executable, ["app-server", "--stdio"], { stdio: ["pipe", "pipe", "pipe"] });
   const connection: CodexConnection = {
     child,
     lineReader: createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY }),
@@ -269,6 +292,7 @@ async function createCodexConnection(): Promise<CodexConnection> {
   unrefNodeHandle(child.stderr);
 
   const deadlineAt = Date.now() + CODEX_PROCESS_START_TIMEOUT_MS;
+  await waitForCodexProcessStart(child, executable, deadlineAt);
   await codexRequest(connection, "initialize", {
     clientInfo: {
       name: "mobile_automation_ai_client",
@@ -281,6 +305,34 @@ async function createCodexConnection(): Promise<CodexConnection> {
   }, deadlineAt);
   await codexSendMessage(connection, { method: "initialized" });
   return connection;
+}
+
+async function waitForCodexProcessStart(
+  child: ChildProcessWithoutNullStreams,
+  executable: string,
+  deadlineAt: number
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out starting Codex executable: ${executable}`));
+    }, Math.max(1, deadlineAt - Date.now()));
+    const onSpawn = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(new Error(`Failed to start Codex executable ${executable}: ${error.message}`));
+    };
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      child.off("spawn", onSpawn);
+      child.off("error", onError);
+    };
+    child.once("spawn", onSpawn);
+    child.once("error", onError);
+  });
 }
 
 async function codexRequest(connection: CodexConnection, method: string, params: unknown, deadlineAt: number): Promise<unknown> {

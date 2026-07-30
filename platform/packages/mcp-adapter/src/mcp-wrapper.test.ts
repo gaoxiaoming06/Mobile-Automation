@@ -17,7 +17,7 @@ describe("mobile automation MCP tools", () => {
     ]);
     expect(() => assertNoSecretInMcpToolDefinitions()).not.toThrow();
     expect(JSON.stringify(mobileAutomationMcpTools)).not.toContain("graph");
-    expect(JSON.stringify(mobileAutomationMcpTools)).toContain("confirmedRiskSteps");
+    expect(JSON.stringify(mobileAutomationMcpTools)).not.toContain("confirmedRiskSteps");
     expect(JSON.stringify(mobileAutomationMcpTools)).toContain("planDigest");
     expect(JSON.stringify(mobileAutomationMcpTools)).not.toContain("confirmedRisks");
   });

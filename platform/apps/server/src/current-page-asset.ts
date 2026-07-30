@@ -454,7 +454,8 @@ function imageRegionMatcher(region: ScreenshotRegionMatcher): StateMatcher {
   if (region.baselineArtifactId) {
     matcher.source = {
       ...(matcher.source ?? { sourceType: "manual_edit" as const }),
-      artifactId: region.baselineArtifactId
+      artifactId: region.baselineArtifactId,
+      artifactPath: region.baselinePath
     };
   }
   return matcher;
@@ -472,7 +473,8 @@ function semanticImageRegionMatcher(region: ScreenshotRegionMatcher): StateMatch
   if (region.baselineArtifactId) {
     matcher.source = {
       ...(matcher.source ?? { sourceType: "manual_edit" as const }),
-      artifactId: region.baselineArtifactId
+      artifactId: region.baselineArtifactId,
+      artifactPath: region.baselinePath
     };
   }
   return matcher;
@@ -754,7 +756,7 @@ async function imageRegionSimilarity(observation: Observation, matcher: StateMat
   const baselineArtifactId = matcher.source?.artifactId;
   const screenshot = readObservationScreenshotBytes(observation);
   if (baselineReader && baselineArtifactId && matcher.region && screenshot) {
-    const baseline = await baselineReader(baselineArtifactId).catch(() => undefined);
+    const baseline = await baselineReader(baselineArtifactId, matcher.source?.artifactPath).catch(() => undefined);
     if (baseline) {
       const actual = await cropRegionBestEffort(screenshot, matcher.region, observation.resolution);
       return imageBufferSimilarity(actual, baseline);
@@ -779,7 +781,7 @@ async function visualRegionSimilarity(observation: Observation, matcher: StateMa
   if (!baselineReader || !baselineArtifactId || !matcher.region || !screenshot) {
     return 0;
   }
-  const baseline = await baselineReader(baselineArtifactId).catch(() => undefined);
+  const baseline = await baselineReader(baselineArtifactId, matcher.source?.artifactPath).catch(() => undefined);
   if (!baseline) {
     return 0;
   }
@@ -800,16 +802,35 @@ function pageAssetOnlyGraphVersion(graphVersion: BusinessGraphVersion): Business
 
 function withRuntimeScreenshotRegionMatchers(node: BusinessNode): BusinessNode {
   const regions = readScreenshotRegionMatchers(node.metadata?.screenshotRegions).filter(hasVisualBaseline);
-  const existingValues = new Set(node.matchers.filter((matcher) => isImageRegionMatcherType(matcher.type)).map((matcher) => `${matcher.type}:${matcher.value}`));
+  const regionsByMatcherValue = new Map<string, ScreenshotRegionMatcher>();
+  for (const region of regions) {
+    regionsByMatcherValue.set(`image_region:${region.signature}`, region);
+    regionsByMatcherValue.set(`semantic_image_region:${semanticImageRegionSignature(region)}`, region);
+  }
+  const enrichedMatchers = node.matchers.map((matcher) => {
+    const region = regionsByMatcherValue.get(`${matcher.type}:${matcher.value}`);
+    if (!region) {
+      return matcher;
+    }
+    return {
+      ...matcher,
+      source: {
+        ...(matcher.source ?? { sourceType: "manual_edit" as const }),
+        ...(region.baselineArtifactId ? { artifactId: region.baselineArtifactId } : {}),
+        ...(region.baselinePath ? { artifactPath: region.baselinePath } : {})
+      }
+    };
+  });
+  const existingValues = new Set(enrichedMatchers.filter((matcher) => isImageRegionMatcherType(matcher.type)).map((matcher) => `${matcher.type}:${matcher.value}`));
   const missingMatchers = regions
     .flatMap((region) => [imageRegionMatcher(region), semanticImageRegionMatcher(region)])
     .filter((matcher) => !existingValues.has(`${matcher.type}:${matcher.value}`));
-  if (!missingMatchers.length) {
+  if (!missingMatchers.length && enrichedMatchers.every((matcher, index) => matcher === node.matchers[index])) {
     return node;
   }
   return {
     ...node,
-    matchers: [...node.matchers, ...missingMatchers]
+    matchers: [...enrichedMatchers, ...missingMatchers]
   };
 }
 

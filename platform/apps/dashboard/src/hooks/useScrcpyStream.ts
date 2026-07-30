@@ -406,12 +406,12 @@ function clearVideoElement(video: HTMLVideoElement | null): void {
   video.srcObject = null;
 }
 
-function revokeScreenshotUrl(ref: MutableRefObject<string | null>): void {
-  if (!ref.current) {
+function revokeScreenshotUrl(screenshotUrlRef: MutableRefObject<string | null>): void {
+  if (!screenshotUrlRef.current) {
     return;
   }
-  URL.revokeObjectURL(ref.current);
-  ref.current = null;
+  URL.revokeObjectURL(screenshotUrlRef.current);
+  screenshotUrlRef.current = null;
 }
 
 async function readScreenshotError(response: Response): Promise<string> {

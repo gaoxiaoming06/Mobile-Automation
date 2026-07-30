@@ -103,6 +103,7 @@ export type GraphAssetSource = {
   line?: number;
   stepId?: string;
   artifactId?: string;
+  artifactPath?: string;
   confidence?: number;
 };
 

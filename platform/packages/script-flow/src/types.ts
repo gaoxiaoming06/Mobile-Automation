@@ -1,5 +1,15 @@
 export type ScriptFlowPlatform = "android" | "ios" | "harmony" | "flutter";
 
+export type ScriptFlowKind = "case" | "scenario";
+
+export type ScriptSessionState = "authenticated" | "unauthenticated";
+
+export type ScriptFlowState = {
+  page?: string;
+  session?: ScriptSessionState;
+  role?: string;
+};
+
 export type ScriptFlowStartStrategy = "keepCurrent" | "goHome" | "launchApp" | "restartApp" | "clearDataAndLaunch";
 
 export type ScriptParameterType = "string" | "number" | "boolean" | "datetime";
@@ -23,9 +33,29 @@ export type ScriptParameterDefinition = {
 
 export type ScriptParameterValue = string | number | boolean;
 
+export type ScriptTargetArea = "topBar" | "content" | "bottomBar";
+
+export type ScriptTargetPosition = "leading" | "trailing";
+
+export type ScriptTargetControl = "checkbox";
+
 export type ScriptTarget = {
-  ocrText?: string;
-  pageElement?: string;
+  text?: string;
+  semantic?: string;
+  icon?: string;
+  control?: ScriptTargetControl;
+  area?: ScriptTargetArea;
+  position?: ScriptTargetPosition;
+  nearText?: string;
+  match?: "contains" | "exact";
+};
+
+export type ScriptSearchPolicy = {
+  mode?: "auto" | "visibleOnly" | "scroll";
+  direction?: "up" | "down" | "both";
+  maxSwipes?: number;
+  resetToTop?: boolean;
+  container?: "content";
 };
 
 export type ScriptStepRisk = "none" | "interaction" | "submit" | "publish" | "delete" | "payment";
@@ -48,6 +78,7 @@ export type ScriptLaunchAppStep = ScriptStepBase & {
 export type ScriptTapStep = ScriptStepBase & {
   tap: {
     target: ScriptTarget;
+    search?: ScriptSearchPolicy;
   };
 };
 
@@ -87,12 +118,26 @@ export type ScriptScrollUntilVisibleStep = ScriptStepBase & {
   };
 };
 
+export type ScriptReachPageStep = ScriptStepBase & {
+  reachPage: {
+    page: string;
+    policy?: "safe";
+  };
+};
+
 export type ScriptWaitForPageStep = ScriptStepBase & {
   waitForPage: string;
 };
 
 export type ScriptAssertPageStep = ScriptStepBase & {
   assertPage: string;
+};
+
+export type ScriptAssertTextStep = ScriptStepBase & {
+  assertText: {
+    text: string;
+    match?: "contains" | "exact";
+  };
 };
 
 export type ScriptRunFlowStep = ScriptStepBase & {
@@ -123,14 +168,17 @@ export type ScriptStep =
   | ScriptSelectTextStep
   | ScriptSwipeStep
   | ScriptScrollUntilVisibleStep
+  | ScriptReachPageStep
   | ScriptWaitForPageStep
   | ScriptAssertPageStep
+  | ScriptAssertTextStep
   | ScriptRunFlowStep
   | ScriptRepeatStep
   | ScriptWhenStep;
 
 export type ScriptFlowDocument = {
   version: 1;
+  kind: ScriptFlowKind;
   name: string;
   description?: string;
   app: {
@@ -140,6 +188,8 @@ export type ScriptFlowDocument = {
   start?: {
     strategy: ScriptFlowStartStrategy;
   };
+  entry?: ScriptFlowState;
+  outcome?: ScriptFlowState;
   parameters: Record<string, ScriptParameterDefinition>;
   steps: ScriptStep[];
   tags: string[];
@@ -153,12 +203,15 @@ export type ScriptExecutableAction =
   | "selectText"
   | "swipe"
   | "scrollUntilVisible"
+  | "reachPage"
   | "waitForPage"
-  | "assertPage";
+  | "assertPage"
+  | "assertText";
 
 export type ScriptExecutionPlanStep = {
   id: string;
   order: number;
+  phase: "preparation" | "test";
   name?: string;
   action: ScriptExecutableAction;
   input: Record<string, unknown>;
@@ -180,8 +233,11 @@ export type ScriptRiskConfirmation = {
 
 export type ScriptExecutionPlan = {
   flowName: string;
+  kind: ScriptFlowKind;
   app: ScriptFlowDocument["app"];
   start?: ScriptFlowDocument["start"];
+  entry?: ScriptFlowState;
+  outcome?: ScriptFlowState;
   parameters: Record<string, ScriptParameterValue>;
   steps: ScriptExecutionPlanStep[];
   riskConfirmations: ScriptRiskConfirmation[];
