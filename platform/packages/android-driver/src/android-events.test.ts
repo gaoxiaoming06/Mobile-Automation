@@ -130,6 +130,28 @@ describe("AndroidLogcatEventWatcher", () => {
     await watcher.stop();
   });
 
+  it("ignores a uiautomator helper crash while watching a target package", async () => {
+    const child = createChildProcess();
+    vi.mocked(spawn).mockReturnValueOnce(child as never);
+    const onEvent = vi.fn();
+    const watcher = await new AndroidLogcatEventWatcher().watchDeviceEvents("device-1", onEvent, {
+      packageName: "cn.eeo.classin"
+    });
+
+    child.stdout.write(
+      [
+        "07-30 16:32:33.235 E AndroidRuntime: FATAL EXCEPTION: main",
+        "07-30 16:32:33.235 E AndroidRuntime: PID: 6663",
+        "07-30 16:32:33.235 E AndroidRuntime: java.lang.NullPointerException",
+        "07-30 16:32:33.235 E AndroidRuntime: at com.android.commands.uiautomator.DumpCommand.run(DumpCommand.java:99)"
+      ].join("\n") + "\n"
+    );
+
+    expect(onEvent).not.toHaveBeenCalled();
+
+    await watcher.stop();
+  });
+
   it("emits a warning when logcat exits unexpectedly", async () => {
     const child = createChildProcess();
     vi.mocked(spawn).mockReturnValueOnce(child as never);

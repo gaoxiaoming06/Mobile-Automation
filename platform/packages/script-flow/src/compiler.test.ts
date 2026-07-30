@@ -33,8 +33,35 @@ steps:
         action: "reachPage",
         input: { pageId: "classin.teacher.login", policy: "safe" }
       }),
-      expect.objectContaining({ id: "input-account", phase: "test", action: "inputText" })
+      expect.objectContaining({ id: "input-account", phase: "test", action: "inputText" }),
+      expect.objectContaining({
+        id: "__verify.outcome-page",
+        phase: "test",
+        action: "assertPage",
+        input: { pageId: "classin.teacher.classes" }
+      })
     ]);
+  });
+
+  it("turns a declared outcome page into a final executable assertion", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: open settings
+app: { id: cn.eeo.classin, platform: android }
+outcome: { page: classin.settings }
+steps:
+  - id: open-settings
+    tap: { target: { text: 设置 } }
+`);
+
+    const plan = compileScriptFlow(flow);
+
+    expect(plan.steps.at(-1)).toMatchObject({
+      id: "__verify.outcome-page",
+      action: "assertPage",
+      input: { pageId: "classin.settings" },
+      source: { flowName: "open settings", stepId: "__verify.outcome-page" }
+    });
   });
 
   it("resolves runtime parameters and defaults into a linear execution plan", () => {
@@ -209,6 +236,37 @@ steps:
       action: "tap",
       input: { target: { text: "班级四十二号" } },
       source: { flowName: "open class", stepId: "tap-class" }
+    });
+  });
+
+  it("keeps a child flow outcome assertion when runFlow is expanded", () => {
+    const child = parseScriptFlow(`
+version: 1
+name: open class detail
+app: { id: cn.eeo.classin, platform: android }
+outcome: { page: classin.class.detail }
+steps:
+  - id: tap-class
+    tap: { target: { text: 班级四十二号 } }
+`);
+    const parent = parseScriptFlow(`
+version: 1
+name: parent scenario
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open-class
+    runFlow: open-class-detail
+`);
+
+    const plan = compileScriptFlow(parent, {
+      resolveFlow: (id) => id === "open-class-detail" ? child : undefined
+    });
+
+    expect(plan.steps.at(-1)).toMatchObject({
+      id: "open-class.__verify.outcome-page",
+      action: "assertPage",
+      input: { pageId: "classin.class.detail" },
+      source: { flowName: "open class detail", stepId: "__verify.outcome-page" }
     });
   });
 

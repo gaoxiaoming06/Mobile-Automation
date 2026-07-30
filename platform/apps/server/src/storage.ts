@@ -10,14 +10,21 @@ import type {
   PlatformScope,
   StateMatcher
 } from "@mobile-automation/graph-core";
-import { parseScriptFlow, type ScriptFlowDocument } from "@mobile-automation/script-flow";
+import { parseScriptFlow, type ScriptFlowDocument, type ScriptStep, type ScriptTarget } from "@mobile-automation/script-flow";
 import {
   createId,
   nowIso,
   type ActionStep,
   type ArtifactRef,
   type DeviceEvent,
+  type FlowVerification,
+  type FlowVerificationStatus,
+  type InteractionAsset,
+  type LearningCandidate,
+  type LearningCandidateStatus,
+  type LearningSession,
   type MetricSample,
+  type NavigationEntry,
   type ScriptFlow,
   type ScriptFlowVersion,
   type StepResult,
@@ -30,6 +37,10 @@ import {
   type PageNavigationSegmentSnapshot
 } from "./page-navigation.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
+import { scriptFlowSourceHash } from "./script-flow-verification.js";
+import { automaticLearningDecision } from "./learning-policy.js";
+import { interactionCandidatesFromTrial } from "./trial-interaction-learning.js";
+import { navigationCandidatesFromTrial } from "./trial-navigation-learning.js";
 
 const dbPath = path.join(dataRoot, "mobile-automation.sqlite");
 
@@ -75,6 +86,15 @@ export type CreateScriptFlowInput = {
   sourceYaml: string;
   document: ScriptFlowDocument;
   status?: ScriptFlow["status"];
+};
+
+export type CreateFlowVerificationInput = Omit<FlowVerification, "id" | "createdAt"> & {
+  id?: string;
+  createdAt?: string;
+};
+
+export type CreateLearningCandidateInput = Omit<LearningCandidate, "id" | "createdAt" | "updatedAt"> & {
+  id?: string;
 };
 
 type RuntimeInterceptorRuleFilter = {
@@ -231,7 +251,386 @@ export class Storage {
        WHERE app_id = ? AND platform = ?
        ORDER BY from_page ASC, to_page ASC, flow_id ASC, segment_order ASC`
     ).all(filter.appId, filter.platform) as Row[];
-    return rows.map(rowToPageNavigationSegment);
+    const flowSegments = rows.map(rowToPageNavigationSegment);
+    const learnedSegments = this.listNavigationEntries(filter)
+      .filter((entry) => entry.status === "active" && entry.from.kind === "page")
+      .map((entry) => navigationEntryToSegment(entry, filter.platform));
+    return [...flowSegments, ...learnedSegments]
+      .sort((left, right) => left.fromPage.localeCompare(right.fromPage)
+        || left.toPage.localeCompare(right.toPage)
+        || left.id.localeCompare(right.id));
+  }
+
+  createFlowVerification(input: CreateFlowVerificationInput): FlowVerification {
+    const verification: FlowVerification = {
+      ...input,
+      id: input.id ?? createId("flow_verification"),
+      createdAt: input.createdAt ?? nowIso()
+    };
+    this.db.prepare(
+      `INSERT INTO flow_verifications
+        (id, flow_id, flow_version, source_hash, app_id, platform, app_version, run_id, status, coverage_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      verification.id,
+      verification.flowId ?? null,
+      verification.flowVersion ?? null,
+      verification.sourceHash,
+      verification.appId,
+      verification.platform,
+      verification.appVersion ?? null,
+      verification.runId,
+      verification.status,
+      JSON.stringify(verification.coverage),
+      verification.createdAt
+    );
+    return verification;
+  }
+
+  findLatestFlowVerification(filter: {
+    sourceHash: string;
+    appId: string;
+    platform: ScriptFlow["platform"];
+    appVersion?: string;
+    status?: FlowVerificationStatus;
+  }): FlowVerification | undefined {
+    const clauses = ["source_hash = ?", "app_id = ?", "platform = ?"];
+    const values: Array<string> = [filter.sourceHash, filter.appId, filter.platform];
+    if (filter.appVersion) {
+      clauses.push("app_version = ?");
+      values.push(filter.appVersion);
+    }
+    if (filter.status) {
+      clauses.push("status = ?");
+      values.push(filter.status);
+    }
+    const row = this.db.prepare(
+      `SELECT * FROM flow_verifications WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC LIMIT 1`
+    ).get(...values) as Row | undefined;
+    return row ? rowToFlowVerification(row) : undefined;
+  }
+
+  listFlowVerificationsForRun(runId: string): FlowVerification[] {
+    const rows = this.db.prepare(
+      "SELECT * FROM flow_verifications WHERE run_id = ? ORDER BY created_at DESC"
+    ).all(runId) as Row[];
+    return rows.map(rowToFlowVerification);
+  }
+
+  updateFlowVerificationStatus(id: string, status: FlowVerificationStatus): FlowVerification | undefined {
+    this.db.prepare("UPDATE flow_verifications SET status = ? WHERE id = ?").run(status, id);
+    const row = this.db.prepare("SELECT * FROM flow_verifications WHERE id = ?").get(id) as Row | undefined;
+    return row ? rowToFlowVerification(row) : undefined;
+  }
+
+  getLearningSessionForRun(runId: string): LearningSession | undefined {
+    const row = this.db.prepare("SELECT * FROM learning_sessions WHERE run_id = ?").get(runId) as Row | undefined;
+    return row ? rowToLearningSession(row) : undefined;
+  }
+
+  getLearningSession(id: string): LearningSession | undefined {
+    const row = this.db.prepare("SELECT * FROM learning_sessions WHERE id = ?").get(id) as Row | undefined;
+    return row ? rowToLearningSession(row) : undefined;
+  }
+
+  createLearningCandidate(input: CreateLearningCandidateInput): LearningCandidate {
+    if (!this.getLearningSession(input.sessionId)) {
+      throw new Error(`Learning session not found: ${input.sessionId}`);
+    }
+    const now = nowIso();
+    const candidate: LearningCandidate = {
+      ...input,
+      id: input.id ?? createId("learning_candidate"),
+      createdAt: now,
+      updatedAt: now
+    };
+    this.db.prepare(
+      `INSERT INTO learning_candidates
+        (id, session_id, kind, stable_key, source_step_id, confidence, status, payload_json,
+         evidence_artifact_ids_json, validation_issues_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      candidate.id,
+      candidate.sessionId,
+      candidate.kind,
+      candidate.stableKey ?? null,
+      candidate.sourceStepId ?? null,
+      candidate.confidence,
+      candidate.status,
+      JSON.stringify(candidate.payload),
+      JSON.stringify(candidate.evidenceArtifactIds),
+      JSON.stringify(candidate.validationIssues),
+      candidate.createdAt,
+      candidate.updatedAt
+    );
+    this.refreshLearningSummary(candidate.sessionId);
+    return candidate;
+  }
+
+  listLearningCandidates(sessionId: string): LearningCandidate[] {
+    const rows = this.db.prepare(
+      "SELECT * FROM learning_candidates WHERE session_id = ? ORDER BY created_at ASC, id ASC"
+    ).all(sessionId) as Row[];
+    return rows.map(rowToLearningCandidate);
+  }
+
+  updateLearningCandidateStatus(id: string, status: LearningCandidateStatus): LearningCandidate | undefined {
+    const current = this.db.prepare("SELECT session_id FROM learning_candidates WHERE id = ?").get(id) as Row | undefined;
+    if (!current) return undefined;
+    this.db.prepare("UPDATE learning_candidates SET status = ?, updated_at = ? WHERE id = ?").run(status, nowIso(), id);
+    this.refreshLearningSummary(String(current.session_id));
+    const row = this.db.prepare("SELECT * FROM learning_candidates WHERE id = ?").get(id) as Row | undefined;
+    return row ? rowToLearningCandidate(row) : undefined;
+  }
+
+  deleteLearningSession(id: string): boolean {
+    return this.db.prepare("DELETE FROM learning_sessions WHERE id = ?").run(id).changes > 0;
+  }
+
+  listInteractionAssets(filter: { appId: string; platform?: ScriptFlow["platform"] }): InteractionAsset[] {
+    const rows = filter.platform
+      ? this.db.prepare(
+        "SELECT * FROM interaction_assets WHERE app_id = ? AND platform_scope IN (?, 'mobile-both') ORDER BY updated_at DESC"
+      ).all(filter.appId, filter.platform) as Row[]
+      : this.db.prepare(
+        "SELECT * FROM interaction_assets WHERE app_id = ? ORDER BY updated_at DESC"
+      ).all(filter.appId) as Row[];
+    return rows.map(rowToInteractionAsset);
+  }
+
+  listNavigationEntries(filter: { appId: string; platform?: ScriptFlow["platform"] }): NavigationEntry[] {
+    const rows = filter.platform
+      ? this.db.prepare(
+        "SELECT * FROM navigation_entries WHERE app_id = ? AND platform_scope IN (?, 'mobile-both') ORDER BY updated_at DESC"
+      ).all(filter.appId, filter.platform) as Row[]
+      : this.db.prepare(
+        "SELECT * FROM navigation_entries WHERE app_id = ? ORDER BY updated_at DESC"
+      ).all(filter.appId) as Row[];
+    return rows.map(rowToNavigationEntry);
+  }
+
+  acceptLearningSession(sessionId: string, candidateIds: string[]): {
+    session: LearningSession;
+    assets: InteractionAsset[];
+    navigationEntries: NavigationEntry[];
+  } {
+    const session = this.getLearningSession(sessionId);
+    if (!session) throw new Error(`Learning session not found: ${sessionId}`);
+    if (session.status !== "ready" || !session.executionPassed || !["verified", "human_confirmed"].includes(session.outcomeStatus)) {
+      throw new Error("Learning session is not ready for acceptance");
+    }
+    const selectedIds = [...new Set(candidateIds)];
+    if (selectedIds.length === 0) throw new Error("At least one learning candidate must be selected");
+    const candidates = this.listLearningCandidates(sessionId).filter((candidate) => selectedIds.includes(candidate.id));
+    if (candidates.length !== selectedIds.length) throw new Error("Learning candidate not found in this session");
+    const unsupported = candidates.find((candidate) => candidate.kind !== "interaction" && candidate.kind !== "navigation");
+    if (unsupported) throw new Error(`Learning candidate ${unsupported.id} cannot be accepted as a reusable asset`);
+    const drafts = candidates
+      .filter((candidate) => candidate.kind === "interaction")
+      .map((candidate) => interactionAssetFromCandidate(session, candidate));
+    const navigationDrafts = candidates
+      .filter((candidate) => candidate.kind === "navigation")
+      .map((candidate) => navigationEntryFromCandidate(session, candidate));
+    const acceptedIds: string[] = [];
+    const acceptedNavigationIds: string[] = [];
+    const now = nowIso();
+
+    this.db.prepare("BEGIN").run();
+    try {
+      for (const draft of drafts) {
+        const existingRow = this.db.prepare(
+          `SELECT * FROM interaction_assets
+           WHERE app_id = ? AND platform_scope = ? AND owner_kind = ? AND owner_key = ? AND asset_key = ?`
+        ).get(draft.appId, draft.platformScope, draft.owner.kind, draft.owner.key, draft.key) as Row | undefined;
+        const asset = existingRow
+          ? mergeInteractionAsset(rowToInteractionAsset(existingRow), draft, now)
+          : { ...draft, id: createId("interaction_asset"), version: 1, createdAt: now, updatedAt: now };
+        if (existingRow) {
+          this.db.prepare(
+            `UPDATE interaction_assets SET name = ?, aliases_json = ?, supported_actions_json = ?,
+             semantic_contract_json = ?, locator_variants_json = ?, status = ?, version = ?, provenance_json = ?, updated_at = ?
+             WHERE id = ?`
+          ).run(
+            asset.name,
+            JSON.stringify(asset.aliases),
+            JSON.stringify(asset.supportedActions),
+            JSON.stringify(asset.semanticContract),
+            JSON.stringify(asset.locatorVariants),
+            asset.status,
+            asset.version,
+            JSON.stringify(asset.provenance),
+            asset.updatedAt,
+            asset.id
+          );
+        } else {
+          this.db.prepare(
+            `INSERT INTO interaction_assets
+              (id, asset_key, app_id, platform_scope, owner_kind, owner_key, name, aliases_json,
+               supported_actions_json, semantic_contract_json, locator_variants_json, status, version,
+               provenance_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            asset.id,
+            asset.key,
+            asset.appId,
+            asset.platformScope,
+            asset.owner.kind,
+            asset.owner.key,
+            asset.name,
+            JSON.stringify(asset.aliases),
+            JSON.stringify(asset.supportedActions),
+            JSON.stringify(asset.semanticContract),
+            JSON.stringify(asset.locatorVariants),
+            asset.status,
+            asset.version,
+            JSON.stringify(asset.provenance),
+            asset.createdAt,
+            asset.updatedAt
+          );
+        }
+        this.db.prepare(
+          `INSERT INTO interaction_asset_versions (id, asset_id, version, snapshot_json, created_at)
+           VALUES (?, ?, ?, ?, ?)`
+        ).run(createId("interaction_asset_version"), asset.id, asset.version, JSON.stringify(asset), now);
+        acceptedIds.push(asset.id);
+      }
+      for (const draft of navigationDrafts) {
+        const existingRow = this.db.prepare(
+          `SELECT * FROM navigation_entries
+           WHERE app_id = ? AND platform_scope = ? AND entry_key = ?`
+        ).get(draft.appId, draft.platformScope, draft.key) as Row | undefined;
+        const entry = existingRow
+          ? mergeNavigationEntry(rowToNavigationEntry(existingRow), draft, now)
+          : { ...draft, id: createId("navigation_entry"), version: 1, createdAt: now, updatedAt: now };
+        if (existingRow) {
+          this.db.prepare(
+            `UPDATE navigation_entries SET from_kind = ?, from_key = ?, from_role = ?, to_page = ?, name = ?,
+             action_json = ?, confidence = ?, status = ?, version = ?, provenance_json = ?, updated_at = ?
+             WHERE id = ?`
+          ).run(
+            entry.from.kind,
+            entry.from.key,
+            entry.from.kind === "session" ? entry.from.role ?? null : null,
+            entry.toPage,
+            entry.name,
+            JSON.stringify(entry.action),
+            entry.confidence,
+            entry.status,
+            entry.version,
+            JSON.stringify(entry.provenance),
+            entry.updatedAt,
+            entry.id
+          );
+        } else {
+          this.db.prepare(
+            `INSERT INTO navigation_entries
+              (id, entry_key, app_id, platform_scope, from_kind, from_key, from_role, to_page, name,
+               action_json, confidence, status, version, provenance_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            entry.id,
+            entry.key,
+            entry.appId,
+            entry.platformScope,
+            entry.from.kind,
+            entry.from.key,
+            entry.from.kind === "session" ? entry.from.role ?? null : null,
+            entry.toPage,
+            entry.name,
+            JSON.stringify(entry.action),
+            entry.confidence,
+            entry.status,
+            entry.version,
+            JSON.stringify(entry.provenance),
+            entry.createdAt,
+            entry.updatedAt
+          );
+        }
+        this.db.prepare(
+          `INSERT INTO navigation_entry_versions (id, entry_id, version, snapshot_json, created_at)
+           VALUES (?, ?, ?, ?, ?)`
+        ).run(createId("navigation_entry_version"), entry.id, entry.version, JSON.stringify(entry), now);
+        acceptedNavigationIds.push(entry.id);
+      }
+      const placeholders = selectedIds.map(() => "?").join(", ");
+      this.db.prepare(
+        `UPDATE learning_candidates SET status = 'accepted', updated_at = ? WHERE session_id = ? AND id IN (${placeholders})`
+      ).run(now, sessionId, ...selectedIds);
+      const verification = this.listFlowVerificationsForRun(session.runId).find((item) => item.status === "verified");
+      if (verification) {
+        this.db.prepare("UPDATE flow_verifications SET coverage_json = ? WHERE id = ?").run(
+          JSON.stringify({
+            ...verification.coverage,
+            interactionAssetIds: uniqueStrings([...verification.coverage.interactionAssetIds, ...acceptedIds])
+          }),
+          verification.id
+        );
+      }
+      this.db.prepare("UPDATE learning_sessions SET status = 'accepted', updated_at = ? WHERE id = ?").run(now, sessionId);
+      this.db.prepare("COMMIT").run();
+    } catch (error) {
+      this.db.prepare("ROLLBACK").run();
+      throw error;
+    }
+    const acceptedSession = this.getLearningSession(sessionId);
+    if (!acceptedSession) throw new Error(`Learning session not found: ${sessionId}`);
+    const assets = acceptedIds.flatMap((id) => {
+      const row = this.db.prepare("SELECT * FROM interaction_assets WHERE id = ?").get(id) as Row | undefined;
+      return row ? [rowToInteractionAsset(row)] : [];
+    });
+    const navigationEntries = acceptedNavigationIds.flatMap((id) => {
+      const row = this.db.prepare("SELECT * FROM navigation_entries WHERE id = ?").get(id) as Row | undefined;
+      return row ? [rowToNavigationEntry(row)] : [];
+    });
+    return { session: acceptedSession, assets, navigationEntries };
+  }
+
+  reviewTrialOutcome(runId: string, decision: "confirmed" | "rejected"): {
+    session: LearningSession;
+    verification?: FlowVerification;
+  } {
+    const current = this.getLearningSessionForRun(runId);
+    if (!current) throw new Error(`Learning session not found for run: ${runId}`);
+    if (!current.executionPassed || current.status !== "needs_outcome_review") {
+      throw new Error("Trial outcome is not awaiting review");
+    }
+    const verification = this.listFlowVerificationsForRun(runId)[0];
+    const now = nowIso();
+    this.db.prepare("BEGIN").run();
+    try {
+      this.db.prepare(
+        "UPDATE learning_sessions SET outcome_status = ?, status = ?, updated_at = ? WHERE id = ?"
+      ).run(
+        decision === "confirmed" ? "human_confirmed" : "rejected",
+        decision === "confirmed" ? "ready" : "rejected",
+        now,
+        current.id
+      );
+      if (verification) {
+        this.db.prepare("UPDATE flow_verifications SET status = ?, coverage_json = ? WHERE id = ?").run(
+          decision === "confirmed" ? "verified" : "invalidated",
+          JSON.stringify({
+            ...verification.coverage,
+            humanConfirmedOutcome: decision === "confirmed"
+          }),
+          verification.id
+        );
+      }
+      this.db.prepare("COMMIT").run();
+    } catch (error) {
+      this.db.prepare("ROLLBACK").run();
+      throw error;
+    }
+    if (decision === "confirmed") {
+      this.refreshPageNavigationIndex();
+      this.automaticallyPromoteLearningCandidates(current.id);
+    }
+    const session = this.getLearningSessionForRun(runId);
+    if (!session) throw new Error(`Learning session not found for run: ${runId}`);
+    const updatedVerification = verification
+      ? this.listFlowVerificationsForRun(runId).find((item) => item.id === verification.id)
+      : undefined;
+    return { session, ...(updatedVerification ? { verification: updatedVerification } : {}) };
   }
 
 
@@ -651,6 +1050,12 @@ export class Storage {
   updateRunStatus(runId: string, status: TestRun["status"], endedAt?: string): void {
     const isFinalStatus = !["pending", "running", "paused"].includes(status);
     this.db.prepare("UPDATE runs SET status = ?, ended_at = ? WHERE id = ?").run(status, isFinalStatus ? endedAt ?? nowIso() : null, runId);
+    if (status === "passed") {
+      this.recordPassedTrialVerification(runId);
+    }
+    if (isFinalStatus) {
+      this.recordTrialLearningSession(runId, status);
+    }
   }
 
   updateRunReport(runId: string, relativePath: string): void {
@@ -903,6 +1308,143 @@ export class Storage {
     );
   }
 
+  private recordPassedTrialVerification(runId: string): void {
+    const row = this.db.prepare("SELECT run_snapshot_json FROM runs WHERE id = ?").get(runId) as Row | undefined;
+    if (!row) return;
+    const runSnapshot = JSON.parse(String(row.run_snapshot_json)) as Record<string, unknown>;
+    const sourceSnapshot = scriptFlowSourceSnapshot(runSnapshot).sourceSnapshot;
+    if (
+      sourceSnapshot?.executionPurpose !== "trial"
+      || !sourceSnapshot.sourceHash
+      || !sourceSnapshot.verificationAssessment
+    ) {
+      return;
+    }
+    const existing = this.db.prepare(
+      "SELECT id FROM flow_verifications WHERE run_id = ? AND source_hash = ? LIMIT 1"
+    ).get(runId, sourceSnapshot.sourceHash) as Row | undefined;
+    if (existing) return;
+
+    const app = sourceSnapshot.parsed.app;
+    if (!app || typeof app !== "object" || Array.isArray(app)) return;
+    const appRecord = app as Record<string, unknown>;
+    if (typeof appRecord.id !== "string" || typeof appRecord.platform !== "string") return;
+    const storedFlow = this.db.prepare("SELECT id FROM script_flows WHERE id = ?").get(sourceSnapshot.flowId) as Row | undefined;
+    const totalSteps = Array.isArray(runSnapshot.steps) ? runSnapshot.steps.length : 0;
+
+    const verificationStatus = sourceSnapshot.verificationAssessment.unresolvedOutcome ? "provisional" : "verified";
+    this.createFlowVerification({
+      ...(storedFlow ? { flowId: sourceSnapshot.flowId, flowVersion: sourceSnapshot.version } : {}),
+      sourceHash: sourceSnapshot.sourceHash,
+      appId: appRecord.id,
+      platform: appRecord.platform as ScriptFlow["platform"],
+      runId,
+      status: verificationStatus,
+      coverage: {
+        totalSteps,
+        verifiedSteps: totalSteps,
+        interactionAssetIds: uniqueStrings(
+          (sourceSnapshot.interactionAssets ?? []).map((binding) => binding.assetId)
+        ),
+        pageAssetIds: [],
+        humanConfirmedOutcome: false
+      }
+    });
+    if (verificationStatus === "verified") this.refreshPageNavigationIndex();
+  }
+
+  private recordTrialLearningSession(runId: string, runStatus: TestRun["status"]): void {
+    const row = this.db.prepare("SELECT run_snapshot_json FROM runs WHERE id = ?").get(runId) as Row | undefined;
+    if (!row || this.getLearningSessionForRun(runId)) return;
+    const runSnapshot = JSON.parse(String(row.run_snapshot_json)) as Record<string, unknown>;
+    const sourceSnapshot = scriptFlowSourceSnapshot(runSnapshot).sourceSnapshot;
+    if (
+      sourceSnapshot?.executionPurpose !== "trial"
+      || !sourceSnapshot.sourceHash
+      || !sourceSnapshot.verificationAssessment
+    ) {
+      return;
+    }
+    const app = sourceSnapshot.parsed.app;
+    if (!app || typeof app !== "object" || Array.isArray(app)) return;
+    const appRecord = app as Record<string, unknown>;
+    if (typeof appRecord.id !== "string" || typeof appRecord.platform !== "string") return;
+
+    const executionPassed = runStatus === "passed";
+    const unresolvedOutcome = sourceSnapshot.verificationAssessment.unresolvedOutcome;
+    const now = nowIso();
+    const summary = {
+      pageCandidates: 0,
+      interactionCandidates: 0,
+      navigationCandidates: 0,
+      testCandidates: executionPassed ? 1 : 0,
+      issues: executionPassed
+        ? unresolvedOutcome ? ["试运行没有自动结果判定，需要确认业务结果"] : []
+        : ["试运行未通过，不能从本次执行学习资产"]
+    };
+    const sessionId = createId("learning_session");
+    this.db.prepare(
+      `INSERT INTO learning_sessions
+        (id, run_id, app_id, platform, source_hash, execution_passed, outcome_status, status,
+         summary_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      sessionId,
+      runId,
+      appRecord.id,
+      appRecord.platform,
+      sourceSnapshot.sourceHash,
+      executionPassed ? 1 : 0,
+      executionPassed && !unresolvedOutcome ? "verified" : "unverified",
+      executionPassed ? unresolvedOutcome ? "needs_outcome_review" : "ready" : "invalid",
+      JSON.stringify(summary),
+      now,
+      now
+    );
+    if (executionPassed) {
+      const run = this.getRun(runId);
+      if (run) {
+        for (const candidate of interactionCandidatesFromTrial(run)) {
+          this.createLearningCandidate({ sessionId, ...candidate });
+        }
+        for (const candidate of navigationCandidatesFromTrial(run)) {
+          this.createLearningCandidate({ sessionId, ...candidate });
+        }
+      }
+      if (!unresolvedOutcome) this.automaticallyPromoteLearningCandidates(sessionId);
+    }
+  }
+
+  private automaticallyPromoteLearningCandidates(sessionId: string): void {
+    const session = this.getLearningSession(sessionId);
+    if (!session || session.status !== "ready") return;
+    const candidateIds = this.listLearningCandidates(sessionId)
+      .filter((candidate) => automaticLearningDecision(candidate).accept)
+      .map((candidate) => candidate.id);
+    if (candidateIds.length > 0) this.acceptLearningSession(sessionId, candidateIds);
+  }
+
+  private refreshLearningSummary(sessionId: string): void {
+    const session = this.getLearningSession(sessionId);
+    if (!session) return;
+    const rows = this.db.prepare(
+      `SELECT kind, COUNT(*) AS total FROM learning_candidates
+       WHERE session_id = ? AND status NOT IN ('rejected', 'superseded') GROUP BY kind`
+    ).all(sessionId) as Row[];
+    const counts = new Map(rows.map((row) => [String(row.kind), Number(row.total)]));
+    this.db.prepare("UPDATE learning_sessions SET summary_json = ?, updated_at = ? WHERE id = ?").run(
+      JSON.stringify({
+        ...session.summary,
+        pageCandidates: counts.get("page") ?? 0,
+        interactionCandidates: counts.get("interaction") ?? 0,
+        navigationCandidates: counts.get("navigation") ?? 0,
+        testCandidates: Math.max(session.summary.testCandidates, counts.get("test") ?? 0)
+      }),
+      nowIso(),
+      sessionId
+    );
+  }
+
   private rowToBusinessGraphVersion(row: Row): BusinessGraphVersion {
     const id = String(row.id);
     return {
@@ -969,6 +1511,7 @@ export class Storage {
 
   private init(): void {
     this.deleteLegacyCaseSchema();
+    this.deleteLegacyInteractionAssetIdentity();
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS script_flows (
         id TEXT PRIMARY KEY,
@@ -1023,6 +1566,107 @@ export class Storage {
         ended_at TEXT,
         report_html_path TEXT,
         created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS flow_verifications (
+        id TEXT PRIMARY KEY,
+        flow_id TEXT REFERENCES script_flows(id) ON DELETE SET NULL,
+        flow_version INTEGER,
+        source_hash TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        app_version TEXT,
+        run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        coverage_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS learning_sessions (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL UNIQUE REFERENCES runs(id) ON DELETE CASCADE,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        execution_passed INTEGER NOT NULL,
+        outcome_status TEXT NOT NULL,
+        status TEXT NOT NULL,
+        summary_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS learning_candidates (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES learning_sessions(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        stable_key TEXT,
+        source_step_id TEXT,
+        confidence REAL NOT NULL,
+        status TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        evidence_artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+        validation_issues_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS interaction_assets (
+        id TEXT PRIMARY KEY,
+        asset_key TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        platform_scope TEXT NOT NULL,
+        owner_kind TEXT NOT NULL,
+        owner_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        aliases_json TEXT NOT NULL DEFAULT '[]',
+        supported_actions_json TEXT NOT NULL DEFAULT '[]',
+        semantic_contract_json TEXT NOT NULL DEFAULT '{}',
+        locator_variants_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        provenance_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(app_id, platform_scope, owner_kind, owner_key, asset_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS interaction_asset_versions (
+        id TEXT PRIMARY KEY,
+        asset_id TEXT NOT NULL REFERENCES interaction_assets(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(asset_id, version)
+      );
+
+      CREATE TABLE IF NOT EXISTS navigation_entries (
+        id TEXT PRIMARY KEY,
+        entry_key TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        platform_scope TEXT NOT NULL,
+        from_kind TEXT NOT NULL,
+        from_key TEXT NOT NULL,
+        from_role TEXT,
+        to_page TEXT NOT NULL,
+        name TEXT NOT NULL,
+        action_json TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        status TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        provenance_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(app_id, platform_scope, entry_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS navigation_entry_versions (
+        id TEXT PRIMARY KEY,
+        entry_id TEXT NOT NULL REFERENCES navigation_entries(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(entry_id, version)
       );
 
       CREATE TABLE IF NOT EXISTS step_results (
@@ -1111,6 +1755,14 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_script_navigation_route ON script_navigation_segments(app_id, platform, from_page, to_page);
       CREATE INDEX IF NOT EXISTS idx_script_navigation_flow ON script_navigation_segments(flow_id, flow_version);
       CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
+      CREATE INDEX IF NOT EXISTS idx_flow_verifications_source ON flow_verifications(source_hash, app_id, platform, app_version, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_flow_verifications_run ON flow_verifications(run_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_learning_sessions_source ON learning_sessions(source_hash, app_id, platform, status, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_learning_candidates_session ON learning_candidates(session_id, kind, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_interaction_assets_owner ON interaction_assets(app_id, owner_kind, owner_key, status, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_interaction_asset_versions_asset ON interaction_asset_versions(asset_id, version);
+      CREATE INDEX IF NOT EXISTS idx_navigation_entries_route ON navigation_entries(app_id, platform_scope, from_kind, from_key, to_page, status);
+      CREATE INDEX IF NOT EXISTS idx_navigation_entry_versions_entry ON navigation_entry_versions(entry_id, version);
       CREATE INDEX IF NOT EXISTS idx_step_results_run ON step_results(run_id, iteration_index, step_order);
       CREATE INDEX IF NOT EXISTS idx_artifacts_run_type ON artifacts(run_id, type);
       CREATE INDEX IF NOT EXISTS idx_metric_samples_run_time ON metric_samples(run_id, sampled_at);
@@ -1179,7 +1831,7 @@ export class Storage {
 
   private replacePageNavigationSegments(flow: ScriptFlow, document: ScriptFlowDocument): void {
     this.db.prepare("DELETE FROM script_navigation_segments WHERE flow_id = ?").run(flow.id);
-    if (flow.status !== "active") return;
+    if (flow.status !== "active" || !this.isFlowVerified(flow)) return;
     const insert = this.db.prepare(
       `INSERT INTO script_navigation_segments
         (id, app_id, platform, from_page, to_page, flow_id, flow_version, flow_name, segment_order,
@@ -1211,7 +1863,7 @@ export class Storage {
   }
 
   private refreshPageNavigationIndex(): void {
-    const activeFlows = this.listScriptFlows({ status: "active" });
+    const activeFlows = this.listScriptFlows({ status: "active" }).filter((flow) => this.isFlowVerified(flow));
     const activeIds = new Set(activeFlows.map((flow) => flow.id));
     const indexedRows = this.db.prepare(
       "SELECT flow_id, MAX(flow_version) AS flow_version FROM script_navigation_segments GROUP BY flow_id"
@@ -1230,6 +1882,15 @@ export class Storage {
         this.db.prepare("DELETE FROM script_navigation_segments WHERE flow_id = ?").run(flow.id);
       }
     }
+  }
+
+  private isFlowVerified(flow: ScriptFlow): boolean {
+    return Boolean(this.findLatestFlowVerification({
+      sourceHash: scriptFlowSourceHash(flow.sourceYaml),
+      appId: flow.appId,
+      platform: flow.platform,
+      status: "verified"
+    }));
   }
 
   private sanitizeAiModelSettings(): void {
@@ -1263,6 +1924,19 @@ export class Storage {
       DROP TABLE IF EXISTS steps;
       DROP TABLE IF EXISTS test_cases;
       PRAGMA foreign_keys = ON;
+    `);
+  }
+
+  private deleteLegacyInteractionAssetIdentity(): void {
+    const row = this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'interaction_assets'"
+    ).get() as Row | undefined;
+    if (!row) return;
+    const schema = String(row.sql ?? "").replace(/\s+/g, " ").toLowerCase();
+    if (schema.includes("unique(app_id, platform_scope, owner_kind, owner_key, asset_key)")) return;
+    this.db.exec(`
+      DROP TABLE IF EXISTS interaction_asset_versions;
+      DROP TABLE IF EXISTS interaction_assets;
     `);
   }
 }
@@ -1406,6 +2080,341 @@ function rowToScriptFlowVersion(row: Row): ScriptFlowVersion {
   };
 }
 
+function rowToFlowVerification(row: Row): FlowVerification {
+  return {
+    id: String(row.id),
+    ...(stringOrUndefined(row.flow_id) ? { flowId: String(row.flow_id) } : {}),
+    ...(row.flow_version === null || row.flow_version === undefined ? {} : { flowVersion: Number(row.flow_version) }),
+    sourceHash: String(row.source_hash),
+    appId: String(row.app_id),
+    platform: row.platform as ScriptFlow["platform"],
+    ...(stringOrUndefined(row.app_version) ? { appVersion: String(row.app_version) } : {}),
+    runId: String(row.run_id),
+    status: row.status as FlowVerification["status"],
+    coverage: JSON.parse(String(row.coverage_json)) as FlowVerification["coverage"],
+    createdAt: String(row.created_at)
+  };
+}
+
+function rowToLearningSession(row: Row): LearningSession {
+  return {
+    id: String(row.id),
+    runId: String(row.run_id),
+    appId: String(row.app_id),
+    platform: row.platform as LearningSession["platform"],
+    sourceHash: String(row.source_hash),
+    executionPassed: Boolean(row.execution_passed),
+    outcomeStatus: row.outcome_status as LearningSession["outcomeStatus"],
+    status: row.status as LearningSession["status"],
+    summary: JSON.parse(String(row.summary_json)) as LearningSession["summary"],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function rowToLearningCandidate(row: Row): LearningCandidate {
+  return {
+    id: String(row.id),
+    sessionId: String(row.session_id),
+    kind: row.kind as LearningCandidate["kind"],
+    ...(stringOrUndefined(row.stable_key) ? { stableKey: String(row.stable_key) } : {}),
+    ...(stringOrUndefined(row.source_step_id) ? { sourceStepId: String(row.source_step_id) } : {}),
+    confidence: Number(row.confidence),
+    status: row.status as LearningCandidate["status"],
+    payload: JSON.parse(String(row.payload_json)) as Record<string, unknown>,
+    evidenceArtifactIds: JSON.parse(String(row.evidence_artifact_ids_json ?? "[]")) as string[],
+    validationIssues: JSON.parse(String(row.validation_issues_json ?? "[]")) as string[],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function rowToInteractionAsset(row: Row): InteractionAsset {
+  return {
+    id: String(row.id),
+    key: String(row.asset_key),
+    appId: String(row.app_id),
+    platformScope: row.platform_scope as InteractionAsset["platformScope"],
+    owner: { kind: row.owner_kind as InteractionAsset["owner"]["kind"], key: String(row.owner_key) },
+    name: String(row.name),
+    aliases: JSON.parse(String(row.aliases_json ?? "[]")) as string[],
+    supportedActions: JSON.parse(String(row.supported_actions_json ?? "[]")) as InteractionAsset["supportedActions"],
+    semanticContract: JSON.parse(String(row.semantic_contract_json ?? "{}")) as InteractionAsset["semanticContract"],
+    locatorVariants: JSON.parse(String(row.locator_variants_json ?? "[]")) as InteractionAsset["locatorVariants"],
+    status: row.status as InteractionAsset["status"],
+    version: Number(row.version),
+    provenance: JSON.parse(String(row.provenance_json ?? "{}")) as InteractionAsset["provenance"],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function rowToNavigationEntry(row: Row): NavigationEntry {
+  const fromKind = row.from_kind === "session" ? "session" : "page";
+  const from = fromKind === "session"
+    ? {
+      kind: "session" as const,
+      key: row.from_key === "unauthenticated" ? "unauthenticated" as const : "authenticated" as const,
+      ...(stringOrUndefined(row.from_role) ? { role: String(row.from_role) } : {})
+    }
+    : { kind: "page" as const, key: String(row.from_key) };
+  return {
+    id: String(row.id),
+    key: String(row.entry_key),
+    appId: String(row.app_id),
+    platformScope: row.platform_scope as NavigationEntry["platformScope"],
+    from,
+    toPage: String(row.to_page),
+    name: String(row.name),
+    action: JSON.parse(String(row.action_json ?? "{}")) as NavigationEntry["action"],
+    confidence: Number(row.confidence),
+    status: row.status as NavigationEntry["status"],
+    version: Number(row.version),
+    provenance: JSON.parse(String(row.provenance_json ?? "{}")) as NavigationEntry["provenance"],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function navigationEntryToSegment(entry: NavigationEntry, platform: ScriptFlow["platform"]): PageNavigationSegmentSnapshot {
+  if (entry.from.kind !== "page") throw new Error(`Navigation entry ${entry.id} is not page-scoped`);
+  const step: ScriptStep = {
+    id: `navigate-with-${entry.id}`,
+    name: entry.name,
+    onPage: entry.from.key,
+    expectPage: entry.toPage,
+    risk: "interaction",
+    tap: {
+      target: entry.action.target as ScriptTarget,
+      ...(entry.action.search ? { search: entry.action.search } : {})
+    }
+  };
+  return {
+    id: `navigation:${entry.id}:v${entry.version}`,
+    appId: entry.appId,
+    platform,
+    fromPage: entry.from.key,
+    toPage: entry.toPage,
+    flowId: `navigation-entry:${entry.id}`,
+    flowVersion: entry.version,
+    flowName: entry.name,
+    parameters: {},
+    stepIds: [step.id],
+    steps: [step]
+  };
+}
+
+type InteractionAssetDraft = Omit<InteractionAsset, "id" | "version" | "createdAt" | "updatedAt">;
+type NavigationEntryDraft = Omit<NavigationEntry, "id" | "version" | "createdAt" | "updatedAt">;
+
+function interactionAssetFromCandidate(session: LearningSession, candidate: LearningCandidate): InteractionAssetDraft {
+  if (candidate.kind !== "interaction" || !candidate.stableKey) {
+    throw new Error(`Learning candidate ${candidate.id} is not an interaction candidate`);
+  }
+  if (["accepted", "rejected", "superseded"].includes(candidate.status)) {
+    throw new Error(`Learning candidate ${candidate.id} cannot be accepted from status ${candidate.status}`);
+  }
+  if (containsForbiddenLocatorField(candidate.payload)) {
+    throw new Error(`Learning candidate ${candidate.id} contains coordinate or region data`);
+  }
+  const owner = plainRecord(candidate.payload.owner);
+  const ownerKind = owner?.kind;
+  const ownerKey = nonEmptyString(owner?.key);
+  if ((ownerKind !== "page" && ownerKind !== "component" && ownerKind !== "overlay") || !ownerKey) {
+    throw new Error(`Learning candidate ${candidate.id} has no valid owner`);
+  }
+  const action = nonEmptyString(candidate.payload.supportedAction);
+  if (action !== "tap" && action !== "inputText" && action !== "clearText" && action !== "selectText") {
+    throw new Error(`Learning candidate ${candidate.id} has no supported action`);
+  }
+  const rawContract = plainRecord(candidate.payload.semanticContract);
+  const semanticContract = readSemanticContract(rawContract);
+  if (!semanticContract.text && !semanticContract.semantic && !semanticContract.icon && !semanticContract.control) {
+    throw new Error(`Learning candidate ${candidate.id} has no semantic target`);
+  }
+  const evidence = plainRecord(candidate.payload.locatorEvidence);
+  const strategy = nonEmptyString(evidence?.strategy);
+  if (!strategy) throw new Error(`Learning candidate ${candidate.id} has no locator strategy`);
+  const selectedText = nonEmptyString(evidence?.selectedText);
+  const name = nonEmptyString(candidate.payload.name)
+    ?? semanticContract.text
+    ?? semanticContract.semantic
+    ?? semanticContract.icon
+    ?? semanticContract.control
+    ?? candidate.stableKey;
+  return {
+    key: candidate.stableKey,
+    appId: session.appId,
+    platformScope: session.platform,
+    owner: { kind: ownerKind, key: ownerKey },
+    name,
+    aliases: [name],
+    supportedActions: [action],
+    semanticContract,
+    locatorVariants: [{
+      platform: session.platform,
+      strategy,
+      descriptor: {
+        semanticContract,
+        ...(selectedText ? { selectedText } : {})
+      },
+      confidence: candidate.confidence
+    }],
+    status: "active",
+    provenance: {
+      runIds: [session.runId],
+      stepIds: candidate.sourceStepId ? [candidate.sourceStepId] : [],
+      artifactIds: candidate.evidenceArtifactIds
+    }
+  };
+}
+
+function mergeInteractionAsset(existing: InteractionAsset, draft: InteractionAssetDraft, now: string): InteractionAsset {
+  const variants = [...existing.locatorVariants];
+  for (const variant of draft.locatorVariants) {
+    if (!variants.some((item) => JSON.stringify(item) === JSON.stringify(variant))) variants.push(variant);
+  }
+  return {
+    ...existing,
+    name: draft.name,
+    aliases: uniqueStrings([...existing.aliases, ...draft.aliases]),
+    supportedActions: uniqueStrings([...existing.supportedActions, ...draft.supportedActions]) as InteractionAsset["supportedActions"],
+    semanticContract: { ...existing.semanticContract, ...draft.semanticContract },
+    locatorVariants: variants,
+    status: "active",
+    version: existing.version + 1,
+    provenance: {
+      runIds: uniqueStrings([...existing.provenance.runIds, ...draft.provenance.runIds]),
+      stepIds: uniqueStrings([...existing.provenance.stepIds, ...draft.provenance.stepIds]),
+      artifactIds: uniqueStrings([...existing.provenance.artifactIds, ...draft.provenance.artifactIds])
+    },
+    updatedAt: now
+  };
+}
+
+function navigationEntryFromCandidate(session: LearningSession, candidate: LearningCandidate): NavigationEntryDraft {
+  if (candidate.kind !== "navigation" || !candidate.stableKey) {
+    throw new Error(`Learning candidate ${candidate.id} is not a navigation candidate`);
+  }
+  if (["accepted", "rejected", "superseded"].includes(candidate.status)) {
+    throw new Error(`Learning candidate ${candidate.id} cannot be accepted from status ${candidate.status}`);
+  }
+  if (containsForbiddenLocatorField(candidate.payload)) {
+    throw new Error(`Learning candidate ${candidate.id} contains coordinate or region data`);
+  }
+  const rawFrom = plainRecord(candidate.payload.from);
+  const fromKind = rawFrom?.kind;
+  const fromKey = nonEmptyString(rawFrom?.key);
+  if ((fromKind !== "page" && fromKind !== "session") || !fromKey) {
+    throw new Error(`Learning candidate ${candidate.id} has no valid navigation source`);
+  }
+  const from = fromKind === "page"
+    ? { kind: "page" as const, key: fromKey }
+    : {
+      kind: "session" as const,
+      key: fromKey === "authenticated" ? "authenticated" as const : fromKey === "unauthenticated" ? "unauthenticated" as const : undefined,
+      ...(nonEmptyString(rawFrom?.role) ? { role: nonEmptyString(rawFrom?.role) } : {})
+    };
+  if (from.kind === "session" && !from.key) {
+    throw new Error(`Learning candidate ${candidate.id} has an invalid session scope`);
+  }
+  const toPage = nonEmptyString(candidate.payload.toPage);
+  const rawAction = plainRecord(candidate.payload.action);
+  if (!toPage || rawAction?.kind !== "tap") {
+    throw new Error(`Learning candidate ${candidate.id} has no valid target page or action`);
+  }
+  const target = readNavigationTarget(plainRecord(rawAction.target));
+  if (!target.text && !target.semantic && !target.icon && !target.control) {
+    throw new Error(`Learning candidate ${candidate.id} has no semantic navigation target`);
+  }
+  const search = readNavigationSearch(plainRecord(rawAction.search));
+  return {
+    key: candidate.stableKey,
+    appId: session.appId,
+    platformScope: session.platform,
+    from: from as NavigationEntry["from"],
+    toPage,
+    name: nonEmptyString(candidate.payload.name) ?? `${fromKey} -> ${toPage}`,
+    action: { kind: "tap", target, ...(search ? { search } : {}) },
+    confidence: Math.max(0, Math.min(1, candidate.confidence)),
+    status: "active",
+    provenance: {
+      runIds: [session.runId],
+      stepIds: candidate.sourceStepId ? [candidate.sourceStepId] : [],
+      artifactIds: candidate.evidenceArtifactIds
+    }
+  };
+}
+
+function mergeNavigationEntry(existing: NavigationEntry, draft: NavigationEntryDraft, now: string): NavigationEntry {
+  return {
+    ...existing,
+    from: draft.from,
+    toPage: draft.toPage,
+    name: draft.name,
+    action: draft.action,
+    confidence: Math.max(existing.confidence, draft.confidence),
+    status: "active",
+    version: existing.version + 1,
+    provenance: {
+      runIds: uniqueStrings([...existing.provenance.runIds, ...draft.provenance.runIds]),
+      stepIds: uniqueStrings([...existing.provenance.stepIds, ...draft.provenance.stepIds]),
+      artifactIds: uniqueStrings([...existing.provenance.artifactIds, ...draft.provenance.artifactIds])
+    },
+    updatedAt: now
+  };
+}
+
+function readNavigationTarget(value: Record<string, unknown> | undefined): NavigationEntry["action"]["target"] {
+  if (!value) return {};
+  const allowed = ["text", "semantic", "icon", "control", "area", "position", "nearText", "match"] as const;
+  return Object.fromEntries(allowed.flatMap((key) => {
+    const item = nonEmptyString(value[key]);
+    return item ? [[key, item]] : [];
+  }));
+}
+
+function readNavigationSearch(value: Record<string, unknown> | undefined): NavigationEntry["action"]["search"] | undefined {
+  if (!value) return undefined;
+  const mode = value.mode === "auto" || value.mode === "visibleOnly" || value.mode === "scroll" ? value.mode : undefined;
+  const direction = value.direction === "up" || value.direction === "down" ? value.direction : undefined;
+  const maxSwipes = typeof value.maxSwipes === "number" && Number.isInteger(value.maxSwipes)
+    ? Math.max(1, Math.min(20, value.maxSwipes))
+    : undefined;
+  const search: NonNullable<NavigationEntry["action"]["search"]> = {
+    ...(mode ? { mode } : {}),
+    ...(direction ? { direction } : {}),
+    ...(maxSwipes ? { maxSwipes } : {})
+  };
+  return Object.keys(search).length ? search : undefined;
+}
+
+function readSemanticContract(value: Record<string, unknown> | undefined): InteractionAsset["semanticContract"] {
+  if (!value) return {};
+  const allowed = ["text", "semantic", "icon", "control", "area", "position", "nearText"] as const;
+  return Object.fromEntries(allowed.flatMap((key) => {
+    const item = nonEmptyString(value[key]);
+    return item ? [[key, item]] : [];
+  })) as InteractionAsset["semanticContract"];
+}
+
+function containsForbiddenLocatorField(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsForbiddenLocatorField);
+  const object = plainRecord(value);
+  if (!object) return false;
+  return Object.entries(object).some(([key, item]) =>
+    /^(x|y|coordinate|coordinates|region|bounds|rect|point)$/i.test(key) || containsForbiddenLocatorField(item)
+  );
+}
+
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
 function scriptFlowSourceSnapshot(runSnapshot: Record<string, unknown>): Pick<TestRun, "sourceSnapshot"> {
   const value = runSnapshot.sourceSnapshot;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -1424,17 +2433,60 @@ function scriptFlowSourceSnapshot(runSnapshot: Record<string, unknown>): Pick<Te
   ) {
     return {};
   }
+  const interactionAssets = interactionAssetSnapshotRefs(snapshot.interactionAssets);
   return {
     sourceSnapshot: {
       kind: "script_flow",
       flowId: snapshot.flowId,
       version: snapshot.version,
       planDigest: snapshot.planDigest,
+      ...(snapshot.executionPurpose === "trial" || snapshot.executionPurpose === "normal"
+        ? { executionPurpose: snapshot.executionPurpose }
+        : {}),
+      ...(typeof snapshot.sourceHash === "string" ? { sourceHash: snapshot.sourceHash } : {}),
+      ...(isVerificationAssessment(snapshot.verificationAssessment)
+        ? { verificationAssessment: snapshot.verificationAssessment }
+        : {}),
+      ...(interactionAssets.length ? { interactionAssets } : {}),
       dependencies: snapshot.dependencies as NonNullable<TestRun["sourceSnapshot"]>["dependencies"],
       ...(typeof snapshot.sourceYaml === "string" ? { sourceYaml: snapshot.sourceYaml } : {}),
       parsed: snapshot.parsed as Record<string, unknown>
     }
   };
+}
+
+function interactionAssetSnapshotRefs(
+  value: unknown
+): NonNullable<NonNullable<TestRun["sourceSnapshot"]>["interactionAssets"]> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const record = plainRecord(item);
+    if (
+      !record
+      || typeof record.stepId !== "string"
+      || typeof record.assetId !== "string"
+      || typeof record.key !== "string"
+      || typeof record.version !== "number"
+      || !Number.isInteger(record.version)
+      || record.version < 1
+    ) return [];
+    return [{
+      stepId: record.stepId,
+      assetId: record.assetId,
+      key: record.key,
+      version: record.version
+    }];
+  });
+}
+
+function isVerificationAssessment(value: unknown): value is NonNullable<TestRun["sourceSnapshot"]>["verificationAssessment"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const assessment = value as Record<string, unknown>;
+  return (assessment.status === "verified" || assessment.status === "needs_trial" || assessment.status === "blocked")
+    && typeof assessment.sourceHash === "string"
+    && Array.isArray(assessment.reasons)
+    && Array.isArray(assessment.unresolvedStepIds)
+    && typeof assessment.unresolvedOutcome === "boolean";
 }
 
 function nonEmptyString(value: unknown): string | undefined {

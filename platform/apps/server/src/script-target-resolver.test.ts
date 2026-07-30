@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { InteractionAsset } from "@mobile-automation/shared";
 import { ScriptTargetResolutionError, ScriptTargetResolver } from "./script-target-resolver.js";
 
 describe("ScriptTargetResolver", () => {
@@ -100,7 +101,6 @@ describe("ScriptTargetResolver", () => {
         locatorKind: "semantic_icon_locator",
         role: "add",
         slot: "trailing",
-        orderFromRight: 1,
         semanticArea: "top",
         searchMode: "visibleOnly",
         allowRegionFallback: false
@@ -124,12 +124,33 @@ describe("ScriptTargetResolver", () => {
         locatorKind: "semantic_icon_locator",
         role: "add",
         slot: "trailing",
-        orderFromRight: 1,
         semanticArea: "content",
         searchMode: "visibleOnly",
         allowRegionFallback: false
       }
     });
+  });
+
+  it("does not encode a role-specific visual order for standard top-bar icons", () => {
+    const resolver = new ScriptTargetResolver();
+
+    const search = resolver.resolve({
+      action: "tap",
+      target: { icon: "search", area: "topBar", position: "trailing" },
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+    const share = resolver.resolve({
+      action: "tap",
+      target: { icon: "share", area: "topBar", position: "trailing" },
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+
+    expect(search.params).not.toHaveProperty("orderFromRight");
+    expect(share.params).not.toHaveProperty("orderFromRight");
   });
 
   it("resolves a checkbox from nearby text without a page element asset or region", () => {
@@ -169,4 +190,54 @@ describe("ScriptTargetResolver", () => {
       platform: "android"
     })).toThrow(ScriptTargetResolutionError);
   });
+
+  it("uses a frozen interaction asset locator without exposing coordinates", () => {
+    const resolver = new ScriptTargetResolver();
+    const result = resolver.resolve({
+      action: "tap",
+      target: { semantic: "进入添加好友页面" },
+      onPage: "classin.home",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      interactionAsset: interactionAsset()
+    });
+
+    expect(result).toEqual({
+      type: "tap_on_text",
+      strategy: "interaction_asset:semantic_text",
+      params: expect.objectContaining({
+        text: "添加好友",
+        interactionAssetId: "asset-1",
+        interactionAssetKey: "classin.home.tap.text.添加好友",
+        interactionAssetVersion: 2,
+        allowRegionFallback: false
+      })
+    });
+    expect(JSON.stringify(result)).not.toMatch(/"(?:coordinate|region|bounds|x|y)"\s*:/i);
+  });
 });
+
+function interactionAsset(): InteractionAsset {
+  return {
+    id: "asset-1",
+    key: "classin.home.tap.text.添加好友",
+    appId: "cn.eeo.classin",
+    platformScope: "android",
+    owner: { kind: "page", key: "classin.home" },
+    name: "添加好友",
+    aliases: ["添加好友"],
+    supportedActions: ["tap"],
+    semanticContract: { text: "添加好友" },
+    locatorVariants: [{
+      platform: "android",
+      strategy: "ocr_text",
+      descriptor: { selectedText: "添加好友" },
+      confidence: 0.95
+    }],
+    status: "active",
+    version: 2,
+    provenance: { runIds: ["run-1"], stepIds: ["open-add-friend"], artifactIds: [] },
+    createdAt: "2026-07-30T00:00:00.000Z",
+    updatedAt: "2026-07-30T00:00:00.000Z"
+  };
+}

@@ -6,8 +6,82 @@ import {
   type ActionStep,
   type AndroidAppMonitorConfig,
   type AndroidAppMonitorThreshold,
+  type FlowVerification,
+  type InteractionAsset,
+  type LearningCandidate,
+  type LearningSession,
   type TestRun
 } from "./index.js";
+
+describe("trial learning domain models", () => {
+  it("round-trips verification and learning records without hidden runtime state", () => {
+    const verification: FlowVerification = {
+      id: "verification-1",
+      flowId: "flow-1",
+      flowVersion: 2,
+      sourceHash: "a".repeat(64),
+      appId: "cn.eeo.classin",
+      platform: "android",
+      runId: "run-1",
+      status: "verified",
+      coverage: {
+        totalSteps: 2,
+        verifiedSteps: 2,
+        interactionAssetIds: [],
+        pageAssetIds: ["page-home"],
+        humanConfirmedOutcome: false
+      },
+      createdAt: "2026-07-30T00:00:00.000Z"
+    };
+    const session: LearningSession = {
+      id: "learning-1",
+      runId: "run-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      sourceHash: verification.sourceHash,
+      executionPassed: true,
+      outcomeStatus: "verified",
+      status: "ready",
+      summary: { pageCandidates: 1, interactionCandidates: 1, navigationCandidates: 1, testCandidates: 1, issues: [] },
+      createdAt: verification.createdAt,
+      updatedAt: verification.createdAt
+    };
+    const candidate: LearningCandidate = {
+      id: "candidate-1",
+      sessionId: session.id,
+      kind: "interaction",
+      stableKey: "home.add-friend",
+      sourceStepId: "open-add-friend",
+      confidence: 0.96,
+      status: "validated",
+      payload: { semantic: "添加好友入口" },
+      evidenceArtifactIds: ["artifact-1"],
+      validationIssues: [],
+      createdAt: verification.createdAt,
+      updatedAt: verification.createdAt
+    };
+    const interaction: InteractionAsset = {
+      id: "interaction-1",
+      key: "home.add-friend",
+      appId: "cn.eeo.classin",
+      platformScope: "android",
+      owner: { kind: "page", key: "classin.home" },
+      name: "添加好友入口",
+      aliases: [],
+      supportedActions: ["tap"],
+      semanticContract: { text: "添加好友", area: "content" },
+      locatorVariants: [{ platform: "android", strategy: "ocr_anchor", descriptor: { text: "添加好友" }, confidence: 0.96 }],
+      status: "active",
+      version: 1,
+      provenance: { runIds: ["run-1"], stepIds: ["open-add-friend"], artifactIds: ["artifact-1"] },
+      createdAt: verification.createdAt,
+      updatedAt: verification.createdAt
+    };
+
+    const records = { verification, session, candidate, interaction };
+    expect(JSON.parse(JSON.stringify(records))).toEqual(records);
+  });
+});
 
 describe("shared stepToAction", () => {
   it("converts ratio-based tap coordinates to device coordinates", () => {

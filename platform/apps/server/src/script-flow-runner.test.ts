@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
-import type { DeviceInfo, TestRun } from "@mobile-automation/shared";
+import type { DeviceInfo, InteractionAsset, TestRun } from "@mobile-automation/shared";
 import type { PageAssetCatalog, PageAssetSummary } from "./page-asset-catalog.js";
 import type { PageStateService } from "./page-state-service.js";
 import { ScriptFlowRunner, pageStateExpectationVerifier, type ScriptFlowRunBackend } from "./script-flow-runner.js";
@@ -90,6 +90,41 @@ describe("ScriptFlowRunner", () => {
     }));
   });
 
+  it("executes with the frozen interaction asset version and records its reference", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+    const asset = learnedInteractionAsset();
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-learned",
+      flow: document([{
+        id: "open-add-friend",
+        onPage: "classin.home",
+        tap: { target: { semantic: "进入添加好友页面" } }
+      }]),
+      interactionAssets: [{ stepId: "open-add-friend", asset }],
+      deviceSerial: "device-1",
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
+      params: expect.objectContaining({
+        text: "添加好友",
+        locatorStrategy: "interaction_asset:semantic_text",
+        interactionAssetId: asset.id,
+        interactionAssetVersion: asset.version,
+        allowRegionFallback: false
+      })
+    }));
+    expect(backend.input?.sourceSnapshot?.interactionAssets).toEqual([{
+      stepId: "open-add-friend",
+      assetId: asset.id,
+      key: asset.key,
+      version: asset.version
+    }]);
+  });
+
   it("keeps waitForPage as one report step instead of creating a verification step pair", async () => {
     const backend = new CapturingBackend();
     const runner = runnerWith(backend);
@@ -168,6 +203,38 @@ describe("ScriptFlowRunner", () => {
         type: "state_is",
         params: expect.objectContaining({ pageId: "classin.home" })
       })]
+    }));
+  });
+
+  it("marks a compiled entry-page preparation step for bounded back recovery", async () => {
+    const backend = new CapturingBackend();
+    const runner = new ScriptFlowRunner({
+      backend,
+      driver: { getDeviceInfo: async () => device("android") },
+      targetResolver: new ScriptTargetResolver(),
+      pageCatalog: new NavigationCatalog()
+    });
+    const flow: ScriptFlowDocument = {
+      ...document([{ id: "verify-home", assertPage: "classin.home" }]),
+      entry: { page: "classin.home", session: "authenticated", role: "teacher" }
+    };
+
+    await runner.start({
+      ...previewBinding,
+      navigationRootPages: ["classin.home", "classin.login"],
+      flowId: "flow-entry-home",
+      flow,
+      deviceSerial: "device-1",
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
+      id: "__prepare.entry-page",
+      type: "reach_page",
+      params: expect.objectContaining({
+        allowBackRecovery: true,
+        recoveryStopPageIds: ["page-home", "page-login"]
+      })
     }));
   });
 
@@ -395,6 +462,7 @@ class NavigationCatalog extends EmptyCatalog {
   override resolvePage(reference: string, _appId: string, _platform: "android" | "ios" | "harmony" | "flutter"): ReturnType<PageAssetCatalog["resolvePage"]> {
     const pages = [
       { id: "page-home", key: "classin.home", name: "主页" },
+      { id: "page-login", key: "classin.login", name: "登录" },
       { id: "page-detail", key: "classin.detail", name: "详情" }
     ];
     const page = pages.find((candidate) => candidate.id === reference || candidate.key === reference || candidate.name === reference);
@@ -421,6 +489,31 @@ function document(
     parameters,
     steps,
     tags: []
+  };
+}
+
+function learnedInteractionAsset(): InteractionAsset {
+  return {
+    id: "asset-add-friend",
+    key: "classin.home.tap.add-friend",
+    appId: "cn.eeo.classin",
+    platformScope: "android",
+    owner: { kind: "page", key: "classin.home" },
+    name: "添加好友",
+    aliases: ["添加好友"],
+    supportedActions: ["tap"],
+    semanticContract: { semantic: "进入添加好友页面" },
+    locatorVariants: [{
+      platform: "android",
+      strategy: "ocr_text",
+      descriptor: { selectedText: "添加好友" },
+      confidence: 0.95
+    }],
+    status: "active",
+    version: 2,
+    provenance: { runIds: ["run-trial"], stepIds: ["open-add-friend"], artifactIds: [] },
+    createdAt: "2026-07-30T00:00:00.000Z",
+    updatedAt: "2026-07-30T00:00:00.000Z"
   };
 }
 

@@ -2663,6 +2663,7 @@ export class SemanticStepResolver {
   }): Promise<SemanticResolutionOutcome> {
     const expectedTargets = tapTextTargets(input.step.params);
     const semanticMatch = input.step.params.mode === "semantic";
+    const fallbackSemanticQuery = textParam(input.step.params.fallbackSemanticQuery).trim();
     const mode = tapTextMatchMode(input.step.params.mode);
     const timeoutMs = positiveNumberParam(input.step.params.timeoutMs, 3000);
     const intervalMs = positiveNumberParam(input.step.params.intervalMs, 500);
@@ -2677,6 +2678,7 @@ export class SemanticStepResolver {
     let resetSwipes = 0;
     let scanSwipes = 0;
     let reachedBoundary = false;
+    let latestMatchStrategy = semanticMatch ? "semantic" : mode;
     const artifacts: ArtifactRef[] = [];
 
     if (!expectedTargets.length) {
@@ -2731,6 +2733,15 @@ export class SemanticStepResolver {
             semanticArea,
             deviceSize: input.deviceSize
           });
+      latestMatchStrategy = semanticMatch ? "semantic" : mode;
+      if (!latestCandidate && fallbackSemanticQuery) {
+        latestCandidate = findSemanticTextCandidate(latestLayout, fallbackSemanticQuery, {
+          preferredPoint: recordedPoint(input.step, input.deviceSize),
+          semanticArea,
+          deviceSize: input.deviceSize
+        });
+        if (latestCandidate) latestMatchStrategy = "semantic_fallback";
+      }
       return {
         layout: latestLayout,
         candidate: latestCandidate,
@@ -2757,7 +2768,7 @@ export class SemanticStepResolver {
           expected: expectedTargets,
           actual: candidate.text,
           action: "tap",
-          matchStrategy: semanticMatch ? "semantic" : mode,
+          matchStrategy: latestMatchStrategy,
           attempts: attempt,
           locator: candidate,
           search: {
@@ -2843,6 +2854,7 @@ export class SemanticStepResolver {
         attempts: attempt,
         candidateCount: latestLayout?.boxes.length ?? 0,
         nearestCandidate: latestCandidate,
+        ...(fallbackSemanticQuery ? { fallbackSemanticQuery } : {}),
         search: {
           mode: searchMode,
           direction: searchDirection,
@@ -5620,6 +5632,8 @@ type TopBarIconVisualComponent = {
   center: { x: number; y: number };
   darkPixelCount: number;
   score: number;
+  polarity?: "dark" | "light";
+  roleScore?: number;
 };
 
 async function locateCurrentTopBarIconInScreenshot(input: {
@@ -5666,24 +5680,32 @@ async function locateCurrentTopBarIconInScreenshot(input: {
   const avatarContainerStrategy = input.role.trim().toLowerCase() === "avatar" && input.slot === "leading";
   const rawComponents = avatarContainerStrategy
     ? findAvatarVisualComponents(sample, pixelSearchRegion)
-    : findDarkVisualComponents(sample, pixelSearchRegion);
+    : findTopBarVisualComponents(sample, pixelSearchRegion);
+  const normalizedRole = input.role.trim().toLowerCase();
+  const roleAware = isKnownTopBarIconRole(normalizedRole);
   const components = mergeNearbyTopBarIconComponents(rawComponents, sample)
-    .map((component) => ({
-      ...component,
-      score: avatarContainerStrategy
-        ? topBarAvatarComponentScore(component, input.candidate, sample, input.anchorXPercent)
-        : topBarIconComponentScore(component, input.candidate, sample, {
-            broadTrailingSearch: input.slot === "trailing"
-          })
-    }))
-    .filter((component) => component.score >= 0.36);
+    .map((component) => {
+      const roleScore = avatarContainerStrategy ? undefined : topBarIconRoleShapeScore(component, sample, normalizedRole);
+      return {
+        ...component,
+        roleScore,
+        score: avatarContainerStrategy
+          ? topBarAvatarComponentScore(component, input.candidate, sample, input.anchorXPercent)
+          : topBarIconComponentScore(component, input.candidate, sample, {
+              broadTrailingSearch: input.slot === "trailing",
+              roleScore
+            })
+      };
+    })
+    .filter((component) => component.score >= 0.36 && (!roleAware || (component.roleScore ?? 0) >= 0.38));
   const selected = selectCurrentTopBarIconComponent(components, {
+    role: normalizedRole,
     slot: input.slot,
     orderFromRight: input.orderFromRight
   });
   const diagnostic = {
     reason: selected ? "current_visual_icon_selected" : "current_visual_icon_not_found",
-    strategy: avatarContainerStrategy ? "avatar_container" : "dark_icon_shape",
+    strategy: avatarContainerStrategy ? "avatar_container" : "contrast_icon_shape",
     role: input.role || undefined,
     slot: input.slot,
     orderFromRight: input.orderFromRight,
@@ -5691,6 +5713,8 @@ async function locateCurrentTopBarIconInScreenshot(input: {
     searchRegion,
     componentCount: components.length,
     bestScore: selected ? roundPercent(selected.score) : undefined,
+    roleScore: selected?.roleScore === undefined ? undefined : roundPercent(selected.roleScore),
+    polarity: selected?.polarity,
     selectedBounds: selected?.bounds
   };
   if (!selected) {
@@ -5784,7 +5808,15 @@ function findContentAddIconComponents(
       if (visited[index] || !isTopBarIconDarkPixel(sample.pixels[index])) {
         continue;
       }
-      const component = floodFillDarkComponent(sample, { startX, startY, endX, endY }, x, y, visited);
+      const component = floodFillTopBarIconComponent(
+        sample,
+        { startX, startY, endX, endY },
+        x,
+        y,
+        visited,
+        isTopBarIconDarkPixel,
+        "dark"
+      );
       if (!component) {
         continue;
       }
@@ -5841,10 +5873,15 @@ function centeredLightCrossScore(component: TopBarIconVisualComponent, sample: I
 
 function selectCurrentTopBarIconComponent(
   components: TopBarIconVisualComponent[],
-  options: { slot: TopBarIconSlot; orderFromRight: number }
+  options: { role: string; slot: TopBarIconSlot; orderFromRight: number }
 ): TopBarIconVisualComponent | undefined {
   if (!components.length) {
     return undefined;
+  }
+  if (isKnownTopBarIconRole(options.role)) {
+    return components.slice().sort((left, right) =>
+      (right.roleScore ?? 0) - (left.roleScore ?? 0) || right.score - left.score
+    )[0];
   }
   const byVisualOrder = components
     .slice()
@@ -5906,7 +5943,18 @@ function topBarIconSearchRegion(
   });
 }
 
-function findDarkVisualComponents(sample: ImageSample, rect: { x: number; y: number; width: number; height: number }): TopBarIconVisualComponent[] {
+function findTopBarVisualComponents(sample: ImageSample, rect: { x: number; y: number; width: number; height: number }): TopBarIconVisualComponent[] {
+  return [
+    ...findTopBarVisualComponentsByPolarity(sample, rect, "dark"),
+    ...findTopBarVisualComponentsByPolarity(sample, rect, "light")
+  ];
+}
+
+function findTopBarVisualComponentsByPolarity(
+  sample: ImageSample,
+  rect: { x: number; y: number; width: number; height: number },
+  polarity: "dark" | "light"
+): TopBarIconVisualComponent[] {
   const startX = Math.max(0, Math.floor(rect.x));
   const startY = Math.max(0, Math.floor(rect.y));
   const endX = Math.min(sample.width, Math.ceil(rect.x + rect.width));
@@ -5916,13 +5964,22 @@ function findDarkVisualComponents(sample: ImageSample, rect: { x: number; y: num
   }
   const visited = new Uint8Array(sample.width * sample.height);
   const components: TopBarIconVisualComponent[] = [];
+  const isForeground = polarity === "dark" ? isTopBarIconDarkPixel : isTopBarIconLightPixel;
   for (let y = startY; y < endY; y += 1) {
     for (let x = startX; x < endX; x += 1) {
       const index = y * sample.width + x;
-      if (visited[index] || !isTopBarIconDarkPixel(sample.pixels[index])) {
+      if (visited[index] || !isForeground(sample.pixels[index])) {
         continue;
       }
-      const component = floodFillDarkComponent(sample, { startX, startY, endX, endY }, x, y, visited);
+      const component = floodFillTopBarIconComponent(
+        sample,
+        { startX, startY, endX, endY },
+        x,
+        y,
+        visited,
+        isForeground,
+        polarity
+      );
       if (!component || component.darkPixelCount < 18) {
         continue;
       }
@@ -6052,6 +6109,9 @@ function mergeNearbyTopBarIconComponents(components: TopBarIconVisualComponent[]
       changed = false;
       for (let index = 0; index < remaining.length; index += 1) {
         const candidate = remaining[index]!;
+        if (current.polarity !== candidate.polarity) {
+          continue;
+        }
         if (!componentsShouldMerge(current.bounds, candidate.bounds, maxGap, maxMergedSize)) {
           continue;
         }
@@ -6090,7 +6150,8 @@ function mergeTopBarIconComponents(left: TopBarIconVisualComponent, right: TopBa
       y: Math.round(bounds.y + bounds.height / 2)
     },
     darkPixelCount: left.darkPixelCount + right.darkPixelCount,
-    score: 0
+    score: 0,
+    polarity: left.polarity
   };
 }
 
@@ -6110,12 +6171,14 @@ function unionRect(
   };
 }
 
-function floodFillDarkComponent(
+function floodFillTopBarIconComponent(
   sample: ImageSample,
   bounds: { startX: number; startY: number; endX: number; endY: number },
   startX: number,
   startY: number,
-  visited: Uint8Array
+  visited: Uint8Array,
+  isForeground: (value: number | undefined) => boolean,
+  polarity: "dark" | "light"
 ): TopBarIconVisualComponent | undefined {
   const stack: Array<{ x: number; y: number }> = [{ x: startX, y: startY }];
   let minX = startX;
@@ -6129,7 +6192,7 @@ function floodFillDarkComponent(
       continue;
     }
     const index = point.y * sample.width + point.x;
-    if (visited[index] || !isTopBarIconDarkPixel(sample.pixels[index])) {
+    if (visited[index] || !isForeground(sample.pixels[index])) {
       continue;
     }
     visited[index] = 1;
@@ -6157,7 +6220,8 @@ function floodFillDarkComponent(
       y: Math.round(minY + height / 2)
     },
     darkPixelCount,
-    score: 0
+    score: 0,
+    polarity
   };
 }
 
@@ -6165,11 +6229,188 @@ function isTopBarIconDarkPixel(value: number | undefined): boolean {
   return typeof value === "number" && value >= 0 && value <= 110;
 }
 
+function isTopBarIconLightPixel(value: number | undefined): boolean {
+  return typeof value === "number" && value >= 205;
+}
+
+const KNOWN_TOP_BAR_ICON_ROLES = new Set(["add", "back", "close", "menu", "more", "search", "share"]);
+
+function isKnownTopBarIconRole(role: string): boolean {
+  return KNOWN_TOP_BAR_ICON_ROLES.has(role);
+}
+
+function topBarIconRoleShapeScore(component: TopBarIconVisualComponent, sample: ImageSample, role: string): number | undefined {
+  if (!isKnownTopBarIconRole(role) || !component.polarity) {
+    return undefined;
+  }
+  const observed = normalizedComponentMask(component, sample);
+  if (observed.length < 8) {
+    return 0;
+  }
+  return Math.max(...topBarIconRoleTemplates(role).map((template) => binaryShapeSimilarity(observed, template)));
+}
+
+function normalizedComponentMask(component: TopBarIconVisualComponent, sample: ImageSample): Array<{ x: number; y: number }> {
+  const canvasSize = 32;
+  const contentSize = 26;
+  const largestSide = Math.max(component.bounds.width, component.bounds.height, 1);
+  const offsetX = (canvasSize - (component.bounds.width / largestSide) * contentSize) / 2;
+  const offsetY = (canvasSize - (component.bounds.height / largestSide) * contentSize) / 2;
+  const mask = new Uint8Array(canvasSize * canvasSize);
+  const isForeground = component.polarity === "light" ? isTopBarIconLightPixel : isTopBarIconDarkPixel;
+  const endX = Math.min(sample.width, component.bounds.x + component.bounds.width);
+  const endY = Math.min(sample.height, component.bounds.y + component.bounds.height);
+  for (let y = Math.max(0, component.bounds.y); y < endY; y += 1) {
+    for (let x = Math.max(0, component.bounds.x); x < endX; x += 1) {
+      if (!isForeground(sample.pixels[y * sample.width + x])) {
+        continue;
+      }
+      const normalizedX = Math.max(0, Math.min(canvasSize - 1, Math.round(offsetX + ((x - component.bounds.x) / largestSide) * contentSize)));
+      const normalizedY = Math.max(0, Math.min(canvasSize - 1, Math.round(offsetY + ((y - component.bounds.y) / largestSide) * contentSize)));
+      mask[normalizedY * canvasSize + normalizedX] = 1;
+    }
+  }
+  return maskPoints(mask, canvasSize);
+}
+
+function topBarIconRoleTemplates(role: string): Array<Array<{ x: number; y: number }>> {
+  const create = (draw: (mask: Uint8Array) => void): Array<{ x: number; y: number }> => {
+    const mask = new Uint8Array(32 * 32);
+    draw(mask);
+    return maskPoints(mask, 32);
+  };
+  switch (role) {
+    case "back":
+      return [create((mask) => {
+        drawMaskLine(mask, 32, 20, 4, 8, 16, 2);
+        drawMaskLine(mask, 32, 8, 16, 20, 28, 2);
+      })];
+    case "share":
+      return [create((mask) => {
+        drawMaskLine(mask, 32, 5, 13, 5, 28, 2);
+        drawMaskLine(mask, 32, 5, 28, 27, 28, 2);
+        drawMaskLine(mask, 32, 27, 28, 27, 13, 2);
+        drawMaskLine(mask, 32, 16, 20, 16, 3, 2);
+        drawMaskLine(mask, 32, 16, 3, 9, 10, 2);
+        drawMaskLine(mask, 32, 16, 3, 23, 10, 2);
+      })];
+    case "search":
+      return [create((mask) => {
+        drawMaskCircle(mask, 32, 13, 13, 8, 2);
+        drawMaskLine(mask, 32, 19, 19, 28, 28, 2);
+      })];
+    case "add":
+      return [
+        create((mask) => {
+          drawMaskCircle(mask, 32, 16, 16, 12, 2);
+          drawMaskLine(mask, 32, 9, 16, 23, 16, 2);
+          drawMaskLine(mask, 32, 16, 9, 16, 23, 2);
+        }),
+        create((mask) => {
+          drawMaskLine(mask, 32, 5, 16, 27, 16, 2);
+          drawMaskLine(mask, 32, 16, 5, 16, 27, 2);
+        })
+      ];
+    case "close":
+      return [create((mask) => {
+        drawMaskLine(mask, 32, 6, 6, 26, 26, 2);
+        drawMaskLine(mask, 32, 26, 6, 6, 26, 2);
+      })];
+    case "menu":
+      return [create((mask) => {
+        drawMaskLine(mask, 32, 4, 8, 28, 8, 2);
+        drawMaskLine(mask, 32, 4, 16, 28, 16, 2);
+        drawMaskLine(mask, 32, 4, 24, 28, 24, 2);
+      })];
+    case "more":
+      return [
+        create((mask) => {
+          drawMaskDot(mask, 32, 7, 16, 3);
+          drawMaskDot(mask, 32, 16, 16, 3);
+          drawMaskDot(mask, 32, 25, 16, 3);
+        }),
+        create((mask) => {
+          drawMaskDot(mask, 32, 16, 7, 3);
+          drawMaskDot(mask, 32, 16, 16, 3);
+          drawMaskDot(mask, 32, 16, 25, 3);
+        })
+      ];
+    default:
+      return [];
+  }
+}
+
+function maskPoints(mask: Uint8Array, width: number): Array<{ x: number; y: number }> {
+  const points: Array<{ x: number; y: number }> = [];
+  for (let index = 0; index < mask.length; index += 1) {
+    if (mask[index]) {
+      points.push({ x: index % width, y: Math.floor(index / width) });
+    }
+  }
+  return points;
+}
+
+function drawMaskLine(
+  mask: Uint8Array,
+  width: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  radius: number
+): void {
+  const steps = Math.max(1, Math.ceil(Math.hypot(x2 - x1, y2 - y1)));
+  for (let step = 0; step <= steps; step += 1) {
+    const x = Math.round(x1 + ((x2 - x1) * step) / steps);
+    const y = Math.round(y1 + ((y2 - y1) * step) / steps);
+    drawMaskDot(mask, width, x, y, radius);
+  }
+}
+
+function drawMaskCircle(mask: Uint8Array, width: number, centerX: number, centerY: number, radius: number, thickness: number): void {
+  for (let y = 0; y < width; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (Math.abs(Math.hypot(x - centerX, y - centerY) - radius) <= thickness) {
+        mask[y * width + x] = 1;
+      }
+    }
+  }
+}
+
+function drawMaskDot(mask: Uint8Array, width: number, centerX: number, centerY: number, radius: number): void {
+  for (let y = Math.max(0, centerY - radius); y <= Math.min(width - 1, centerY + radius); y += 1) {
+    for (let x = Math.max(0, centerX - radius); x <= Math.min(width - 1, centerX + radius); x += 1) {
+      if (Math.hypot(x - centerX, y - centerY) <= radius) {
+        mask[y * width + x] = 1;
+      }
+    }
+  }
+}
+
+function binaryShapeSimilarity(observed: Array<{ x: number; y: number }>, template: Array<{ x: number; y: number }>): number {
+  if (!observed.length || !template.length) {
+    return 0;
+  }
+  const directed = (from: Array<{ x: number; y: number }>, to: Array<{ x: number; y: number }>): number => {
+    let total = 0;
+    for (const point of from) {
+      let nearest = Number.POSITIVE_INFINITY;
+      for (const candidate of to) {
+        const distanceSquared = (point.x - candidate.x) ** 2 + (point.y - candidate.y) ** 2;
+        nearest = Math.min(nearest, distanceSquared);
+      }
+      total += Math.max(0, 1 - Math.sqrt(nearest) / 5);
+    }
+    return total / from.length;
+  };
+  return directed(observed, template) * 0.5 + directed(template, observed) * 0.5;
+}
+
 function topBarIconComponentScore(
   component: TopBarIconVisualComponent,
   candidate: VisualImageRegionCandidate,
   sample: ImageSample,
-  options: { broadTrailingSearch?: boolean } = {}
+  options: { broadTrailingSearch?: boolean; roleScore?: number } = {}
 ): number {
   const candidateCenter = {
     x: ((candidate.region.x + candidate.region.width / 2) / 100) * sample.width,
@@ -6185,6 +6426,12 @@ function topBarIconComponentScore(
   const sizeScore = Math.max(0, 1 - Math.abs(iconSize - targetSize) / targetSize);
   const density = component.darkPixelCount / Math.max(1, component.bounds.width * component.bounds.height);
   const densityScore = density >= 0.06 && density <= 0.65 ? 1 : 0.35;
+  if (options.roleScore !== undefined) {
+    const geometryScore = options.broadTrailingSearch
+      ? distanceScore * 0.15 + aspectScore * 0.25 + sizeScore * 0.25 + densityScore * 0.35
+      : distanceScore * 0.42 + aspectScore * 0.18 + sizeScore * 0.22 + densityScore * 0.18;
+    return options.roleScore * 0.72 + geometryScore * 0.28;
+  }
   if (options.broadTrailingSearch) {
     return distanceScore * 0.2 + aspectScore * 0.22 + sizeScore * 0.22 + densityScore * 0.36;
   }

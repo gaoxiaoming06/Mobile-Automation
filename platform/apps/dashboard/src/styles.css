@@ -4562,15 +4562,32 @@ button:disabled {
   }
 
   .app-nav {
-    height: auto;
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-rows: auto;
+    height: 56px;
+    grid-template-columns: 38px minmax(0, 1fr);
+    grid-template-rows: 38px;
+    align-items: start;
+  }
+
+  .nav-toggle {
+    grid-column: 1;
+    grid-row: 1;
   }
 
   .nav-items {
-    grid-auto-flow: column;
-    grid-auto-columns: max-content;
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
     overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .nav-items .nav-item {
+    flex: 0 0 auto;
+    width: auto;
+  }
+
+  .nav-collapsed .nav-items .nav-item {
+    width: 38px;
   }
 
   .sidebar {
@@ -4660,6 +4677,12 @@ button:disabled {
 
   .workspace {
     grid-template-rows: auto minmax(420px, 58vh) auto;
+  }
+
+  .workspace.page-aiScriptFlows,
+  .workspace.page-scriptFlows {
+    grid-template-rows: auto auto;
+    align-content: start;
   }
 
   .page-devices,
@@ -4801,6 +4824,44 @@ button:disabled {
 .script-run-status strong[data-status="failed"] { color: #b42318; }
 .script-run-status strong[data-status="running"] { color: #1f63d3; }
 
+.trial-outcome-review {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid #e5b84f;
+  border-radius: 6px;
+  background: #fffaf0;
+}
+
+.trial-outcome-review strong,
+.trial-outcome-review p {
+  margin: 0;
+}
+
+.trial-outcome-review p {
+  margin-top: 4px;
+  color: #66758b;
+  font-size: 12px;
+}
+
+.trial-outcome-review.verified {
+  border-color: #9bd2b4;
+  background: #f1fbf5;
+}
+
+.trial-outcome-review.rejected {
+  border-color: #edaaa4;
+  background: #fff5f4;
+}
+
+.trial-outcome-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
 .ai-script-module {
   min-width: 0;
   min-height: 0;
@@ -4845,6 +4906,27 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.ai-script-request .form-grid.two-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.45fr);
+  gap: 10px;
+}
+
+.ai-script-request .form-grid.two-columns label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.ai-script-request .form-grid.two-columns input,
+.ai-script-request .form-grid.two-columns select {
+  width: 100%;
+  min-width: 0;
 }
 
 .ai-script-prompt {
@@ -4928,6 +5010,17 @@ button:disabled {
   .ai-script-layout {
     display: flex;
     flex-direction: column;
+  }
+}
+
+@media (max-width: 520px) {
+  .ai-script-request .form-grid.two-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-script-prompt,
+  .ai-script-prompt textarea {
+    min-height: 240px;
   }
 }
 

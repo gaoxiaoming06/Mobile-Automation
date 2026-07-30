@@ -43,7 +43,11 @@ export interface AutomationDeviceDriver {
   performSemanticAction?(serial: string, action: SemanticDeviceActionRequest): Promise<DeviceActionResult | void>;
   clearAppData(serial: string, packageName: string): Promise<void>;
   collectLogs(serial: string, lines?: number): Promise<string>;
-  watchDeviceEvents?(serial: string, onEvent: (event: ObservedDeviceEvent) => void, options?: { since?: Date }): Promise<DeviceEventWatcher>;
+  watchDeviceEvents?(
+    serial: string,
+    onEvent: (event: ObservedDeviceEvent) => void,
+    options?: { since?: Date; packageName?: string }
+  ): Promise<DeviceEventWatcher>;
   samplePerformance(serial: string, runId: string, stepResultId?: string): Promise<MetricSample>;
   startAppMonitor?(
     serial: string,
@@ -135,7 +139,11 @@ export class MobileDriver implements AutomationDeviceDriver {
     return platform === "ios" ? this.ios.collectLogs(serial, lines) : this.android.collectLogs(serial, lines);
   }
 
-  async watchDeviceEvents(serial: string, onEvent: (event: ObservedDeviceEvent) => void, options?: { since?: Date }): Promise<DeviceEventWatcher> {
+  async watchDeviceEvents(
+    serial: string,
+    onEvent: (event: ObservedDeviceEvent) => void,
+    options?: { since?: Date; packageName?: string }
+  ): Promise<DeviceEventWatcher> {
     const platform = await this.resolvePlatform(serial);
     if (platform === "ios") {
       return {

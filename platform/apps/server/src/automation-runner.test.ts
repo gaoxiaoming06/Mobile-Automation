@@ -142,6 +142,220 @@ describe("AutomationRunner regression flow", () => {
     }));
   });
 
+  it("does not press back when the current page is recognized but no reliable route exists", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, undefined, {
+      pageStateService: pageStateSequence(["page-class-detail"])
+    });
+    const step = reachPageStep("page-growth", []);
+    step.params.maxRecoveryBacks = 1;
+    step.params.recoveryDelayMs = 0;
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
+      status: "no_reliable_path",
+      currentPageId: "page-class-detail",
+      recoveryActions: 0
+    }));
+  });
+
+  it("backs to a page that can reach the target and then executes the indexed route", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    let identifyCount = 0;
+    const page = (id: string, name: string) => ({
+      status: "matched" as const,
+      page: {
+        id,
+        key: id,
+        name,
+        appId: "cn.eeo.classin",
+        graphVersionId: "v1",
+        matcherCount: 1
+      },
+      candidates: []
+    });
+    const runner = new AutomationRunner(storage, driver, undefined, {
+      pageStateService: {
+        identifyCurrentPage: async () => {
+          identifyCount += 1;
+          return identifyCount === 1
+            ? page("page-class-detail", "班级详情")
+            : page("page-home", "主页");
+        },
+        verifyExpectedPage: async () => page("page-growth", "成长"),
+        waitForExpectedPage: async () => page("page-growth", "成长")
+      }
+    });
+    const openGrowth: ActionStep = {
+      id: "navigate:open-growth",
+      order: 1,
+      type: "tap",
+      enabled: true,
+      params: {},
+      coordinate: { x: 320, y: 720 },
+      createdAt: nowIso()
+    };
+    const step = reachPageStep("page-growth", [{
+      fromPageId: "page-home",
+      toPageId: "page-growth",
+      flowId: "flow-home-growth",
+      flowName: "从主页进入成长页",
+      segmentId: "home-growth",
+      stepIds: ["open-growth"],
+      actions: [openGrowth]
+    }]);
+    step.params.recoveryStopPageIds = ["page-home", "page-login"];
+    step.params.recoveryDelayMs = 0;
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "back" },
+      { type: "tap", x: 320, y: 720 }
+    ]);
+    expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
+      status: "reached",
+      recoveryActions: 1,
+      route: [expect.objectContaining({ segmentId: "home-growth" })]
+    }));
+  });
+
+  it("allows a preparation step to back directly to its declared entry page", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    let identifyCount = 0;
+    const runner = new AutomationRunner(storage, driver, undefined, {
+      pageStateService: {
+        identifyCurrentPage: async () => {
+          identifyCount += 1;
+          const id = identifyCount === 1 ? "page-class-detail" : "page-home";
+          return {
+            status: "matched",
+            page: {
+              id,
+              key: id,
+              name: id === "page-home" ? "主页" : "班级详情",
+              appId: "cn.eeo.classin",
+              graphVersionId: "v1",
+              matcherCount: 1
+            },
+            candidates: []
+          };
+        },
+        verifyExpectedPage: async () => ({ status: "unknown", candidates: [] }),
+        waitForExpectedPage: async () => ({ status: "unknown", candidates: [] })
+      }
+    });
+    const step = reachPageStep("page-home", []);
+    step.params.allowBackRecovery = true;
+    step.params.recoveryStopPageIds = ["page-home", "page-login"];
+    step.params.recoveryDelayMs = 0;
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "back" }]);
+    expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
+      status: "recovered_to_target",
+      recoveryActions: 1
+    }));
+  });
+
+  it("stops preparation recovery at another declared navigation root", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, undefined, {
+      pageStateService: pageStateSequence(["page-login"])
+    });
+    const step = reachPageStep("page-home", []);
+    step.params.allowBackRecovery = true;
+    step.params.recoveryStopPageIds = ["page-home", "page-login"];
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
+      status: "recovery_stopped_at_anchor",
+      currentPageId: "page-login",
+      recoveryActions: 0
+    }));
+  });
+
+  it("stops back recovery immediately after leaving the target app", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    let identifyCount = 0;
+    const runner = new AutomationRunner(storage, driver, undefined, {
+      pageStateService: {
+        identifyCurrentPage: async () => {
+          identifyCount += 1;
+          if (identifyCount === 1) return { status: "unknown", candidates: [] };
+          return {
+            status: "outside_app",
+            actualAppId: "com.android.launcher",
+            candidates: []
+          };
+        },
+        verifyExpectedPage: async () => ({ status: "unknown", candidates: [] }),
+        waitForExpectedPage: async () => ({ status: "unknown", candidates: [] })
+      }
+    });
+    const step = reachPageStep("page-growth", []);
+    step.params.recoveryDelayMs = 0;
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([{ type: "back" }]);
+    expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
+      status: "recovery_left_app",
+      currentStatus: "outside_app",
+      recoveryActions: 1
+    }));
+  });
+
   it("persists redacted steps while executing the in-memory runtime steps", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
@@ -770,7 +984,8 @@ describe("AutomationRunner regression flow", () => {
         }
       ],
       stepIntervalMs: 0,
-      recordVideo: false
+      recordVideo: false,
+      startAppPackageName: "demo.app"
     });
 
     const run = await waitForRun(runner, storage, started.id);
@@ -781,7 +996,7 @@ describe("AutomationRunner regression flow", () => {
         expect.objectContaining({
           status: "failed",
           errorCode: "DEVICE_EVENT_FAILED",
-          errorMessage: "Run stopped after Android crash or ANR event."
+          errorMessage: "Run stopped after Android app crash event."
         })
       ])
     );
@@ -796,6 +1011,7 @@ describe("AutomationRunner regression flow", () => {
     expect(run.events.some((event) => event.summary === "Runner execution failed")).toBe(false);
     expect(run.artifacts.some((artifact) => artifact.type === "log" && artifact.name.includes("device-event-crash"))).toBe(true);
     expect(run.artifacts.some((artifact) => artifact.type === "screenshot" && artifact.name.includes("crash"))).toBe(true);
+    expect(driver.watchOptions).toEqual(expect.objectContaining({ packageName: "demo.app" }));
   });
 
   it("passes no_crash and app_alive expectations after a successful step", async () => {
@@ -1895,9 +2111,15 @@ class SequenceUiHierarchyMockDriver extends MockDriver {
 class EventMockDriver extends MockDriver {
   private eventListener?: (event: ObservedDeviceEvent) => void;
   private emittedCrash = false;
+  watchOptions?: { since?: Date; packageName?: string };
 
-  async watchDeviceEvents(_serial: string, onEvent: (event: ObservedDeviceEvent) => void): Promise<DeviceEventWatcher> {
+  async watchDeviceEvents(
+    _serial: string,
+    onEvent: (event: ObservedDeviceEvent) => void,
+    options?: { since?: Date; packageName?: string }
+  ): Promise<DeviceEventWatcher> {
     this.eventListener = onEvent;
+    this.watchOptions = options;
     return {
       stop: async () => undefined
     };

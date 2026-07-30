@@ -7,10 +7,11 @@ import {
   type ScriptParameterValue,
   type ScriptStep
 } from "@mobile-automation/script-flow";
-import type { ScriptFlow } from "@mobile-automation/shared";
+import type { NavigationEntry, ScriptFlow, ScriptFlowVerificationAssessment } from "@mobile-automation/shared";
 import { isCodexAppServerProvider, runAiJsonRequest, type AiClientFetch } from "./ai-client.js";
 import type { AiModelConfig } from "./ai-model-settings.js";
 import type { PageAssetCatalog, PageAssetPlatform } from "./page-asset-catalog.js";
+import { assessScriptFlowVerification } from "./script-flow-verification.js";
 
 export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "你是移动自动化 ScriptFlow 规划器，只生成可审查的脚本草稿，不操作设备。",
@@ -21,14 +22,17 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。semantic 用于‘进入教学方案的入口’这类概念目标，不能伪装成屏幕原文。",
   "text、semantic、icon 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
   "icon 必须描述 area 和 position。顶部栏标准图标使用 topBar；内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
+  "用户明确说‘点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复、reachPage 或重启。",
   "control 当前只支持 checkbox，必须描述 area: content 和 nearText；执行器会在文字附近识别并校验勾选状态。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
-  "用户只表达进入、打开、前往或回到某页面时，这是目标状态而不是操作方式；目标页面唯一且已录入时生成 reachPage，不要因为‘回到’推断系统返回、重启或要求用户选择底层导航方式。",
-  "只有用户明确描述点击、返回、重启等过程时才生成对应操作；reachPage 的运行时执行器负责识别当前页面、选择安全路径并验证目标页。",
+  "用户明确操作是硬约束：点击、输入、清空、滑动、启动或重启等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。资产只可补充定位、页面约束和结果验证。",
+  "用户只表达进入、打开、前往或回到某页面时，这是目标状态而不是操作方式。只有目标是 navigationAnchors 中的状态入口，或 transitions 中存在到该目标的路径时，才生成 reachPage；不要因为‘回到’推断系统返回或重启。",
+  "navigationEntries 是试运行验证并经用户确认的导航入口。目标型请求只能使用 navigationEntries、已验证 transitions 或 navigationAnchors；页面标签和页面名称不能作为入口推断依据。",
+  "只有用户明确描述点击、返回、重启等过程时才生成对应过程；reachPage 的运行时执行器只使用已验证导航索引和受控入口恢复，不会猜测未知点击路径。",
   "动作会进入另一个页面时，把目标页写在该动作的 expectPage；不要再紧跟一个独立 assertPage。assertPage 只用于用户明确要求单独验证当前页面的场景。",
-  "目标页面未录入但用户提供了该页独有的稳定可见文字时，不要引用未知 page key；用最终 assertText: { text: <用户原文>, match: contains } 验证结果。没有页面资产也没有稳定文字时才返回 needs_clarification。",
+  "目标页面未录入时禁止引用或编造 page key。用户提供完整操作链时，保留这些操作并生成可试运行草稿：有独有稳定文字时用最终 assertText 验证；没有稳定文字时允许不写结果断言，试运行后由用户确认业务结果。",
   "只能引用目录中存在的 page key 和 active ScriptFlow id。禁止元素资产 ID、坐标、bounds、region_center、圈选区域或固定屏幕区域点击。",
-  "用户要求到达的目标页面不在页面目录时，不得编造 page key，也不得省略结果验证后假装生成成功；返回 needs_clarification，请用户录入页面资产，或补充该页面独有的稳定文字作为结果验证依据。",
+  "用户只说到达一个未录入页面、又没有提供操作路径时返回 needs_clarification，请用户补充从已知状态开始的完整点击过程或目标页独有稳定文字。不要要求用户先录制资产。",
   "目标型请求生成 reachPage；过程型请求按用户描述保留每个动作，不擅自扩展成创建、发布、提交或删除。场景编排命中完全匹配的启用用例时自动使用 runFlow，不要求用户再确认复用；用户明确描述具体操作过程时则保留该过程。",
   "动态业务值必须声明为 parameters 并在步骤中使用 ${parameterName}。用户已给出的值放入顶层 parameterValues，仅用于本次运行；未给出但执行必需的值设 required: true。",
   "账号、密码等 sensitive 参数禁止写入 parameters.default、summary 或 assumptions，必须只放入顶层 parameterValues。",
@@ -41,18 +45,21 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
 
 export type ScriptFlowPlannerCatalog = ReturnType<typeof buildScriptFlowPlannerCatalog>;
 
-export type ScriptFlowAiDraft =
-  | {
-      status: "ready";
+type ScriptFlowAiGeneratedDraft = {
+      status: "ready" | "trial_ready";
       sourceYaml: string;
       document: ScriptFlowDocument;
       kind: ScriptFlowDocument["kind"];
       parameterValues: Record<string, ScriptParameterValue>;
       summary: string;
       assumptions: string[];
+      verification: ScriptFlowVerificationAssessment;
       channel: "codex" | "openai-compatible";
       model: string;
-    }
+    };
+
+export type ScriptFlowAiDraft =
+  | ScriptFlowAiGeneratedDraft
   | {
       status: "needs_clarification";
       clarification: string;
@@ -61,7 +68,7 @@ export type ScriptFlowAiDraft =
     };
 
 type ParsedScriptFlowAiDraft =
-  | Omit<Extract<ScriptFlowAiDraft, { status: "ready" }>, "channel" | "model">
+  | Omit<ScriptFlowAiGeneratedDraft, "status" | "channel" | "model" | "verification"> & { status: "ready" }
   | Omit<Extract<ScriptFlowAiDraft, { status: "needs_clarification" }>, "channel" | "model">;
 
 export async function generateScriptFlowDraft(input: {
@@ -71,6 +78,7 @@ export async function generateScriptFlowDraft(input: {
   platform: PageAssetPlatform;
   pageCatalog: PageAssetCatalog;
   flows: ScriptFlow[];
+  navigationEntries?: NavigationEntry[];
   existingFlow?: ScriptFlow;
   fetchImpl?: AiClientFetch;
 }): Promise<ScriptFlowAiDraft> {
@@ -81,7 +89,8 @@ export async function generateScriptFlowDraft(input: {
     input.pageCatalog,
     input.existingFlow ? input.flows.filter((flow) => flow.id !== input.existingFlow?.id) : input.flows,
     input.appId,
-    input.platform
+    input.platform,
+    input.navigationEntries ?? []
   );
   const channel = isCodexAppServerProvider(input.config.baseURL) ? "codex" as const : "openai-compatible" as const;
   const requestConfig = {
@@ -126,25 +135,45 @@ export async function generateScriptFlowDraft(input: {
           model: input.config.model
         };
       }
+      if (repairError instanceof UnreachableReachPageError) {
+        return {
+          status: "needs_clarification",
+          clarification: `${repairError.message} 请补充从已知页面开始的操作过程。`,
+          channel,
+          model: input.config.model
+        };
+      }
       throw new Error(`AI 未能生成有效的 ScriptFlow 草稿：${compactError(repairError)}`);
     }
   }
   if (parsed.status === "needs_clarification") {
     return { ...parsed, channel, model: input.config.model };
   }
-  return { ...parsed, channel, model: input.config.model };
+  const verification = assessScriptFlowVerification({
+    document: parsed.document,
+    sourceYaml: parsed.sourceYaml
+  });
+  return {
+    ...parsed,
+    status: verification.status === "verified" ? "ready" : "trial_ready",
+    verification,
+    channel,
+    model: input.config.model
+  };
 }
 
 export function buildScriptFlowPlannerCatalog(
   pageCatalog: PageAssetCatalog,
   flows: ScriptFlow[],
   appId: string,
-  platform: PageAssetPlatform
+  platform: PageAssetPlatform,
+  learnedNavigationEntries: NavigationEntry[] = []
 ) {
   const pages = pageCatalog.listPages(appId, platform).map((page) => ({
     id: page.id,
     key: page.key,
-    name: page.name
+    name: page.name,
+    tags: page.tags ?? []
   }));
   const reusableFlows = flows
     .filter((flow) => flow.appId === appId && flow.platform === platform && flow.status === "active")
@@ -161,10 +190,42 @@ export function buildScriptFlowPlannerCatalog(
         ...(Object.keys(outcome).length ? { outcome } : {})
       };
     });
-  const transitions = flows
+  const navigationEntries = learnedNavigationEntries
+    .filter((entry) => entry.appId === appId
+      && entry.status === "active"
+      && (entry.platformScope === platform || entry.platformScope === "mobile-both"))
+    .map((entry) => ({
+      id: entry.id,
+      key: entry.key,
+      name: entry.name,
+      from: entry.from,
+      toPage: entry.toPage,
+      action: entry.action,
+      confidence: entry.confidence,
+      version: entry.version
+    }));
+  const transitions = [
+    ...flows
     .filter((flow) => flow.appId === appId && flow.platform === platform && flow.status === "active")
-    .flatMap((flow) => transitionEntries(flow));
-  return { pages, reusableFlows, transitions };
+    .flatMap((flow) => transitionEntries(flow)),
+    ...navigationEntries.flatMap((entry) => entry.from.kind === "page" ? [{
+      onPage: entry.from.key,
+      expectPage: entry.toPage,
+      flowId: `navigation-entry:${entry.id}`,
+      flowName: entry.name,
+      stepId: `navigate-with-${entry.id}`,
+      action: entry.action.kind,
+      parameters: {},
+      source: "navigation_entry" as const
+    }] : [])
+  ];
+  const navigationAnchors = reusableFlows.flatMap((flow) => {
+    const page = stringValue(flow.entry?.page);
+    const session = stringValue(flow.entry?.session);
+    if (!page || !session) return [];
+    return [{ page, session, ...(stringValue(flow.entry?.role) ? { role: stringValue(flow.entry?.role) } : {}) }];
+  }).filter((anchor, index, anchors) => anchors.findIndex((candidate) => candidate.page === anchor.page) === index);
+  return { pages, reusableFlows, navigationEntries, transitions, navigationAnchors };
 }
 
 export function buildScriptFlowPlannerPrompt(
@@ -174,6 +235,7 @@ export function buildScriptFlowPlannerPrompt(
   catalog: ScriptFlowPlannerCatalog,
   existingDocument?: ScriptFlowDocument
 ): string {
+  const explicitOperations = extractExplicitOperationContract(prompt);
   return [
     existingDocument
       ? "根据用户要求修改现有用例，输出修改后的完整 ScriptFlow v1 草稿。未提及的步骤、参数和约束保持不变。"
@@ -205,8 +267,11 @@ export function buildScriptFlowPlannerPrompt(
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
     "target 必须且只能使用 text、semantic、icon 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；不知道准确标签时改用 semantic。icon 必须带 area 和 position；control 当前只支持 checkbox，并且必须带 area: content 和 nearText；禁止元素资产 ID、坐标、区域和临时视觉模板。",
     "tap.search.mode 可用 auto、visibleOnly 或 scroll。普通内容点击目标默认用 auto；瞬时菜单和顶栏/底栏点击目标用 visibleOnly。执行器负责在允许时逐屏查找，脚本不要展开成机械滑动步骤。inputText、clearText 和 selectText 当前不接受 search。",
-    "只表达目标页面时使用 reachPage: { page: <目录页面>, policy: safe }，不要因为“回到”推断系统返回或重启。reachPage 自身会验证目标页，不要追加 assertPage。",
+    "只表达目标页面时，仅当目标属于 navigationAnchors，或能通过 navigationEntries、已验证 transitions 到达时使用 reachPage: { page: <目录页面>, policy: safe }。不要因为“回到”推断系统返回或重启，也不要根据页面名称或标签猜测导航入口。reachPage 自身会验证目标页，不要追加 assertPage。",
     "tap 与 selectText 默认标记 risk: interaction。明确属于提交、发布、删除或支付时，risk 分别填写 submit、publish、delete 或 payment；这些标记仅用于报告审计，无需运行前确认；禁止 risk: none。",
+    explicitOperations.length
+      ? `用户明确操作契约（必须按顺序生成直接动作，不能用 reachPage 或 runFlow 代替）：${explicitOperations.map((operation) => operation.phrase).join(" -> ")}`
+      : "用户没有明确指定操作过程；可以使用已验证导航知识补全目标型请求。",
     existingDocument ? "修改现有用例：" : "输入：",
     JSON.stringify({ prompt, appId, platform, ...(existingDocument ? { existingDocument } : {}), catalog }, null, 2)
   ].join("\n\n");
@@ -295,7 +360,9 @@ export function parseScriptFlowAiResponse(
   const hydrated = validateScriptFlowDocument(hydrateGeneratedParameters(validated, input.catalog));
   const { document, parameterValues } = extractEphemeralParameterValues(hydrated, root.parameterValues);
   validateGeneratedReferences(document, input);
+  validateGeneratedNavigationReachability(document, input.catalog);
   validateGeneratedTargetGrounding(document, input);
+  validateExplicitOperationContract(document, input.prompt);
   return {
     status: "ready",
     sourceYaml: serializeScriptFlow(document),
@@ -305,6 +372,68 @@ export function parseScriptFlowAiResponse(
     summary: stringValue(root.summary) ?? `已生成 ${document.name}`,
     assumptions: stringArray(root.assumptions)
   };
+}
+
+type ExplicitOperationKind = "launch" | "tap" | "input" | "clear" | "swipe";
+
+type ExplicitOperationContract = {
+  kind: ExplicitOperationKind;
+  phrase: string;
+};
+
+function extractExplicitOperationContract(prompt: string): ExplicitOperationContract[] {
+  const operationPattern = /向上滑动|向下滑动|上滑|下滑|点击|点按|轻触|输入|填写|键入|清空|滑动|启动|重启/gu;
+  const matches = [...prompt.matchAll(operationPattern)];
+  return matches.map((match, index) => {
+    const verb = match[0];
+    const start = match.index ?? 0;
+    const end = matches[index + 1]?.index ?? prompt.length;
+    const phrase = prompt.slice(start, end)
+      .replace(/[\s，,。；;]*(?:然后|再|接着|之后)[\s，,。；;]*$/u, "")
+      .trim();
+    return {
+      kind: explicitOperationKind(verb),
+      phrase: phrase || verb
+    };
+  });
+}
+
+function explicitOperationKind(verb: string): ExplicitOperationKind {
+  if (/点击|点按|轻触/u.test(verb)) return "tap";
+  if (/输入|填写|键入/u.test(verb)) return "input";
+  if (verb === "清空") return "clear";
+  if (/滑/u.test(verb)) return "swipe";
+  return "launch";
+}
+
+function validateExplicitOperationContract(document: ScriptFlowDocument, prompt?: string): void {
+  if (!prompt) return;
+  const contract = extractExplicitOperationContract(prompt);
+  if (!contract.length) return;
+  const generated = generatedDirectOperationKinds(document);
+  let cursor = 0;
+  for (const operation of contract) {
+    const foundAt = generated.findIndex((kind, index) => index >= cursor && kind === operation.kind);
+    if (foundAt < 0) {
+      throw new Error(`用户明确操作“${operation.phrase}”没有按顺序保留；明确操作不能被 reachPage、runFlow 或已有资产替代`);
+    }
+    cursor = foundAt + 1;
+  }
+}
+
+function generatedDirectOperationKinds(document: ScriptFlowDocument): ExplicitOperationKind[] {
+  const operations: ExplicitOperationKind[] = [];
+  if (["launchApp", "restartApp", "clearDataAndLaunch"].includes(document.start?.strategy ?? "")) {
+    operations.push("launch");
+  }
+  for (const step of flattenSteps(document.steps)) {
+    if ("launchApp" in step) operations.push("launch");
+    else if ("tap" in step) operations.push("tap");
+    else if ("inputText" in step || "selectText" in step) operations.push("input");
+    else if ("clearText" in step) operations.push("clear");
+    else if ("swipe" in step || "scrollUntilVisible" in step) operations.push("swipe");
+  }
+  return operations;
 }
 
 function extractEphemeralParameterValues(
@@ -464,6 +593,53 @@ function validateGeneratedReferences(
   }
 }
 
+function validateGeneratedNavigationReachability(
+  document: ScriptFlowDocument,
+  catalog: ScriptFlowPlannerCatalog
+): void {
+  const pagesByReference = new Map<string, ScriptFlowPlannerCatalog["pages"][number]>();
+  for (const page of catalog.pages) {
+    pagesByReference.set(page.id, page);
+    pagesByReference.set(page.key, page);
+    pagesByReference.set(page.name, page);
+  }
+  const canonicalPage = (reference: string | undefined) => reference ? pagesByReference.get(reference)?.key : undefined;
+  const transitions = catalog.transitions.flatMap((transition) => {
+    const onPage = canonicalPage(transition.onPage);
+    const expectPage = canonicalPage(transition.expectPage);
+    return onPage && expectPage ? [{ ...transition, onPage, expectPage }] : [];
+  });
+  const navigationAnchors = new Set([
+    ...catalog.navigationAnchors.flatMap((anchor) => canonicalPage(anchor.page) ?? []),
+    ...catalog.pages.filter((page) => page.tags.some((tag) => tag === "navigation-root" || tag === "session-root")).map((page) => page.key)
+  ]);
+  const flows = new Map(catalog.reusableFlows.map((flow) => [flow.id, flow]));
+  let currentPage = canonicalPage(document.entry?.page);
+
+  for (const step of flattenSteps(document.steps)) {
+    if ("runFlow" in step) {
+      currentPage = canonicalPage(stringValue(flows.get(step.runFlow)?.outcome?.page)) ?? currentPage;
+      continue;
+    }
+    if ("reachPage" in step) {
+      const targetPage = canonicalPage(step.reachPage.page);
+      if (!targetPage) continue;
+      const reachableFromCurrent = currentPage === targetPage
+        || Boolean(currentPage && findPlannerTransitionPath(transitions, currentPage, targetPage));
+      const reachableFromIndex = transitions.some((transition) =>
+        Boolean(findPlannerTransitionPath(transitions, transition.onPage, targetPage))
+      );
+      if (!reachableFromCurrent && !reachableFromIndex && !navigationAnchors.has(targetPage)) {
+        const target = pagesByReference.get(step.reachPage.page);
+        throw new UnreachableReachPageError(target?.name ?? step.reachPage.page);
+      }
+      currentPage = targetPage;
+      continue;
+    }
+    if (step.expectPage) currentPage = canonicalPage(step.expectPage) ?? currentPage;
+  }
+}
+
 function validateGeneratedTargetGrounding(
   document: ScriptFlowDocument,
   input: { prompt?: string; existingDocument?: ScriptFlowDocument; catalog: ScriptFlowPlannerCatalog }
@@ -500,7 +676,7 @@ function compactGroundingText(value: string): string {
 
 function missingPageClarification(prompt: string): string {
   const request = prompt.replace(/\s+/g, " ").trim().slice(0, 80);
-  return `目标页面尚未录入页面资产，无法验证“${request}”的执行结果。请先录入目标页面资产，或补充该页面独有的稳定文字作为结果验证依据。`;
+  return `当前还不知道如何到达“${request}”。请补充从已知状态开始的完整操作过程，或提供目标页独有的稳定文字用于验证结果。`;
 }
 
 function validatePageReference(
@@ -518,6 +694,13 @@ class UnrecordedPageReferenceError extends Error {
   constructor(readonly field: string, readonly reference: string) {
     super(`AI 草稿的 ${field} 引用了未录入页面：${reference}`);
     this.name = "UnrecordedPageReferenceError";
+  }
+}
+
+class UnreachableReachPageError extends Error {
+  constructor(readonly pageName: string) {
+    super(`目标页面“${pageName}”没有可执行导航路径。`);
+    this.name = "UnreachableReachPageError";
   }
 }
 

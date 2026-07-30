@@ -1,8 +1,9 @@
 import express from "express";
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
-import type { ScriptFlow, ScriptFlowVersion, TestRun } from "@mobile-automation/shared";
+import type { FlowVerification, InteractionAsset, ScriptFlow, ScriptFlowVersion, TestRun } from "@mobile-automation/shared";
 import { derivePageNavigationSegments } from "./page-navigation.js";
 import { registerScriptFlowRoutes, type ScriptFlowApiStorage } from "./script-flow-api.js";
 import type { StartScriptFlowRunInput } from "./script-flow-runner.js";
@@ -66,11 +67,20 @@ describe("ScriptFlow API", () => {
     expect((listResponse.body as { flows: ScriptFlow[] }).flows).toHaveLength(1);
 
     const updatedYaml = sourceYaml.replace("打开添加好友", "打开添加好友页面");
+    const unverifiedUpdate = await put(context.baseUrl, `/api/script-flows/${created.id}`, {
+      sourceYaml: updatedYaml,
+      status: "active",
+      expectedVersion: 1
+    });
+    expect(unverifiedUpdate).toEqual({
+      status: 409,
+      body: { error: "ScriptFlow must pass a trial run before it can be activated" }
+    });
+    context.storage.markSourceVerified(updatedYaml);
     const updatedResponse = await put(context.baseUrl, `/api/script-flows/${created.id}`, { sourceYaml: updatedYaml, status: "active", expectedVersion: 1 });
     expect(updatedResponse.body).toEqual({
       flow: expect.objectContaining({ version: 2, name: "打开添加好友页面", status: "active" })
     });
-
     const preview = await post(context.baseUrl, `/api/script-flows/${created.id}/preview`, {
       expectedVersion: 2,
       parameters: { friendName: "张三" }
@@ -80,6 +90,12 @@ describe("ScriptFlow API", () => {
       planDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
       plan: expect.objectContaining({ steps: [expect.objectContaining({ id: "open-add-friend", action: "tap" })] })
     }));
+    expect(await post(context.baseUrl, "/api/script-flow-drafts/verification", { sourceYaml })).toEqual({
+      status: 200,
+      body: {
+        verification: expect.objectContaining({ status: "needs_trial", sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/) })
+      }
+    });
     const planDigest = (preview.body as { planDigest: string }).planDigest;
 
     const runResponse = await post(context.baseUrl, `/api/script-flows/${created.id}/runs`, {
@@ -140,7 +156,7 @@ describe("ScriptFlow API", () => {
     expect(context.runner.inputs).toEqual([]);
   });
 
-  it("previews and runs an unsaved draft without adding it to the use case center", async () => {
+  it("previews and trial-runs an unverified draft without adding it to the use case center", async () => {
     const context = await apiContext(servers);
 
     const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
@@ -148,13 +164,33 @@ describe("ScriptFlow API", () => {
       parameters: { friendName: "张三" }
     });
     expect(preview.status).toBe(200);
+    expect(preview.body).toEqual(expect.objectContaining({
+      verification: expect.objectContaining({
+        status: "needs_trial",
+        sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        unresolvedStepIds: ["open-add-friend"],
+        unresolvedOutcome: false
+      })
+    }));
     const planDigest = (preview.body as { planDigest: string }).planDigest;
 
-    const started = await post(context.baseUrl, "/api/script-flow-drafts/runs", {
+    const normalRun = await post(context.baseUrl, "/api/script-flow-drafts/runs", {
       sourceYaml,
       planDigest,
       deviceSerial: "device-1",
       parameters: { friendName: "张三" }
+    });
+    expect(normalRun).toEqual({
+      status: 409,
+      body: { error: "ScriptFlow must pass a trial run before normal execution" }
+    });
+
+    const started = await post(context.baseUrl, "/api/script-flow-drafts/trial-runs", {
+      sourceYaml,
+      planDigest,
+      deviceSerial: "device-1",
+      parameters: { friendName: "张三" },
+      recordVideo: true
     });
 
     expect(started.status).toBe(202);
@@ -164,13 +200,52 @@ describe("ScriptFlow API", () => {
         flowId: expect.stringMatching(/^temporary:/),
         scriptVersion: 1,
         sourceYaml,
-        deviceSerial: "device-1"
+        deviceSerial: "device-1",
+        executionPurpose: "trial",
+        recordVideo: false,
+        verificationAssessment: expect.objectContaining({ status: "needs_trial" })
       })
     ]);
+
+    context.storage.markSourceVerified(sourceYaml);
+    const verification = await post(context.baseUrl, "/api/script-flow-drafts/verification", { sourceYaml });
+    expect(verification).toEqual({
+      status: 200,
+      body: { verification: expect.objectContaining({ status: "verified", unresolvedStepIds: [] }) }
+    });
+
+    const direct = await post(context.baseUrl, "/api/script-flow-drafts/runs", {
+      sourceYaml,
+      planDigest,
+      deviceSerial: "device-1",
+      parameters: { friendName: "张三" }
+    });
+    expect(direct.status).toBe(202);
+    expect(context.runner.inputs[1]).toEqual(expect.objectContaining({ executionPurpose: "normal" }));
+  });
+
+  it("rejects an infinite loop trial run", async () => {
+    const context = await apiContext(servers);
+    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", { sourceYaml, parameters: { friendName: "张三" } });
+
+    const started = await post(context.baseUrl, "/api/script-flow-drafts/trial-runs", {
+      sourceYaml,
+      planDigest: (preview.body as { planDigest: string }).planDigest,
+      deviceSerial: "device-1",
+      parameters: { friendName: "张三" },
+      mode: "loop_until_stop"
+    });
+
+    expect(started).toEqual({
+      status: 400,
+      body: { error: "Trial runs do not support loop_until_stop" }
+    });
+    expect(context.runner.inputs).toEqual([]);
   });
 
   it("freezes the derived navigation index without copying active use case sources into dependencies", async () => {
     const context = await apiContext(servers);
+    context.storage.markSourceVerified(navigationSource("从详情到主页"));
     const route = ((await post(context.baseUrl, "/api/script-flows", {
       sourceYaml: navigationSource("从详情到主页"),
       status: "active"
@@ -197,6 +272,7 @@ describe("ScriptFlow API", () => {
 
   it("loads the navigation index for an entry page added by the compiler", async () => {
     const context = await apiContext(servers);
+    context.storage.markSourceVerified(navigationSource("从详情到主页"));
     await post(context.baseUrl, "/api/script-flows", {
       sourceYaml: navigationSource("从详情到主页"),
       status: "active"
@@ -219,8 +295,88 @@ describe("ScriptFlow API", () => {
     }));
   });
 
+  it("freezes active session entry pages as runtime recovery roots", async () => {
+    const context = await apiContext(servers);
+    const rootSource = navigationRootSource();
+    context.storage.markSourceVerified(rootSource);
+    await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: rootSource,
+      status: "active"
+    });
+
+    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
+      sourceYaml: reachHomeSource(),
+      parameters: {}
+    });
+
+    expect(preview.status).toBe(200);
+    expect(preview.body).toEqual(expect.objectContaining({
+      navigationIndex: expect.objectContaining({ rootCount: 1 })
+    }));
+
+    const started = await post(context.baseUrl, "/api/script-flow-drafts/trial-runs", {
+      sourceYaml: reachHomeSource(),
+      planDigest: (preview.body as { planDigest: string }).planDigest,
+      deviceSerial: "device-1",
+      parameters: {}
+    });
+
+    expect(started.status).toBe(202);
+    expect(context.runner.inputs[0]?.navigationRootPages).toEqual(["classin.home"]);
+  });
+
+  it("freezes a unique interaction asset into the preview and invalidates the digest when its version changes", async () => {
+    const context = await apiContext(servers);
+    context.storage.setInteractionAssets([interactionAsset(2)]);
+
+    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
+      sourceYaml,
+      parameters: { friendName: "张三" }
+    });
+
+    expect(preview.status).toBe(200);
+    expect(preview.body).toEqual(expect.objectContaining({
+      interactionAssets: [{
+        stepId: "open-add-friend",
+        assetId: "asset-add-friend",
+        key: "classin.home.tap.text.添加好友",
+        version: 2
+      }]
+    }));
+    const firstDigest = (preview.body as { planDigest: string }).planDigest;
+
+    context.storage.setInteractionAssets([interactionAsset(3)]);
+    const changed = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
+      sourceYaml,
+      parameters: { friendName: "张三" }
+    });
+
+    expect(changed.status).toBe(200);
+    expect((changed.body as { planDigest: string }).planDigest).not.toBe(firstDigest);
+  });
+
+  it("blocks preview when multiple interaction assets match the same semantic step", async () => {
+    const context = await apiContext(servers);
+    const first = interactionAsset(2);
+    context.storage.setInteractionAssets([
+      first,
+      { ...first, id: "asset-add-friend-copy", key: `${first.key}.copy` }
+    ]);
+
+    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
+      sourceYaml,
+      parameters: { friendName: "张三" }
+    });
+
+    expect(preview).toEqual({
+      status: 400,
+      body: { error: "Multiple interaction assets match step open-add-friend; review the duplicated assets before previewing" }
+    });
+  });
+
   it("rejects saving an AI revision over a newer use case version", async () => {
     const context = await apiContext(servers);
+    context.storage.markSourceVerified(sourceYaml);
     const created = ((await post(context.baseUrl, "/api/script-flows", { sourceYaml, status: "active" })).body as { flow: ScriptFlow }).flow;
 
     const stale = await put(context.baseUrl, `/api/script-flows/${created.id}`, {
@@ -274,6 +430,42 @@ describe("ScriptFlow API", () => {
     expect(run).toEqual({ status: 409, body: { error: "Execution plan changed; preview again" } });
     expect(context.runner.inputs).toEqual([]);
   });
+
+  it("requires every exact runFlow dependency version to be verified before normal execution", async () => {
+    const context = await apiContext(servers);
+    const child = ((await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: childSource("未验证子流程")
+    })).body as { flow: ScriptFlow }).flow;
+    const parentYaml = parentSource(child.id);
+    context.storage.markSourceVerified(parentYaml);
+    const parent = ((await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: parentYaml,
+      status: "draft"
+    })).body as { flow: ScriptFlow }).flow;
+    const preview = await post(context.baseUrl, `/api/script-flows/${parent.id}/preview`, {
+      expectedVersion: parent.version,
+      parameters: {}
+    });
+
+    expect(preview.body).toEqual(expect.objectContaining({
+      verification: expect.objectContaining({
+        status: "needs_trial",
+        reasons: expect.arrayContaining([expect.stringContaining(child.id)])
+      })
+    }));
+    const normalRun = await post(context.baseUrl, `/api/script-flows/${parent.id}/runs`, {
+      expectedVersion: parent.version,
+      planDigest: (preview.body as { planDigest: string }).planDigest,
+      deviceSerial: "device-1",
+      parameters: {}
+    });
+
+    expect(normalRun).toEqual({
+      status: 409,
+      body: { error: "ScriptFlow must pass a trial run before normal execution" }
+    });
+    expect(context.runner.inputs).toEqual([]);
+  });
 });
 
 async function apiContext(servers: Server[]): Promise<{
@@ -300,6 +492,47 @@ class MemoryScriptFlowStorage implements ScriptFlowApiStorage {
   private readonly flows = new Map<string, ScriptFlow>();
   private readonly versions = new Map<string, ScriptFlowVersion[]>();
   private readonly runs = new Map<string, TestRun>();
+  private readonly verifiedSourceHashes = new Set<string>();
+  private interactionAssets: InteractionAsset[] = [];
+
+  setInteractionAssets(assets: InteractionAsset[]): void {
+    this.interactionAssets = assets;
+  }
+
+  listInteractionAssets(filter: { appId: string; platform?: ScriptFlow["platform"] }): InteractionAsset[] {
+    return this.interactionAssets
+      .filter((asset) => asset.appId === filter.appId)
+      .filter((asset) => !filter.platform || asset.platformScope === "mobile-both" || asset.platformScope === filter.platform);
+  }
+
+  markSourceVerified(sourceYaml: string): void {
+    this.verifiedSourceHashes.add(createHash("sha256").update(sourceYaml).digest("hex"));
+  }
+
+  findLatestFlowVerification(filter: {
+    sourceHash: string;
+    appId: string;
+    platform: ScriptFlow["platform"];
+    status?: FlowVerification["status"];
+  }): FlowVerification | undefined {
+    if (!this.verifiedSourceHashes.has(filter.sourceHash) || (filter.status && filter.status !== "verified")) return undefined;
+    return {
+      id: `verification-${filter.sourceHash.slice(0, 8)}`,
+      sourceHash: filter.sourceHash,
+      appId: filter.appId,
+      platform: filter.platform,
+      runId: "run-verified",
+      status: "verified",
+      coverage: {
+        totalSteps: 1,
+        verifiedSteps: 1,
+        interactionAssetIds: [],
+        pageAssetIds: [],
+        humanConfirmedOutcome: false
+      },
+      createdAt: "2026-07-30T00:00:00.000Z"
+    };
+  }
 
   createScriptFlow(input: { sourceYaml: string; document: ScriptFlowDocument; status?: ScriptFlow["status"] }): ScriptFlow {
     const flow = storedFlow(`flow-${this.flows.size + 1}`, 1, input);
@@ -342,6 +575,31 @@ class MemoryScriptFlowStorage implements ScriptFlowApiStorage {
   listScriptFlowVersions(id: string): ScriptFlowVersion[] { return this.versions.get(id) ?? []; }
   getRun(id: string): TestRun | undefined { return this.runs.get(id); }
   saveRun(run: TestRun): void { this.runs.set(run.id, run); }
+}
+
+function interactionAsset(version: number): InteractionAsset {
+  return {
+    id: "asset-add-friend",
+    key: "classin.home.tap.text.添加好友",
+    appId: "cn.eeo.classin",
+    platformScope: "android",
+    owner: { kind: "page", key: "classin.home" },
+    name: "添加好友",
+    aliases: ["添加好友"],
+    supportedActions: ["tap"],
+    semanticContract: { text: "添加好友" },
+    locatorVariants: [{
+      platform: "android",
+      strategy: "ocr_text",
+      descriptor: { selectedText: "添加好友" },
+      confidence: 0.95
+    }],
+    status: "active",
+    version,
+    provenance: { runIds: ["run-trial"], stepIds: ["open-add-friend"], artifactIds: [] },
+    createdAt: "2026-07-30T00:00:00.000Z",
+    updatedAt: `2026-07-30T00:00:0${version}.000Z`
+  };
 }
 
 function childSource(name: string): string {
@@ -403,6 +661,19 @@ steps:
 `;
 }
 
+function navigationRootSource(): string {
+  return `
+version: 1
+kind: case
+name: 教师主页入口
+app: { id: cn.eeo.classin, platform: android }
+entry: { page: classin.home, session: authenticated, role: teacher }
+steps:
+  - id: verify-home
+    assertPage: classin.home
+`;
+}
+
 class CapturingScriptFlowRunner {
   readonly inputs: StartScriptFlowRunInput[] = [];
   validationError?: Error;
@@ -431,6 +702,9 @@ class CapturingScriptFlowRunner {
         version: input.scriptVersion ?? 1,
         planDigest: input.planDigest,
         dependencies: input.dependencies,
+        executionPurpose: input.executionPurpose,
+        sourceHash: input.sourceHash,
+        verificationAssessment: input.verificationAssessment,
         sourceYaml: input.sourceYaml,
         parsed: input.flow as unknown as Record<string, unknown>
       },

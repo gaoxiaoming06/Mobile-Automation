@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
-import type { ScriptFlow } from "@mobile-automation/shared";
+import type { NavigationEntry, ScriptFlow } from "@mobile-automation/shared";
 import type { PageAssetCatalog } from "./page-asset-catalog.js";
 import {
   SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
@@ -13,7 +13,9 @@ import {
 it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("text、semantic、icon 或 control");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止擅自增加");
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不在页面目录");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("未录入页面");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("完整操作链");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("用户确认业务结果");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("search");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("一个 tap 只执行一次点击");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不要再紧跟一个独立 assertPage");
@@ -28,12 +30,75 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("场景编排命中完全匹配的启用用例时自动使用 runFlow");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("无需运行前确认");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("点击左上角返回按钮");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon: back");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon: share");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("明确操作是硬约束");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止元素资产 ID");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("唯一 JSON 对象");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toMatch(/\bref\b/i);
 });
 
 describe("ScriptFlow AI planner", () => {
+  it("rejects replacing explicit user clicks with a reachPage shortcut", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "打开添加好友";
+    response.document.steps = [{
+      id: "reach-home",
+      reachPage: { page: "classin.home", policy: "safe" }
+    }];
+
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "在主页点击右上角加号，然后点击添加好友"
+    })).toThrow(/明确操作.*点击右上角加号.*不能被 reachPage、runFlow 或已有资产替代/);
+  });
+
+  it("preserves explicit operations while allowing reachPage for a vague segment", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "从主页打开更多菜单";
+    response.document.steps = [
+      { id: "reach-home", reachPage: { page: "classin.home", policy: "safe" } },
+      {
+        id: "open-more-menu",
+        onPage: "classin.home",
+        risk: "interaction",
+        tap: {
+          target: { icon: "add", area: "topBar", position: "trailing" },
+          search: { mode: "visibleOnly" }
+        }
+      }
+    ];
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "先到主页，然后点击右上角加号"
+    })).toMatchObject({
+      status: "ready",
+      document: { steps: [{ reachPage: { page: "classin.home" } }, { tap: expect.any(Object) }] }
+    });
+  });
+
+  it("accepts the complete explicit click sequence even when assets could provide a shortcut", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(readyResponse()), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "在主页点击右上角加号，然后点击添加好友"
+    })).toMatchObject({
+      status: "ready",
+      document: { steps: [{ tap: expect.any(Object) }, { tap: expect.any(Object) }] }
+    });
+  });
+
   it("accepts a target-only request as reachPage without asking how to navigate", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
@@ -58,6 +123,97 @@ describe("ScriptFlow AI planner", () => {
     expect(prompt).toContain('"kind": "case | scenario"');
     expect(prompt).toContain('"entry"');
     expect(prompt).toContain('"outcome"');
+  });
+
+  it("rejects a bare reachPage for an unindexed bottom-tab page", () => {
+    const catalog = buildScriptFlowPlannerCatalog(bottomTabPageCatalog(), planningFlows(), "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "进入成长页";
+    response.document.entry = { session: "authenticated", role: "teacher" };
+    response.document.steps = [{
+      id: "reach-growth",
+      reachPage: { page: "classin.growth", policy: "safe" }
+    }];
+
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "进入成长页"
+    })).toThrow(/成长页.*没有可执行导航路径/);
+
+    const prompt = buildScriptFlowPlannerPrompt("进入成长页", "cn.eeo.classin", "android", catalog);
+    expect(prompt).not.toContain("带 bottom-tab 标签但无路径");
+    expect(prompt).toContain('"navigationAnchors"');
+  });
+
+  it("uses only accepted navigation entries as executable planner transitions", () => {
+    const catalog = buildScriptFlowPlannerCatalog(
+      bottomTabPageCatalog(),
+      planningFlows(),
+      "cn.eeo.classin",
+      "android",
+      [learnedNavigationEntry()]
+    );
+    const response = readyResponse();
+    response.document.name = "进入成长页";
+    response.document.entry = { page: "classin.home", session: "authenticated", role: "teacher" };
+    response.document.steps = [{
+      id: "reach-growth",
+      reachPage: { page: "classin.growth", policy: "safe" }
+    }];
+
+    expect(catalog.navigationEntries).toEqual([
+      expect.objectContaining({
+        id: "navigation-growth",
+        from: { kind: "page", key: "classin.home" },
+        toPage: "classin.growth",
+        action: expect.objectContaining({ target: { text: "成长", area: "bottomBar" } })
+      })
+    ]);
+    expect(catalog.transitions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        onPage: "classin.home",
+        expectPage: "classin.growth",
+        source: "navigation_entry"
+      })
+    ]));
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "进入成长页"
+    })).toMatchObject({
+      status: "ready",
+      document: { steps: [{ reachPage: { page: "classin.growth", policy: "safe" } }] }
+    });
+
+    const prompt = buildScriptFlowPlannerPrompt("进入成长页", "cn.eeo.classin", "android", catalog);
+    expect(prompt).toContain('"navigationEntries"');
+    expect(prompt).toContain('"toPage": "classin.growth"');
+    expect(prompt).toContain('"text": "成长"');
+  });
+
+  it("excludes reusable flows and navigation entries from another App or platform", () => {
+    const classInFlow = planningFlows()[0]!;
+    const anotherAppFlow = { ...classInFlow, id: "flow-other-app", appId: "com.example.another" };
+    const iosFlow = { ...classInFlow, id: "flow-ios", platform: "ios" as const };
+    const classInNavigation = learnedNavigationEntry();
+    const anotherAppNavigation = { ...classInNavigation, id: "navigation-other-app", appId: "com.example.another" };
+    const iosNavigation = { ...classInNavigation, id: "navigation-ios", platformScope: "ios" as const };
+
+    const catalog = buildScriptFlowPlannerCatalog(
+      bottomTabPageCatalog(),
+      [classInFlow, anotherAppFlow, iosFlow],
+      "cn.eeo.classin",
+      "android",
+      [classInNavigation, anotherAppNavigation, iosNavigation]
+    );
+
+    expect(catalog.reusableFlows.map((flow) => flow.id)).toEqual([classInFlow.id]);
+    expect(catalog.navigationEntries.map((entry) => entry.id)).toEqual([classInNavigation.id]);
+    expect(JSON.stringify(catalog)).not.toContain("com.example.another");
+    expect(JSON.stringify(catalog)).not.toContain("navigation-ios");
   });
 
   it("returns the model classification with the generated test draft", () => {
@@ -214,8 +370,12 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(result).toMatchObject({ status: "ready", document: { name: "打开添加好友" } });
-    if (result.status === "ready") {
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      document: { name: "打开添加好友" },
+      verification: expect.objectContaining({ status: "needs_trial" })
+    });
+    if (result.status === "ready" || result.status === "trial_ready") {
       expect(result.sourceYaml).toContain('icon: "add"');
       expect(result.sourceYaml).toContain('text: "添加好友"');
       expect(result.sourceYaml).not.toContain("pageElement");
@@ -267,7 +427,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(result).toMatchObject({ status: "ready", document: { name: "确认主页" } });
+    expect(result).toMatchObject({ status: "trial_ready", document: { name: "确认主页" } });
     expect(requestBodies).toHaveLength(2);
     const repairPrompt = JSON.parse(requestBodies[1]) as { messages: Array<{ content: string }> };
     expect(repairPrompt.messages[1]?.content).toContain("steps[0].action: Unknown field");
@@ -304,7 +464,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(result).toMatchObject({ status: "ready", document: { steps: [expect.anything(), expect.objectContaining({
+    expect(result).toMatchObject({ status: "trial_ready", document: { steps: [expect.anything(), expect.objectContaining({
       tap: expect.objectContaining({ target: expect.objectContaining({ text: "添加好友" }) })
     })] } });
     expect(requestBodies).toHaveLength(2);
@@ -338,8 +498,9 @@ describe("ScriptFlow AI planner", () => {
       clarification: expect.stringContaining("教学方案")
     });
     if (result.status === "needs_clarification") {
-      expect(result.clarification).toContain("页面资产");
+      expect(result.clarification).toContain("完整操作过程");
       expect(result.clarification).toContain("稳定文字");
+      expect(result.clarification).not.toContain("先录入");
     }
   });
 
@@ -378,6 +539,40 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
+  it("allows a complete zero-asset action chain to proceed to trial with human outcome review", async () => {
+    const response = readyResponse();
+    response.document.name = "进入未录入的教学方案页面";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.steps = [
+      {
+        id: "open-class",
+        tap: { target: { text: "班级四十二号" }, search: { mode: "auto" } }
+      },
+      {
+        id: "open-teaching-plan",
+        tap: { target: { semantic: "进入教学方案的入口", area: "content" }, search: { mode: "auto" } }
+      }
+    ];
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "点击班级四十二号，然后找到教学方案入口并点击",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: emptyPageCatalog(),
+      flows: [],
+      fetchImpl: async () => new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(response) } }]
+      }), { status: 200 })
+    });
+
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      verification: expect.objectContaining({ status: "needs_trial", unresolvedOutcome: true })
+    });
+  });
+
   it("rejects page references invented by the model", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
@@ -394,8 +589,8 @@ describe("ScriptFlow AI planner", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
 
     expect(catalog.pages).toEqual([
-      { id: "page-home", key: "classin.home", name: "主页" },
-      { id: "page-friend-add", key: "classin.friend.add", name: "添加好友" }
+      { id: "page-home", key: "classin.home", name: "主页", tags: ["navigation-root"] },
+      { id: "page-friend-add", key: "classin.friend.add", name: "添加好友", tags: [] }
     ]);
   });
 
@@ -546,7 +741,7 @@ function readyResponse(): {
 
 function pageCatalog(): PageAssetCatalog {
   const pages = [
-    { id: "page-home", key: "classin.home", name: "主页", appId: "cn.eeo.classin", graphVersionId: "v1", matcherCount: 2 },
+    { id: "page-home", key: "classin.home", name: "主页", appId: "cn.eeo.classin", graphVersionId: "v1", matcherCount: 2, tags: ["navigation-root"] },
     { id: "page-friend-add", key: "classin.friend.add", name: "添加好友", appId: "cn.eeo.classin", graphVersionId: "v1", matcherCount: 2 }
   ];
   return {
@@ -556,6 +751,15 @@ function pageCatalog(): PageAssetCatalog {
       const page = pages.find((candidate) => candidate.id === reference || candidate.key === reference);
       return page ? { ...page, node: {} as never } : undefined;
     },
+    findConfusablePages: () => []
+  };
+}
+
+function emptyPageCatalog(): PageAssetCatalog {
+  return {
+    listPages: () => [],
+    getPage: () => undefined,
+    resolvePage: () => undefined,
     findConfusablePages: () => []
   };
 }
@@ -575,6 +779,61 @@ function planningPageCatalog(): PageAssetCatalog {
       return page ? { ...page, node: {} as never } : undefined;
     },
     findConfusablePages: () => []
+  };
+}
+
+function bottomTabPageCatalog(): PageAssetCatalog {
+  const pages = [
+    {
+      id: "page-home",
+      key: "classin.home",
+      name: "主页",
+      appId: "cn.eeo.classin",
+      graphVersionId: "v1",
+      matcherCount: 2,
+      tags: ["navigation-root"]
+    },
+    {
+      id: "page-growth",
+      key: "classin.growth",
+      name: "成长页",
+      appId: "cn.eeo.classin",
+      graphVersionId: "v1",
+      matcherCount: 2,
+      tags: ["bottom-tab"]
+    }
+  ];
+  return {
+    listPages: () => pages,
+    getPage: () => undefined,
+    resolvePage: (reference) => {
+      const page = pages.find((candidate) => candidate.id === reference || candidate.key === reference || candidate.name === reference);
+      return page ? { ...page, node: {} as never } : undefined;
+    },
+    findConfusablePages: () => []
+  };
+}
+
+function learnedNavigationEntry(): NavigationEntry {
+  return {
+    id: "navigation-growth",
+    key: "classin.home.tap.text.成长.area.bottomBar.to.classin.growth",
+    appId: "cn.eeo.classin",
+    platformScope: "android",
+    from: { kind: "page", key: "classin.home" },
+    toPage: "classin.growth",
+    name: "主页进入成长页",
+    action: {
+      kind: "tap",
+      target: { text: "成长", area: "bottomBar" },
+      search: { mode: "visibleOnly" }
+    },
+    confidence: 0.98,
+    status: "active",
+    version: 1,
+    provenance: { runIds: ["run-growth"], stepIds: ["open-growth"], artifactIds: [] },
+    createdAt: "2026-07-30T00:00:00.000Z",
+    updatedAt: "2026-07-30T00:00:00.000Z"
   };
 }
 

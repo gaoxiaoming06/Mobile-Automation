@@ -1,7 +1,16 @@
 import { Pencil, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AndroidAppMonitorConfig, ScriptFlow, TestRun } from "@mobile-automation/shared";
+import type {
+  AndroidAppMonitorConfig,
+  FlowVerification,
+  LearningSession,
+  ScriptFlow,
+  ScriptFlowVerificationAssessment,
+  ScriptFlowVerificationStatus,
+  TestRun
+} from "@mobile-automation/shared";
 import { apiFetchJson } from "../api.js";
+import { TrialOutcomeReview } from "./AiScriptFlowsPanel.js";
 import { ScriptRunForm, type ScriptParameterValue } from "./ScriptRunForm.js";
 import {
   caseStepViews,
@@ -23,6 +32,11 @@ type CaseCenterPanelProps = {
   androidAppMonitorForApp?: (appId: string) => AndroidAppMonitorConfig | undefined;
 };
 
+type CaseLearningSummary = {
+  session: LearningSession;
+  verification?: FlowVerification;
+};
+
 export function CaseCenterPanel({
   devices,
   selectedSerial,
@@ -42,6 +56,8 @@ export function CaseCenterPanel({
   const [deviceSerial, setDeviceSerial] = useState(selectedSerial);
   const [plan, setPlan] = useState<CasePlanView>();
   const [lastRun, setLastRun] = useState<TestRun>();
+  const [learning, setLearning] = useState<CaseLearningSummary>();
+  const [verification, setVerification] = useState<ScriptFlowVerificationAssessment>();
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -53,10 +69,27 @@ export function CaseCenterPanel({
   }, [selectedSerial]);
 
   useEffect(() => {
+    if (!selected) return;
+    void loadVerification(selected);
+  }, [selected?.id, selected?.version]);
+
+  useEffect(() => {
     if (!lastRun || !["pending", "running", "paused"].includes(lastRun.status)) return;
     const timer = window.setInterval(() => {
       void apiFetchJson<{ run: TestRun }>(`/api/script-flow-runs/${encodeURIComponent(lastRun.id)}`)
-        .then(({ run }) => setLastRun(run))
+        .then(async ({ run }) => {
+          setLastRun(run);
+          if (run.status === "passed" && run.sourceSnapshot?.executionPurpose === "trial" && selected) {
+            const summary = await apiFetchJson<CaseLearningSummary>(
+              `/api/trial-runs/${encodeURIComponent(run.id)}/learning-summary`
+            );
+            setLearning(summary);
+            const currentVerification = summary.session.status === "needs_outcome_review"
+              ? undefined
+              : await loadVerification(selected);
+            setMessage(caseTrialCompletionMessage(summary.session, currentVerification));
+          }
+        })
         .catch(() => undefined);
     }, 1000);
     return () => window.clearInterval(timer);
@@ -79,6 +112,21 @@ export function CaseCenterPanel({
     setParameterValues(defaultCaseParameterValues(readCaseDocument(flow.parsed)));
     setPlan(undefined);
     setLastRun(undefined);
+    setLearning(undefined);
+    setVerification(undefined);
+  }
+
+  async function loadVerification(flow: ScriptFlow) {
+    try {
+      const response = await apiFetchJson<{ verification: ScriptFlowVerificationAssessment }>(
+        `/api/script-flows/${encodeURIComponent(flow.id)}/verification`
+      );
+      setVerification(response.verification);
+      return response.verification;
+    } catch {
+      setVerification(undefined);
+      return undefined;
+    }
   }
 
   async function removeSelected() {
@@ -101,14 +149,16 @@ export function CaseCenterPanel({
     if (!selected) return;
     try {
       setBusy(true);
-      const preview = await apiFetchJson<{ plan: CasePlanView; planDigest: string }>(`/api/script-flows/${encodeURIComponent(selected.id)}/preview`, {
+      const preview = await apiFetchJson<{ plan: CasePlanView; planDigest: string; verification: ScriptFlowVerificationAssessment }>(`/api/script-flows/${encodeURIComponent(selected.id)}/preview`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ expectedVersion: selected.version, parameters: parameterValues })
       });
       setPlan(preview.plan);
+      setVerification(preview.verification);
+      setLearning(undefined);
       const androidAppMonitor = androidAppMonitorForApp?.(selected.appId);
-      const response = await apiFetchJson<{ run: TestRun }>(`/api/script-flows/${encodeURIComponent(selected.id)}/runs`, {
+      const response = await apiFetchJson<{ run: TestRun }>(caseRunEndpoint(selected.id, preview.verification.status), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(buildCaseRunRequest({
@@ -122,6 +172,32 @@ export function CaseCenterPanel({
       });
       setLastRun(response.run);
       setMessage(`已启动${testKindLabel(document?.kind)}：${response.run.id}`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reviewOutcome(decision: "confirmed" | "rejected") {
+    if (!lastRun || !selected) return;
+    try {
+      setBusy(true);
+      const reviewed = await apiFetchJson<{ session: LearningSession; verification?: FlowVerification }>(
+        `/api/trial-runs/${encodeURIComponent(lastRun.id)}/outcome-review`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ decision })
+        }
+      );
+      setLearning((current) => current ? { ...current, ...reviewed } : undefined);
+      if (decision === "rejected") {
+        setMessage("已标记执行结果不符合预期，本次执行不会用于验证或自动学习");
+        return;
+      }
+      const currentVerification = await loadVerification(selected);
+      setMessage(caseTrialCompletionMessage(reviewed.session, currentVerification));
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -164,6 +240,7 @@ export function CaseCenterPanel({
               <div><span>平台</span><strong>{platformLabel(selected.platform)}</strong></div>
               <div><span>版本</span><strong>v{selected.version}</strong></div>
               <div><span>状态</span><strong>{statusLabel(selected.status)}</strong></div>
+              <div><span>验证</span><strong>{verificationLabel(verification?.status)}</strong></div>
             </div>
             <section className="case-execution-logic">
               <header><h3>执行逻辑</h3><span>{steps.length} 个步骤</span></header>
@@ -181,15 +258,21 @@ export function CaseCenterPanel({
             devices={devices}
             deviceSerial={deviceSerial}
             busy={busy}
-            disabled={!selected || selected.status === "archived"}
+            disabled={!selected || selected.status === "archived" || verification?.status === "blocked"}
             onValueChange={(key, value) => {
               setParameterValues((current) => ({ ...current, [key]: value }));
               setPlan(undefined);
             }}
             onDeviceChange={setDeviceSerial}
             onRun={() => void runSelected()}
+            buttonLabel={verification?.status === "blocked" ? "暂不可执行" : "开始执行"}
           />
           {lastRun ? <section className="script-run-status"><header><h3>执行状态</h3><strong data-status={lastRun.status}>{lastRun.status}</strong></header><p>{lastRun.stepResults.length}/{lastRun.steps.length} 个步骤</p><button type="button" onClick={() => onOpenRun(lastRun.id)}>查看执行结果</button></section> : null}
+          {learning ? <TrialOutcomeReview
+            session={learning.session}
+            busy={busy}
+            onReview={(decision) => void reviewOutcome(decision)}
+          /> : null}
         </aside>
       </div>
     </section>
@@ -205,8 +288,34 @@ export function buildCaseRunRequest<T extends {
   return input;
 }
 
+export function caseRunEndpoint(flowId: string, status: ScriptFlowVerificationStatus): string {
+  const suffix = status === "verified" ? "runs" : "trial-runs";
+  return `/api/script-flows/${encodeURIComponent(flowId)}/${suffix}`;
+}
+
+export function caseTrialCompletionMessage(
+  session: LearningSession,
+  verification?: ScriptFlowVerificationAssessment
+): string {
+  if (session.status === "needs_outcome_review") {
+    return "执行操作已完成，请确认当前业务结果是否符合预期";
+  }
+  if (verification?.status === "verified") {
+    return "执行通过，当前版本已验证";
+  }
+  if (session.status === "rejected" || session.status === "invalid") {
+    return "本次执行未通过验证";
+  }
+  return "执行已完成，请检查验证状态";
+}
+
 function statusLabel(status: ScriptFlow["status"]): string {
   return { draft: "草稿", active: "启用", archived: "归档" }[status];
+}
+
+function verificationLabel(status: ScriptFlowVerificationStatus | undefined): string {
+  if (!status) return "检查中";
+  return { verified: "已验证", needs_trial: "待首次验证", blocked: "不可执行" }[status];
 }
 
 function platformLabel(platform: ScriptFlow["platform"]): string {

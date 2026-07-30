@@ -1,4 +1,4 @@
-import type { ActionStep } from "@mobile-automation/shared";
+import type { ActionStep, InteractionAsset } from "@mobile-automation/shared";
 import type { ScriptParameterValue, ScriptSearchPolicy, ScriptTarget } from "@mobile-automation/script-flow";
 import type { PageAssetPlatform } from "./page-asset-catalog.js";
 
@@ -16,6 +16,7 @@ export type ScriptTargetResolutionInput = {
   maxSwipes?: number;
   search?: ScriptSearchPolicy;
   parameters?: Record<string, ScriptParameterValue>;
+  interactionAsset?: InteractionAsset;
 };
 
 export type ResolvedScriptTarget = {
@@ -33,6 +34,13 @@ export class ScriptTargetResolutionError extends Error {
 
 export class ScriptTargetResolver {
   resolve(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
+    if (input.interactionAsset) {
+      return this.resolveInteractionAsset(input, input.interactionAsset);
+    }
+    return this.resolveUnbound(input);
+  }
+
+  private resolveUnbound(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
     if (input.target.text) {
       return this.resolveRuntimeText(input, input.target.text);
     }
@@ -46,6 +54,37 @@ export class ScriptTargetResolver {
       return this.resolveSemanticControl(input);
     }
     throw new ScriptTargetResolutionError("Target has no executable text, semantic query, icon, or control");
+  }
+
+  private resolveInteractionAsset(
+    input: ScriptTargetResolutionInput,
+    asset: InteractionAsset
+  ): ResolvedScriptTarget {
+    validateInteractionAsset(input, asset);
+    const variant = [...asset.locatorVariants]
+      .filter((candidate) => candidate.platform === input.platform)
+      .sort((left, right) => right.confidence - left.confidence)[0];
+    if (!variant) {
+      throw new ScriptTargetResolutionError(
+        `Interaction asset ${asset.key} has no ${input.platform} locator variant`
+      );
+    }
+    const target = targetFromInteractionAsset(input.target, asset, variant.descriptor);
+    const resolved = this.resolveUnbound({ ...input, target, interactionAsset: undefined });
+    return {
+      ...resolved,
+      strategy: `interaction_asset:${resolved.strategy}`,
+      params: {
+        ...resolved.params,
+        ...(input.action === "tap" && input.target.semantic
+          ? { fallbackSemanticQuery: input.target.semantic }
+          : {}),
+        interactionAssetId: asset.id,
+        interactionAssetKey: asset.key,
+        interactionAssetVersion: asset.version,
+        allowRegionFallback: false
+      }
+    };
   }
 
   private resolveSemanticQuery(input: ScriptTargetResolutionInput, query: string): ResolvedScriptTarget {
@@ -142,7 +181,6 @@ export class ScriptTargetResolver {
         locatorKind: "semantic_icon_locator",
         role,
         slot: input.target.position,
-        orderFromRight: iconOrderFromRight(input.target.icon ?? "", input.target.position),
         semanticArea,
         ...(input.target.nearText ? { anchorText: input.target.nearText } : {}),
         ...searchParams(input.target, input.search),
@@ -176,6 +214,65 @@ export class ScriptTargetResolver {
   }
 }
 
+function validateInteractionAsset(input: ScriptTargetResolutionInput, asset: InteractionAsset): void {
+  if (asset.status !== "active") {
+    throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} is not active`);
+  }
+  if (asset.appId !== input.appId) {
+    throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} belongs to another App`);
+  }
+  if (asset.platformScope !== "mobile-both" && asset.platformScope !== input.platform) {
+    throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} does not support ${input.platform}`);
+  }
+  if (asset.owner.kind !== "page" || !input.onPage || asset.owner.key !== input.onPage) {
+    throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} does not belong to the current step page`);
+  }
+  if (!asset.supportedActions.includes(input.action as InteractionAsset["supportedActions"][number])) {
+    throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} does not support ${input.action}`);
+  }
+}
+
+function targetFromInteractionAsset(
+  original: ScriptTarget,
+  asset: InteractionAsset,
+  descriptor: Record<string, unknown>
+): ScriptTarget {
+  const selectedText = nonEmptyString(descriptor.selectedText) ?? nonEmptyString(asset.semanticContract.text);
+  if (selectedText) {
+    return {
+      ...original,
+      text: selectedText,
+      semantic: undefined,
+      icon: undefined,
+      control: undefined
+    };
+  }
+  const semantic = nonEmptyString(asset.semanticContract.semantic);
+  if (semantic) {
+    return { ...original, text: undefined, semantic, icon: undefined, control: undefined };
+  }
+  const icon = nonEmptyString(asset.semanticContract.icon);
+  if (icon) {
+    return { ...original, text: undefined, semantic: undefined, icon, control: undefined };
+  }
+  const control = nonEmptyString(asset.semanticContract.control);
+  if (control) {
+    return {
+      ...original,
+      text: undefined,
+      semantic: undefined,
+      icon: undefined,
+      control: control as ScriptTarget["control"],
+      nearText: nonEmptyString(asset.semanticContract.nearText) ?? original.nearText
+    };
+  }
+  throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} has no executable semantic locator`);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function searchParams(target: ScriptTarget, policy: ScriptSearchPolicy | undefined): Record<string, unknown> {
   const semanticArea = semanticAreaParam(target.area);
   const requestedMode = policy?.mode ?? "auto";
@@ -201,13 +298,6 @@ function semanticAreaParam(area: ScriptTarget["area"]): "top" | "content" | "bot
   if (area === "bottomBar") return "bottom";
   if (area === "content") return "content";
   return undefined;
-}
-
-function iconOrderFromRight(icon: string, position: ScriptTarget["position"]): number {
-  if (position !== "trailing") {
-    return 1;
-  }
-  return icon.trim().toLowerCase() === "search" ? 2 : 1;
 }
 
 function requiredValue(input: ScriptTargetResolutionInput): string {

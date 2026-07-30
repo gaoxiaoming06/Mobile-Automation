@@ -586,6 +586,107 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("resolves light back and share icons on a dark top bar by their visual roles", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("班级详情")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: topBarIconScreenshot(1200, 2000, [
+          { role: "back", centerX: 64, centerY: 182 },
+          { role: "share", centerX: 1122, centerY: 182 }
+        ], { background: 62, foreground: 245 })
+      })
+    });
+
+    const backOutcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-back",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "back",
+        slot: "leading",
+        semanticArea: "top",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    const shareOutcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-share",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "share",
+        slot: "trailing",
+        semanticArea: "top",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 65, y: 183 },
+      { type: "tap", x: 1123, y: 183 }
+    ]);
+    expect(backOutcome?.metadata).toEqual(expect.objectContaining({
+      role: "back",
+      relocatedBy: "top_bar_current_visual",
+      currentVisual: expect.objectContaining({ polarity: "light" })
+    }));
+    expect(shareOutcome?.metadata).toEqual(expect.objectContaining({
+      role: "share",
+      relocatedBy: "top_bar_current_visual",
+      currentVisual: expect.objectContaining({ polarity: "light" })
+    }));
+  });
+
+  it("selects trailing icons by role when their visual order changes", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(topBarLayout()),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: topBarIconScreenshot(1200, 2000, [
+          { role: "add", centerX: 985, centerY: 210 },
+          { role: "search", centerX: 1064, centerY: 214 }
+        ])
+      })
+    });
+
+    for (const role of ["add", "search"] as const) {
+      await resolver.resolveIfNeeded({
+        runId: "run-1",
+        stepResultId: `step-result-${role}`,
+        serial: "device-1",
+        deviceSize: { width: 1200, height: 2000 },
+        step: semanticStep("tap_on_image", {
+          locatorKind: "semantic_icon_locator",
+          role,
+          slot: "trailing",
+          semanticArea: "top",
+          searchMode: "visibleOnly",
+          allowRegionFallback: false
+        })
+      });
+    }
+
+    expect(actions).toEqual([
+      { type: "tap", x: 986, y: 211 },
+      { type: "tap", x: 1066, y: 216 }
+    ]);
+  });
+
   it("resolves a standard floating add icon in page content without a recorded region", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -703,6 +804,38 @@ describe("SemanticStepResolver", () => {
         })
       })
     );
+  });
+
+  it("falls back from a learned text locator to the original semantic query without coordinates", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("教学方案")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: tapOnTextStep("旧版教学入口", 540, 1200, {
+        fallbackSemanticQuery: "进入教学方案的入口",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toHaveLength(1);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: true,
+      metadata: expect.objectContaining({
+        actual: "教学方案",
+        matchStrategy: "semantic_fallback"
+      })
+    }));
   });
 
   it("fails semantic resolution without falling back to recorded coordinates", async () => {
@@ -4747,17 +4880,28 @@ function trailingSwitchScreenshot(on: boolean): Buffer {
 function topBarIconScreenshot(
   width: number,
   height: number,
-  icons: Array<{ role: "add" | "search"; centerX: number; centerY: number }>
+  icons: Array<{ role: "add" | "search" | "back" | "share"; centerX: number; centerY: number }>,
+  colors: { background: number; foreground: number } = { background: 255, foreground: 20 }
 ): Buffer {
-  const pixels = Array.from({ length: width * height }, () => 255);
+  const pixels = Array.from({ length: width * height }, () => colors.background);
   for (const icon of icons) {
     if (icon.role === "add") {
-      drawCircle(pixels, width, height, icon.centerX, icon.centerY, 22, 5, 20);
-      drawLine(pixels, width, height, icon.centerX - 13, icon.centerY, icon.centerX + 13, icon.centerY, 5, 20);
-      drawLine(pixels, width, height, icon.centerX, icon.centerY - 13, icon.centerX, icon.centerY + 13, 5, 20);
+      drawCircle(pixels, width, height, icon.centerX, icon.centerY, 22, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX - 13, icon.centerY, icon.centerX + 13, icon.centerY, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX, icon.centerY - 13, icon.centerX, icon.centerY + 13, 5, colors.foreground);
+    } else if (icon.role === "search") {
+      drawCircle(pixels, width, height, icon.centerX - 3, icon.centerY - 3, 18, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX + 9, icon.centerY + 9, icon.centerX + 24, icon.centerY + 24, 5, colors.foreground);
+    } else if (icon.role === "back") {
+      drawLine(pixels, width, height, icon.centerX + 10, icon.centerY - 20, icon.centerX - 10, icon.centerY, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX - 10, icon.centerY, icon.centerX + 10, icon.centerY + 20, 5, colors.foreground);
     } else {
-      drawCircle(pixels, width, height, icon.centerX - 3, icon.centerY - 3, 18, 5, 20);
-      drawLine(pixels, width, height, icon.centerX + 9, icon.centerY + 9, icon.centerX + 24, icon.centerY + 24, 5, 20);
+      drawLine(pixels, width, height, icon.centerX - 18, icon.centerY - 2, icon.centerX - 18, icon.centerY + 22, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX - 18, icon.centerY + 22, icon.centerX + 18, icon.centerY + 22, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX + 18, icon.centerY + 22, icon.centerX + 18, icon.centerY - 2, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX, icon.centerY + 8, icon.centerX, icon.centerY - 22, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX, icon.centerY - 22, icon.centerX - 10, icon.centerY - 12, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX, icon.centerY - 22, icon.centerX + 10, icon.centerY - 12, 5, colors.foreground);
     }
   }
   return pgm(width, height, pixels);

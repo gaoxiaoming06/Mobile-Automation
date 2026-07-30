@@ -190,6 +190,148 @@ export type ScriptFlowPlatform = "android" | "ios" | "harmony" | "flutter";
 
 export type ScriptFlowStatus = "draft" | "active" | "archived";
 
+export type ScriptFlowVerificationStatus = "verified" | "needs_trial" | "blocked";
+
+export type ScriptFlowVerificationAssessment = {
+  status: ScriptFlowVerificationStatus;
+  sourceHash: string;
+  reasons: string[];
+  unresolvedStepIds: string[];
+  unresolvedOutcome: boolean;
+};
+
+export type ScriptFlowExecutionPurpose = "trial" | "normal";
+
+export type FlowVerificationStatus = "provisional" | "verified" | "invalidated";
+
+export type FlowVerification = {
+  id: string;
+  flowId?: string;
+  flowVersion?: number;
+  sourceHash: string;
+  appId: string;
+  platform: ScriptFlowPlatform;
+  appVersion?: string;
+  runId: string;
+  status: FlowVerificationStatus;
+  coverage: {
+    totalSteps: number;
+    verifiedSteps: number;
+    interactionAssetIds: string[];
+    pageAssetIds: string[];
+    humanConfirmedOutcome: boolean;
+  };
+  createdAt: string;
+};
+
+export type LearningSessionStatus = "analyzing" | "needs_outcome_review" | "ready" | "accepted" | "rejected" | "invalid";
+export type LearningOutcomeStatus = "verified" | "human_confirmed" | "rejected" | "unverified";
+
+export type LearningSummary = {
+  pageCandidates: number;
+  interactionCandidates: number;
+  navigationCandidates: number;
+  testCandidates: number;
+  issues: string[];
+};
+
+export type LearningSession = {
+  id: string;
+  runId: string;
+  appId: string;
+  platform: ScriptFlowPlatform;
+  sourceHash: string;
+  executionPassed: boolean;
+  outcomeStatus: LearningOutcomeStatus;
+  status: LearningSessionStatus;
+  summary: LearningSummary;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LearningCandidateStatus = "detected" | "validated" | "needs_review" | "accepted" | "rejected" | "superseded";
+
+export type LearningCandidate = {
+  id: string;
+  sessionId: string;
+  kind: "page" | "interaction" | "navigation" | "test";
+  stableKey?: string;
+  sourceStepId?: string;
+  confidence: number;
+  status: LearningCandidateStatus;
+  payload: Record<string, unknown>;
+  evidenceArtifactIds: string[];
+  validationIssues: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InteractionAsset = {
+  id: string;
+  key: string;
+  appId: string;
+  platformScope: ScriptFlowPlatform | "mobile-both";
+  owner: { kind: "page" | "component" | "overlay"; key: string };
+  name: string;
+  aliases: string[];
+  supportedActions: Array<"tap" | "inputText" | "clearText" | "selectText">;
+  semanticContract: {
+    text?: string;
+    semantic?: string;
+    icon?: string;
+    control?: string;
+    area?: string;
+    position?: string;
+    nearText?: string;
+  };
+  locatorVariants: Array<{
+    platform: ScriptFlowPlatform;
+    appVersionRange?: string;
+    strategy: string;
+    descriptor: Record<string, unknown>;
+    confidence: number;
+  }>;
+  status: "draft" | "active" | "deprecated" | "rejected";
+  version: number;
+  provenance: { runIds: string[]; stepIds: string[]; artifactIds: string[] };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type NavigationEntry = {
+  id: string;
+  key: string;
+  appId: string;
+  platformScope: ScriptFlowPlatform | "mobile-both";
+  from: { kind: "page"; key: string } | { kind: "session"; key: "authenticated" | "unauthenticated"; role?: string };
+  toPage: string;
+  name: string;
+  action: {
+    kind: "tap";
+    target: {
+      text?: string;
+      semantic?: string;
+      icon?: string;
+      control?: string;
+      area?: string;
+      position?: string;
+      nearText?: string;
+      match?: string;
+    };
+    search?: {
+      mode?: "auto" | "visibleOnly" | "scroll";
+      direction?: "up" | "down";
+      maxSwipes?: number;
+    };
+  };
+  confidence: number;
+  status: "draft" | "active" | "deprecated" | "rejected";
+  version: number;
+  provenance: { runIds: string[]; stepIds: string[]; artifactIds: string[] };
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ScriptFlow = {
   id: string;
   appId: string;
@@ -454,6 +596,15 @@ export type TestRun = {
     flowId: string;
     version: number;
     planDigest: string;
+    executionPurpose?: ScriptFlowExecutionPurpose;
+    sourceHash?: string;
+    verificationAssessment?: ScriptFlowVerificationAssessment;
+    interactionAssets?: Array<{
+      stepId: string;
+      assetId: string;
+      key: string;
+      version: number;
+    }>;
     dependencies: Array<{
       flowId: string;
       version: number;

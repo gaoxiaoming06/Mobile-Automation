@@ -10,6 +10,7 @@ export type PageAssetSummary = {
   graphVersionId: string;
   platformScope?: PlatformScope;
   matcherCount: number;
+  tags?: string[];
 };
 
 export type PageAsset = PageAssetSummary & {
@@ -94,7 +95,8 @@ function summarizePage(graph: BusinessGraph, node: BusinessNode): PageAssetSumma
     appId: graph.appId,
     graphVersionId: node.graphVersionId,
     platformScope: node.platformScope,
-    matcherCount: node.matchers.length
+    matcherCount: node.matchers.length,
+    tags: [...node.tags]
   };
 }
 

@@ -1,8 +1,8 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { ScriptFlow } from "@mobile-automation/shared";
-import { CaseCenterPanel, buildCaseRunRequest } from "./CaseCenterPanel.js";
+import type { LearningSession, ScriptFlow } from "@mobile-automation/shared";
+import { CaseCenterPanel, buildCaseRunRequest, caseRunEndpoint, caseTrialCompletionMessage } from "./CaseCenterPanel.js";
 
 describe("CaseCenterPanel", () => {
   it("shows reusable use cases and readable execution logic without exposing scripts", () => {
@@ -28,7 +28,10 @@ describe("CaseCenterPanel", () => {
     expect(markup).toContain("AI 创建测试");
     expect(markup).toContain("沉淀可复用的用例与场景");
     expect(markup).toContain("运行配置");
+    expect(markup).toContain("开始执行");
     expect(markup).not.toContain("风险确认");
+    expect(markup).not.toContain("试运行");
+    expect(markup).not.toContain("沉淀所选资产");
     expect(markup).not.toContain("ScriptFlow YAML");
     expect(markup).not.toContain("脚本编辑器");
     expect(markup).not.toContain("校验脚本");
@@ -47,7 +50,41 @@ describe("CaseCenterPanel", () => {
       parameters: { className: "班级四十二号" }
     });
   });
+
+  it("uses trial execution until the exact use case version is verified", () => {
+    expect(caseRunEndpoint("flow-1", "needs_trial")).toBe("/api/script-flows/flow-1/trial-runs");
+    expect(caseRunEndpoint("flow-1", "verified")).toBe("/api/script-flows/flow-1/runs");
+  });
+
+  it("requires business outcome confirmation before calling a persisted trial verified", () => {
+    expect(caseTrialCompletionMessage(learningSession("needs_outcome_review"))).toBe(
+      "执行操作已完成，请确认当前业务结果是否符合预期"
+    );
+    expect(caseTrialCompletionMessage(learningSession("ready"), {
+      status: "verified",
+      sourceHash: "hash",
+      reasons: [],
+      unresolvedStepIds: [],
+      unresolvedOutcome: false
+    })).toBe("执行通过，当前版本已验证");
+  });
 });
+
+function learningSession(status: LearningSession["status"]): LearningSession {
+  return {
+    id: "learning-1",
+    runId: "run-1",
+    appId: "cn.eeo.classin",
+    platform: "android",
+    sourceHash: "hash",
+    executionPassed: true,
+    outcomeStatus: status === "needs_outcome_review" ? "unverified" : "human_confirmed",
+    status,
+    summary: { pageCandidates: 0, interactionCandidates: 0, navigationCandidates: 0, testCandidates: 0, issues: [] },
+    createdAt: "2026-07-30T00:00:00.000Z",
+    updatedAt: "2026-07-30T00:00:00.000Z"
+  };
+}
 
 function flow(): ScriptFlow {
   return {

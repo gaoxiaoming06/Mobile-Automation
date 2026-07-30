@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
 import { nowIso, type ActionStep, type ArtifactRef, type StepResult } from "@mobile-automation/shared";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
+import { scriptFlowSourceHash } from "./script-flow-verification.js";
 import type { Storage } from "./storage.js";
 
 type StorageContext = {
@@ -128,6 +129,202 @@ describe("Storage", () => {
     expect(context.storage.getRun(run.id)?.sourceSnapshot).toEqual(expect.objectContaining({ sourceYaml: secondYaml }));
   });
 
+  it("persists trial snapshot fields and finds verification by exact source hash", async () => {
+    context = await createStorageContext();
+    const sourceYaml = "version: 1\nname: 打开主页\napp: { id: cn.eeo.classin, platform: android }\nsteps: []\n";
+    const sourceHash = "b".repeat(64);
+    const flow = context.storage.createScriptFlow({
+      sourceYaml,
+      document: scriptFlowDocument("打开主页"),
+      status: "draft"
+    });
+    const run = context.storage.createRun({
+      caseName: flow.name,
+      deviceSerial: "device-1",
+      configJson: JSON.stringify({ deviceSerial: "device-1", mode: "once", repeatCount: 1, stepIntervalMs: 0, stopOnFailure: true }),
+      runSnapshotJson: JSON.stringify({
+        steps: [],
+        sourceSnapshot: {
+          kind: "script_flow",
+          flowId: flow.id,
+          version: flow.version,
+          planDigest: "a".repeat(64),
+          executionPurpose: "trial",
+          sourceHash,
+          verificationAssessment: {
+            status: "needs_trial",
+            sourceHash,
+            reasons: ["当前脚本版本尚未通过试运行"],
+            unresolvedStepIds: [],
+            unresolvedOutcome: false
+          },
+          interactionAssets: [{
+            stepId: "open-home",
+            assetId: "interaction-home",
+            key: "classin.home.tap.open-home",
+            version: 3
+          }],
+          dependencies: [],
+          sourceYaml,
+          parsed: flow.parsed
+        }
+      }),
+      steps: []
+    });
+
+    expect(context.storage.getRun(run.id)?.sourceSnapshot).toEqual(expect.objectContaining({
+      executionPurpose: "trial",
+      sourceHash,
+      verificationAssessment: expect.objectContaining({ status: "needs_trial" }),
+      interactionAssets: [{
+        stepId: "open-home",
+        assetId: "interaction-home",
+        key: "classin.home.tap.open-home",
+        version: 3
+      }]
+    }));
+
+    const verification = context.storage.createFlowVerification({
+      flowId: flow.id,
+      flowVersion: flow.version,
+      sourceHash,
+      appId: flow.appId,
+      platform: flow.platform,
+      runId: run.id,
+      status: "verified",
+      coverage: {
+        totalSteps: 1,
+        verifiedSteps: 1,
+        interactionAssetIds: [],
+        pageAssetIds: ["classin.home"],
+        humanConfirmedOutcome: false
+      }
+    });
+
+    expect(context.storage.findLatestFlowVerification({
+      sourceHash,
+      appId: flow.appId,
+      platform: flow.platform,
+      status: "verified"
+    })).toEqual(verification);
+    expect(context.storage.findLatestFlowVerification({
+      sourceHash: "c".repeat(64),
+      appId: flow.appId,
+      platform: flow.platform,
+      status: "verified"
+    })).toBeUndefined();
+
+    expect(context.storage.updateFlowVerificationStatus(verification.id, "invalidated")).toMatchObject({ status: "invalidated" });
+    expect(context.storage.findLatestFlowVerification({
+      sourceHash,
+      appId: flow.appId,
+      platform: flow.platform,
+      status: "verified"
+    })).toBeUndefined();
+  });
+
+  it("creates a verified source record when a trial with an automatic oracle passes", async () => {
+    context = await createStorageContext();
+    const sourceYaml = "version: 1\nname: 校验主页\napp: { id: cn.eeo.classin, platform: android }\nsteps: []\n";
+    const sourceHash = "d".repeat(64);
+    const flow = context.storage.createScriptFlow({ sourceYaml, document: scriptFlowDocument("校验主页"), status: "draft" });
+    const run = context.storage.createRun({
+      caseName: flow.name,
+      deviceSerial: "device-1",
+      configJson: JSON.stringify({ deviceSerial: "device-1", mode: "once", repeatCount: 1, stepIntervalMs: 0, stopOnFailure: true }),
+      runSnapshotJson: JSON.stringify({
+        steps: [{ id: "verify-home" }],
+        sourceSnapshot: {
+          kind: "script_flow",
+          flowId: flow.id,
+          version: flow.version,
+          planDigest: "e".repeat(64),
+          executionPurpose: "trial",
+          sourceHash,
+          verificationAssessment: {
+            status: "needs_trial",
+            sourceHash,
+            reasons: ["当前脚本版本尚未通过试运行"],
+            unresolvedStepIds: [],
+            unresolvedOutcome: false
+          },
+          interactionAssets: [{
+            stepId: "verify-home",
+            assetId: "interaction-home",
+            key: "classin.home.tap.verify-home",
+            version: 1
+          }],
+          dependencies: [],
+          sourceYaml,
+          parsed: flow.parsed
+        }
+      }),
+      steps: []
+    });
+
+    context.storage.updateRunStatus(run.id, "passed");
+
+    expect(context.storage.findLatestFlowVerification({
+      sourceHash,
+      appId: flow.appId,
+      platform: flow.platform,
+      status: "verified"
+    })).toMatchObject({
+      flowId: flow.id,
+      flowVersion: flow.version,
+      runId: run.id,
+      status: "verified",
+      coverage: {
+        totalSteps: 1,
+        verifiedSteps: 1,
+        interactionAssetIds: ["interaction-home"],
+        humanConfirmedOutcome: false
+      }
+    });
+  });
+
+  it("adds an active flow to the navigation index immediately after its trial becomes verified", async () => {
+    context = await createStorageContext();
+    const document = navigationFlowDocument("classin.add_friend");
+    const sourceYaml = JSON.stringify(document);
+    const sourceHash = scriptFlowSourceHash(sourceYaml);
+    const flow = context.storage.createScriptFlow({ sourceYaml, document, status: "active" });
+    expect(context.storage.listPageNavigationSegments({ appId: flow.appId, platform: flow.platform })).toEqual([]);
+    const run = context.storage.createRun({
+      caseName: flow.name,
+      deviceSerial: "device-1",
+      configJson: JSON.stringify({ deviceSerial: "device-1", mode: "once", repeatCount: 1, stepIntervalMs: 0, stopOnFailure: true }),
+      runSnapshotJson: JSON.stringify({
+        steps: [{ id: "open-more-menu" }, { id: "open-target" }],
+        sourceSnapshot: {
+          kind: "script_flow",
+          flowId: flow.id,
+          version: flow.version,
+          planDigest: "f".repeat(64),
+          executionPurpose: "trial",
+          sourceHash,
+          verificationAssessment: {
+            status: "needs_trial",
+            sourceHash,
+            reasons: ["当前脚本版本尚未通过试运行"],
+            unresolvedStepIds: ["open-more-menu", "open-target"],
+            unresolvedOutcome: false
+          },
+          dependencies: [],
+          sourceYaml,
+          parsed: document
+        }
+      }),
+      steps: []
+    });
+
+    context.storage.updateRunStatus(run.id, "passed");
+
+    expect(context.storage.listPageNavigationSegments({ appId: flow.appId, platform: flow.platform })).toEqual([
+      expect.objectContaining({ flowId: flow.id, flowVersion: flow.version, toPage: "classin.add_friend" })
+    ]);
+  });
+
   it("maintains navigation segments incrementally for active use cases", async () => {
     context = await createStorageContext();
     const first = navigationFlowDocument("classin.add_friend");
@@ -137,10 +334,19 @@ describe("Storage", () => {
       status: "active"
     });
 
+    expect(context.storage.listPageNavigationSegments({ appId: "cn.eeo.classin", platform: "android" })).toEqual([]);
+
+    recordVerifiedSource(context.storage, created, JSON.stringify(first));
+    const verifiedFirst = context.storage.updateScriptFlow(created.id, {
+      sourceYaml: JSON.stringify(first),
+      document: first,
+      status: "active"
+    });
+
     expect(context.storage.listPageNavigationSegments({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
       expect.objectContaining({
-        flowId: created.id,
-        flowVersion: 1,
+        flowId: verifiedFirst.id,
+        flowVersion: 2,
         fromPage: "classin.home",
         toPage: "classin.add_friend",
         stepIds: ["open-more-menu", "open-target"]
@@ -153,10 +359,18 @@ describe("Storage", () => {
       document: second,
       status: "active"
     });
+    expect(context.storage.listPageNavigationSegments({ appId: "cn.eeo.classin", platform: "android" })).toEqual([]);
+
+    recordVerifiedSource(context.storage, created, JSON.stringify(second));
+    context.storage.updateScriptFlow(created.id, {
+      sourceYaml: JSON.stringify(second),
+      document: second,
+      status: "active"
+    });
     expect(context.storage.listPageNavigationSegments({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
       expect.objectContaining({
         flowId: created.id,
-        flowVersion: 2,
+        flowVersion: 4,
         fromPage: "classin.home",
         toPage: "classin.settings"
       })
@@ -342,6 +556,32 @@ function runtimeRule(): Omit<RuntimeInterceptorRule, "id" | "createdAt" | "updat
     matchers: [{ type: "text", value: "稍后再说" }],
     action: { type: "tap_text", text: "稍后再说" }
   };
+}
+
+function recordVerifiedSource(storage: Storage, flow: ReturnType<Storage["createScriptFlow"]>, sourceYaml: string): void {
+  const run = storage.createRun({
+    caseName: flow.name,
+    deviceSerial: "device-1",
+    configJson: JSON.stringify({ deviceSerial: "device-1", mode: "once", repeatCount: 1, stepIntervalMs: 0, stopOnFailure: true }),
+    runSnapshotJson: JSON.stringify({ steps: [] }),
+    steps: []
+  });
+  storage.createFlowVerification({
+    flowId: flow.id,
+    flowVersion: flow.version,
+    sourceHash: scriptFlowSourceHash(sourceYaml),
+    appId: flow.appId,
+    platform: flow.platform,
+    runId: run.id,
+    status: "verified",
+    coverage: {
+      totalSteps: 0,
+      verifiedSteps: 0,
+      interactionAssetIds: [],
+      pageAssetIds: [],
+      humanConfirmedOutcome: false
+    }
+  });
 }
 
 function tapStep(): ActionStep {

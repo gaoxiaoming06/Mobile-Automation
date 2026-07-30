@@ -5,22 +5,30 @@ import {
   ScriptFlowValidationError,
   compileScriptFlow,
   parseScriptFlow,
+  type ScriptExecutionPlan,
   type ScriptFlowDocument,
   type ScriptParameterValue
 } from "@mobile-automation/script-flow";
-import type { ScriptFlow } from "@mobile-automation/shared";
+import type { InteractionAsset, ScriptFlow } from "@mobile-automation/shared";
 import type { Storage } from "./storage.js";
 import type { PageNavigationSegmentSnapshot } from "./page-navigation.js";
 import { readAndroidAppMonitorConfig } from "./android-app-monitor-request.js";
 import { DeviceExecutionBusyError } from "./device-execution-lease.js";
-import type { ScriptFlowRunner, StartScriptFlowRunInput } from "./script-flow-runner.js";
+import type {
+  ScriptFlowRunner,
+  ScriptInteractionAssetBinding,
+  StartScriptFlowRunInput
+} from "./script-flow-runner.js";
 import { ScriptTargetResolutionError } from "./script-target-resolver.js";
+import { assessScriptFlowVerification } from "./script-flow-verification.js";
 
 export type ScriptFlowApiStorage = Pick<
   Storage,
   | "createScriptFlow"
   | "listScriptFlows"
   | "listPageNavigationSegments"
+  | "listInteractionAssets"
+  | "findLatestFlowVerification"
   | "getScriptFlow"
   | "updateScriptFlow"
   | "deleteScriptFlow"
@@ -29,9 +37,11 @@ export type ScriptFlowApiStorage = Pick<
 
 export type ScriptFlowApiRunner = Pick<ScriptFlowRunner, "start" | "validatePlan">;
 
+type ScriptFlowRouteDeps = { storage: ScriptFlowApiStorage; runner: ScriptFlowApiRunner };
+
 export function registerScriptFlowRoutes(
   app: express.Application,
-  deps: { storage: ScriptFlowApiStorage; runner: ScriptFlowApiRunner }
+  deps: ScriptFlowRouteDeps
 ): void {
   app.get("/api/script-flows", (req, res) => {
     try {
@@ -58,6 +68,7 @@ export function registerScriptFlowRoutes(
   app.post("/api/script-flows", (req, res) => {
     try {
       const input = readWriteInput(req.body);
+      assertActivationAllowed(deps.storage, input, input.status ?? "draft");
       res.status(201).json({ flow: deps.storage.createScriptFlow(input) });
     } catch (error) {
       sendScriptFlowError(res, error);
@@ -82,7 +93,9 @@ export function registerScriptFlowRoutes(
       }
       const body = strictBody(req.body, ["sourceYaml", "status", "expectedVersion"]);
       assertExpectedVersion(existing, body.expectedVersion);
-      res.json({ flow: deps.storage.updateScriptFlow(req.params.id, readWriteBody(body)) });
+      const input = readWriteBody(body);
+      assertActivationAllowed(deps.storage, input, input.status ?? existing.status);
+      res.json({ flow: deps.storage.updateScriptFlow(req.params.id, input) });
     } catch (error) {
       sendScriptFlowError(res, error);
     }
@@ -105,12 +118,15 @@ export function registerScriptFlowRoutes(
       const document = parseScriptFlow(flow.sourceYaml);
       const parameters = readParameters(body.parameters);
       const compiled = compileSnapshot(deps.storage, flow, document, parameters);
-      deps.runner.validatePlan(compiled.plan);
+      const verification = verificationAssessment(deps.storage, flow, document, compiled.dependencies);
+      deps.runner.validatePlan(compiled.plan, compiled.interactionAssets);
       res.json({
         flow,
         plan: compiled.plan,
         planDigest: compiled.planDigest,
+        verification,
         dependencies: compiled.dependencies.map(publicDependency),
+        interactionAssets: compiled.interactionAssets.map(publicInteractionAsset),
         navigationIndex: compiled.navigationIndex
       });
     } catch (error) {
@@ -124,12 +140,15 @@ export function registerScriptFlowRoutes(
       const root = temporaryFlow(requiredSourceYaml(body.sourceYaml));
       const document = parseScriptFlow(root.sourceYaml);
       const compiled = compileSnapshot(deps.storage, root, document, readParameters(body.parameters));
-      deps.runner.validatePlan(compiled.plan);
+      const verification = verificationAssessment(deps.storage, root, document, compiled.dependencies);
+      deps.runner.validatePlan(compiled.plan, compiled.interactionAssets);
       res.json({
         document,
         plan: compiled.plan,
         planDigest: compiled.planDigest,
+        verification,
         dependencies: compiled.dependencies.map(publicDependency),
+        interactionAssets: compiled.interactionAssets.map(publicInteractionAsset),
         navigationIndex: compiled.navigationIndex
       });
     } catch (error) {
@@ -137,96 +156,45 @@ export function registerScriptFlowRoutes(
     }
   });
 
-  app.post("/api/script-flow-drafts/runs", async (req, res) => {
+  app.post("/api/script-flow-drafts/verification", (req, res) => {
     try {
-      const body = strictBody(req.body, [
-        "sourceYaml",
-        "deviceSerial",
-        "planDigest",
-        "parameters",
-        "mode",
-        "repeatCount",
-        "stepIntervalMs",
-        "stopOnFailure",
-        "recordVideo",
-        "keepVideoOnSuccess",
-        "pauseAfterEachStep",
-        "androidAppMonitor"
-      ]);
+      const body = strictBody(req.body, ["sourceYaml"]);
       const root = temporaryFlow(requiredSourceYaml(body.sourceYaml));
       const document = parseScriptFlow(root.sourceYaml);
-      const parameters = readParameters(body.parameters);
-      const compiled = compileSnapshot(deps.storage, root, document, parameters);
-      if (requiredPlanDigest(body.planDigest) !== compiled.planDigest) {
-        throw new ScriptFlowApiError(409, "Execution plan changed; preview again");
-      }
-      const run = await deps.runner.start({
-        flowId: root.id,
-        scriptVersion: 1,
-        planDigest: compiled.planDigest,
-        dependencies: compiled.dependencies,
-        navigationSegments: compiled.navigationSegments,
-        sourceYaml: root.sourceYaml,
-        flow: document,
-        deviceSerial: requiredString(body.deviceSerial, "deviceSerial"),
-        parameters,
-        androidAppMonitor: readAndroidAppMonitorConfig(body.androidAppMonitor),
-        resolveFlow: compiled.resolveFlow,
-        ...runOptions(body)
-      });
-      res.status(202).json({ run });
+      res.json({ verification: verificationAssessment(deps.storage, root, document, dependencySnapshots(deps.storage, document)) });
     } catch (error) {
       sendScriptFlowError(res, error);
     }
   });
 
-  app.post("/api/script-flows/:id/runs", async (req, res) => {
+  app.get("/api/script-flows/:id/verification", (req, res) => {
     try {
-      const flow = requireFlow(deps.storage, req.params.id);
-      if (flow.status === "archived") {
-        res.status(409).json({ error: "Archived ScriptFlow cannot run" });
-        return;
-      }
-      const body = strictBody(req.body, [
-        "deviceSerial",
-        "expectedVersion",
-        "planDigest",
-        "parameters",
-        "mode",
-        "repeatCount",
-        "stepIntervalMs",
-        "stopOnFailure",
-        "recordVideo",
-        "keepVideoOnSuccess",
-        "pauseAfterEachStep",
-        "androidAppMonitor"
-      ]);
-      assertExpectedVersion(flow, body.expectedVersion);
+      const flow = requireFlow(deps.storage, requiredString(req.params.id, "id"));
       const document = parseScriptFlow(flow.sourceYaml);
-      const parameters = readParameters(body.parameters);
-      const compiled = compileSnapshot(deps.storage, flow, document, parameters);
-      if (requiredPlanDigest(body.planDigest) !== compiled.planDigest) {
-        throw new ScriptFlowApiError(409, "Execution plan changed; preview again");
-      }
-      const input: StartScriptFlowRunInput = {
+      res.json({
         flowId: flow.id,
-        scriptVersion: flow.version,
-        planDigest: compiled.planDigest,
-        dependencies: compiled.dependencies,
-        navigationSegments: compiled.navigationSegments,
-        sourceYaml: flow.sourceYaml,
-        flow: document,
-        deviceSerial: requiredString(body.deviceSerial, "deviceSerial"),
-        parameters,
-        androidAppMonitor: readAndroidAppMonitorConfig(body.androidAppMonitor),
-        resolveFlow: compiled.resolveFlow,
-        ...runOptions(body)
-      };
-      const run = await deps.runner.start(input);
-      res.status(202).json({ run });
+        version: flow.version,
+        verification: verificationAssessment(deps.storage, flow, document, dependencySnapshots(deps.storage, document))
+      });
     } catch (error) {
       sendScriptFlowError(res, error);
     }
+  });
+
+  app.post("/api/script-flow-drafts/runs", async (req, res) => {
+    await startDraftExecution(req, res, deps, "normal");
+  });
+
+  app.post("/api/script-flow-drafts/trial-runs", async (req, res) => {
+    await startDraftExecution(req, res, deps, "trial");
+  });
+
+  app.post("/api/script-flows/:id/runs", async (req, res) => {
+    await startPersistedExecution(req, res, deps, "normal");
+  });
+
+  app.post("/api/script-flows/:id/trial-runs", async (req, res) => {
+    await startPersistedExecution(req, res, deps, "trial");
   });
 
   app.get("/api/script-flow-runs/:runId", (req, res) => {
@@ -237,6 +205,175 @@ export function registerScriptFlowRoutes(
     }
     res.json({ run });
   });
+}
+
+const DRAFT_RUN_FIELDS = [
+  "sourceYaml",
+  "deviceSerial",
+  "planDigest",
+  "parameters",
+  "mode",
+  "repeatCount",
+  "stepIntervalMs",
+  "stopOnFailure",
+  "recordVideo",
+  "keepVideoOnSuccess",
+  "pauseAfterEachStep",
+  "androidAppMonitor"
+];
+
+const PERSISTED_RUN_FIELDS = DRAFT_RUN_FIELDS.filter((field) => field !== "sourceYaml").concat("expectedVersion");
+
+async function startDraftExecution(
+  req: express.Request,
+  res: express.Response,
+  deps: ScriptFlowRouteDeps,
+  purpose: "trial" | "normal"
+): Promise<void> {
+  try {
+    const body = strictBody(req.body, DRAFT_RUN_FIELDS);
+    const root = temporaryFlow(requiredSourceYaml(body.sourceYaml));
+    const document = parseScriptFlow(root.sourceYaml);
+    const parameters = readParameters(body.parameters);
+    const compiled = compileSnapshot(deps.storage, root, document, parameters);
+    if (requiredPlanDigest(body.planDigest) !== compiled.planDigest) {
+      throw new ScriptFlowApiError(409, "Execution plan changed; preview again");
+    }
+    const verification = verificationAssessment(deps.storage, root, document, compiled.dependencies);
+    assertExecutionAllowed(verification.status, purpose);
+    const run = await deps.runner.start({
+      flowId: root.id,
+      scriptVersion: 1,
+      planDigest: compiled.planDigest,
+      dependencies: compiled.dependencies,
+      navigationSegments: compiled.navigationSegments,
+      navigationRootPages: compiled.navigationRootPages,
+      interactionAssets: compiled.interactionAssets,
+      sourceYaml: root.sourceYaml,
+      sourceHash: verification.sourceHash,
+      executionPurpose: purpose,
+      verificationAssessment: verification,
+      flow: document,
+      deviceSerial: requiredString(body.deviceSerial, "deviceSerial"),
+      parameters,
+      androidAppMonitor: readAndroidAppMonitorConfig(body.androidAppMonitor),
+      resolveFlow: compiled.resolveFlow,
+      ...(purpose === "trial" ? trialRunOptions(body) : runOptions(body))
+    });
+    res.status(202).json({ run });
+  } catch (error) {
+    sendScriptFlowError(res, error);
+  }
+}
+
+async function startPersistedExecution(
+  req: express.Request,
+  res: express.Response,
+  deps: ScriptFlowRouteDeps,
+  purpose: "trial" | "normal"
+): Promise<void> {
+  try {
+    const flow = requireFlow(deps.storage, requiredString(req.params.id, "id"));
+    if (flow.status === "archived") {
+      throw new ScriptFlowApiError(409, "Archived ScriptFlow cannot run");
+    }
+    const body = strictBody(req.body, PERSISTED_RUN_FIELDS);
+    assertExpectedVersion(flow, body.expectedVersion);
+    const document = parseScriptFlow(flow.sourceYaml);
+    const parameters = readParameters(body.parameters);
+    const compiled = compileSnapshot(deps.storage, flow, document, parameters);
+    if (requiredPlanDigest(body.planDigest) !== compiled.planDigest) {
+      throw new ScriptFlowApiError(409, "Execution plan changed; preview again");
+    }
+    const verification = verificationAssessment(deps.storage, flow, document, compiled.dependencies);
+    assertExecutionAllowed(verification.status, purpose);
+    const input: StartScriptFlowRunInput = {
+      flowId: flow.id,
+      scriptVersion: flow.version,
+      planDigest: compiled.planDigest,
+      dependencies: compiled.dependencies,
+      navigationSegments: compiled.navigationSegments,
+      navigationRootPages: compiled.navigationRootPages,
+      interactionAssets: compiled.interactionAssets,
+      sourceYaml: flow.sourceYaml,
+      sourceHash: verification.sourceHash,
+      executionPurpose: purpose,
+      verificationAssessment: verification,
+      flow: document,
+      deviceSerial: requiredString(body.deviceSerial, "deviceSerial"),
+      parameters,
+      androidAppMonitor: readAndroidAppMonitorConfig(body.androidAppMonitor),
+      resolveFlow: compiled.resolveFlow,
+      ...(purpose === "trial" ? trialRunOptions(body) : runOptions(body))
+    };
+    const run = await deps.runner.start(input);
+    res.status(202).json({ run });
+  } catch (error) {
+    sendScriptFlowError(res, error);
+  }
+}
+
+function verificationAssessment(
+  storage: ScriptFlowApiStorage,
+  flow: ScriptFlow,
+  document: ScriptFlowDocument,
+  dependencies: ScriptFlowDependencySnapshot[] = []
+) {
+  const sourceHash = sha256(flow.sourceYaml);
+  const verified = storage.findLatestFlowVerification({
+    sourceHash,
+    appId: flow.appId,
+    platform: flow.platform,
+    status: "verified"
+  });
+  const assessment = assessScriptFlowVerification({
+    document,
+    sourceYaml: flow.sourceYaml,
+    verifiedSourceHashes: verified ? [sourceHash] : []
+  });
+  const unverifiedDependencies = dependencies.filter((dependency) => !storage.findLatestFlowVerification({
+    sourceHash: dependency.sourceHash,
+    appId: flow.appId,
+    platform: flow.platform,
+    status: "verified"
+  }));
+  if (unverifiedDependencies.length === 0) return assessment;
+  return {
+    ...assessment,
+    status: assessment.status === "blocked" ? "blocked" as const : "needs_trial" as const,
+    reasons: [...new Set([
+      ...assessment.reasons,
+      ...unverifiedDependencies.map((dependency) =>
+        `复用用例 ${dependency.flowId} · v${dependency.version} 尚未通过试运行`
+      )
+    ])]
+  };
+}
+
+function assertExecutionAllowed(status: "verified" | "needs_trial" | "blocked", purpose: "trial" | "normal"): void {
+  if (status === "blocked") {
+    throw new ScriptFlowApiError(409, "ScriptFlow is blocked and cannot run");
+  }
+  if (purpose === "normal" && status !== "verified") {
+    throw new ScriptFlowApiError(409, "ScriptFlow must pass a trial run before normal execution");
+  }
+}
+
+function assertActivationAllowed(
+  storage: ScriptFlowApiStorage,
+  input: { sourceYaml: string; document: ScriptFlowDocument },
+  status: ScriptFlow["status"]
+): void {
+  if (status !== "active") return;
+  const verification = verificationAssessment(
+    storage,
+    temporaryFlow(input.sourceYaml),
+    input.document,
+    dependencySnapshots(storage, input.document)
+  );
+  if (verification.status !== "verified") {
+    throw new ScriptFlowApiError(409, "ScriptFlow must pass a trial run before it can be activated");
+  }
 }
 
 function readWriteInput(value: unknown): { sourceYaml: string; document: ScriptFlowDocument; status?: ScriptFlow["status"] } {
@@ -387,6 +524,18 @@ function runOptions(body: Record<string, unknown>): Partial<StartScriptFlowRunIn
   };
 }
 
+function trialRunOptions(body: Record<string, unknown>): Partial<StartScriptFlowRunInput> {
+  const options = runOptions(body);
+  if (options.mode === "loop_until_stop") {
+    throw new ScriptFlowApiError(400, "Trial runs do not support loop_until_stop");
+  }
+  return {
+    ...options,
+    recordVideo: false,
+    keepVideoOnSuccess: false
+  };
+}
+
 function optionalPositiveInteger(value: unknown, key: "repeatCount"): Pick<StartScriptFlowRunInput, "repeatCount"> {
   if (value === undefined) return {};
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) throw new ScriptFlowApiError(400, `${key} must be a positive integer`);
@@ -426,7 +575,9 @@ function compileSnapshot(
   planDigest: string;
   dependencies: ScriptFlowDependencySnapshot[];
   navigationSegments: PageNavigationSegmentSnapshot[];
-  navigationIndex: { segmentCount: number; digest: string };
+  navigationRootPages: string[];
+  interactionAssets: ScriptInteractionAssetBinding[];
+  navigationIndex: { segmentCount: number; rootCount: number; digest: string };
   resolveFlow: (id: string) => ScriptFlowDocument | undefined;
 } {
   const documents = new Map<string, ScriptFlowDocument>();
@@ -437,16 +588,20 @@ function compileSnapshot(
     : [];
   const orderedDependencies = [...dependencies.values()].sort((left, right) => left.flowId.localeCompare(right.flowId));
   const orderedNavigationSegments = [...navigationSegments].sort((left, right) => left.id.localeCompare(right.id));
+  const navigationRootPages = listNavigationRootPages(storage, root.appId, root.platform);
   const navigationIndex = {
     segmentCount: orderedNavigationSegments.length,
-    digest: sha256(canonicalJson(orderedNavigationSegments))
+    rootCount: navigationRootPages.length,
+    digest: sha256(canonicalJson({ segments: orderedNavigationSegments, roots: navigationRootPages }))
   };
   const resolveFlow = (id: string) => documents.get(id);
   const plan = compileScriptFlow(document, { parameters, resolveFlow });
+  const interactionAssets = freezeInteractionAssets(storage, plan);
   const planDigest = sha256(canonicalJson({
     root: { flowId: root.id, version: root.version, sourceHash: sha256(root.sourceYaml) },
     dependencies: orderedDependencies.map(publicDependency),
     navigationIndex,
+    interactionAssets,
     plan
   }));
   return {
@@ -454,9 +609,102 @@ function compileSnapshot(
     planDigest,
     dependencies: orderedDependencies,
     navigationSegments: orderedNavigationSegments,
+    navigationRootPages,
+    interactionAssets,
     navigationIndex,
     resolveFlow
   };
+}
+
+function listNavigationRootPages(
+  storage: ScriptFlowApiStorage,
+  appId: string,
+  platform: ScriptFlow["platform"]
+): string[] {
+  return [...new Set(storage.listScriptFlows({ appId, platform, status: "active" }).flatMap((flow) => {
+    const entry = recordValue(flow.parsed.entry) ?? {};
+    const page = normalizedString(entry.page);
+    const session = normalizedString(entry.session);
+    return page && session ? [page] : [];
+  }))].sort();
+}
+
+function freezeInteractionAssets(
+  storage: ScriptFlowApiStorage,
+  plan: ScriptExecutionPlan
+): ScriptInteractionAssetBinding[] {
+  const assets = storage.listInteractionAssets({ appId: plan.app.id, platform: plan.app.platform })
+    .filter((asset) => asset.status === "active");
+  return plan.steps.flatMap((step) => {
+    if (!isInteractionAction(step.action) || !step.onPage) return [];
+    const target = recordValue(step.input.target);
+    if (!target) return [];
+    const matches = assets.filter((asset) =>
+      asset.owner.kind === "page"
+      && asset.owner.key === step.onPage
+      && asset.supportedActions.includes(step.action as InteractionAsset["supportedActions"][number])
+      && asset.locatorVariants.some((variant) => variant.platform === plan.app.platform)
+      && interactionTargetMatches(target, asset)
+    );
+    if (matches.length > 1) {
+      throw new ScriptFlowCompileError(
+        `Multiple interaction assets match step ${step.id}; review the duplicated assets before previewing`
+      );
+    }
+    return matches.length === 1 ? [{ stepId: step.id, asset: matches[0]! }] : [];
+  });
+}
+
+function isInteractionAction(action: string): action is InteractionAsset["supportedActions"][number] {
+  return action === "tap" || action === "inputText" || action === "clearText" || action === "selectText";
+}
+
+function interactionTargetMatches(target: Record<string, unknown>, asset: InteractionAsset): boolean {
+  const text = normalizedString(target.text);
+  if (text) {
+    const textCandidates = [
+      asset.name,
+      ...asset.aliases,
+      asset.semanticContract.text,
+      ...asset.locatorVariants.map((variant) => variant.descriptor.selectedText)
+    ].map(normalizedString).filter((value): value is string => Boolean(value));
+    if (!textCandidates.includes(text)) return false;
+  }
+  for (const key of ["semantic", "icon", "control"] as const) {
+    const expected = normalizedString(target[key]);
+    if (expected && normalizedString(asset.semanticContract[key]) !== expected) return false;
+  }
+  if (!text && !["semantic", "icon", "control"].some((key) => normalizedString(target[key]))) return false;
+  for (const key of ["area", "position", "nearText"] as const) {
+    const expected = normalizedString(target[key]);
+    const actual = normalizedString(asset.semanticContract[key]);
+    if (expected && actual && expected !== actual) return false;
+  }
+  return true;
+}
+
+function publicInteractionAsset(binding: ScriptInteractionAssetBinding): {
+  stepId: string;
+  assetId: string;
+  key: string;
+  version: number;
+} {
+  return {
+    stepId: binding.stepId,
+    assetId: binding.asset.id,
+    key: binding.asset.key,
+    version: binding.asset.version
+  };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function normalizedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
 }
 
 function containsReachPage(steps: ScriptFlowDocument["steps"]): boolean {
@@ -495,6 +743,16 @@ function collectDependencies(
     dependencies.set(flow.id, dependencySnapshot(flow, child));
     collectDependencies(storage, child.steps, documents, dependencies);
   }
+}
+
+function dependencySnapshots(
+  storage: ScriptFlowApiStorage,
+  document: ScriptFlowDocument
+): ScriptFlowDependencySnapshot[] {
+  const documents = new Map<string, ScriptFlowDocument>();
+  const dependencies = new Map<string, ScriptFlowDependencySnapshot>();
+  collectDependencies(storage, document.steps, documents, dependencies);
+  return [...dependencies.values()].sort((left, right) => left.flowId.localeCompare(right.flowId));
 }
 
 function dependencySnapshot(flow: ScriptFlow, document = parseScriptFlow(flow.sourceYaml)): ScriptFlowDependencySnapshot {

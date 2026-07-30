@@ -53,7 +53,21 @@ export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScri
     risk: "none",
     source: { flowName: flow.name, stepId: "__prepare.entry-page" }
   }] : [];
-  const steps = [...preparationSteps, ...bodySteps].map((step, index) => ({ ...step, order: index + 1 }));
+  const outcomePage = flow.outcome?.page
+    ? interpolateString(flow.outcome.page, redactSensitiveParameters ? redactParameters(flow.parameters, parameters) : parameters)
+    : undefined;
+  const outcomeSteps: Omit<ScriptExecutionPlanStep, "order">[] = outcomePage && !stepVerifiesPage(bodySteps.at(-1), outcomePage)
+    ? [{
+        id: "__verify.outcome-page",
+        phase: "test",
+        name: `确认到达 ${outcomePage}`,
+        action: "assertPage",
+        input: { pageId: outcomePage },
+        risk: "none",
+        source: { flowName: flow.name, stepId: "__verify.outcome-page" }
+      }]
+    : [];
+  const steps = [...preparationSteps, ...bodySteps, ...outcomeSteps].map((step, index) => ({ ...step, order: index + 1 }));
   return {
     flowName: flow.name,
     kind: flow.kind,
@@ -65,6 +79,16 @@ export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScri
     steps,
     riskConfirmations: []
   };
+}
+
+function stepVerifiesPage(
+  step: CompiledBodyStep | Omit<ScriptExecutionPlanStep, "order"> | undefined,
+  pageId: string
+): boolean {
+  if (!step) return false;
+  if (step.expectPage === pageId) return true;
+  return (step.action === "assertPage" || step.action === "waitForPage" || step.action === "reachPage")
+    && step.input.pageId === pageId;
 }
 
 function expandSteps(steps: ScriptStep[], context: ExpansionContext): CompiledBodyStep[] {
@@ -141,7 +165,7 @@ function expandChildFlow(
   const renderedParameters = context.redactSensitiveParameters
     ? redactParameters(child.parameters, resolveParameters(child.parameters, renderedBindings))
     : parameters;
-  return expandSteps(child.steps, {
+  const childSteps = expandSteps(child.steps, {
     flow: child,
     parameters,
     renderedParameters,
@@ -150,6 +174,18 @@ function expandChildFlow(
     stack: [...context.stack, step.runFlow],
     prefix: expandedId
   });
+  const outcomePage = child.outcome?.page
+    ? interpolateString(child.outcome.page, renderedParameters)
+    : undefined;
+  if (!outcomePage || stepVerifiesPage(childSteps.at(-1), outcomePage)) return childSteps;
+  return [...childSteps, {
+    id: joinId(expandedId, "__verify.outcome-page"),
+    name: `确认到达 ${outcomePage}`,
+    action: "assertPage",
+    input: { pageId: outcomePage },
+    risk: "none",
+    source: { flowName: child.name, stepId: "__verify.outcome-page" }
+  }];
 }
 
 function interpolateBindingValue(value: unknown, parameters: Record<string, ScriptParameterValue>): unknown {

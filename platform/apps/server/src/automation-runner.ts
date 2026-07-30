@@ -341,6 +341,7 @@ export class AutomationRunner {
     let appMonitor: AndroidAppMonitorRunSupport | undefined;
     const pendingEventWrites: Promise<void>[] = [];
     let runtimeFailure = false;
+    let runtimeFailureEventType: DeviceEvent["type"] | undefined;
     let activeStepResultId: string | undefined;
 
     try {
@@ -368,6 +369,7 @@ export class AutomationRunner {
         (event) => {
           if (event.type === "crash" || event.type === "anr") {
             runtimeFailure = true;
+            runtimeFailureEventType = event.type;
             if (config.stopOnFailure) {
               controller.stop();
             }
@@ -375,7 +377,8 @@ export class AutomationRunner {
         },
         (eventWrite) => pendingEventWrites.push(eventWrite),
         () => activeStepResultId,
-        runStartedAt
+        runStartedAt,
+        config.androidAppMonitor?.packageName ?? config.startAppPackageName
       );
 
       if (config.recordVideo && !shouldRecordVideoForDevice(config, device)) {
@@ -427,7 +430,7 @@ export class AutomationRunner {
         executeStep: ({ iterationIndex, step, signal }) =>
           this.executeStep(runId, iterationIndex, step, config, deviceSize, signal, (stepResultId) => {
             activeStepResultId = stepResultId;
-          }, () => runtimeFailure)
+          }, () => runtimeFailure, () => runtimeFailureEventType)
       });
       const result = await stateMachine.run();
       failed = result.failed || runtimeFailure;
@@ -470,7 +473,8 @@ export class AutomationRunner {
     deviceSize: { width: number; height: number } | undefined,
     signal: AbortSignal,
     setActiveStepResultId?: (stepResultId: string | undefined) => void,
-    isRuntimeFailure?: () => boolean
+    isRuntimeFailure?: () => boolean,
+    getRuntimeFailureEventType?: () => DeviceEvent["type"] | undefined
   ): Promise<StepResult> {
     if (step.timing?.delayBeforeMs) {
       await sleepInterruptibly(step.timing.delayBeforeMs, signal);
@@ -649,7 +653,7 @@ export class AutomationRunner {
         if (isRuntimeFailure?.()) {
           result.status = "failed";
           result.errorCode = "DEVICE_EVENT_FAILED";
-          result.errorMessage = "Run stopped after Android crash or ANR event.";
+          result.errorMessage = runtimeFailureMessage(getRuntimeFailureEventType?.());
           await this.collectMetric(runId, config.deviceSerial, result.id);
         } else {
           result.status = "skipped";
@@ -735,6 +739,14 @@ export class AutomationRunner {
       };
     }
     const navigationEdges = readPageNavigationEdges(input.step.params.navigationEdges);
+    const allowBackRecovery = input.step.params.allowBackRecovery === true;
+    const recoveryStopPageIds = navigationStringSet(input.step.params.recoveryStopPageIds);
+    const routeSourcePageIds = new Set(
+      navigationEdges
+        .map((edge) => edge.fromPageId)
+        .filter((pageId, index, values) => values.indexOf(pageId) === index)
+        .filter((pageId) => Boolean(findPageNavigationPath(navigationEdges, pageId, targetPageId)))
+    );
     const maxRecoveryBacks = navigationInteger(input.step.params.maxRecoveryBacks, 6, 0, 12);
     const recoveryDelayMs = navigationInteger(input.step.params.recoveryDelayMs, 250, 0, 2_000);
     let current = await pageState.identifyCurrentPage({ serial: input.serial, appId, platform });
@@ -759,6 +771,52 @@ export class AutomationRunner {
         };
       }
       if (path) break;
+      if (current.status === "outside_app") {
+        return {
+          passed: false,
+          message: `页面恢复已离开目标 App，已停止继续返回；无法安全到达目标页面“${targetPageName}”。`,
+          artifacts: [],
+          metadata: {
+            ...baseMetadata,
+            status: "recovery_left_app",
+            currentStatus: current.status,
+            recoveryActions,
+            initialStatus
+          }
+        };
+      }
+      if (current.status === "matched" && current.page) {
+        if (recoveryStopPageIds.has(current.page.id)) {
+          return {
+            passed: false,
+            message: `已到达导航状态入口“${current.page.name}”，但当前索引没有到目标页面“${targetPageName}”的可靠路径，已停止返回。`,
+            artifacts: [],
+            metadata: {
+              ...baseMetadata,
+              status: "recovery_stopped_at_anchor",
+              currentStatus: current.status,
+              currentPageId: current.page.id,
+              recoveryActions,
+              initialStatus
+            }
+          };
+        }
+        if (!allowBackRecovery && routeSourcePageIds.size === 0) {
+          return {
+            passed: false,
+            message: `当前已识别为“${current.page.name}”，但导航索引中没有到目标页面“${targetPageName}”的可靠路径，未执行返回操作。`,
+            artifacts: [],
+            metadata: {
+              ...baseMetadata,
+              status: "no_reliable_path",
+              currentStatus: current.status,
+              currentPageId: current.page.id,
+              recoveryActions,
+              initialStatus
+            }
+          };
+        }
+      }
       if (recoveryActions >= maxRecoveryBacks) {
         const currentPageName = current.status === "matched" && current.page ? `“${current.page.name}”` : "未识别页面";
         return {
@@ -1014,7 +1072,8 @@ export class AutomationRunner {
     onObservedEvent: (event: ObservedDeviceEvent) => void,
     trackEventWrite?: (write: Promise<void>) => void,
     getActiveStepResultId?: () => string | undefined,
-    since?: Date
+    since?: Date,
+    packageName?: string
   ): Promise<DeviceEventWatcher | undefined> {
     if (!this.driver.watchDeviceEvents) {
       return undefined;
@@ -1037,7 +1096,7 @@ export class AutomationRunner {
         });
         trackEventWrite?.(eventWrite);
         void eventWrite;
-      }, { since });
+      }, { since, packageName });
     } catch (error) {
       const artifact = await this.artifactService.writeLog(runId, `event-watch-start-failed-${Date.now()}.txt`, errorToString(error));
       this.addDeviceEvent({
@@ -1079,6 +1138,21 @@ export class AutomationRunner {
 
 }
 
+function runtimeFailureMessage(eventType: DeviceEvent["type"] | undefined): string {
+  switch (eventType) {
+    case "crash":
+      return "Run stopped after Android app crash event.";
+    case "native_crash":
+      return "Run stopped after Android app native crash event.";
+    case "anr":
+      return "Run stopped after Android app ANR event.";
+    case "process_death":
+      return "Run stopped after Android app process death event.";
+    default:
+      return "Run stopped after Android app stability failure.";
+  }
+}
+
 function persistedCase(
   testCase: RuntimeFlow & { sourceSnapshot?: TestRun["sourceSnapshot"] },
   steps: ActionStep[] | undefined
@@ -1104,6 +1178,11 @@ function navigationPlatform(value: unknown): PageAssetPlatform | undefined {
 
 function navigationInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
   return typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
+}
+
+function navigationStringSet(value: unknown): Set<string> {
+  if (!Array.isArray(value)) return new Set();
+  return new Set(value.map(navigationString).filter(Boolean));
 }
 
 function scriptStepResultMetadata(params: Record<string, unknown>): Record<string, unknown> | undefined {

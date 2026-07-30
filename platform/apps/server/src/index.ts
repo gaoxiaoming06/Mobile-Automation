@@ -53,6 +53,7 @@ import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 import { findNearestTextCandidate } from "./semantic-locator.js";
 import { registerScriptFlowRoutes } from "./script-flow-api.js";
 import { registerScriptFlowAiRoutes } from "./script-flow-ai-api.js";
+import { registerTrialLearningRoutes } from "./trial-learning-api.js";
 import { generateScriptFlowDraft } from "./script-flow-ai-planner.js";
 import { pageStateExpectationVerifier, ScriptFlowRunner } from "./script-flow-runner.js";
 import { ScriptTargetResolver } from "./script-target-resolver.js";
@@ -112,6 +113,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 registerScriptFlowRoutes(app, { storage, runner: scriptFlowRunner });
+registerTrialLearningRoutes(app, { storage });
 registerPageAssetLibraryRoutes(app, { storage });
 registerScriptFlowAiRoutes(app, {
   getFlow: (id) => storage.getScriptFlow(id),
@@ -122,7 +124,8 @@ registerScriptFlowAiRoutes(app, {
     platform,
     existingFlow,
     pageCatalog: pageAssetCatalog,
-    flows: storage.listScriptFlows({ appId, platform })
+    flows: storage.listScriptFlows({ appId, platform }),
+    navigationEntries: storage.listNavigationEntries({ appId, platform })
   })
 });
 

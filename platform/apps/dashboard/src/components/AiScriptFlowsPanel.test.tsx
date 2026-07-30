@@ -1,9 +1,37 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { AiScriptFlowsPanel } from "./AiScriptFlowsPanel.js";
+import { AiScriptFlowsPanel, draftRunEndpoint, TrialOutcomeReview } from "./AiScriptFlowsPanel.js";
 
 describe("AiScriptFlowsPanel", () => {
+  it("uses separate execution endpoints for verified and trial-ready drafts", () => {
+    expect(draftRunEndpoint("ready")).toBe("/api/script-flow-drafts/runs");
+    expect(draftRunEndpoint("trial_ready")).toBe("/api/script-flow-drafts/trial-runs");
+  });
+
+  it("asks for a single business outcome review when the trial has no automatic oracle", () => {
+    const markup = renderToStaticMarkup(<TrialOutcomeReview
+      session={{
+        id: "session-1",
+        runId: "run-1",
+        appId: "cn.eeo.classin",
+        platform: "android",
+        sourceHash: "a".repeat(64),
+        executionPassed: true,
+        outcomeStatus: "unverified",
+        status: "needs_outcome_review",
+        summary: { pageCandidates: 0, interactionCandidates: 0, navigationCandidates: 0, testCandidates: 1, issues: [] },
+        createdAt: "2026-07-30T00:00:00.000Z",
+        updatedAt: "2026-07-30T00:00:00.000Z"
+      }}
+      busy={false}
+      onReview={vi.fn()}
+    />);
+
+    expect(markup).toContain("确认执行结果");
+    expect(markup).toContain("结果符合预期");
+    expect(markup).toContain("不符合预期");
+  });
   it("shows a generated draft without reading current device state", () => {
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel
       defaultAppId="cn.eeo.classin"
@@ -33,7 +61,7 @@ describe("AiScriptFlowsPanel", () => {
 
     expect(markup).toContain("AI 生成测试");
     expect(markup).toContain("用例");
-    expect(markup).toContain("直接执行");
+    expect(markup).toContain(">执行<");
     expect(markup).toContain("保存到用例中心");
     expect(markup).toContain("执行逻辑");
     expect(markup).toContain("启动 ClassIn");
@@ -42,6 +70,47 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).not.toContain("进入脚本编辑器");
     expect(markup).not.toContain("识别当前设备页面");
     expect(markup).not.toContain("key=value");
+  });
+
+  it("offers the same execute and save actions for a first-run test", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialDraft={{
+        status: "trial_ready",
+        sourceYaml: "version: 1\nname: 打开添加好友",
+        document: {
+          version: 1,
+          kind: "case",
+          name: "打开添加好友",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [{ id: "open-add-friend", tap: { target: { text: "添加好友" } } }],
+          tags: []
+        },
+        summary: "打开添加好友页面",
+        assumptions: [],
+        verification: {
+          status: "needs_trial",
+          sourceHash: "a".repeat(64),
+          reasons: ["当前脚本版本尚未通过试运行"],
+          unresolvedStepIds: ["open-add-friend"],
+          unresolvedOutcome: true
+        },
+        channel: "codex",
+        model: "planner"
+      }}
+    />);
+
+    expect(markup).toContain(">执行<");
+    expect(markup).toContain("保存到用例中心");
+    expect(markup).not.toContain("试运行");
+    expect(markup).not.toContain("保存草稿");
+    expect(markup).not.toContain("沉淀所选资产");
   });
 
   it("uses natural language to revise an existing use case", () => {
