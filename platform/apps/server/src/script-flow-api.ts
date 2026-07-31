@@ -9,7 +9,13 @@ import {
   type ScriptFlowDocument,
   type ScriptParameterValue
 } from "@mobile-automation/script-flow";
-import type { InteractionAsset, ScriptFlow } from "@mobile-automation/shared";
+import {
+  publicExecutionFailure,
+  publicExecutionFailureFromRun,
+  type InteractionAsset,
+  type PublicExecutionFailureKind,
+  type ScriptFlow
+} from "@mobile-automation/shared";
 import type { Storage } from "./storage.js";
 import type { PageNavigationSegmentSnapshot } from "./page-navigation.js";
 import { readAndroidAppMonitorConfig } from "./android-app-monitor-request.js";
@@ -215,7 +221,7 @@ export function registerScriptFlowRoutes(
       res.status(404).json({ error: "ScriptFlow run not found" });
       return;
     }
-    res.json({ run });
+    res.json({ run, failure: publicExecutionFailureFromRun(run) });
   });
 }
 
@@ -857,11 +863,16 @@ function sendScriptFlowError(res: express.Response, error: unknown): void {
     return;
   }
   if (error instanceof ScriptFlowCompileError) {
-    res.status(400).json({ error: error.message });
+    const kind = compileFailureKind(error.message);
+    if (kind) {
+      sendPublicFailure(res, 400, kind);
+      return;
+    }
+    res.status(400).json({ error: "测试计划无法通过校验，请调整测试描述后重试。" });
     return;
   }
   if (error instanceof ScriptTargetResolutionError) {
-    res.status(400).json({ error: error.message });
+    sendPublicFailure(res, 400, targetResolutionFailureKind(error.message));
     return;
   }
   if (error instanceof DeviceExecutionBusyError) {
@@ -873,7 +884,24 @@ function sendScriptFlowError(res: express.Response, error: unknown): void {
     });
     return;
   }
-  res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  sendPublicFailure(res, 500, "infrastructure_failure");
+}
+
+function sendPublicFailure(res: express.Response, status: number, kind: PublicExecutionFailureKind): void {
+  const failure = publicExecutionFailure(kind);
+  res.status(status).json({ error: failure.message, failure });
+}
+
+function compileFailureKind(message: string): PublicExecutionFailureKind | undefined {
+  if (/missing required parameter|缺少.*参数/i.test(message)) return "missing_parameter";
+  if (/multiple interaction assets|ambiguous|多个.*目标/i.test(message)) return "target_ambiguous";
+  return undefined;
+}
+
+function targetResolutionFailureKind(message: string): PublicExecutionFailureKind {
+  if (/需要参数|required parameter|parameter\s+[\w.-]+/i.test(message)) return "missing_parameter";
+  if (/multiple|ambiguous|多个|歧义/i.test(message)) return "target_ambiguous";
+  return "target_not_found";
 }
 
 class ScriptFlowApiError extends Error {

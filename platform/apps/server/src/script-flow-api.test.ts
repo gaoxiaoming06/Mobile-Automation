@@ -433,7 +433,14 @@ steps:
 
     expect(preview).toEqual({
       status: 400,
-      body: { error: "Multiple interaction assets match step open-add-friend; review the duplicated assets before previewing" }
+      body: {
+        error: "当前操作匹配到多个目标，请补充位置、附近文字或更明确的操作描述。",
+        failure: {
+          kind: "target_ambiguous",
+          message: "当前操作匹配到多个目标，请补充位置、附近文字或更明确的操作描述。",
+          nextAction: "supplement_process"
+        }
+      }
     });
   });
 
@@ -463,8 +470,58 @@ steps:
 
     expect(preview).toEqual({
       status: 400,
-      body: { error: "页面元素“班级列表”需要参数 className（班级名称）" }
+      body: {
+        error: "测试缺少执行所需参数，请补充运行配置后重试。",
+        failure: {
+          kind: "missing_parameter",
+          message: "测试缺少执行所需参数，请补充运行配置后重试。",
+          nextAction: "supplement_parameter"
+        }
+      }
     });
+  });
+
+  it("returns a public failure summary for a failed run without leaking technical details", async () => {
+    const context = await apiContext(servers);
+    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
+      sourceYaml,
+      parameters: { friendName: "张三" }
+    });
+    const started = await post(context.baseUrl, "/api/script-flow-drafts/trial-runs", {
+      sourceYaml,
+      planDigest: (preview.body as { planDigest: string }).planDigest,
+      deviceSerial: "device-1",
+      parameters: { friendName: "张三" }
+    });
+    const run = (started.body as { run: TestRun }).run;
+    context.storage.saveRun({
+      ...run,
+      status: "failed",
+      stepResults: [{
+        id: "result-1",
+        runId: run.id,
+        iterationIndex: 0,
+        stepId: "internal-open-add-friend",
+        stepOrder: 1,
+        type: "tap_on_text",
+        status: "failed",
+        startedAt: "2026-07-31T00:00:00.000Z",
+        errorCode: "SEMANTIC_TARGET_NOT_FOUND",
+        errorMessage: "OCR target not found; locator={x:12,y:34}",
+        artifacts: [],
+        metadata: { semantic: { reason: "target_not_found", locator: { x: 12, y: 34 } } }
+      }]
+    });
+
+    const response = await get(context.baseUrl, `/api/script-flow-runs/${run.id}`);
+    expect(response.body).toEqual(expect.objectContaining({
+      failure: {
+        kind: "target_not_found",
+        message: "未找到当前操作的目标，请补充目标文字、图标特征或所在位置。",
+        nextAction: "supplement_process"
+      }
+    }));
+    expect(JSON.stringify((response.body as { failure: unknown }).failure)).not.toContain("locator");
   });
 
   it("rejects execution when a previewed runFlow dependency changes", async () => {

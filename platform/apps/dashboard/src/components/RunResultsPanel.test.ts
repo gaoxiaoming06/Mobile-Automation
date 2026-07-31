@@ -107,6 +107,46 @@ describe("RunResultsPanel", () => {
 
     expect(markup).toContain("App 性能正常");
   });
+
+  it("shows a public failure summary instead of raw step errors", () => {
+    const currentRun = run({
+      id: "run-failed",
+      caseName: "打开添加好友",
+      status: "failed",
+      startedMinute: 1,
+      stepResults: [{
+        id: "result-1",
+        runId: "run-failed",
+        iterationIndex: 0,
+        stepId: "internal-step-id",
+        stepOrder: 1,
+        type: "tap_on_text",
+        status: "failed",
+        startedAt: "2026-07-23T08:01:00.000Z",
+        errorCode: "SEMANTIC_TARGET_NOT_FOUND",
+        errorMessage: "OCR locator failed at x=12,y=34",
+        artifacts: [],
+        metadata: { semantic: { reason: "target_not_found" } }
+      }]
+    });
+
+    const markup = renderToStaticMarkup(React.createElement(RunResultsPanel, {
+      currentRun,
+      runs: [currentRun],
+      runsLimit: 30,
+      selectedSerial: "device-1",
+      setCurrentRunId: () => undefined,
+      stopCurrentRun: async () => undefined,
+      pauseCurrentRun: async () => undefined,
+      resumeCurrentRun: async () => undefined,
+      stepCurrentRun: async () => undefined,
+      loadMoreRuns: () => undefined
+    }));
+
+    expect(markup).toContain("未找到当前操作的目标");
+    expect(markup).not.toContain("OCR locator failed");
+    expect(markup).not.toContain("internal-step-id");
+  });
 });
 
 function run(input: {
@@ -116,6 +156,7 @@ function run(input: {
   startedMinute: number;
   events?: TestRun["events"];
   artifacts?: TestRun["artifacts"];
+  stepResults?: TestRun["stepResults"];
 }): TestRun {
   return {
     id: input.id,
@@ -133,7 +174,7 @@ function run(input: {
       runKind: "script_flow"
     },
     steps: [],
-    stepResults: [],
+    stepResults: input.stepResults ?? [],
     metrics: [],
     events: input.events ?? [],
     artifacts: input.artifacts ?? [],

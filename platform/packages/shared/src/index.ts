@@ -1,5 +1,7 @@
 export type Platform = "android" | "ios";
 
+export * from "./public-execution-failure.js";
+
 export type DeviceStatus = "online" | "offline" | "locked" | "running" | "error";
 
 export type DeviceCapabilities = {

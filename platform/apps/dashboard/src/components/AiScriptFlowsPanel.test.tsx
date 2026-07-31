@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { AiScriptFlowsPanel, draftRunEndpoint, draftSaveDestination, TrialOutcomeReview } from "./AiScriptFlowsPanel.js";
+import { AiScriptFlowsPanel, draftRunEndpoint, draftSaveDestination, ExecutionFailureNotice, TrialOutcomeReview } from "./AiScriptFlowsPanel.js";
 
 describe("AiScriptFlowsPanel", () => {
   it("uses separate execution endpoints for verified and trial-ready drafts", () => {
@@ -127,6 +127,21 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("确认执行结果");
     expect(markup).toContain("结果符合预期");
     expect(markup).toContain("不符合预期");
+  });
+
+  it("shows only the public execution failure and keeps technical details in the report", () => {
+    const markup = renderToStaticMarkup(<ExecutionFailureNotice
+      failure={{
+        kind: "target_not_found",
+        message: "未找到当前操作的目标，请补充目标文字、图标特征或所在位置。",
+        nextAction: "supplement_process"
+      }}
+      onOpenReport={vi.fn()}
+    />);
+
+    expect(markup).toContain("未找到当前操作的目标");
+    expect(markup).toContain("查看执行结果");
+    expect(markup).not.toContain("SEMANTIC_TARGET_NOT_FOUND");
   });
   it("shows a generated draft without reading current device state", () => {
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel

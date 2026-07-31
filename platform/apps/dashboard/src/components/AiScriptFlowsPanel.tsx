@@ -1,9 +1,11 @@
 import { ExternalLink, History, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
+import { publicExecutionFailureFromRun } from "@mobile-automation/shared";
 import type {
   AndroidAppMonitorConfig,
   FlowVerification,
   LearningSession,
+  PublicExecutionFailure,
   ScriptFlow,
   ScriptFlowVerificationAssessment,
   TemporaryTest,
@@ -98,6 +100,7 @@ export function AiScriptFlowsPanel({
   const [lastRun, setLastRun] = useState<TestRun>();
   const [learning, setLearning] = useState<LearningSummaryResponse>();
   const [busyAction, setBusyAction] = useState<"generate" | "save" | "run" | "review">();
+  const lastRunFailure = lastRun ? publicExecutionFailureFromRun(lastRun) : undefined;
 
   useEffect(() => {
     if (selectedSerial) setDeviceSerial(selectedSerial);
@@ -114,6 +117,8 @@ export function AiScriptFlowsPanel({
       void apiFetchJson<{ run: TestRun }>(`/api/script-flow-runs/${encodeURIComponent(lastRun.id)}`)
         .then(async ({ run }) => {
           setLastRun(run);
+          const failure = publicExecutionFailureFromRun(run);
+          if (failure) setMessage(failure.message);
           if (["pending", "running", "paused"].includes(run.status) || run.sourceSnapshot?.executionPurpose !== "trial") return;
           const summary = await loadLearningSummary(run.id);
           setLearning(summary);
@@ -380,7 +385,7 @@ export function AiScriptFlowsPanel({
               onRun={() => void runDraft()}
               buttonLabel="执行"
             />
-            {lastRun ? <section className="script-run-status"><header><h3>执行状态</h3><strong data-status={lastRun.status}>{lastRun.status}</strong></header><p>{lastRun.stepResults.length}/{lastRun.steps.length} 个步骤</p><button type="button" onClick={() => onOpenRun(lastRun.id)}>查看执行结果</button></section> : null}
+            {lastRun ? <section className="script-run-status"><header><h3>执行状态</h3><strong data-status={lastRun.status}>{lastRun.status}</strong></header><p>{lastRun.stepResults.length}/{lastRun.steps.length} 个步骤</p>{lastRunFailure ? <ExecutionFailureNotice failure={lastRunFailure} onOpenReport={() => onOpenRun(lastRun.id)} /> : <button type="button" onClick={() => onOpenRun(lastRun.id)}>查看执行结果</button>}</section> : null}
             {learning ? <TrialOutcomeReview
               session={learning.session}
               busy={busyAction === "review"}
@@ -391,6 +396,16 @@ export function AiScriptFlowsPanel({
       </div>
     </section>
   );
+}
+
+export function ExecutionFailureNotice({
+  failure,
+  onOpenReport
+}: {
+  failure: PublicExecutionFailure;
+  onOpenReport: () => void;
+}) {
+  return <div className="execution-failure-notice"><strong>执行未完成</strong><p>{failure.message}</p><button type="button" onClick={onOpenReport}>查看执行结果</button></div>;
 }
 
 export function caseCenterEligible(purpose: CaseDocumentView["purpose"]): boolean {

@@ -1,6 +1,7 @@
 import {
   androidAppMonitorDisplaySummaryForRuns,
   androidAppMonitorDisplaySummaryFromRun,
+  publicExecutionFailureFromRun,
   shouldDisplayExpectationResult,
   type AndroidAppMonitorDisplaySummary,
   type DeviceInfo,
@@ -47,6 +48,7 @@ export function RunResultsPanel({
   const deviceMeta = selectedDevice
     ? `${selectedDevice.platform === "ios" ? "iOS" : "Android"}${selectedDevice.osVersion ? ` ${selectedDevice.osVersion}` : ""} · ${selectedDevice.status} · ${selectedDevice.serial}`
     : "请选择设备后查看执行结果";
+  const executionFailure = currentRun ? publicExecutionFailureFromRun(currentRun) : undefined;
 
   return (
     <aside className="steps-panel">
@@ -118,6 +120,7 @@ export function RunResultsPanel({
                   打开 HTML 报告
                 </a>
               )}
+              {executionFailure && <div className="execution-failure-notice"><strong>执行未完成</strong><p>{executionFailure.message}</p><small>技术细节和现场证据请查看 HTML 报告。</small></div>}
               {renderAndroidAppMonitorSummary(androidAppMonitorDisplaySummaryFromRun(currentRun))}
               {currentRun.artifacts
                 .filter((artifact) => artifact.type === "video" && !artifact.deletedAt)
@@ -143,7 +146,6 @@ export function RunResultsPanel({
                         <div>
                           <strong>{display.label}</strong>
                           <small>{formatRunStepResultDetail(step, display)}</small>
-                          {step.errorMessage && <small className="error-text">{step.errorMessage}</small>}
                           {renderStepConditionResult(step.metadata)}
                           {visibleExpectationResults(step.expectationResults).length > 0 && (
                             <div className="expectation-result-chips">
@@ -172,8 +174,7 @@ export function RunResultsPanel({
                     {currentRun.events.slice(0, 4).map((event) => (
                       <div className={`run-event-item ${event.severity}`} key={event.id}>
                         <strong>{event.type}</strong>
-                        <span>{event.summary}</span>
-                        {eventDetailForDisplay(event) && <small>{eventDetailForDisplay(event)}</small>}
+                        <span>{eventSummaryForDisplay(event)}</span>
                       </div>
                     ))}
                   </div>
@@ -315,11 +316,13 @@ function androidAppMonitorSampleText(summary: AndroidAppMonitorDisplaySummary): 
   return `CPU ${summary.cpuSamples} · 内存 ${summary.memorySamples} · 生命周期 ${summary.lifecycleSamples}`;
 }
 
-function eventDetailForDisplay(event: TestRun["events"][number]): string {
-  if (event.type === "android_app_monitor") {
-    return "";
+function eventSummaryForDisplay(event: TestRun["events"][number]): string {
+  if (event.type === "android_app_monitor") return event.summary;
+  if (["crash", "anr", "app_exit", "black_screen", "native_crash", "process_death"].includes(event.type)) {
+    return "目标 App 在执行过程中出现异常。";
   }
-  return event.detail ?? "";
+  if (event.type === "device_lost" || event.type === "preview_lost") return "设备连接在执行过程中中断。";
+  return "执行过程中记录到异常，技术细节请查看报告。";
 }
 
 type RunStepResult = TestRun["stepResults"][number];

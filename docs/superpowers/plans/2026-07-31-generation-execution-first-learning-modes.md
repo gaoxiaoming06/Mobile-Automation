@@ -354,7 +354,7 @@ git commit -m "fix: 收紧页面识别与有界恢复"
 - 修改：`platform/apps/dashboard/src/components/RunResultsPanel.test.ts`
 - 创建：`docs/test/plans/generation-execution-phase-1.md`
 
-- [ ] **步骤 1：定义并测试公开失败类型**
+- [x] **步骤 1：定义并测试公开失败类型**
 
 ```ts
 type PublicExecutionFailureKind =
@@ -371,7 +371,7 @@ type PublicExecutionFailureKind =
 
 用户提示只说明发生了什么和下一步需要补充什么，不显示内部页面 ID、堆栈或 locator payload。
 
-- [ ] **步骤 2：运行 API 和前端测试并确认失败**
+- [x] **步骤 2：运行 API 和前端测试并确认失败**
 
 运行：
 
@@ -379,15 +379,15 @@ type PublicExecutionFailureKind =
 pnpm vitest run platform/apps/server/src/script-flow-api.test.ts platform/apps/dashboard/src/components/AiScriptFlowsPanel.test.tsx platform/apps/dashboard/src/components/RunResultsPanel.test.ts
 ```
 
-- [ ] **步骤 3：实现失败映射和界面**
+- [x] **步骤 3：实现失败映射和界面**
 
 报告保留完整技术细节；AI 生成测试页只显示简短说明和可执行动作，例如补充操作过程、补充参数、查看报告或重新执行。
 
-- [ ] **步骤 4：建立真实设备矩阵**
+- [x] **步骤 4：建立真实设备矩阵**
 
 `docs/test/plans/generation-execution-phase-1.md` 固定记录以下 20 次连续运行：登录、退出登录、主页加号进入添加好友、进入指定班级、屏外教学方案、创建课堂但不发布、公告页、成长页课堂报告、未知结果页文字断言和离开 App 恢复。
 
-- [ ] **步骤 5：运行完整门禁**
+- [x] **步骤 5：运行完整门禁**
 
 运行：
 

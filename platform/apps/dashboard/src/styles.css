@@ -5087,6 +5087,21 @@ button:disabled {
 .ai-script-assumptions p,
 .ai-script-clarification p { margin-top: 5px; color: #526176; font-size: 12px; }
 
+.execution-failure-notice {
+  padding: 10px 12px;
+  border: 1px solid #f1b8b2;
+  border-radius: 6px;
+  background: #fff7f6;
+  color: #8f2d24;
+}
+
+.execution-failure-notice p,
+.execution-failure-notice small {
+  display: block;
+  margin: 4px 0 0;
+  color: #6f3a35;
+}
+
 @media (max-width: 1280px) {
   .script-parameter-grid {
     grid-template-columns: 1fr;
