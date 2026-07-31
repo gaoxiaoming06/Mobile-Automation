@@ -184,7 +184,7 @@ git commit -m "feat: 默认关闭持续学习链路"
 - 修改：`platform/apps/server/src/script-flow-ai-planner.ts`
 - 修改：`platform/apps/server/src/script-flow-ai-planner.test.ts`
 
-- [ ] **步骤 1：补齐四类输入测试**
+- [x] **步骤 1：补齐四类输入测试**
 
 每类至少包含一个正例和一个拒绝例：
 
@@ -193,7 +193,7 @@ git commit -m "feat: 默认关闭持续学习链路"
 3. 混合流程：明确部分不可被资产替代，只补模糊缺口。
 4. 未知结果页：有稳定结果文字时生成 `assertText`；没有 oracle 时返回 clarification。
 
-- [ ] **步骤 2：运行测试并确认新增边界失败**
+- [x] **步骤 2：运行测试并确认新增边界失败**
 
 运行：
 
@@ -201,7 +201,7 @@ git commit -m "feat: 默认关闭持续学习链路"
 pnpm vitest run platform/apps/server/src/script-flow-ai-planner.test.ts
 ```
 
-- [ ] **步骤 3：实现生成后确定性检查**
+- [x] **步骤 3：实现生成后确定性检查**
 
 检查顺序固定为：
 
@@ -218,7 +218,7 @@ AI JSON 解析
 
 内部页面 ID 只能进入结构化草稿，不出现在面向用户的 clarification 文案中。
 
-- [ ] **步骤 4：运行测试并确认通过**
+- [x] **步骤 4：运行测试并确认通过**
 
 运行：
 
@@ -226,7 +226,7 @@ AI JSON 解析
 pnpm vitest run platform/apps/server/src/script-flow-ai-planner.test.ts platform/apps/server/src/script-flow-api.test.ts
 ```
 
-- [ ] **步骤 5：提交生成合同**
+- [x] **步骤 5：提交生成合同**
 
 ```bash
 git add platform/apps/server/src/script-flow-ai-planner.ts platform/apps/server/src/script-flow-ai-planner.test.ts

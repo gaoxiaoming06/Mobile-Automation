@@ -15,7 +15,8 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止擅自增加");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("未录入页面");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("完整操作链");
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("用户确认业务结果");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("必须补充结果验证依据");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("用户确认业务结果");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("search");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("一个 tap 只执行一次点击");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不要再紧跟一个独立 assertPage");
@@ -193,6 +194,19 @@ describe("ScriptFlow AI planner", () => {
       status: "ready",
       document: { steps: [{ tap: expect.any(Object) }, { tap: expect.any(Object) }] }
     });
+  });
+
+  it("rejects explicit click targets generated in the wrong order", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.steps = [response.document.steps[1]!, response.document.steps[0]!];
+
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "在主页点击右上角加号，然后点击添加好友"
+    })).toThrow(/明确操作.*点击右上角加号.*目标.*顺序/);
   });
 
   it("accepts a target-only request as reachPage without asking how to navigate", () => {
@@ -644,7 +658,7 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it("allows a complete zero-asset action chain to proceed to trial with human outcome review", async () => {
+  it("asks for stable result evidence before accepting an unrecorded outcome", async () => {
     const response = readyResponse();
     response.document.name = "进入未录入的教学方案页面";
     response.document.entry = undefined;
@@ -675,8 +689,8 @@ describe("ScriptFlow AI planner", () => {
     });
 
     expect(result).toMatchObject({
-      status: "trial_ready",
-      verification: expect.objectContaining({ status: "needs_trial", unresolvedOutcome: true })
+      status: "needs_clarification",
+      clarification: expect.stringMatching(/稳定文字|验证结果/)
     });
   });
 
