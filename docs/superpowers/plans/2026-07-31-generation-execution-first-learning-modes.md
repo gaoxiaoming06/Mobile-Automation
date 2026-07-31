@@ -246,7 +246,7 @@ git commit -m "fix: 完善 AI 测试生成确定性门禁"
 - 修改：`platform/apps/server/src/semantic-locator.ts`
 - 修改：`platform/apps/server/src/semantic-locator.test.ts`
 
-- [ ] **步骤 1：编写 input、clear、select 的 search 失败测试**
+- [x] **步骤 1：编写 input、clear、select 的 search 失败测试**
 
 ```yaml
 - id: fill-title
@@ -258,13 +258,13 @@ git commit -m "fix: 完善 AI 测试生成确定性门禁"
 
 断言 parser 接受，compiler 保留，执行器先查当前屏，找不到才滚动。
 
-- [ ] **步骤 2：编写固定栏和歧义目标测试**
+- [x] **步骤 2：编写固定栏和歧义目标测试**
 
 - `area: top`、`area: bottom`、弹窗和临时菜单强制 `visibleOnly`。
 - 同屏存在两个“公告”时，不因任一文字命中直接点击；需要 area、position、control 或上下文消歧。
 - 滚动扫描到边界后停止，不超过 `maxSwipes`。
 
-- [ ] **步骤 3：运行测试并确认失败**
+- [x] **步骤 3：运行测试并确认失败**
 
 运行：
 
@@ -272,7 +272,7 @@ git commit -m "fix: 完善 AI 测试生成确定性门禁"
 pnpm vitest run platform/packages/script-flow/src/parser.test.ts platform/packages/script-flow/src/compiler.test.ts platform/apps/server/src/script-target-resolver.test.ts platform/apps/server/src/semantic-locator.test.ts
 ```
 
-- [ ] **步骤 4：实现统一搜索合同**
+- [x] **步骤 4：实现统一搜索合同**
 
 `search: auto` 表示执行期许可，不表示生成期知道目标在屏外：
 
@@ -282,11 +282,11 @@ pnpm vitest run platform/packages/script-flow/src/parser.test.ts platform/packag
 4. 多个候选无法消歧时失败，不选择最高分碰运气。
 5. 找到目标后执行动作并继续页面/文本结果验证。
 
-- [ ] **步骤 5：运行测试并确认通过**
+- [x] **步骤 5：运行测试并确认通过**
 
 运行任务 3 步骤 3 的同一命令，预期全部通过。
 
-- [ ] **步骤 6：提交统一目标搜索**
+- [x] **步骤 6：提交统一目标搜索**
 
 ```bash
 git add platform/packages/script-flow/src platform/apps/server/src/script-target-resolver.ts platform/apps/server/src/script-target-resolver.test.ts platform/apps/server/src/semantic-locator.ts platform/apps/server/src/semantic-locator.test.ts

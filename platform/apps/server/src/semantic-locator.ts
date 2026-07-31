@@ -1593,13 +1593,18 @@ export class SemanticStepResolver {
     let opener: { x: number; y: number } | undefined;
     let openerRelocatedBy = "runtime_ocr_text";
     let revealSwipes = 0;
+    let resetSwipes = 0;
+    let scanSwipes = 0;
+    let reachedBoundary = false;
+    let previousSignature: string | undefined;
     let captureAttempt = 0;
-    const locateOpener = async (): Promise<boolean> => {
+    const locateOpener = async (): Promise<{ found: boolean; signature: string }> => {
       captureAttempt += 1;
       const attempt = captureAttempt;
       const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
       artifacts.push(screenshot.artifact);
       const layout = await locateText({ image: screenshot.png, mode: "contains" });
+      const signature = textSearchLayoutSignature(layout, semanticArea, input.deviceSize);
       let candidate = findTextCandidate(layout, targetText, {
         mode: "contains",
         semanticArea,
@@ -1618,24 +1623,81 @@ export class SemanticStepResolver {
         openerRelocatedBy = allowsBottomContent && textCandidateSemanticArea(candidate, layout, input.deviceSize) === "bottom"
           ? (revealSwipes ? "runtime_ocr_text_bottom_content_after_reveal" : "runtime_ocr_text_bottom_content")
           : (revealSwipes ? "runtime_ocr_text_after_reveal" : "runtime_ocr_text");
-        return true;
+        return { found: true, signature };
       }
-      return false;
+      return { found: false, signature };
     };
-    const currentViewAttempts = Math.max(1, Math.floor(positiveNumberParam(structuralLocator?.locatorReadAttempts, 2)));
+    const currentViewAttempts = revealSettings?.strategy === "bounded_search"
+      ? 1
+      : Math.max(1, Math.floor(positiveNumberParam(structuralLocator?.locatorReadAttempts, 2)));
     for (let attempt = 0; attempt < currentViewAttempts; attempt += 1) {
-      if (await locateOpener()) {
+      const located = await locateOpener();
+      previousSignature = located.signature;
+      if (located.found) {
         break;
       }
     }
-    while (!opener && revealSettings && revealSwipes < revealSettings.maxSwipes) {
-      await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
-      revealSwipes += 1;
-      if (revealSettings.intervalMs > 0) {
-        await sleep(revealSettings.intervalMs);
+    if (!opener && revealSettings?.strategy === "bounded_search") {
+      if (revealSettings.resetToTop && revealSettings.direction !== "up") {
+        for (let swipe = 0; swipe < revealSettings.maxSwipes; swipe += 1) {
+          await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+          resetSwipes += 1;
+          if (revealSettings.intervalMs > 0) {
+            await sleep(revealSettings.intervalMs);
+          }
+          const located = await locateOpener();
+          if (located.found) break;
+          if (previousSignature && located.signature === previousSignature) {
+            reachedBoundary = true;
+            break;
+          }
+          previousSignature = located.signature;
+        }
       }
-      await locateOpener();
+      if (!opener) {
+        reachedBoundary = false;
+        const direction = revealSettings.direction === "up" ? "up" : "down";
+        for (let swipe = 0; swipe < revealSettings.maxSwipes; swipe += 1) {
+          await this.deps.performAction(input.serial, scrollSwipeAction(direction, input.deviceSize));
+          scanSwipes += 1;
+          if (revealSettings.intervalMs > 0) {
+            await sleep(revealSettings.intervalMs);
+          }
+          const located = await locateOpener();
+          if (located.found) break;
+          if (previousSignature && located.signature === previousSignature) {
+            reachedBoundary = true;
+            break;
+          }
+          previousSignature = located.signature;
+        }
+      }
+      if (opener) {
+        openerRelocatedBy = "runtime_ocr_text_after_search";
+      }
+    } else {
+      while (!opener && revealSettings && revealSwipes < revealSettings.maxSwipes) {
+        await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+        revealSwipes += 1;
+        if (revealSettings.intervalMs > 0) {
+          await sleep(revealSettings.intervalMs);
+        }
+        await locateOpener();
+      }
     }
+    const searchMetadata = revealSettings?.strategy === "bounded_search"
+      ? {
+          search: {
+            mode: revealSettings.mode,
+            direction: revealSettings.direction,
+            resetToTop: revealSettings.resetToTop,
+            maxSwipes: revealSettings.maxSwipes,
+            resetSwipes,
+            scanSwipes,
+            reachedBoundary
+          }
+        }
+      : {};
     if (!opener) {
       return {
         supported: true,
@@ -1649,6 +1711,7 @@ export class SemanticStepResolver {
           reason: "runtime_target_text_not_found",
           targetText,
           revealSwipes,
+          ...searchMetadata,
           structuralLocator
         }
       };
@@ -1667,6 +1730,7 @@ export class SemanticStepResolver {
         openerRelocatedBy,
         targetText,
         revealSwipes,
+        ...searchMetadata,
         structuralLocator
       }
     };
@@ -2678,6 +2742,8 @@ export class SemanticStepResolver {
     let resetSwipes = 0;
     let scanSwipes = 0;
     let reachedBoundary = false;
+    let latestAmbiguous = false;
+    let latestCandidateCount = 0;
     let latestMatchStrategy = semanticMatch ? "semantic" : mode;
     const artifacts: ArtifactRef[] = [];
 
@@ -2712,7 +2778,7 @@ export class SemanticStepResolver {
     }
     const locateText = this.deps.ocr.locateText.bind(this.deps.ocr);
 
-    const inspectViewport = async (): Promise<{ layout: OcrLayoutResult; candidate?: TextLocatorCandidate; signature: string }> => {
+    const inspectViewport = async (): Promise<{ layout: OcrLayoutResult; candidate?: TextLocatorCandidate; ambiguous: boolean; signature: string }> => {
       attempt += 1;
       const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
       artifacts.push(screenshot.artifact);
@@ -2721,20 +2787,27 @@ export class SemanticStepResolver {
         lang: textParam(input.step.params.lang) || undefined,
         mode
       });
-      latestCandidate = semanticMatch
-        ? findSemanticTextCandidate(latestLayout, expectedTargets[0] ?? "", {
+      if (semanticMatch) {
+        latestCandidate = findSemanticTextCandidate(latestLayout, expectedTargets[0] ?? "", {
             preferredPoint: recordedPoint(input.step, input.deviceSize),
             semanticArea,
             deviceSize: input.deviceSize
-          })
-        : findTextCandidateFromTargets(latestLayout, expectedTargets, {
+          });
+        latestAmbiguous = false;
+        latestCandidateCount = latestCandidate ? 1 : 0;
+      } else {
+        const selection = findTextCandidateSelectionFromTargets(latestLayout, expectedTargets, {
             mode,
             preferredPoint: recordedPoint(input.step, input.deviceSize),
             semanticArea,
             deviceSize: input.deviceSize
           });
+        latestCandidate = selection.candidate;
+        latestAmbiguous = selection.ambiguous;
+        latestCandidateCount = selection.candidateCount;
+      }
       latestMatchStrategy = semanticMatch ? "semantic" : mode;
-      if (!latestCandidate && fallbackSemanticQuery) {
+      if (!latestCandidate && !latestAmbiguous && fallbackSemanticQuery) {
         latestCandidate = findSemanticTextCandidate(latestLayout, fallbackSemanticQuery, {
           preferredPoint: recordedPoint(input.step, input.deviceSize),
           semanticArea,
@@ -2745,6 +2818,7 @@ export class SemanticStepResolver {
       return {
         layout: latestLayout,
         candidate: latestCandidate,
+        ambiguous: latestAmbiguous,
         signature: textSearchLayoutSignature(latestLayout, semanticArea, input.deviceSize)
       };
     };
@@ -2792,6 +2866,9 @@ export class SemanticStepResolver {
         if (current.candidate) {
           return tapCandidate(current.candidate, current.layout);
         }
+        if (current.ambiguous) {
+          break;
+        }
 
         const elapsed = Date.now() - started;
         if (elapsed >= timeoutMs) {
@@ -2804,6 +2881,9 @@ export class SemanticStepResolver {
       if (current.candidate) {
         return tapCandidate(current.candidate, current.layout);
       }
+      if (current.ambiguous) {
+        return textTargetFailure();
+      }
       let previousSignature = current.signature;
 
       if (resetToTop) {
@@ -2814,6 +2894,9 @@ export class SemanticStepResolver {
           current = await inspectViewport();
           if (current.candidate) {
             return tapCandidate(current.candidate, current.layout);
+          }
+          if (current.ambiguous) {
+            return textTargetFailure();
           }
           if (current.signature === previousSignature) {
             reachedBoundary = true;
@@ -2833,6 +2916,9 @@ export class SemanticStepResolver {
         if (current.candidate) {
           return tapCandidate(current.candidate, current.layout);
         }
+        if (current.ambiguous) {
+          return textTargetFailure();
+        }
         if (current.signature === previousSignature) {
           reachedBoundary = true;
           break;
@@ -2841,18 +2927,25 @@ export class SemanticStepResolver {
       }
     }
 
-    return {
+    return textTargetFailure();
+
+    function textTargetFailure(): SemanticResolutionOutcome {
+      const reason = latestAmbiguous ? "ambiguous_target" : "target_not_found";
+      return {
       supported: true,
       resolved: false,
-      message: `Text target "${expectedTargets.join(" / ")}" was not found.`,
+      message: latestAmbiguous
+        ? `Text target "${expectedTargets.join(" / ")}" matched multiple visible candidates.`
+        : `Text target "${expectedTargets.join(" / ")}" was not found.`,
       artifacts,
       metadata: {
         type: "text",
         expected: expectedTargets,
         actual: normalizeOcrText(latestLayout?.text ?? "") || "(empty OCR result)",
         action: "fail",
+        reason,
         attempts: attempt,
-        candidateCount: latestLayout?.boxes.length ?? 0,
+        candidateCount: latestCandidateCount || latestLayout?.boxes.length || 0,
         nearestCandidate: latestCandidate,
         ...(fallbackSemanticQuery ? { fallbackSemanticQuery } : {}),
         search: {
@@ -2866,7 +2959,8 @@ export class SemanticStepResolver {
         },
         evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
       }
-    };
+      };
+    }
   }
 
   private async resolveTapOnElement(input: {
@@ -3277,19 +3371,76 @@ export class SemanticStepResolver {
     let focus = await this.resolveInputRegionFocusPoint(input, searchRegion);
     let reveal: { strategy: "scroll_to_top"; swipes: number } | undefined;
     const revealSettings = runtimeInputRevealSettings(input.step.params, semanticArea);
+    let resetSwipes = 0;
+    let scanSwipes = 0;
+    let reachedBoundary = false;
+    let previousSignature = focus.signature;
+    const inspectAfterSwipe = async (): Promise<void> => {
+      focus = await this.resolveInputRegionFocusPoint(input, searchRegion);
+    };
+    const reachedSameViewport = (): boolean => {
+      if (!focus.signature || !previousSignature) {
+        previousSignature = focus.signature ?? previousSignature;
+        return false;
+      }
+      const same = focus.signature === previousSignature;
+      previousSignature = focus.signature;
+      return same;
+    };
     if (!focus.point && revealSettings) {
-      for (let swipes = 1; swipes <= revealSettings.maxSwipes; swipes += 1) {
-        await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
-        if (revealSettings.intervalMs > 0) {
-          await sleep(revealSettings.intervalMs);
+      if (revealSettings.strategy === "bounded_search" && revealSettings.resetToTop && revealSettings.direction !== "up") {
+        for (let swipe = 0; swipe < revealSettings.maxSwipes; swipe += 1) {
+          await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+          resetSwipes += 1;
+          if (revealSettings.intervalMs > 0) {
+            await sleep(revealSettings.intervalMs);
+          }
+          await inspectAfterSwipe();
+          if (focus.point) {
+            break;
+          }
+          if (reachedSameViewport()) {
+            reachedBoundary = true;
+            break;
+          }
         }
-        focus = await this.resolveInputRegionFocusPoint(input, searchRegion);
-        if (focus.point) {
-          reveal = { strategy: "scroll_to_top", swipes };
-          break;
+      }
+      if (!focus.point) {
+        reachedBoundary = false;
+        const direction = revealSettings.strategy === "scroll_to_top" || revealSettings.direction === "up" ? "up" : "down";
+        for (let swipe = 0; swipe < revealSettings.maxSwipes; swipe += 1) {
+          await this.deps.performAction(input.serial, scrollSwipeAction(direction, input.deviceSize));
+          scanSwipes += 1;
+          if (revealSettings.intervalMs > 0) {
+            await sleep(revealSettings.intervalMs);
+          }
+          await inspectAfterSwipe();
+          if (focus.point) {
+            if (revealSettings.strategy === "scroll_to_top") {
+              reveal = { strategy: "scroll_to_top", swipes: scanSwipes };
+            }
+            break;
+          }
+          if (reachedSameViewport()) {
+            reachedBoundary = true;
+            break;
+          }
         }
       }
     }
+    const searchMetadata = revealSettings?.strategy === "bounded_search"
+      ? {
+          search: {
+            mode: revealSettings.mode,
+            direction: revealSettings.direction,
+            resetToTop: revealSettings.resetToTop,
+            maxSwipes: revealSettings.maxSwipes,
+            resetSwipes,
+            scanSwipes,
+            reachedBoundary
+          }
+        }
+      : {};
     if (!focus.point) {
       return {
         supported: true,
@@ -3306,7 +3457,10 @@ export class SemanticStepResolver {
           ...(focus.recordedCenter ? { recordedCenter: focus.recordedCenter } : {}),
           focusResolvedBy: focus.resolvedBy,
           semanticArea,
-          ...(revealSettings ? { revealAttempted: { strategy: "scroll_to_top", swipes: revealSettings.maxSwipes } } : {}),
+          ...(revealSettings?.strategy === "scroll_to_top"
+            ? { revealAttempted: { strategy: "scroll_to_top", swipes: revealSettings.maxSwipes } }
+            : {}),
+          ...searchMetadata,
           ...pageTaskSemanticMetadata(input.step.params)
         }
       };
@@ -3340,6 +3494,7 @@ export class SemanticStepResolver {
           ...(focus.uiCandidate ? { focusUiCandidate: focus.uiCandidate } : {}),
           semanticArea,
           ...(reveal ? { reveal } : {}),
+          ...searchMetadata,
           driverChannel: actionResult?.driverChannel
         }
       };
@@ -3386,6 +3541,7 @@ export class SemanticStepResolver {
           ...(focus.artifacts.length ? { focusEvidenceArtifactIds: focus.artifacts.map((artifact) => artifact.id) } : {}),
           semanticArea,
           ...(reveal ? { reveal } : {}),
+          ...searchMetadata,
           ...pageTaskSemanticMetadata(input.step.params),
           clearFirst: input.step.params.clearFirst !== false,
           sensitiveInput: isSensitiveInput(input.step.params),
@@ -3417,6 +3573,7 @@ export class SemanticStepResolver {
         ...(focus.artifacts.length ? { focusEvidenceArtifactIds: focus.artifacts.map((artifact) => artifact.id) } : {}),
         semanticArea,
         ...(reveal ? { reveal } : {}),
+        ...searchMetadata,
         ...pageTaskSemanticMetadata(input.step.params),
         clearFirst: input.step.params.clearFirst !== false,
         inputVerified: verification.verified,
@@ -3612,6 +3769,7 @@ export class SemanticStepResolver {
     candidate?: TextLocatorCandidate;
     uiCandidate?: UiElementCandidate;
     artifacts: ArtifactRef[];
+    signature?: string;
   }> {
     const tapPointPercent = readTapPointPercent(input.step.params.tapPointPercent);
     const fallbackPoint = regionPoint(region, input.deviceSize, tapPointPercent);
@@ -3622,6 +3780,7 @@ export class SemanticStepResolver {
         image: screenshot.png,
         mode: "contains"
       });
+      const signature = textSearchLayoutSignature(layout, undefined, input.deviceSize);
       const candidate = findInputFocusCandidate(layout, region, input.deviceSize, input.step.params);
       if (candidate) {
         const point = textCandidateDevicePoint(candidate, layout, input.deviceSize);
@@ -3629,7 +3788,8 @@ export class SemanticStepResolver {
           point,
           resolvedBy: isRelativeInputStructure(input.step.params) ? "ocr_relative_structure" : "ocr_text_semantic",
           candidate,
-          artifacts: [screenshot.artifact]
+          artifacts: [screenshot.artifact],
+          signature
         };
       }
       const uiCandidate = await this.resolveInputUiCandidate(input.serial, region, input.deviceSize, input.step.params);
@@ -3638,20 +3798,23 @@ export class SemanticStepResolver {
           point: { x: uiCandidate.bounds.centerX, y: uiCandidate.bounds.centerY },
           resolvedBy: "ui_edit_text_structural",
           uiCandidate,
-          artifacts: [screenshot.artifact]
+          artifacts: [screenshot.artifact],
+          signature
         };
       }
       if (fallbackPoint && allowRegionFallback) {
         return {
           point: fallbackPoint,
           resolvedBy: tapPointPercent ? "tap_point_percent" : "region_center",
-          artifacts: [screenshot.artifact]
+          artifacts: [screenshot.artifact],
+          signature
         };
       }
       return {
         recordedCenter: fallbackPoint,
         resolvedBy: "region_center_disabled",
-        artifacts: [screenshot.artifact]
+        artifacts: [screenshot.artifact],
+        signature
       };
     }
     const uiCandidate = await this.resolveInputUiCandidate(input.serial, region, input.deviceSize, input.step.params);
@@ -4001,6 +4164,21 @@ export function findTextCandidate(
     deviceSize?: { width: number; height: number };
   } = {}
 ): TextLocatorCandidate | undefined {
+  return findTextCandidates(layout, expected, options)[0];
+}
+
+function findTextCandidates(
+  layout: OcrLayoutResult,
+  expected: string,
+  options: {
+    mode?: "contains" | "equals";
+    preferredPoint?: { x: number; y: number };
+    maxDistance?: number;
+    semanticArea?: VisualSemanticArea;
+    percentRegion?: { x: number; y: number; width: number; height: number };
+    deviceSize?: { width: number; height: number };
+  } = {}
+): TextLocatorCandidate[] {
   const expectedText = normalizeOcrText(expected);
   const mode = options.mode ?? "contains";
   const matches = layout.boxes
@@ -4009,7 +4187,7 @@ export function findTextCandidate(
     .filter((candidate) => !options.semanticArea || options.semanticArea === "unknown" || textCandidateSemanticArea(candidate, layout, options.deviceSize) === options.semanticArea)
     .filter((candidate) => !options.percentRegion || candidateInsidePercentRegion(candidate, options.percentRegion, layout, options.deviceSize));
   if (!matches.length) {
-    return undefined;
+    return [];
   }
   const rankedMatches =
     mode === "contains" ? matches.filter((candidate) => normalizeOcrText(candidate.text) === expectedText) : matches;
@@ -4017,7 +4195,7 @@ export function findTextCandidate(
   const maxDistance = options.maxDistance;
   return candidates
     .filter((candidate) => maxDistance === undefined || candidate.distanceToPoint === undefined || candidate.distanceToPoint <= maxDistance)
-    .sort((left, right) => candidateScore(right) - candidateScore(left))[0];
+    .sort((left, right) => candidateScore(right) - candidateScore(left));
 }
 
 function findSemanticTextCandidate(
@@ -4338,6 +4516,39 @@ function findTextCandidateFromTargets(
     .map((target) => findTextCandidate(layout, target, options))
     .filter((candidate): candidate is TextLocatorCandidate => Boolean(candidate))
     .sort((left, right) => candidateScore(right) - candidateScore(left))[0];
+}
+
+function findTextCandidateSelectionFromTargets(
+  layout: OcrLayoutResult,
+  expectedTargets: string[],
+  options: {
+    mode?: "contains" | "equals";
+    preferredPoint?: { x: number; y: number };
+    maxDistance?: number;
+    semanticArea?: VisualSemanticArea;
+    deviceSize?: { width: number; height: number };
+  } = {}
+): { candidate?: TextLocatorCandidate; ambiguous: boolean; candidateCount: number } {
+  const candidates = expectedTargets
+    .flatMap((target) => findTextCandidates(layout, target, options))
+    .filter((candidate, index, all) => all.findIndex((item) =>
+      item.centerX === candidate.centerX && item.centerY === candidate.centerY && item.text === candidate.text
+    ) === index)
+    .sort((left, right) => candidateScore(right) - candidateScore(left));
+  if (candidates.length <= 1) {
+    return { candidate: candidates[0], ambiguous: false, candidateCount: candidates.length };
+  }
+  const preferredPoint = options.preferredPoint;
+  const hasMeaningfulPoint = Boolean(preferredPoint && preferredPoint.x > 0 && preferredPoint.y > 0);
+  if (hasMeaningfulPoint) {
+    const [best, second] = candidates;
+    const bestDistance = best?.distanceToPoint ?? Number.POSITIVE_INFINITY;
+    const secondDistance = second?.distanceToPoint ?? Number.POSITIVE_INFINITY;
+    if (best && secondDistance - bestDistance >= 48) {
+      return { candidate: best, ambiguous: false, candidateCount: candidates.length };
+    }
+  }
+  return { ambiguous: true, candidateCount: candidates.length };
 }
 
 export function findNearestTextCandidate(
@@ -5373,16 +5584,39 @@ function isRuntimeInputStructuralLocator(params: Record<string, unknown>): boole
 function runtimeInputRevealSettings(
   params: Record<string, unknown>,
   semanticArea: VisualSemanticArea
-): { maxSwipes: number; intervalMs: number } | undefined {
+): {
+  strategy: "bounded_search" | "scroll_to_top";
+  mode: "auto" | "scroll";
+  direction: "up" | "down" | "both";
+  resetToTop: boolean;
+  maxSwipes: number;
+  intervalMs: number;
+} | undefined {
   if (semanticArea !== "content") {
     return undefined;
   }
   const structuralLocator = readRecord(params.structuralLocator);
+  const searchMode = readTextSearchMode(params.searchMode);
+  if (searchMode === "auto" || searchMode === "scroll") {
+    const direction = readTextSearchDirection(params.searchDirection);
+    return {
+      strategy: "bounded_search",
+      mode: searchMode,
+      direction,
+      resetToTop: params.resetToTop !== false && direction !== "up",
+      maxSwipes: Math.max(1, Math.floor(positiveNumberParam(params.maxSwipes, 6))),
+      intervalMs: nonNegativeNumberParam(params.intervalMs, 250)
+    };
+  }
   const strategy = textParam(structuralLocator?.revealStrategy ?? params.revealStrategy).trim();
   if (strategy !== "scroll_to_top") {
     return undefined;
   }
   return {
+    strategy: "scroll_to_top",
+    mode: "scroll",
+    direction: "up",
+    resetToTop: false,
     maxSwipes: Math.max(1, Math.floor(positiveNumberParam(structuralLocator?.revealMaxSwipes ?? params.revealMaxSwipes, 3))),
     intervalMs: nonNegativeNumberParam(structuralLocator?.revealIntervalMs ?? params.revealIntervalMs, 250)
   };

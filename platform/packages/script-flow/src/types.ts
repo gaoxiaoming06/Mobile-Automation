@@ -91,12 +91,14 @@ export type ScriptInputTextStep = ScriptStepBase & {
   inputText: {
     target: ScriptTarget;
     value: string;
+    search?: ScriptSearchPolicy;
   };
 };
 
 export type ScriptClearTextStep = ScriptStepBase & {
   clearText: {
     target: ScriptTarget;
+    search?: ScriptSearchPolicy;
   };
 };
 
@@ -105,6 +107,7 @@ export type ScriptSelectTextStep = ScriptStepBase & {
     target: ScriptTarget;
     value: string;
     confirmText?: string;
+    search?: ScriptSearchPolicy;
   };
 };
 

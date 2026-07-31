@@ -289,18 +289,34 @@ steps:
     `)).toThrow(/bottom bar icon targets are not supported/i);
   });
 
-  it("rejects search on actions whose executor does not implement generic search yet", () => {
-    expect(() => parseScriptFlow(`
+  it("accepts the same bounded search policy for input, clear, and select actions", () => {
+    const flow = parseScriptFlow(`
 version: 1
-name: unsupported input search
+name: searchable form fields
 app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: fill-name
     inputText:
       target: { text: 课堂名称 }
       value: 自动化课堂
-      search: { mode: auto }
-`)).toThrow(/inputText\.search.*unknown field/i);
+      search: { mode: auto, direction: down, maxSwipes: 6 }
+  - id: clear-name
+    clearText:
+      target: { text: 课堂名称 }
+      search: { mode: scroll, direction: both, maxSwipes: 4 }
+  - id: select-duration
+    risk: interaction
+    selectText:
+      target: { text: 课堂时长 }
+      value: 30分钟
+      search: { mode: auto, direction: down, maxSwipes: 5 }
+`);
+
+    expect(flow.steps).toMatchObject([
+      { inputText: { search: { mode: "auto", direction: "down", maxSwipes: 6 } } },
+      { clearText: { search: { mode: "scroll", direction: "both", maxSwipes: 4 } } },
+      { selectText: { search: { mode: "auto", direction: "down", maxSwipes: 5 } } }
+    ]);
   });
 
   it("rejects absolute coordinates instead of accepting a hidden coordinate fallback", () => {

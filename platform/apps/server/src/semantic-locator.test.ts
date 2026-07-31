@@ -233,6 +233,45 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("does not guess when identical visible text targets are ambiguous", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "公告 公告",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1080,
+        height: 2400,
+        boxes: [
+          { text: "公告", confidence: 0.99, x: 120, y: 500, width: 100, height: 50 },
+          { text: "公告", confidence: 0.98, x: 760, y: 1500, width: 100, height: 50 }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-ambiguous-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-ambiguous",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: tapOnTextStep("公告", 0, 0, {
+        searchMode: "visibleOnly",
+        timeoutMs: 1,
+        intervalMs: 1
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: false,
+      metadata: expect.objectContaining({ reason: "ambiguous_target" })
+    }));
+  });
+
   it("rejects legacy grid candidate index taps without a semantic target", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -1508,6 +1547,73 @@ describe("SemanticStepResolver", () => {
       metadata: expect.objectContaining({
         focusResolvedBy: "ocr_relative_structure",
         reveal: expect.objectContaining({ strategy: "scroll_to_top", swipes: 1 })
+      })
+    }));
+  });
+
+  it("searches from the current viewport, resets, and scans down for an offscreen input", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        layout("页面中部"),
+        layout("页面顶部"),
+        {
+          text: "课堂名称",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [{ text: "课堂名称", confidence: 0.99, x: 90, y: 600, width: 180, height: 52 }]
+        },
+        {
+          text: "课堂名称 自动化课堂",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [{ text: "自动化课堂", confidence: 0.99, x: 90, y: 600, width: 220, height: 52 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-search-input-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-search-input",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "自动化课堂",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locatorKind: "structural_locator",
+        targetText: "课堂名称",
+        semanticArea: "content",
+        searchMode: "auto",
+        searchDirection: "down",
+        resetToTop: true,
+        maxSwipes: 1,
+        intervalMs: 0,
+        structuralLocator: { strategy: "ocr_or_edittext", text: "课堂名称" }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "swipe", startX: 500, startY: 500, endX: 500, endY: 1500, durationMs: 450 },
+      { type: "swipe", startX: 500, startY: 1500, endX: 500, endY: 500, durationMs: 450 },
+      { type: "tap", x: 180, y: 626 },
+      { type: "clear_text" },
+      { type: "input_text", text: "自动化课堂" }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        search: expect.objectContaining({ resetSwipes: 1, scanSwipes: 1, maxSwipes: 1 })
       })
     }));
   });
@@ -3133,6 +3239,83 @@ describe("SemanticStepResolver", () => {
         pickerMode: "duration_hours_minutes",
         selectedValue: "30分钟",
         openerRelocatedBy: "runtime_ocr_text_after_reveal"
+      })
+    }));
+  });
+
+  it("uses the shared bounded search contract for an offscreen picker", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        layout("页面中部"),
+        layout("页面顶部"),
+        {
+          text: "课堂时长 50分钟",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "课堂时长", confidence: 0.99, x: 90, y: 600, width: 180, height: 52 }]
+        },
+        {
+          text: "0小时 50分钟",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "0小时", confidence: 0.99, x: 120, y: 1500, width: 150, height: 60 },
+            { text: "50分钟", confidence: 0.99, x: 680, y: 1500, width: 170, height: 60 }
+          ]
+        },
+        {
+          text: "0小时 30分钟",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [
+            { text: "0小时", confidence: 0.99, x: 120, y: 1500, width: 150, height: 60 },
+            { text: "30分钟", confidence: 0.99, x: 680, y: 1500, width: 170, height: 60 }
+          ]
+        },
+        {
+          text: "确定",
+          engine: "fake-layout", lang: "test", width: 1000, height: 2000,
+          boxes: [{ text: "确定", confidence: 0.99, x: 820, y: 1120, width: 100, height: 55 }]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-search-picker-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1", stepResultId: "step-result-search-picker", serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "runtime-locator:lesson_duration_row",
+        locatorKind: "structural_locator",
+        targetText: "课堂时长",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        fieldType: "picker_select",
+        selectedValue: "30分钟",
+        searchMode: "auto",
+        searchDirection: "down",
+        resetToTop: true,
+        maxSwipes: 1,
+        intervalMs: 0,
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        pickerScrollIntervalMs: 1,
+        structuralLocator: {
+          strategy: "ocr_text_row",
+          anchorText: "课堂时长",
+          pickerMode: "duration_hours_minutes"
+        }
+      })
+    });
+
+    expect(actions[0]).toEqual({ type: "swipe", startX: 500, startY: 500, endX: 500, endY: 1500, durationMs: 450 });
+    expect(actions[1]).toEqual({ type: "swipe", startX: 500, startY: 1500, endX: 500, endY: 500, durationMs: 450 });
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        search: expect.objectContaining({ resetSwipes: 1, scanSwipes: 1, maxSwipes: 1 })
       })
     }));
   });

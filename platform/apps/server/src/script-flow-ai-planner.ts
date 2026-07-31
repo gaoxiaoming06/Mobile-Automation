@@ -316,7 +316,7 @@ export function buildScriptFlowPlannerPrompt(
     "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
     "target 必须且只能使用 text、semantic、icon 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；不知道准确标签时改用 semantic。icon 必须带 area 和 position；control 当前只支持 checkbox，并且必须带 area: content 和 nearText；禁止元素资产 ID、坐标、区域和临时视觉模板。",
-    "tap.search.mode 可用 auto、visibleOnly 或 scroll。普通内容点击目标默认用 auto；瞬时菜单和顶栏/底栏点击目标用 visibleOnly。执行器负责在允许时逐屏查找，脚本不要展开成机械滑动步骤。inputText、clearText 和 selectText 当前不接受 search。",
+    "tap、inputText、clearText 和 selectText 使用同一 search 合同，search.mode 可用 auto、visibleOnly 或 scroll。普通内容目标默认用 auto；瞬时菜单和顶栏/底栏目标用 visibleOnly。执行器负责在允许时逐屏查找，脚本不要展开成机械滑动步骤。",
     "只表达目标页面时，仅当目标属于 navigationAnchors，或能通过 navigationEntries、已验证 transitions 到达时使用 reachPage: { page: <目录页面>, policy: safe }。不要因为“回到”推断系统返回或重启，也不要根据页面名称或标签猜测导航入口。reachPage 自身会验证目标页，不要追加 assertPage。",
     "tap 与 selectText 默认标记 risk: interaction。明确属于提交、发布、删除或支付时，risk 分别填写 submit、publish、delete 或 payment；这些标记仅用于报告审计，无需运行前确认；禁止 risk: none。",
     explicitOperations.length
@@ -370,6 +370,27 @@ function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Re
       role: "business",
       onPage: pageReference,
       tap: { target: { control: "checkbox", area: "content", nearText: "我已阅读并同意" }, search: { mode: "visibleOnly" } }
+    },
+    {
+      id: "fill-content-field",
+      role: "business",
+      onPage: pageReference,
+      inputText: {
+        target: { semantic: "课堂名称输入框", area: "content" },
+        value: "${lessonName}",
+        search: { mode: "auto", direction: "down", maxSwipes: 6 }
+      }
+    },
+    {
+      id: "select-content-option",
+      role: "business",
+      onPage: pageReference,
+      selectText: {
+        target: { text: "课程", area: "content" },
+        value: "${course}",
+        search: { mode: "auto", direction: "down", maxSwipes: 6 }
+      },
+      risk: "interaction"
     },
     { id: "reach-page", role: "navigation", reachPage: { page: pageReference, policy: "safe" } },
     { id: "assert-page", role: "assertion", assertPage: pageReference },

@@ -25,7 +25,14 @@ describe("ScriptTargetResolver", () => {
         resetToTop: true
       }
     });
-    expect(resolver.resolve({ action: "inputText", target: { text: "课堂名称输入框" }, value: "自动化课堂", appId: "cn.eeo.classin", platform: "android" }))
+    expect(resolver.resolve({
+      action: "inputText",
+      target: { text: "课堂名称输入框", area: "content" },
+      value: "自动化课堂",
+      search: { mode: "auto", direction: "down", maxSwipes: 5 },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    }))
       .toEqual(expect.objectContaining({
         type: "input_text_to_element",
         strategy: "semantic_text",
@@ -33,9 +40,32 @@ describe("ScriptTargetResolver", () => {
           text: "自动化课堂",
           targetText: "课堂名称输入框",
           clearFirst: true,
-          locatorKind: "structural_locator"
+          locatorKind: "structural_locator",
+          searchMode: "auto",
+          searchDirection: "down",
+          maxSwipes: 5,
+          resetToTop: true
         })
       }));
+  });
+
+  it("forces fixed-bar form targets to visible-only search", () => {
+    const resolver = new ScriptTargetResolver();
+
+    const result = resolver.resolve({
+      action: "clearText",
+      target: { text: "搜索", area: "topBar" },
+      search: { mode: "auto", direction: "down", maxSwipes: 6 },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+
+    expect(result.params).toMatchObject({
+      targetText: "搜索",
+      semanticArea: "top",
+      searchMode: "visibleOnly"
+    });
+    expect(result.params).not.toHaveProperty("maxSwipes");
   });
 
   it("turns a semantic target into an outcome-aware OCR grounding request", () => {

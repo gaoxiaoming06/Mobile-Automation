@@ -106,6 +106,7 @@ steps:
     selectText:
       target: { text: 课堂时长, area: content }
       value: "\${duration}"
+      search: { mode: auto, direction: down, maxSwipes: 5 }
 `);
 
     const plan = compileScriptFlow(flow, { parameters: { className: "班级四十二号" } });
@@ -124,7 +125,10 @@ steps:
       order: 2,
       id: "select-duration",
       action: "selectText",
-      input: { value: "30" }
+      input: {
+        value: "30",
+        search: { mode: "auto", direction: "down", maxSwipes: 5 }
+      }
     });
   });
 

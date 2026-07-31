@@ -452,29 +452,37 @@ function readTapAction(value: unknown, path: string, issues: ScriptFlowValidatio
   };
 }
 
-function readTargetAction(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { target: ScriptTarget } {
+function readTargetAction(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { target: ScriptTarget; search?: ScriptSearchPolicy } {
   const action = recordAt(value, path, issues);
-  rejectUnknownFields(action, new Set(["target"]), path, issues);
-  return { target: readTarget(action.target, `${path}.target`, issues) };
-}
-
-function readValueAction(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { target: ScriptTarget; value: string } {
-  const action = recordAt(value, path, issues);
-  rejectUnknownFields(action, new Set(["target", "value"]), path, issues);
+  rejectUnknownFields(action, new Set(["target", "search"]), path, issues);
+  const search = readSearchPolicy(action.search, `${path}.search`, issues);
   return {
     target: readTarget(action.target, `${path}.target`, issues),
-    value: scalarAsString(action.value, `${path}.value`, issues)
+    ...(search ? { search } : {})
   };
 }
 
-function readSelectText(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { target: ScriptTarget; value: string; confirmText?: string } {
+function readValueAction(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { target: ScriptTarget; value: string; search?: ScriptSearchPolicy } {
   const action = recordAt(value, path, issues);
-  rejectUnknownFields(action, new Set(["target", "value", "confirmText"]), path, issues);
-  const confirmText = optionalString(action.confirmText, `${path}.confirmText`, issues);
+  rejectUnknownFields(action, new Set(["target", "value", "search"]), path, issues);
+  const search = readSearchPolicy(action.search, `${path}.search`, issues);
   return {
     target: readTarget(action.target, `${path}.target`, issues),
     value: scalarAsString(action.value, `${path}.value`, issues),
-    ...(confirmText ? { confirmText } : {})
+    ...(search ? { search } : {})
+  };
+}
+
+function readSelectText(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { target: ScriptTarget; value: string; confirmText?: string; search?: ScriptSearchPolicy } {
+  const action = recordAt(value, path, issues);
+  rejectUnknownFields(action, new Set(["target", "value", "confirmText", "search"]), path, issues);
+  const confirmText = optionalString(action.confirmText, `${path}.confirmText`, issues);
+  const search = readSearchPolicy(action.search, `${path}.search`, issues);
+  return {
+    target: readTarget(action.target, `${path}.target`, issues),
+    value: scalarAsString(action.value, `${path}.value`, issues),
+    ...(confirmText ? { confirmText } : {}),
+    ...(search ? { search } : {})
   };
 }
 

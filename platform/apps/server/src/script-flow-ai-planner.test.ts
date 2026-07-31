@@ -231,6 +231,7 @@ describe("ScriptFlow AI planner", () => {
     const prompt = buildScriptFlowPlannerPrompt("回到主页", "cn.eeo.classin", "android", catalog);
     expect(prompt).toContain("reachPage");
     expect(prompt).toContain("不要因为“回到”推断系统返回");
+    expect(prompt).toContain("tap、inputText、clearText 和 selectText 使用同一 search 合同");
     expect(prompt).toContain('"kind": "case | scenario"');
     expect(prompt).toContain('"entry"');
     expect(prompt).toContain('"outcome"');
