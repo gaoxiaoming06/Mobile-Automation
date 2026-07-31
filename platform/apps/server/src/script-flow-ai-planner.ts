@@ -78,6 +78,27 @@ type ParsedScriptFlowAiDraft =
   | Omit<ScriptFlowAiGeneratedDraft, "status" | "channel" | "model" | "verification"> & { status: "ready" }
   | Omit<Extract<ScriptFlowAiDraft, { status: "needs_clarification" }>, "channel" | "model">;
 
+const SCRIPT_FLOW_READY_RESPONSE_FIELDS = ["status", "summary", "assumptions", "parameterValues", "document"];
+const SCRIPT_FLOW_DOCUMENT_RESPONSE_FIELDS = [
+  "version",
+  "kind",
+  "purpose",
+  "testLevel",
+  "name",
+  "description",
+  "app",
+  "start",
+  "entry",
+  "outcome",
+  "parameters",
+  "steps",
+  "tags"
+];
+const SCRIPT_FLOW_FLATTENED_READY_RESPONSE_FIELDS = new Set([
+  ...SCRIPT_FLOW_READY_RESPONSE_FIELDS,
+  ...SCRIPT_FLOW_DOCUMENT_RESPONSE_FIELDS
+]);
+
 export async function generateScriptFlowDraft(input: {
   config: AiModelConfig;
   prompt: string;
@@ -466,7 +487,7 @@ export function parseScriptFlowAiResponse(
   }
 ): ParsedScriptFlowAiDraft {
   const value = parseAiJsonObject(raw);
-  const root = recordValue(value);
+  const root = normalizeScriptFlowAiResponseRoot(recordValue(value));
   if (root.status === "needs_clarification") {
     assertKnownResponseFields(root, ["status", "clarification"]);
     const clarification = stringValue(root.clarification);
@@ -498,6 +519,41 @@ export function parseScriptFlowAiResponse(
     summary: stringValue(root.summary) ?? `已生成 ${document.name}`,
     assumptions: stringArray(root.assumptions)
   };
+}
+
+function normalizeScriptFlowAiResponseRoot(root: Record<string, unknown>): Record<string, unknown> {
+  if ("document" in root || root.status === "needs_clarification") return root;
+  if (root.status !== undefined && root.status !== "ready") return root;
+  if (!Object.keys(root).every((key) => SCRIPT_FLOW_FLATTENED_READY_RESPONSE_FIELDS.has(key))) return root;
+
+  const document = pickFlattenedScriptFlowDocument(root);
+  if (!looksLikeScriptFlowDocumentShape(document)) return root;
+
+  return {
+    status: "ready",
+    ...(root.summary !== undefined ? { summary: root.summary } : {}),
+    ...(root.assumptions !== undefined ? { assumptions: root.assumptions } : {}),
+    ...(root.parameterValues !== undefined ? { parameterValues: root.parameterValues } : {}),
+    document
+  };
+}
+
+function pickFlattenedScriptFlowDocument(root: Record<string, unknown>): Record<string, unknown> {
+  const document: Record<string, unknown> = {};
+  for (const field of SCRIPT_FLOW_DOCUMENT_RESPONSE_FIELDS) {
+    if (root[field] !== undefined) document[field] = root[field];
+  }
+  return document;
+}
+
+function looksLikeScriptFlowDocumentShape(document: Record<string, unknown>): boolean {
+  const app = recordValue(document.app);
+  return document.version === 1
+    && !!stringValue(document.kind)
+    && !!stringValue(document.name)
+    && !!stringValue(app.id)
+    && !!stringValue(app.platform)
+    && Array.isArray(document.steps);
 }
 
 function parseAiJsonObject(raw: string): unknown {

@@ -854,6 +854,50 @@ describe("ScriptFlow AI planner", () => {
     })).toMatchObject({ status: "ready", document: { name: "打开添加好友" } });
   });
 
+  it("wraps a flattened ready ScriptFlow document response from the AI", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = {
+      status: "ready",
+      summary: "设置课堂时长",
+      assumptions: [],
+      parameterValues: {},
+      version: 1,
+      kind: "case",
+      purpose: "business",
+      testLevel: "component",
+      name: "设置课堂时长",
+      app: { id: "cn.eeo.classin", platform: "android" },
+      parameters: {},
+      steps: [{
+        id: "select-duration",
+        role: "business",
+        risk: "interaction",
+        selectText: {
+          target: { text: "课堂时长", area: "content" },
+          value: "10小时40分钟",
+          confirmText: "确定",
+          search: { mode: "auto" }
+        }
+      }],
+      tags: ["ai-generated"]
+    };
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "测试一下课堂时长能不能选到10小时40分钟"
+    })).toMatchObject({
+      status: "ready",
+      summary: "设置课堂时长",
+      document: {
+        testLevel: "component",
+        name: "设置课堂时长",
+        steps: [{ id: "select-duration" }]
+      }
+    });
+  });
+
   it("builds a draft from page identity without exposing element locator assets", async () => {
     const catalog = pageCatalog();
     let requestBody = "";
