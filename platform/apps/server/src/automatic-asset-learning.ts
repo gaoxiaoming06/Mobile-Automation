@@ -4,6 +4,11 @@ import type {
   LearningCandidate
 } from "@mobile-automation/shared";
 import type { AssetLearningAnalysis } from "./asset-learning-ai.js";
+import {
+  ASSET_LEARNING_MODE,
+  shouldPublishAssetLearning,
+  type AssetLearningMode
+} from "./asset-learning-mode.js";
 import { nextAggregateStatusAfterAi } from "./learning-lifecycle.js";
 
 export type LearningAggregateUpdate = {
@@ -21,12 +26,12 @@ export interface AutomaticAssetLearningRepository {
 }
 
 export type AutomaticAssetLearningConfig = {
-  enabled: boolean;
+  mode: AssetLearningMode;
   intervalMs: number;
 };
 
 const DEFAULT_CONFIG: AutomaticAssetLearningConfig = {
-  enabled: true,
+  mode: ASSET_LEARNING_MODE,
   intervalMs: 5_000
 };
 
@@ -43,7 +48,7 @@ export class AutomaticAssetLearningService {
 
   start(): void {
     const config = this.config();
-    if (!config.enabled) return;
+    if (!shouldPublishAssetLearning(config.mode)) return;
     this.schedule();
     this.timer = setInterval(() => this.schedule(), config.intervalMs);
     this.timer.unref?.();
@@ -59,7 +64,7 @@ export class AutomaticAssetLearningService {
   }
 
   async runOnce(): Promise<void> {
-    if (this.running || !this.config().enabled) return;
+    if (this.running || !shouldPublishAssetLearning(this.config().mode)) return;
     this.running = true;
     try {
       const aggregates = await this.deps.repository.listPending();

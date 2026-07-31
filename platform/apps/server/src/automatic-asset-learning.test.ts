@@ -3,10 +3,26 @@ import type { LearningAggregate, LearningCandidate } from "@mobile-automation/sh
 import { AutomaticAssetLearningService, type AutomaticAssetLearningRepository } from "./automatic-asset-learning.js";
 
 describe("AutomaticAssetLearningService", () => {
+  it("does not inspect or publish pending aggregates while learning is code-disabled", async () => {
+    const repository = fakeRepository([aggregate({ status: "ready", analysisRequired: false })]);
+    const analyze = vi.fn();
+    const service = new AutomaticAssetLearningService({
+      repository,
+      analyze,
+      config: { mode: "disabled" }
+    });
+
+    await service.runOnce();
+
+    expect(repository.listPending).not.toHaveBeenCalled();
+    expect(analyze).not.toHaveBeenCalled();
+    expect(repository.promote).not.toHaveBeenCalled();
+  });
+
   it("publishes deterministic ready candidates without invoking AI", async () => {
     const repository = fakeRepository([aggregate({ status: "ready", analysisRequired: false })]);
     const analyze = vi.fn();
-    const service = new AutomaticAssetLearningService({ repository, analyze });
+    const service = new AutomaticAssetLearningService({ repository, analyze, config: { mode: "active" } });
 
     await service.runOnce();
 
@@ -28,7 +44,7 @@ describe("AutomaticAssetLearningService", () => {
       validationIssues: []
     };
     const analyze = vi.fn().mockResolvedValue(analysis);
-    const service = new AutomaticAssetLearningService({ repository, analyze });
+    const service = new AutomaticAssetLearningService({ repository, analyze, config: { mode: "active" } });
 
     await service.runOnce();
 
@@ -53,7 +69,8 @@ describe("AutomaticAssetLearningService", () => {
     };
     const service = new AutomaticAssetLearningService({
       repository,
-      analyze: vi.fn().mockResolvedValue(analysis)
+      analyze: vi.fn().mockResolvedValue(analysis),
+      config: { mode: "active" }
     });
 
     await service.runOnce();
@@ -70,7 +87,8 @@ describe("AutomaticAssetLearningService", () => {
     const repository = fakeRepository([pending]);
     const service = new AutomaticAssetLearningService({
       repository,
-      analyze: vi.fn().mockRejectedValue(new Error("model unavailable"))
+      analyze: vi.fn().mockRejectedValue(new Error("model unavailable")),
+      config: { mode: "active" }
     });
 
     await expect(service.runOnce()).resolves.toBeUndefined();
@@ -89,7 +107,8 @@ describe("AutomaticAssetLearningService", () => {
     const service = new AutomaticAssetLearningService({
       repository,
       analyze,
-      canAnalyze: () => false
+      canAnalyze: () => false,
+      config: { mode: "active" }
     });
 
     await service.runOnce();

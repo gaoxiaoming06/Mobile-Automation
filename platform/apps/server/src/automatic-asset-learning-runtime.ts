@@ -8,6 +8,7 @@ import {
   type AssetLearningAnalysis,
   type AssetLearningSample
 } from "./asset-learning-ai.js";
+import { ASSET_LEARNING_MODE } from "./asset-learning-mode.js";
 import { runAiJsonRequest } from "./ai-client.js";
 import type { AiModelConfig } from "./ai-model-settings.js";
 import {
@@ -119,12 +120,12 @@ export async function analyzeLearningAggregate(input: {
 }
 
 function readAutomaticAssetLearningConfig(env: NodeJS.ProcessEnv = process.env): {
-  enabled: boolean;
+  mode: typeof ASSET_LEARNING_MODE;
   intervalMs: number;
 } {
   const interval = Number(env.ASSET_LEARNING_INTERVAL_MS ?? 5_000);
   return {
-    enabled: env.ASSET_LEARNING_ENABLED !== "0",
+    mode: ASSET_LEARNING_MODE,
     intervalMs: Number.isFinite(interval) && interval >= 1_000 ? interval : 5_000
   };
 }

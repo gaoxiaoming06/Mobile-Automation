@@ -17,6 +17,16 @@ describe("trial learning storage", () => {
     delete process.env.DATA_DIR;
   });
 
+  it("does not create learning data when the internal code mode is disabled", async () => {
+    ({ storage, tempRoot } = await createStorage("disabled"));
+    const run = createTrialRun(storage, { unresolvedOutcome: false });
+
+    storage.updateRunStatus(run.id, "passed");
+
+    expect(storage.getLearningSessionForRun(run.id)).toBeUndefined();
+    expect(storage.listLearningAggregates()).toEqual([]);
+  });
+
   it("creates a ready learning session after a trial with an automatic outcome passes", async () => {
     ({ storage, tempRoot } = await createStorage());
     const run = createTrialRun(storage, { unresolvedOutcome: false });
@@ -668,12 +678,14 @@ describe("trial learning storage", () => {
   });
 });
 
-async function createStorage(): Promise<{ storage: Storage; tempRoot: string }> {
+async function createStorage(
+  assetLearningMode: "disabled" | "shadow" | "active" = "active"
+): Promise<{ storage: Storage; tempRoot: string }> {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "mobile-automation-learning-"));
   process.env.DATA_DIR = tempRoot;
   vi.resetModules();
   const { Storage: StorageConstructor } = await import("./storage.js");
-  const storage = new StorageConstructor();
+  const storage = new StorageConstructor({ assetLearningMode });
   await storage.ensureDirs();
   return { storage, tempRoot };
 }

@@ -36,6 +36,11 @@ import {
   type TestRun
 } from "@mobile-automation/shared";
 import { artifactRoot, dataRoot } from "./artifacts.js";
+import {
+  ASSET_LEARNING_MODE,
+  shouldCollectAssetLearning,
+  type AssetLearningMode
+} from "./asset-learning-mode.js";
 import { previewAiModelSettingsUpdate, type AiModelSettingsUpdateInput, type AiModelStoredSettings } from "./ai-model-settings.js";
 import {
   derivePageNavigationSegments,
@@ -134,10 +139,16 @@ export type StoredRunForCleanup = {
   endedAt?: string;
 };
 
+export type StorageOptions = {
+  assetLearningMode?: AssetLearningMode;
+};
+
 export class Storage {
   private readonly db: DatabaseSync;
+  private readonly assetLearningMode: AssetLearningMode;
 
-  constructor() {
+  constructor(options: StorageOptions = {}) {
+    this.assetLearningMode = options.assetLearningMode ?? ASSET_LEARNING_MODE;
     mkdirSync(dataRoot, { recursive: true });
     this.db = new DatabaseSync(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL");
@@ -1377,7 +1388,7 @@ export class Storage {
     if (status === "passed" || status === "failed") {
       this.recordInteractionAssetHealth(runId);
     }
-    if (isFinalStatus) {
+    if (isFinalStatus && shouldCollectAssetLearning(this.assetLearningMode)) {
       this.recordTrialLearningSession(runId, status);
     }
   }

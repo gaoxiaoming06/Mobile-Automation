@@ -4,7 +4,7 @@
 
 **目标：** 先把“自然语言描述测试 -> 生成确定性 ScriptFlow -> 在真实设备稳定执行 -> 输出可诊断结果”做成可靠主链路，再通过可控的三态持续学习模式逐步引入页面、交互和导航资产学习。
 
-**架构：** ScriptFlow 始终是测试事实来源，现有 active 资产始终只作为可选增强信息读取。持续学习使用 `disabled | shadow | active` 三态控制证据写入、候选聚合、AI 分析和资产发布；默认 `disabled`，第一阶段验收通过后进入 `shadow`，影子数据达到质量门槛后才允许 `active`。生成阶段不读取设备，执行阶段负责页面识别、目标查找、受控恢复和结果验证。
+**架构：** ScriptFlow 始终是测试事实来源，现有 active 资产始终只作为可选增强信息读取。持续学习使用服务端源码常量 `disabled | shadow | active` 控制证据写入、候选聚合、AI 分析和资产发布；默认 `disabled`，不提供设置、API 或环境变量开关。第一阶段验收通过后通过代码评审改为 `shadow`，影子数据达到质量门槛后再通过代码评审改为 `active`。生成阶段不读取设备，执行阶段负责页面识别、目标查找、受控恢复和结果验证。
 
 **技术栈：** TypeScript、React、Express、Node.js 24 `node:sqlite`、Vitest、Vite、现有 OCR/视觉定位器、ScriptFlow v1。
 
@@ -52,17 +52,18 @@ node --version
 
 规则：
 
-- 默认值必须是 `disabled`。
-- 学习开关只控制新证据和新资产生命周期，不关闭现有可靠资产读取。
+- 生产源码常量 `ASSET_LEARNING_MODE` 必须默认并暂时固定为 `disabled`。
+- 不提供数据库设置、HTTP API、前端控件或环境变量覆盖，防止功能验收前被误开启。
+- 代码模式只控制新证据和新资产生命周期，不关闭现有可靠资产读取。
 - `shadow` 中即使聚合状态达到 ready，也不执行 AI 分析和 promotion。
 - 从 `shadow` 切到 `active` 后，可以处理已经达到门槛的存量聚合。
 - 从 `active` 切回 `disabled` 不删除资产或候选，只停止新学习工作。
 - 三种模式都必须保持 App ID 与平台隔离。
-- 第一版使用全局系统设置，不增加每 App 开关；资产本身继续按 App ID 和平台隔离。
+- 测试可以注入模式验证边界，正式服务只能读取源码常量；资产本身继续按 App ID 和平台隔离。
 
 ### 3. 阶段准入标准
 
-第一阶段满足以下条件后才允许默认进入 `shadow`：
+第一阶段满足以下条件后，才允许通过独立代码提交把常量改为 `shadow`：
 
 - 代表性明确流程中，用户动作保留率为 100%。
 - 已知文字、系统控件、常见图标和屏外内容四类目标都能稳定执行。
@@ -73,7 +74,7 @@ node --version
 - Node 24 下全量单元测试、类型检查和 Dashboard 构建通过。
 - ClassIn Android 真实设备代表集连续 20 次执行成功率不低于 95%，且不存在错误点击后被误判通过。
 
-`shadow` 满足以下条件后才允许人工切换到 `active`：
+`shadow` 满足以下条件后，才允许通过独立代码提交把常量改为 `active`：
 
 - 每类候选至少覆盖 3 次独立成功运行和 2 份不同截图证据。
 - 页面候选冲突率低于 1%，并且没有动态账号、班级名、日期、数量被写成页面唯一身份。
@@ -86,21 +87,17 @@ node --version
 
 ### 新建文件
 
-- `platform/apps/server/src/asset-learning-settings.ts`：三态设置类型、默认值、HTTP 输入解析和公开设置。
-- `platform/apps/server/src/asset-learning-settings.test.ts`：设置解析、默认值和非法输入测试。
-- `platform/apps/server/src/learning-mode-gate.test.ts`：三种模式下学习写入、分析和发布边界测试。
+- `platform/apps/server/src/asset-learning-mode.ts`：三态源码常量以及采集、发布边界函数。
+- `platform/apps/server/src/asset-learning-mode.test.ts`：锁定生产默认关闭和三态行为。
 - `docs/test/plans/generation-execution-phase-1.md`：真实设备第一阶段用例矩阵和逐次结果记录。
 - `docs/test/plans/asset-learning-shadow-phase-2.md`：影子学习质量、冲突率和 AI 调用统计记录。
 
 ### 修改文件
 
-- `platform/packages/shared/src/index.ts`：共享 `AssetLearningMode` 和公开设置类型。
-- `platform/apps/server/src/storage.ts`：持久化学习模式，并在运行结束时按模式决定是否创建学习证据。
-- `platform/apps/server/src/storage.test.ts`：设置持久化和默认 disabled 测试。
-- `platform/apps/server/src/automatic-asset-learning.ts`：后台服务动态读取模式，仅 active 执行分析与发布。
-- `platform/apps/server/src/automatic-asset-learning-runtime.ts`：删除旧布尔开关，注入动态模式读取器。
+- `platform/apps/server/src/storage.ts`：在运行结束时按注入或生产代码模式决定是否创建学习证据。
+- `platform/apps/server/src/automatic-asset-learning.ts`：仅 active 执行分析与发布。
+- `platform/apps/server/src/automatic-asset-learning-runtime.ts`：删除旧布尔环境开关，固定读取生产源码常量。
 - `platform/apps/server/src/automatic-asset-learning.test.ts`：disabled、shadow、active 的后台行为测试。
-- `platform/apps/server/src/index.ts`：学习模式 API 和服务动态配置。
 - `platform/apps/server/src/script-flow-ai-planner.ts`：第一阶段生成约束和失败分类。
 - `platform/apps/server/src/script-flow-ai-planner.test.ts`：明确操作、模糊目标、混合请求和结果 oracle 测试。
 - `platform/packages/script-flow/src/types.ts`：统一可搜索目标动作的搜索策略。
@@ -118,8 +115,6 @@ node --version
 - `platform/apps/server/src/automation-runner.test.ts`：登录页/主页双根、未知页、系统桌面和恢复上限测试。
 - `platform/apps/server/src/script-flow-api.ts`：执行前检查和公开错误分类。
 - `platform/apps/server/src/script-flow-api.test.ts`：生成、预览、执行门禁的 API 回归。
-- `platform/apps/dashboard/src/App.tsx`：系统设置中的学习模式控件。
-- `platform/apps/dashboard/src/App.test.ts`：设置加载、保存和说明测试。
 - `platform/apps/dashboard/src/components/AiScriptFlowsPanel.tsx`：第一阶段错误提示和执行状态。
 - `platform/apps/dashboard/src/components/AiScriptFlowsPanel.test.tsx`：可执行、需补充和失败分类视图测试。
 - `platform/apps/dashboard/src/components/RunResultsPanel.tsx`：资产过期与执行失败的用户可读诊断。
@@ -129,256 +124,61 @@ node --version
 
 ## 三、实施任务
 
-### 任务 1：建立三态学习设置模型
+### 任务 1：建立代码级学习模式总闸门
 
 **文件：**
-- 创建：`platform/apps/server/src/asset-learning-settings.ts`
-- 创建：`platform/apps/server/src/asset-learning-settings.test.ts`
-- 修改：`platform/packages/shared/src/index.ts`
-
-- [ ] **步骤 1：编写失败的设置解析测试**
-
-```ts
-expect(publicAssetLearningSettings(undefined)).toEqual({
-  mode: "disabled",
-  updatedAt: undefined
-});
-expect(readAssetLearningSettingsUpdate({ mode: "shadow" })).toEqual({ mode: "shadow" });
-expect(() => readAssetLearningSettingsUpdate({ mode: "enabled" })).toThrow(/disabled, shadow, or active/);
-```
-
-- [ ] **步骤 2：运行测试并确认失败**
-
-运行：
-
-```bash
-pnpm vitest run platform/apps/server/src/asset-learning-settings.test.ts
-```
-
-预期：失败，提示 `asset-learning-settings.ts` 或导出函数不存在。
-
-- [ ] **步骤 3：实现最小设置模型**
-
-```ts
-export type AssetLearningMode = "disabled" | "shadow" | "active";
-
-export type AssetLearningStoredSettings = {
-  mode: AssetLearningMode;
-  updatedAt?: string;
-};
-
-export function publicAssetLearningSettings(
-  stored?: AssetLearningStoredSettings
-): AssetLearningStoredSettings {
-  return stored ?? { mode: "disabled" };
-}
-```
-
-HTTP 输入只允许 `mode`，未知字段和其他字符串直接返回 400。
-
-- [ ] **步骤 4：运行测试并确认通过**
-
-运行：
-
-```bash
-pnpm vitest run platform/apps/server/src/asset-learning-settings.test.ts
-```
-
-预期：全部通过。
-
-- [ ] **步骤 5：提交设置模型**
-
-```bash
-git add platform/apps/server/src/asset-learning-settings.ts platform/apps/server/src/asset-learning-settings.test.ts platform/packages/shared/src/index.ts
-git commit -m "feat: 新增持续学习三态设置模型"
-```
-
-### 任务 2：持久化设置并在运行结束处建立总闸门
-
-**文件：**
+- 创建：`platform/apps/server/src/asset-learning-mode.ts`
+- 创建：`platform/apps/server/src/asset-learning-mode.test.ts`
 - 修改：`platform/apps/server/src/storage.ts`
-- 修改：`platform/apps/server/src/storage.test.ts`
-- 创建：`platform/apps/server/src/learning-mode-gate.test.ts`
-
-- [ ] **步骤 1：编写 disabled 不产生学习数据的失败测试**
-
-```ts
-storage.updateAssetLearningSettings({ mode: "disabled" });
-storage.updateRunStatus(run.id, "passed");
-
-expect(storage.getLearningSessionForRun(run.id)).toBeUndefined();
-expect(storage.listLearningCandidates()).toEqual([]);
-expect(storage.listLearningAggregates()).toEqual([]);
-```
-
-- [ ] **步骤 2：编写 shadow 与 active 都采集证据的失败测试**
-
-分别设置 `shadow` 和 `active`，完成同一份可学习 trial run，断言创建 session、candidate 和 aggregate；断言 App ID 与平台字段来自 source snapshot。
-
-- [ ] **步骤 3：运行测试并确认失败**
-
-运行：
-
-```bash
-pnpm vitest run platform/apps/server/src/storage.test.ts platform/apps/server/src/learning-mode-gate.test.ts
-```
-
-预期：disabled 测试失败，因为当前 `updateRunStatus` 会无条件调用 `recordTrialLearningSession`。
-
-- [ ] **步骤 4：实现持久化与运行结束闸门**
-
-在 `app_settings` 中使用独立 key `asset_learning`。`updateRunStatus` 保留交互资产健康统计，但仅在模式不是 disabled 时记录新学习会话：
-
-```ts
-if (status === "passed" || status === "failed") {
-  this.recordInteractionAssetHealth(runId);
-}
-if (isFinalStatus && this.getAssetLearningSettings().mode !== "disabled") {
-  this.recordTrialLearningSession(runId, status);
-}
-```
-
-不得删除或停用已有 active 资产。
-
-- [ ] **步骤 5：运行测试并确认通过**
-
-运行：
-
-```bash
-pnpm vitest run platform/apps/server/src/storage.test.ts platform/apps/server/src/learning-mode-gate.test.ts platform/apps/server/src/learning-storage.test.ts
-```
-
-预期：全部通过。
-
-- [ ] **步骤 6：提交存储闸门**
-
-```bash
-git add platform/apps/server/src/storage.ts platform/apps/server/src/storage.test.ts platform/apps/server/src/learning-mode-gate.test.ts
-git commit -m "feat: 按学习模式控制运行证据写入"
-```
-
-### 任务 3：让后台学习服务只在 active 模式工作
-
-**文件：**
+- 修改：`platform/apps/server/src/learning-storage.test.ts`
 - 修改：`platform/apps/server/src/automatic-asset-learning.ts`
 - 修改：`platform/apps/server/src/automatic-asset-learning-runtime.ts`
 - 修改：`platform/apps/server/src/automatic-asset-learning.test.ts`
-- 修改：`platform/apps/server/src/index.ts`
-- 修改：`platform/apps/server/src/script-flow-api.test.ts`
 
-- [ ] **步骤 1：编写模式切换失败测试**
+- [x] **步骤 1：先写失败测试锁定生产默认关闭**
 
 ```ts
-let mode: AssetLearningMode = "shadow";
-const service = new AutomaticAssetLearningService({ repository, getMode: () => mode, analyze });
-
-await service.runOnce();
-expect(analyze).not.toHaveBeenCalled();
-expect(repository.promote).not.toHaveBeenCalled();
-
-mode = "active";
-await service.runOnce();
-expect(analyze).toHaveBeenCalledTimes(1);
+expect(ASSET_LEARNING_MODE).toBe("disabled");
+expect(shouldCollectAssetLearning("disabled")).toBe(false);
+expect(shouldPublishAssetLearning("shadow")).toBe(false);
+expect(shouldPublishAssetLearning("active")).toBe(true);
 ```
 
-同时覆盖 disabled 下 deterministic ready aggregate 也不能直接 promotion。
+- [x] **步骤 2：验证 disabled 下不创建学习会话**
 
-- [ ] **步骤 2：运行测试并确认失败**
+用测试注入 `assetLearningMode: "disabled"`，完成 trial run 后断言 session 和 aggregate 均不存在。现有学习测试显式注入 active，不改变其原有验证目标。
 
-运行：
-
-```bash
-pnpm vitest run platform/apps/server/src/automatic-asset-learning.test.ts
-```
-
-预期：失败，因为当前服务只支持静态 `enabled` 布尔值。
-
-- [ ] **步骤 3：替换静态布尔配置**
-
-将依赖改为动态函数：
+- [x] **步骤 3：实现生产代码常量和运行结束闸门**
 
 ```ts
-getMode: () => AssetLearningMode
+export type AssetLearningMode = "disabled" | "shadow" | "active";
+export const ASSET_LEARNING_MODE: AssetLearningMode = "disabled";
 ```
 
-`runOnce()` 在模式不是 active 时立即返回。删除 `ASSET_LEARNING_ENABLED` 兼容逻辑；若需要部署启动默认值，只接受 `ASSET_LEARNING_MODE`，并且仅在数据库尚未保存设置时读取。
+`Storage` 默认读取该常量；仅测试构造参数可以覆盖。运行健康统计保持启用，但只有 shadow/active 可以创建学习证据。
 
-- [ ] **步骤 4：新增设置 API**
+- [x] **步骤 4：禁止后台在 disabled/shadow 下分析和发布**
 
-```text
-GET /api/settings/asset-learning
-PUT /api/settings/asset-learning
-```
+`AutomaticAssetLearningService` 仅在 `shouldPublishAssetLearning(mode)` 为 true 时启动扫描和执行 `runOnce()`。运行时直接读取源码常量，不读取 `ASSET_LEARNING_ENABLED` 或其他模式环境变量。
 
-PUT 成功后下一轮服务立即读取新模式，不要求重启服务。
-
-- [ ] **步骤 5：运行测试并确认通过**
+- [x] **步骤 5：运行聚焦测试**
 
 运行：
 
 ```bash
-pnpm vitest run platform/apps/server/src/automatic-asset-learning.test.ts platform/apps/server/src/script-flow-api.test.ts
+pnpm vitest run platform/apps/server/src/asset-learning-mode.test.ts platform/apps/server/src/automatic-asset-learning.test.ts platform/apps/server/src/learning-storage.test.ts
 ```
 
-预期：全部通过。
+结果：3 个测试文件、28 项测试通过。
 
-- [ ] **步骤 6：提交后台服务模式控制**
+- [x] **步骤 6：提交代码级总闸门**
 
 ```bash
-git add platform/apps/server/src/automatic-asset-learning.ts platform/apps/server/src/automatic-asset-learning-runtime.ts platform/apps/server/src/automatic-asset-learning.test.ts platform/apps/server/src/index.ts platform/apps/server/src/script-flow-api.test.ts
-git commit -m "feat: 仅在正式模式发布学习资产"
+git add platform/apps/server/src/asset-learning-mode.ts platform/apps/server/src/asset-learning-mode.test.ts platform/apps/server/src/storage.ts platform/apps/server/src/learning-storage.test.ts platform/apps/server/src/automatic-asset-learning.ts platform/apps/server/src/automatic-asset-learning-runtime.ts platform/apps/server/src/automatic-asset-learning.test.ts docs/superpowers/plans/2026-07-31-generation-execution-first-learning-modes.md
+git commit -m "feat: 默认关闭持续学习链路"
 ```
 
-### 任务 4：在系统设置中提供三态控件
-
-**文件：**
-- 修改：`platform/apps/dashboard/src/App.tsx`
-- 修改：`platform/apps/dashboard/src/App.test.ts`
-- 修改：`platform/apps/dashboard/src/styles.css`
-
-- [ ] **步骤 1：编写设置视图失败测试**
-
-测试应验证三个互斥选项、默认关闭、保存请求体 `{ mode: "shadow" }`，以及每个模式的简短影响说明。
-
-- [ ] **步骤 2：运行测试并确认失败**
-
-运行：
-
-```bash
-pnpm vitest run platform/apps/dashboard/src/App.test.ts
-```
-
-预期：失败，因为设置页尚无学习模式控件。
-
-- [ ] **步骤 3：实现分段控件**
-
-显示文案：
-
-- `关闭`：只执行测试，不采集学习数据。
-- `影子学习`：采集并评估，不调用 AI、不发布资产。
-- `正式启用`：达到门槛后允许 AI 分析和资产发布。
-
-控件使用 segmented control，不使用三个独立复选框。切换到 active 前展示阶段准入提示，但不增加每次运行确认。
-
-- [ ] **步骤 4：运行前端测试和构建**
-
-运行：
-
-```bash
-pnpm vitest run platform/apps/dashboard/src/App.test.ts platform/apps/dashboard/src/styles.test.ts
-pnpm --filter @mobile-automation/dashboard build
-```
-
-预期：全部通过，页面无文字溢出。
-
-- [ ] **步骤 5：提交设置界面**
-
-```bash
-git add platform/apps/dashboard/src/App.tsx platform/apps/dashboard/src/App.test.ts platform/apps/dashboard/src/styles.css
-git commit -m "feat: 新增持续学习模式设置"
-```
-
-### 任务 5：完成生成阶段的确定性合同
+### 任务 2：完成生成阶段的确定性合同
 
 **文件：**
 - 修改：`platform/apps/server/src/script-flow-ai-planner.ts`
@@ -433,7 +233,7 @@ git add platform/apps/server/src/script-flow-ai-planner.ts platform/apps/server/
 git commit -m "fix: 完善 AI 测试生成确定性门禁"
 ```
 
-### 任务 6：统一所有目标动作的屏外查找语义
+### 任务 3：统一所有目标动作的屏外查找语义
 
 **文件：**
 - 修改：`platform/packages/script-flow/src/types.ts`
@@ -484,7 +284,7 @@ pnpm vitest run platform/packages/script-flow/src/parser.test.ts platform/packag
 
 - [ ] **步骤 5：运行测试并确认通过**
 
-运行任务 6 步骤 3 的同一命令，预期全部通过。
+运行任务 3 步骤 3 的同一命令，预期全部通过。
 
 - [ ] **步骤 6：提交统一目标搜索**
 
@@ -493,7 +293,7 @@ git add platform/packages/script-flow/src platform/apps/server/src/script-target
 git commit -m "feat: 统一语义目标的屏内与屏外查找"
 ```
 
-### 任务 7：收紧页面验证和任意状态恢复
+### 任务 4：收紧页面验证和任意状态恢复
 
 **文件：**
 - 修改：`platform/apps/server/src/page-state-service.ts`
@@ -534,7 +334,7 @@ pnpm vitest run platform/apps/server/src/page-state-service.test.ts platform/app
 
 - [ ] **步骤 5：运行测试并确认通过**
 
-运行任务 7 步骤 3 的同一命令，预期全部通过。
+运行任务 4 步骤 3 的同一命令，预期全部通过。
 
 - [ ] **步骤 6：提交页面与恢复逻辑**
 
@@ -543,7 +343,7 @@ git add platform/apps/server/src/page-state-service.ts platform/apps/server/src/
 git commit -m "fix: 收紧页面识别与有界恢复"
 ```
 
-### 任务 8：形成可操作的失败分类和第一阶段验收
+### 任务 5：形成可操作的失败分类和第一阶段验收
 
 **文件：**
 - 修改：`platform/apps/server/src/script-flow-api.ts`
@@ -610,9 +410,9 @@ git add platform/apps/server/src/script-flow-api.ts platform/apps/server/src/scr
 git commit -m "feat: 完成测试生成执行第一阶段闭环"
 ```
 
-### 任务 9：第一阶段通过后进入 shadow 并扩展全过程证据
+### 任务 6：第一阶段通过后进入 shadow 并扩展全过程证据
 
-**前置条件：** 任务 8 的真实设备验收已通过，并由项目负责人把系统设置从 disabled 切换为 shadow。
+**前置条件：** 任务 5 的真实设备验收已通过，并由项目负责人通过独立代码提交把 `ASSET_LEARNING_MODE` 从 disabled 改为 shadow。
 
 **文件：**
 - 修改：`platform/apps/server/src/automation-runner.ts`
@@ -647,7 +447,7 @@ pnpm vitest run platform/apps/server/src/automation-runner.test.ts platform/apps
 
 - [ ] **步骤 5：运行测试并确认通过**
 
-运行任务 9 步骤 3 的同一命令，预期全部通过。
+运行任务 6 步骤 3 的同一命令，预期全部通过。
 
 - [ ] **步骤 6：记录影子质量**
 
@@ -660,7 +460,7 @@ git add platform/apps/server/src/automation-runner.ts platform/apps/server/src/a
 git commit -m "feat: 扩展影子模式全过程学习证据"
 ```
 
-### 任务 10：通过 AI 提案和确定性校验发布资产
+### 任务 7：通过 AI 提案和确定性校验发布资产
 
 **前置条件：** shadow 数据满足本文“阶段准入标准”。
 
@@ -707,7 +507,7 @@ AI 请求失败将 aggregate 标记为 `analysis_failed`，普通测试不失败
 
 - [ ] **步骤 5：运行测试并确认通过**
 
-运行任务 10 步骤 3 的同一命令，预期全部通过。
+运行任务 7 步骤 3 的同一命令，预期全部通过。
 
 - [ ] **步骤 6：提交正式学习发布链路**
 
@@ -716,7 +516,7 @@ git add platform/apps/server/src/asset-learning-ai.ts platform/apps/server/src/a
 git commit -m "feat: 完成持续学习资产安全发布"
 ```
 
-### 任务 11：补齐资产健康、保留策略和 active 灰度
+### 任务 8：补齐资产健康、保留策略和 active 灰度
 
 **文件：**
 - 修改：`platform/apps/server/src/interaction-asset-health.ts`
@@ -760,7 +560,7 @@ pnpm --filter @mobile-automation/dashboard build
 
 - [ ] **步骤 6：active 灰度验证**
 
-先只在本地 ClassIn Android 数据集切换 active。确认 AI 学习失败不阻塞测试、资产命中唯一、未出现跨 App 数据、连续 20 次代表性执行不低于 shadow 阶段成功率后，才保留 active。
+先通过独立代码提交只在本地 ClassIn Android 数据集把 `ASSET_LEARNING_MODE` 改为 active。确认 AI 学习失败不阻塞测试、资产命中唯一、未出现跨 App 数据、连续 20 次代表性执行不低于 shadow 阶段成功率后，才保留 active。
 
 - [ ] **步骤 7：提交第二阶段闭环**
 
@@ -775,18 +575,19 @@ git commit -m "feat: 完成持续学习健康治理与灰度准入"
 2. 不录页面/元素资产，输入完整明确操作，生成并执行测试。
 3. 输入模糊目标，验证仅从已存在的可靠能力补齐；无能力时要求补充。
 4. 验证 disabled 下数据库不新增 learning session、candidate、aggregate，AI 学习调用为零。
-5. 切换 shadow，重复执行代表流程，验证只积累候选且不发布、不影响计划摘要。
+5. 通过独立代码提交把 `ASSET_LEARNING_MODE` 改为 shadow，重复执行代表流程，验证只积累候选且不发布、不影响计划摘要。
 6. 运行影子质量报告并满足准入门槛。
-7. 手动切换 active，验证达到门槛的聚合按规则发布。
+7. 通过独立代码提交把 `ASSET_LEARNING_MODE` 改为 active，验证达到门槛的聚合按规则发布。
 8. 模拟 App UI 变化导致 locator failure，验证资产降级且报告给出可操作提示。
-9. 切回 disabled，验证普通生成和执行继续工作，已有可靠 active 资产仍可读取。
+9. 通过独立代码提交改回 disabled，验证普通生成和执行继续工作，已有可靠 active 资产仍可读取。
 
 ## 五、明确不在本方案中实现
 
 - 不恢复 `ref`、元素资产 ID、固定坐标或截图区域脚本。
 - 不让用户维护 YAML 或人工审核每一个学习候选。
 - 不在生成阶段读取或操作当前设备。
-- 不为每个 App 增加独立学习开关，除非全局三态运行后出现明确运维需求。
+- 不提供用户可操作的学习设置、HTTP API 或环境变量覆盖。
+- 不为每个 App 增加独立学习开关；模式只允许通过源码评审变更。
 - 不在 Android 第一阶段通过前并行开展 iOS、鸿蒙和 Flutter 驱动适配。
 - 不把一次成功执行直接视为可发布资产。
 - 不让学习 AI 参与普通测试的每一步执行。
