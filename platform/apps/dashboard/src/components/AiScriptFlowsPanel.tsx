@@ -1,4 +1,4 @@
-import { Save, Sparkles } from "lucide-react";
+import { ExternalLink, History, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import type {
   AndroidAppMonitorConfig,
@@ -6,6 +6,7 @@ import type {
   LearningSession,
   ScriptFlow,
   ScriptFlowVerificationAssessment,
+  TemporaryTest,
   TestRun
 } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api.js";
@@ -13,7 +14,9 @@ import { ScriptRunForm, type ScriptParameterValue } from "./ScriptRunForm.js";
 import {
   caseStepViews,
   defaultCaseParameterValues,
+  readCaseDocument,
   testKindLabel,
+  testPurposeLabel,
   type CaseDocumentView,
   type CasePlanView
 } from "./case-view.js";
@@ -26,6 +29,7 @@ type GeneratedDraft = {
   summary: string;
   assumptions: string[];
   verification?: ScriptFlowVerificationAssessment;
+  sourceFlow?: SavedFlowReference;
   channel: string;
   model: string;
 };
@@ -50,6 +54,12 @@ export type CaseRevision = {
   name: string;
 };
 
+type SavedFlowReference = {
+  id: string;
+  version: number;
+  name: string;
+};
+
 type AiScriptFlowsPanelProps = {
   defaultAppId: string;
   devices: Array<{ serial: string; name?: string }>;
@@ -59,6 +69,7 @@ type AiScriptFlowsPanelProps = {
   onOpenRun: (runId: string) => void;
   revision?: CaseRevision;
   initialDraft?: AiDraft;
+  initialHistory?: TemporaryTest[];
   androidAppMonitorForApp?: (appId: string) => AndroidAppMonitorConfig | undefined;
 };
 
@@ -71,12 +82,14 @@ export function AiScriptFlowsPanel({
   onOpenRun,
   revision,
   initialDraft,
+  initialHistory = [],
   androidAppMonitorForApp
 }: AiScriptFlowsPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [appId, setAppId] = useState(defaultAppId);
   const [platform, setPlatform] = useState<ScriptFlow["platform"]>("android");
   const [draft, setDraft] = useState<AiDraft | undefined>(initialDraft);
+  const [history, setHistory] = useState<TemporaryTest[]>(initialHistory);
   const generatedDraft = draft?.status === "ready" || draft?.status === "trial_ready" ? draft : undefined;
   const trialRequired = generatedDraft?.status === "trial_ready";
   const [parameterValues, setParameterValues] = useState<Record<string, ScriptParameterValue>>(() => draftParameterValues(generatedDraft));
@@ -89,6 +102,11 @@ export function AiScriptFlowsPanel({
   useEffect(() => {
     if (selectedSerial) setDeviceSerial(selectedSerial);
   }, [selectedSerial]);
+
+  useEffect(() => {
+    if (revision || !appId.trim()) return;
+    void refreshHistory(appId.trim(), platform).then(setHistory).catch(() => undefined);
+  }, [appId, platform, revision?.flowId]);
 
   useEffect(() => {
     if (!lastRun || !["pending", "running", "paused"].includes(lastRun.status)) return;
@@ -150,18 +168,19 @@ export function AiScriptFlowsPanel({
     if (!generatedDraft) return;
     try {
       setBusyAction("save");
-      const response = await apiFetchJson<{ flow: ScriptFlow }>(revision ? `/api/script-flows/${encodeURIComponent(revision.flowId)}` : "/api/script-flows", {
-        method: revision ? "PUT" : "POST",
+      const destination = draftSaveDestination(revision, generatedDraft.sourceFlow);
+      const response = await apiFetchJson<{ flow: ScriptFlow }>(destination.url, {
+        method: destination.method,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           sourceYaml: generatedDraft.sourceYaml,
           status: trialRequired ? "draft" : "active",
-          ...(revision ? { expectedVersion: revision.version } : {})
+          ...(destination.expectedVersion ? { expectedVersion: destination.expectedVersion } : {})
         })
       });
       setMessage(trialRequired
-        ? `已保存草稿：${response.flow.name}`
-        : revision
+        ? destination.method === "PUT" ? `已更新草稿：${response.flow.name}` : `已保存草稿：${response.flow.name}`
+        : destination.method === "PUT"
           ? `已更新${testKindLabel(generatedDraft.document.kind)} ${response.flow.name} · v${response.flow.version}`
           : `已保存到用例中心：${response.flow.name}`);
       onSaved(response.flow);
@@ -174,23 +193,32 @@ export function AiScriptFlowsPanel({
 
   async function runDraft() {
     if (!generatedDraft) return;
+    await executeDraft(generatedDraft, parameterValues, prompt.trim() || generatedDraft.document.description || generatedDraft.document.name);
+  }
+
+  async function executeDraft(
+    targetDraft: GeneratedDraft,
+    values: Record<string, ScriptParameterValue>,
+    sourcePrompt: string
+  ) {
     try {
       setBusyAction("run");
       const preview = await apiFetchJson<{ plan: CasePlanView; planDigest: string }>("/api/script-flow-drafts/preview", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sourceYaml: generatedDraft.sourceYaml, parameters: parameterValues })
+        body: JSON.stringify({ sourceYaml: targetDraft.sourceYaml, parameters: values })
       });
       setPlan(preview.plan);
-      const androidAppMonitor = androidAppMonitorForApp?.(generatedDraft.document.app.id);
-      const response = await apiFetchJson<{ run: TestRun }>(draftRunEndpoint(generatedDraft.status), {
+      const androidAppMonitor = androidAppMonitorForApp?.(targetDraft.document.app.id);
+      const response = await apiFetchJson<{ run: TestRun }>(draftRunEndpoint(targetDraft.status), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          sourceYaml: generatedDraft.sourceYaml,
+          prompt: sourcePrompt,
+          sourceYaml: targetDraft.sourceYaml,
           planDigest: preview.planDigest,
           deviceSerial,
-          parameters: parameterValues,
+          parameters: values,
           recordVideo: false,
           ...(androidAppMonitor ? { androidAppMonitor } : {})
         })
@@ -198,6 +226,48 @@ export function AiScriptFlowsPanel({
       setLastRun(response.run);
       setLearning(undefined);
       setMessage(`已启动测试：${response.run.id}`);
+      if (!revision) setHistory(await refreshHistory(targetDraft.document.app.id, targetDraft.document.app.platform));
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setBusyAction(undefined);
+    }
+  }
+
+  async function rerunTemporaryTest(item: TemporaryTest) {
+    const document = readCaseDocument(item.parsed);
+    if (!document) {
+      setMessage("历史测试快照已损坏，无法再次执行");
+      return;
+    }
+    try {
+      setBusyAction("run");
+      const base: GeneratedDraft = {
+        status: "trial_ready",
+        sourceYaml: item.sourceYaml,
+        document,
+        parameterValues: item.parameterValues,
+        summary: item.prompt,
+        assumptions: [],
+        channel: "history",
+        model: "snapshot"
+      };
+      const nextDraft = await reconcileDraftVerification(base);
+      const values = { ...defaultCaseParameterValues(document), ...item.parameterValues };
+      setPrompt(item.prompt);
+      setAppId(item.appId);
+      setPlatform(item.platform);
+      setDraft(nextDraft);
+      setParameterValues(values);
+      setLastRun(undefined);
+      setLearning(undefined);
+      setPlan(undefined);
+      const missing = missingRequiredParameters(document, values);
+      if (missing.length) {
+        setMessage(`请先补充运行参数：${missing.join("、")}`);
+        return;
+      }
+      await executeDraft(nextDraft, values, item.prompt);
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -266,12 +336,26 @@ export function AiScriptFlowsPanel({
           <button className="primary-button ai-script-generate" type="button" onClick={() => void generate()} disabled={busy || !prompt.trim() || (!revision && !appId.trim())}>
             <Sparkles size={17} /><span>{busyAction === "generate" ? "生成中" : revision ? "生成修改方案" : "生成测试"}</span>
           </button>
+          {!revision ? <section className="temporary-test-history">
+            <header><div><History size={16} /><strong>最近测试</strong></div><span>{history.length} 条</span></header>
+            {history.length ? <div className="temporary-test-list">{history.map((item) => <article key={item.id}>
+              <div className="temporary-test-copy">
+                <div><span className={`test-purpose-badge ${item.purpose}`}>{testPurposeLabel(item.purpose)}</span><strong>{item.name}</strong></div>
+                <p>{item.prompt}</p>
+                <small>{testKindLabel(item.kind)} · {item.lastRunStatus ? runStatusLabel(item.lastRunStatus) : "已记录"} · 执行 {item.runCount} 次</small>
+              </div>
+              <div className="temporary-test-actions">
+                <button type="button" onClick={() => void rerunTemporaryTest(item)} disabled={busy}><RotateCcw size={14} /><span>再次执行</span></button>
+                <button type="button" title="查看最近执行结果" onClick={() => onOpenRun(item.lastRunId)}><ExternalLink size={14} /></button>
+              </div>
+            </article>)}</div> : <p className="temporary-test-empty">执行过的临时测试会保留在这里。</p>}
+          </section> : null}
         </section>
         <section className="ai-script-result" aria-live="polite">
           {!draft ? <div className="empty"><strong>{revision ? "等待修改说明" : "等待生成"}</strong><span>规划时不会读取或改变当前设备页面。</span></div> : null}
           {draft?.status === "needs_clarification" ? <div className="ai-script-clarification"><strong>需要补充信息</strong><p>{draft.clarification}</p></div> : null}
           {generatedDraft ? <>
-            <header><div><span className={`test-kind-badge ${generatedDraft.document.kind}`}>{testKindLabel(generatedDraft.document.kind)}</span><h3>{generatedDraft.document.name}</h3><p>{generatedDraft.summary}</p></div><span>{steps.length} 个步骤</span></header>
+            <header><div><span className={`test-kind-badge ${generatedDraft.document.kind}`}>{testKindLabel(generatedDraft.document.kind)}</span><span className={`test-purpose-badge ${generatedDraft.document.purpose ?? "business"}`}>{testPurposeLabel(generatedDraft.document.purpose)}</span><h3>{generatedDraft.document.name}</h3><p>{generatedDraft.summary}</p></div><span>{steps.length} 个步骤</span></header>
             {generatedDraft.assumptions.length ? <div className="ai-script-assumptions"><strong>生成假设</strong>{generatedDraft.assumptions.map((item) => <p key={item}>{item}</p>)}</div> : null}
             <section className="ai-case-logic">
               <header><h3>执行逻辑</h3><span>{steps.length} 个步骤</span></header>
@@ -279,9 +363,9 @@ export function AiScriptFlowsPanel({
                 {steps.map((step) => <li key={step.id}><span>{step.order}</span><div><strong>{step.name}</strong><small>{step.context ?? step.id}</small></div></li>)}
               </ol>
             </section>
-            <div className="ai-case-actions">
-              <button type="button" onClick={() => void saveDraft()} disabled={busy}><Save size={16} /><span>{revision ? "保存修改" : "保存到用例中心"}</span></button>
-            </div>
+            {caseCenterEligible(generatedDraft.document.purpose) ? <div className="ai-case-actions">
+              <button type="button" onClick={() => void saveDraft()} disabled={busy}><Save size={16} /><span>{revision ? "保存修改" : generatedDraft.sourceFlow ? "更新用例中心" : "保存到用例中心"}</span></button>
+            </div> : <p className="navigation-flow-note">导航流程执行成功后会作为系统内部导航能力复用。</p>}
             <ScriptRunForm
               parameters={generatedDraft.document.parameters}
               values={parameterValues}
@@ -307,6 +391,53 @@ export function AiScriptFlowsPanel({
       </div>
     </section>
   );
+}
+
+export function caseCenterEligible(purpose: CaseDocumentView["purpose"]): boolean {
+  return purpose !== "navigation";
+}
+
+function runStatusLabel(status: TestRun["status"]): string {
+  if (status === "passed") return "已通过";
+  if (status === "failed") return "失败";
+  if (status === "running" || status === "pending") return "执行中";
+  if (status === "stopped") return "已停止";
+  return status;
+}
+
+function missingRequiredParameters(
+  document: CaseDocumentView,
+  values: Record<string, ScriptParameterValue>
+): string[] {
+  return Object.entries(document.parameters).flatMap(([key, definition]) => {
+    if (!definition.required) return [];
+    const value = values[key];
+    return value === undefined || value === null || (typeof value === "string" && !value.trim())
+      ? [definition.label ?? key]
+      : [];
+  });
+}
+
+async function refreshHistory(appId: string, platform: string): Promise<TemporaryTest[]> {
+  const query = new URLSearchParams({ appId, platform, limit: "50" });
+  const response = await apiFetchJson<{ tests: TemporaryTest[] }>(`/api/temporary-tests?${query.toString()}`);
+  return response.tests;
+}
+
+export function draftSaveDestination(
+  revision?: CaseRevision,
+  sourceFlow?: SavedFlowReference
+): { url: string; method: "POST" | "PUT"; expectedVersion?: number } {
+  const target = revision
+    ? { id: revision.flowId, version: revision.version }
+    : sourceFlow;
+  return target
+    ? {
+        url: `/api/script-flows/${encodeURIComponent(target.id)}`,
+        method: "PUT",
+        expectedVersion: target.version
+      }
+    : { url: "/api/script-flows", method: "POST" };
 }
 
 export function TrialOutcomeReview({

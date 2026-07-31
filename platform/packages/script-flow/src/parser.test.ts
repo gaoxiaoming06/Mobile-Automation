@@ -42,6 +42,51 @@ steps:
 `;
 
 describe("parseScriptFlow", () => {
+  it("parses flow purpose and semantic step roles as first-class fields", () => {
+    const flow = parseScriptFlow(`
+version: 1
+kind: scenario
+purpose: business
+name: 创建课堂场景
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: prepare-home
+    role: navigation
+    reachPage: { page: classin.home, policy: safe }
+  - id: publish-lesson
+    role: business
+    risk: publish
+    tap: { target: { text: 发布 } }
+  - id: verify-result
+    role: assertion
+    assertText: { text: 创建成功 }
+`);
+
+    expect(flow).toMatchObject({
+      kind: "scenario",
+      purpose: "business",
+      steps: [
+        { id: "prepare-home", role: "navigation" },
+        { id: "publish-lesson", role: "business" },
+        { id: "verify-result", role: "assertion" }
+      ]
+    });
+  });
+
+  it("rejects navigation flows that contain business side effects", () => {
+    expect(() => parseScriptFlow(`
+version: 1
+purpose: navigation
+name: 错误导航
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: publish
+    role: business
+    risk: publish
+    tap: { target: { text: 发布 } }
+`)).toThrow(/navigation.*business side effects/i);
+  });
+
   it("parses test kind, entry state, and expected outcome as first-class semantics", () => {
     const flow = parseScriptFlow(`
 version: 1
@@ -216,6 +261,7 @@ steps:
 
     expect(flow.steps[0]).toEqual({
       id: "reach-home",
+      role: "navigation",
       reachPage: { page: "classin.home", policy: "safe" }
     });
   });

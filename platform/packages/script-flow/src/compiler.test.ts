@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { ScriptFlowCompileError, compileScriptFlow, parseScriptFlow } from "./index.js";
 
 describe("compileScriptFlow", () => {
+  it("keeps purpose and semantic roles in the execution plan", () => {
+    const flow = parseScriptFlow(`
+version: 1
+purpose: fixture
+name: 教师登录
+app: { id: cn.eeo.classin, platform: android }
+entry: { session: unauthenticated }
+outcome: { session: authenticated, role: teacher }
+steps:
+  - id: submit-login
+    role: setup
+    risk: submit
+    tap: { target: { text: 登录 } }
+`);
+
+    const plan = compileScriptFlow(flow);
+
+    expect(plan).toMatchObject({
+      purpose: "fixture",
+      steps: [{ id: "submit-login", role: "setup" }]
+    });
+  });
+
   it("adds the declared entry page as a preparation step outside the test body", () => {
     const flow = parseScriptFlow(`
 version: 1

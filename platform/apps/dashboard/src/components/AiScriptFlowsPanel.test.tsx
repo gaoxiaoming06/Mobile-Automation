@@ -1,12 +1,108 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { AiScriptFlowsPanel, draftRunEndpoint, TrialOutcomeReview } from "./AiScriptFlowsPanel.js";
+import { AiScriptFlowsPanel, draftRunEndpoint, draftSaveDestination, TrialOutcomeReview } from "./AiScriptFlowsPanel.js";
 
 describe("AiScriptFlowsPanel", () => {
   it("uses separate execution endpoints for verified and trial-ready drafts", () => {
     expect(draftRunEndpoint("ready")).toBe("/api/script-flow-drafts/runs");
     expect(draftRunEndpoint("trial_ready")).toBe("/api/script-flow-drafts/trial-runs");
+  });
+
+  it("shows recent temporary tests and keeps navigation flows out of the case center", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialHistory={[{
+        id: "temporary-1",
+        appId: "cn.eeo.classin",
+        platform: "android",
+        kind: "case",
+        purpose: "navigation",
+        name: "从主页进入添加好友",
+        prompt: "从主页进入添加好友页面",
+        sourceYaml: "version: 1",
+        parsed: {},
+        parameterValues: {},
+        lastRunId: "run-1",
+        lastRunStatus: "passed",
+        runCount: 2,
+        createdAt: "2026-07-30T00:00:00.000Z",
+        updatedAt: "2026-07-30T01:00:00.000Z"
+      }]}
+      initialDraft={{
+        status: "ready",
+        sourceYaml: "version: 1\npurpose: navigation\nname: 从主页进入添加好友",
+        document: {
+          version: 1,
+          kind: "case",
+          purpose: "navigation",
+          name: "从主页进入添加好友",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [{ id: "reach", role: "navigation", reachPage: { page: "classin.friend.add" } }],
+          tags: []
+        },
+        summary: "从主页进入添加好友",
+        assumptions: [],
+        channel: "codex",
+        model: "planner"
+      } as never}
+    />);
+
+    expect(markup).toContain("最近测试");
+    expect(markup).toContain("从主页进入添加好友页面");
+    expect(markup).toContain("再次执行");
+    expect(markup).toContain("导航");
+    expect(markup).not.toContain("保存到用例中心");
+  });
+
+  it("updates the matched saved draft instead of creating a duplicate use case", () => {
+    expect(draftSaveDestination(undefined, {
+      id: "flow-add-friend",
+      version: 4,
+      name: "从主页进入添加好友页面"
+    })).toEqual({
+      url: "/api/script-flows/flow-add-friend",
+      method: "PUT",
+      expectedVersion: 4
+    });
+  });
+
+  it("labels a matched saved draft as an update", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[]}
+      selectedSerial=""
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialDraft={{
+        status: "trial_ready",
+        sourceYaml: "version: 1\nname: 从主页进入添加好友页面",
+        document: {
+          version: 1,
+          kind: "case",
+          name: "从主页进入添加好友页面",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [],
+          tags: []
+        },
+        summary: "已找到待验证草稿",
+        assumptions: [],
+        sourceFlow: { id: "flow-add-friend", version: 4, name: "从主页进入添加好友页面" },
+        channel: "codex",
+        model: "planner"
+      } as never}
+    />);
+
+    expect(markup).toContain("更新用例中心");
+    expect(markup).not.toContain("保存到用例中心");
   });
 
   it("asks for a single business outcome review when the trial has no automatic oracle", () => {

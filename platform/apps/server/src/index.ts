@@ -15,6 +15,7 @@ import { renderReportHtml } from "@mobile-automation/report-core";
 import { type BusinessGraphVersion, type Observation } from "@mobile-automation/graph-core";
 import { WebSocketServer } from "ws";
 import { ArtifactCleanupScheduler } from "./artifact-cleanup.js";
+import { createAutomaticAssetLearningService } from "./automatic-asset-learning-runtime.js";
 import { readAndroidAppMonitorConfig } from "./android-app-monitor-request.js";
 import { AutomationRunner } from "./automation-runner.js";
 import { DeviceExecutionBusyError, DeviceExecutionLease } from "./device-execution-lease.js";
@@ -94,12 +95,18 @@ const scriptFlowRunner = new ScriptFlowRunner({
 const stabilityExplorer = new StabilityExplorer(storage, driver, ocr, deviceExecutionLease);
 const scrcpyStreamBridge = new ScrcpyStreamBridge();
 const artifactCleanupScheduler = new ArtifactCleanupScheduler(storage);
+const automaticAssetLearningService = createAutomaticAssetLearningService({
+  storage,
+  ocr,
+  getAiConfig: () => resolveAiModelConfig(process.env, storage.getAiModelSettings())
+});
 
 await storage.ensureDirs();
 await runner.markStaleRunningRunsStopped("Server started with no active worker for this run.").catch((error) => {
   console.warn("Failed to mark stale runs stopped", error);
 });
 artifactCleanupScheduler.start();
+automaticAssetLearningService.start();
 
 app.use(express.json({ limit: "5mb" }));
 app.use("/artifacts", express.static(artifactRoot, { fallthrough: false }));
@@ -868,6 +875,7 @@ server.listen(port, host, () => {
 
 async function shutdown(): Promise<void> {
   artifactCleanupScheduler.stop();
+  automaticAssetLearningService.stop();
   await Promise.all([runner.stopAll(), stabilityExplorer.stopAll(), scrcpyStreamBridge.closeAll(), ocrSidecar.stop()]);
 }
 

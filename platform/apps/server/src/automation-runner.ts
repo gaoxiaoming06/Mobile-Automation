@@ -1186,7 +1186,19 @@ function navigationStringSet(value: unknown): Set<string> {
 }
 
 function scriptStepResultMetadata(params: Record<string, unknown>): Record<string, unknown> | undefined {
-  const keys = ["scriptFlowId", "scriptVersion", "scriptStepId", "sourceFlowName", "executionPhase", "onPage", "expectPage", "locatorStrategy"];
+  const keys = [
+    "scriptFlowId",
+    "scriptVersion",
+    "scriptStepId",
+    "sourceFlowName",
+    "executionPhase",
+    "onPage",
+    "expectPage",
+    "locatorStrategy",
+    "interactionAssetId",
+    "interactionAssetKey",
+    "interactionAssetVersion"
+  ];
   const entries = keys.flatMap((key) => params[key] === undefined ? [] : [[key, params[key]] as const]);
   return entries.length ? Object.fromEntries(entries) : undefined;
 }

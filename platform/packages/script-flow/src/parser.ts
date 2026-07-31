@@ -2,6 +2,7 @@ import { parseDocument } from "yaml";
 import type {
   ScriptFlowDocument,
   ScriptFlowKind,
+  ScriptFlowPurpose,
   ScriptFlowPlatform,
   ScriptFlowState,
   ScriptFlowStartStrategy,
@@ -11,6 +12,7 @@ import type {
   ScriptParameterValue,
   ScriptSearchPolicy,
   ScriptStep,
+  ScriptStepRole,
   ScriptStepRisk,
   ScriptTarget
 } from "./types.js";
@@ -27,8 +29,8 @@ export class ScriptFlowValidationError extends Error {
   }
 }
 
-const rootFields = new Set(["version", "kind", "name", "description", "app", "start", "entry", "outcome", "parameters", "steps", "tags"]);
-const stepBaseFields = new Set(["id", "name", "onPage", "expectPage", "timeoutMs", "risk", "with"]);
+const rootFields = new Set(["version", "kind", "purpose", "name", "description", "app", "start", "entry", "outcome", "parameters", "steps", "tags"]);
+const stepBaseFields = new Set(["id", "name", "role", "onPage", "expectPage", "timeoutMs", "risk", "with"]);
 const actionFields = [
   "launchApp",
   "tap",
@@ -68,6 +70,7 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
     issues.push({ path: "version", message: "ScriptFlow version must be 1" });
   }
   const kind = readKind(root.kind, issues);
+  const purpose = readPurpose(root.purpose, issues);
   const name = requiredString(root.name, "name", issues);
   const description = optionalString(root.description, "description", issues);
   const app = readApp(root.app, issues);
@@ -75,10 +78,11 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
   const entry = readFlowState(root.entry, "entry", issues);
   const outcome = readFlowState(root.outcome, "outcome", issues);
   const parameters = readParameters(root.parameters, issues);
-  const steps = readSteps(root.steps, "steps", issues);
+  const steps = readSteps(root.steps, "steps", issues, purpose);
   const tags = readStringArray(root.tags, "tags", issues, []);
 
   validateUniqueStepIds(steps, issues);
+  validatePurposeSemantics(purpose, steps, issues);
   validateParameterReferences({ root, parameters, steps, issues });
 
   if (issues.length > 0) {
@@ -88,6 +92,7 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
   return {
     version: 1,
     kind,
+    purpose,
     name,
     ...(description ? { description } : {}),
     app,
@@ -98,6 +103,13 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
     steps,
     tags
   };
+}
+
+function readPurpose(value: unknown, issues: ScriptFlowValidationIssue[]): ScriptFlowPurpose {
+  if (value === undefined) return "business";
+  if (value === "navigation" || value === "fixture" || value === "business" || value === "recovery") return value;
+  issues.push({ path: "purpose", message: "Flow purpose must be navigation, fixture, business, or recovery" });
+  return "business";
 }
 
 function readKind(value: unknown, issues: ScriptFlowValidationIssue[]): ScriptFlowKind {
@@ -254,15 +266,25 @@ function readParameterControl(value: unknown, path: string, issues: ScriptFlowVa
   return {};
 }
 
-function readSteps(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): ScriptStep[] {
+function readSteps(
+  value: unknown,
+  path: string,
+  issues: ScriptFlowValidationIssue[],
+  purpose: ScriptFlowPurpose
+): ScriptStep[] {
   if (!Array.isArray(value) || value.length === 0) {
     issues.push({ path, message: "Steps must be a non-empty array" });
     return [];
   }
-  return value.map((step, index) => readStep(step, `${path}[${index}]`, issues));
+  return value.map((step, index) => readStep(step, `${path}[${index}]`, issues, purpose));
 }
 
-function readStep(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): ScriptStep {
+function readStep(
+  value: unknown,
+  path: string,
+  issues: ScriptFlowValidationIssue[],
+  purpose: ScriptFlowPurpose
+): ScriptStep {
   const step = recordAt(value, path, issues);
   rejectUnknownFields(step, new Set([...stepBaseFields, ...actionFields]), path, issues);
   const id = requiredString(step.id, `${path}.id`, issues);
@@ -276,6 +298,8 @@ function readStep(value: unknown, path: string, issues: ScriptFlowValidationIssu
     issues.push({ path, message: "Each step must contain exactly one action" });
   }
   const action = actions[0] ?? "assertPage";
+  const role = readStepRole(step.role, `${path}.role`, issues)
+    ?? inferStepRole(purpose, action, Boolean(expectPage));
   if ((action === "tap" || action === "selectText") && step.risk === "none") {
     issues.push({ path: `${path}.risk`, message: `${action} steps cannot declare risk none` });
   }
@@ -285,6 +309,7 @@ function readStep(value: unknown, path: string, issues: ScriptFlowValidationIssu
   const base = {
     id,
     ...(name ? { name } : {}),
+    role,
     ...(onPage ? { onPage } : {}),
     ...(expectPage ? { expectPage } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
@@ -321,10 +346,64 @@ function readStep(value: unknown, path: string, issues: ScriptFlowValidationIssu
         ...(step.with !== undefined ? { with: readParameterBindings(step.with, `${path}.with`, issues) } : {})
       };
     case "repeat":
-      return { ...base, repeat: readRepeat(step.repeat, `${path}.repeat`, issues) };
+      return { ...base, repeat: readRepeat(step.repeat, `${path}.repeat`, issues, purpose) };
     case "when":
-      return { ...base, when: readWhen(step.when, `${path}.when`, issues) };
+      return { ...base, when: readWhen(step.when, `${path}.when`, issues, purpose) };
   }
+}
+
+function readStepRole(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): ScriptStepRole | undefined {
+  if (value === undefined) return undefined;
+  if (value === "setup" || value === "navigation" || value === "business" || value === "assertion" || value === "cleanup" || value === "recovery") return value;
+  issues.push({ path, message: "Step role must be setup, navigation, business, assertion, cleanup, or recovery" });
+  return undefined;
+}
+
+function inferStepRole(
+  purpose: ScriptFlowPurpose,
+  action: typeof actionFields[number],
+  hasExpectedPage: boolean
+): ScriptStepRole {
+  if (action === "assertPage" || action === "assertText" || action === "waitForPage") return "assertion";
+  if (purpose === "navigation") return "navigation";
+  if (purpose === "fixture") return "setup";
+  if (purpose === "recovery") return "recovery";
+  if (action === "launchApp") return "setup";
+  if (action === "reachPage" || (action === "tap" && hasExpectedPage)) return "navigation";
+  return "business";
+}
+
+function validatePurposeSemantics(
+  purpose: ScriptFlowPurpose,
+  steps: ScriptStep[],
+  issues: ScriptFlowValidationIssue[]
+): void {
+  const flattened = flattenScriptSteps(steps);
+  if (purpose === "navigation" && flattened.some((step) =>
+    step.role === "business"
+    || step.risk === "submit"
+    || step.risk === "publish"
+    || step.risk === "delete"
+    || step.risk === "payment"
+    || "inputText" in step
+    || "clearText" in step
+    || "selectText" in step
+  )) {
+    issues.push({ path: "purpose", message: "Navigation flows cannot contain business side effects" });
+  }
+  if (purpose === "recovery" && flattened.some((step) =>
+    step.risk === "submit" || step.risk === "publish" || step.risk === "delete" || step.risk === "payment"
+  )) {
+    issues.push({ path: "purpose", message: "Recovery flows cannot contain business side effects" });
+  }
+}
+
+function flattenScriptSteps(steps: ScriptStep[]): ScriptStep[] {
+  return steps.flatMap((step) => [
+    step,
+    ...("repeat" in step ? flattenScriptSteps(step.repeat.steps) : []),
+    ...("when" in step ? flattenScriptSteps(step.when.steps) : [])
+  ]);
 }
 
 function readAssertText(
@@ -442,7 +521,12 @@ function readReachPage(value: unknown, path: string, issues: ScriptFlowValidatio
   };
 }
 
-function readRepeat(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { times: number | string; steps: ScriptStep[] } {
+function readRepeat(
+  value: unknown,
+  path: string,
+  issues: ScriptFlowValidationIssue[],
+  purpose: ScriptFlowPurpose
+): { times: number | string; steps: ScriptStep[] } {
   const repeat = recordAt(value, path, issues);
   rejectUnknownFields(repeat, new Set(["times", "steps"]), path, issues);
   const times = repeat.times;
@@ -455,11 +539,16 @@ function readRepeat(value: unknown, path: string, issues: ScriptFlowValidationIs
   }
   return {
     times: typeof times === "number" || typeof times === "string" ? times : 1,
-    steps: readSteps(repeat.steps, `${path}.steps`, issues)
+    steps: readSteps(repeat.steps, `${path}.steps`, issues, purpose)
   };
 }
 
-function readWhen(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { parameter: string; equals: ScriptParameterValue; steps: ScriptStep[] } {
+function readWhen(
+  value: unknown,
+  path: string,
+  issues: ScriptFlowValidationIssue[],
+  purpose: ScriptFlowPurpose
+): { parameter: string; equals: ScriptParameterValue; steps: ScriptStep[] } {
   const when = recordAt(value, path, issues);
   rejectUnknownFields(when, new Set(["parameter", "equals", "steps"]), path, issues);
   const parameter = requiredString(when.parameter, `${path}.parameter`, issues);
@@ -469,7 +558,7 @@ function readWhen(value: unknown, path: string, issues: ScriptFlowValidationIssu
   return {
     parameter,
     equals: isParameterValue(when.equals) ? when.equals : "",
-    steps: readSteps(when.steps, `${path}.steps`, issues)
+    steps: readSteps(when.steps, `${path}.steps`, issues, purpose)
   };
 }
 

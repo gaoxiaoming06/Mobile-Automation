@@ -1,5 +1,6 @@
 import type { LearningCandidate, TestRun } from "@mobile-automation/shared";
 import type { ScriptStep, ScriptTarget } from "@mobile-automation/script-flow";
+import { canLearnFromSuccessfulRun } from "./learning-run-eligibility.js";
 
 export type LearnedInteractionCandidate = Omit<
   LearningCandidate,
@@ -10,8 +11,9 @@ const ACTION_KEYS = ["tap", "inputText", "clearText", "selectText"] as const;
 type SupportedAction = typeof ACTION_KEYS[number];
 
 export function interactionCandidatesFromTrial(run: TestRun): LearnedInteractionCandidate[] {
-  if (run.status !== "passed" || run.sourceSnapshot?.executionPurpose !== "trial") return [];
-  const steps = parsedSteps(run.sourceSnapshot.parsed);
+  if (!canLearnFromSuccessfulRun(run)) return [];
+  const sourceSnapshot = run.sourceSnapshot!;
+  const steps = parsedSteps(sourceSnapshot.parsed);
   const artifactsByResult = new Map<string, string[]>();
   for (const artifact of run.artifacts) {
     if (!artifact.stepResultId) continue;

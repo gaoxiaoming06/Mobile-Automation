@@ -3,6 +3,7 @@ import type { ScriptParameterDefinitionView, ScriptParameterValue } from "./Scri
 export type CaseDocumentView = {
   version: 1;
   kind: "case" | "scenario";
+  purpose?: "navigation" | "fixture" | "business" | "recovery";
   name: string;
   description?: string;
   app: { id: string; platform: string };
@@ -16,6 +17,7 @@ export type CaseDocumentView = {
 export type CaseSourceStep = Record<string, unknown> & {
   id: string;
   name?: string;
+  role?: "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery";
   onPage?: string;
   expectPage?: string;
   risk?: string;
@@ -32,6 +34,7 @@ export type CasePlanView = {
     expectPage?: string;
     risk: string;
     phase?: "preparation" | "test";
+    role?: "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery";
   }>;
   riskConfirmations: Array<{ stepId: string; risk: string; stepName?: string }>;
 };
@@ -53,6 +56,13 @@ export function readCaseDocument(value: Record<string, unknown> | undefined): Ca
 
 export function testKindLabel(kind: CaseDocumentView["kind"] | undefined): string {
   return kind === "scenario" ? "场景" : "用例";
+}
+
+export function testPurposeLabel(purpose: CaseDocumentView["purpose"]): string {
+  if (purpose === "navigation") return "导航";
+  if (purpose === "fixture") return "准备";
+  if (purpose === "recovery") return "恢复";
+  return "业务";
 }
 
 export function defaultCaseParameterValues(document: CaseDocumentView | undefined): Record<string, ScriptParameterValue> {

@@ -17,6 +17,7 @@ import {
   defaultCaseParameterValues,
   readCaseDocument,
   testKindLabel,
+  testPurposeLabel,
   type CasePlanView
 } from "./case-view.js";
 
@@ -236,6 +237,7 @@ export function CaseCenterPanel({
             </header>
             <div className="case-facts">
               <div><span>类型</span><strong>{testKindLabel(document?.kind)}</strong></div>
+              <div><span>用途</span><strong>{testPurposeLabel(document?.purpose)}</strong></div>
               <div><span>App</span><strong>{selected.appId}</strong></div>
               <div><span>平台</span><strong>{platformLabel(selected.platform)}</strong></div>
               <div><span>版本</span><strong>v{selected.version}</strong></div>

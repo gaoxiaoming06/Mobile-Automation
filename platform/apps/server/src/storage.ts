@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -10,7 +11,7 @@ import type {
   PlatformScope,
   StateMatcher
 } from "@mobile-automation/graph-core";
-import { parseScriptFlow, type ScriptFlowDocument, type ScriptStep, type ScriptTarget } from "@mobile-automation/script-flow";
+import { parseScriptFlow, type ScriptFlowDocument, type ScriptParameterValue, type ScriptStep, type ScriptTarget } from "@mobile-automation/script-flow";
 import {
   createId,
   nowIso,
@@ -20,14 +21,18 @@ import {
   type FlowVerification,
   type FlowVerificationStatus,
   type InteractionAsset,
+  type LearningAggregate,
+  type LearningAggregateStatus,
   type LearningCandidate,
   type LearningCandidateStatus,
+  type LearningObservation,
   type LearningSession,
   type MetricSample,
   type NavigationEntry,
   type ScriptFlow,
   type ScriptFlowVersion,
   type StepResult,
+  type TemporaryTest,
   type TestRun
 } from "@mobile-automation/shared";
 import { artifactRoot, dataRoot } from "./artifacts.js";
@@ -38,9 +43,15 @@ import {
 } from "./page-navigation.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 import { scriptFlowSourceHash } from "./script-flow-verification.js";
-import { automaticLearningDecision } from "./learning-policy.js";
+import { learningAggregateReadiness, requiresAiLearningAnalysis } from "./learning-lifecycle.js";
 import { interactionCandidatesFromTrial } from "./trial-interaction-learning.js";
 import { navigationCandidatesFromTrial } from "./trial-navigation-learning.js";
+import { pageCandidatesFromTrial } from "./trial-page-learning.js";
+import {
+  classifyInteractionAssetStepOutcome,
+  nextInteractionAssetHealth,
+  type InteractionAssetHealth
+} from "./interaction-asset-health.js";
 
 const dbPath = path.join(dataRoot, "mobile-automation.sqlite");
 
@@ -91,6 +102,14 @@ export type CreateScriptFlowInput = {
 export type CreateFlowVerificationInput = Omit<FlowVerification, "id" | "createdAt"> & {
   id?: string;
   createdAt?: string;
+};
+
+export type RecordTemporaryTestInput = {
+  prompt: string;
+  sourceYaml: string;
+  document: ScriptFlowDocument;
+  parameterValues: Record<string, ScriptParameterValue>;
+  runId: string;
 };
 
 export type CreateLearningCandidateInput = Omit<LearningCandidate, "id" | "createdAt" | "updatedAt"> & {
@@ -242,6 +261,79 @@ export class Storage {
     return this.db.prepare("DELETE FROM script_flows WHERE id = ?").run(id).changes > 0;
   }
 
+  recordTemporaryTest(input: RecordTemporaryTestInput): TemporaryTest {
+    const now = nowIso();
+    const sourceHash = createHash("sha256").update(input.sourceYaml).digest("hex");
+    this.db.prepare(
+      `INSERT INTO temporary_tests
+        (id, source_hash, app_id, platform, kind, purpose, name, prompt, source_yaml, parsed_json,
+         parameter_values_json, last_run_id, run_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+       ON CONFLICT(app_id, platform, source_hash) DO UPDATE SET
+         kind = excluded.kind,
+         purpose = excluded.purpose,
+         name = excluded.name,
+         prompt = excluded.prompt,
+         source_yaml = excluded.source_yaml,
+         parsed_json = excluded.parsed_json,
+         parameter_values_json = excluded.parameter_values_json,
+         last_run_id = excluded.last_run_id,
+         run_count = temporary_tests.run_count + 1,
+         updated_at = excluded.updated_at`
+    ).run(
+      createId("temporary_test"),
+      sourceHash,
+      input.document.app.id,
+      input.document.app.platform,
+      input.document.kind,
+      input.document.purpose ?? "business",
+      input.document.name,
+      input.prompt,
+      input.sourceYaml,
+      JSON.stringify(input.document),
+      JSON.stringify(input.parameterValues),
+      input.runId,
+      now,
+      now
+    );
+    const row = this.db.prepare(
+      `SELECT temporary_tests.*, runs.status AS last_run_status
+       FROM temporary_tests
+       LEFT JOIN runs ON runs.id = temporary_tests.last_run_id
+       WHERE temporary_tests.app_id = ? AND temporary_tests.platform = ? AND temporary_tests.source_hash = ?`
+    ).get(input.document.app.id, input.document.app.platform, sourceHash) as Row;
+    return rowToTemporaryTest(row);
+  }
+
+  listTemporaryTests(filter: {
+    appId?: string;
+    platform?: ScriptFlow["platform"];
+    limit?: number;
+  } = {}): TemporaryTest[] {
+    const clauses: string[] = [];
+    const values: Array<string | number> = [];
+    if (filter.appId) {
+      clauses.push("temporary_tests.app_id = ?");
+      values.push(filter.appId);
+    }
+    if (filter.platform) {
+      clauses.push("temporary_tests.platform = ?");
+      values.push(filter.platform);
+    }
+    const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
+    values.push(limit);
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db.prepare(
+      `SELECT temporary_tests.*, runs.status AS last_run_status
+       FROM temporary_tests
+       LEFT JOIN runs ON runs.id = temporary_tests.last_run_id
+       ${where}
+       ORDER BY temporary_tests.updated_at DESC
+       LIMIT ?`
+    ).all(...values) as Row[];
+    return rows.map(rowToTemporaryTest);
+  }
+
   listPageNavigationSegments(filter: {
     appId: string;
     platform: ScriptFlow["platform"];
@@ -374,6 +466,218 @@ export class Storage {
     return rows.map(rowToLearningCandidate);
   }
 
+  getLearningCandidate(id: string): LearningCandidate | undefined {
+    const row = this.db.prepare("SELECT * FROM learning_candidates WHERE id = ?").get(id) as Row | undefined;
+    return row ? rowToLearningCandidate(row) : undefined;
+  }
+
+  listLearningAggregates(filter: {
+    appId?: string;
+    platform?: ScriptFlow["platform"];
+    status?: LearningAggregateStatus;
+  } = {}): LearningAggregate[] {
+    const clauses: string[] = [];
+    const values: string[] = [];
+    if (filter.appId) {
+      clauses.push("app_id = ?");
+      values.push(filter.appId);
+    }
+    if (filter.platform) {
+      clauses.push("platform = ?");
+      values.push(filter.platform);
+    }
+    if (filter.status) {
+      clauses.push("status = ?");
+      values.push(filter.status);
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db.prepare(
+      `SELECT * FROM learning_aggregates${where} ORDER BY updated_at DESC, id ASC`
+    ).all(...values) as Row[];
+    return rows.map(rowToLearningAggregate);
+  }
+
+  getLearningAggregate(id: string): LearningAggregate | undefined {
+    const row = this.db.prepare("SELECT * FROM learning_aggregates WHERE id = ?").get(id) as Row | undefined;
+    return row ? rowToLearningAggregate(row) : undefined;
+  }
+
+  listLearningObservations(aggregateId: string): LearningObservation[] {
+    const rows = this.db.prepare(
+      "SELECT * FROM learning_observations WHERE aggregate_id = ? ORDER BY created_at ASC, id ASC"
+    ).all(aggregateId) as Row[];
+    return rows.map(rowToLearningObservation);
+  }
+
+  updateLearningAggregate(input: {
+    id: string;
+    status: LearningAggregateStatus;
+    analysis?: Record<string, unknown>;
+    assetId?: string;
+    lastError?: string;
+  }): LearningAggregate | undefined {
+    const current = this.getLearningAggregate(input.id);
+    if (!current) return undefined;
+    this.db.prepare(
+      `UPDATE learning_aggregates
+       SET status = ?, analysis_json = ?, asset_id = ?, last_error = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(
+      input.status,
+      input.analysis === undefined ? current.analysis ? JSON.stringify(current.analysis) : null : JSON.stringify(input.analysis),
+      input.assetId ?? current.assetId ?? null,
+      input.lastError ?? null,
+      nowIso(),
+      input.id
+    );
+    return this.getLearningAggregate(input.id);
+  }
+
+  promoteLearningAggregate(
+    id: string,
+    analysis?: Record<string, unknown>
+  ): LearningAggregate {
+    const aggregate = this.getLearningAggregate(id);
+    if (!aggregate) throw new Error(`Learning aggregate not found: ${id}`);
+    if (aggregate.status !== "ready") {
+      throw new Error(`Learning aggregate ${id} is not ready for promotion`);
+    }
+    if (aggregate.analysisRequired && analysis?.decision !== "approve") {
+      throw new Error(`Learning aggregate ${id} requires an approved AI proposal`);
+    }
+    const candidate = this.getLearningCandidate(aggregate.representativeCandidateId);
+    if (!candidate) throw new Error(`Representative learning candidate not found: ${aggregate.representativeCandidateId}`);
+    if (candidate.kind === "page") {
+      const pageId = this.promotePageLearningAggregate(aggregate, candidate, analysis);
+      const promoted = this.updateLearningAggregate({
+        id,
+        status: "active",
+        ...(analysis ? { analysis } : {}),
+        assetId: pageId
+      });
+      if (!promoted) throw new Error(`Learning aggregate not found after promotion: ${id}`);
+      return promoted;
+    }
+    const accepted = this.acceptLearningSession(candidate.sessionId, [candidate.id]);
+    const assetId = candidate.kind === "interaction"
+      ? accepted.assets[0]?.id
+      : accepted.navigationEntries[0]?.id;
+    if (!assetId) throw new Error(`Learning aggregate ${id} did not produce an asset`);
+    if (candidate.kind === "interaction") {
+      this.db.prepare(
+        `UPDATE interaction_asset_health
+         SET status = 'active', consecutive_locator_failures = 0, last_error = NULL, updated_at = ?
+         WHERE asset_id = ?`
+      ).run(nowIso(), assetId);
+    }
+    const promoted = this.updateLearningAggregate({
+      id,
+      status: "active",
+      ...(analysis ? { analysis } : {}),
+      assetId
+    });
+    if (!promoted) throw new Error(`Learning aggregate not found after promotion: ${id}`);
+    return promoted;
+  }
+
+  private promotePageLearningAggregate(
+    aggregate: LearningAggregate,
+    candidate: LearningCandidate,
+    analysis: Record<string, unknown> | undefined
+  ): string {
+    const proposal = approvedPageLearningProposal(analysis);
+    let graph = this.findBusinessGraphByAppId(aggregate.appId);
+    if (!graph) {
+      graph = this.createPageAssetLibrary({
+        appId: aggregate.appId,
+        name: `${aggregate.appId} 页面资产库`,
+        targetApp: {
+          productId: aggregate.appId,
+          productName: aggregate.appId,
+          profiles: [{
+            id: `${aggregate.platform}:${aggregate.appId}`,
+            platform: aggregate.platform,
+            displayName: `${aggregate.appId} ${aggregate.platform}`,
+            ...(aggregate.platform === "android"
+              ? { androidPackageName: aggregate.appId }
+              : aggregate.platform === "ios"
+                ? { iosBundleId: aggregate.appId }
+                : aggregate.platform === "harmony"
+                  ? { harmonyBundleName: aggregate.appId }
+                  : { flutterAppId: aggregate.appId }),
+            isPrimary: true
+          }]
+        }
+      });
+    }
+    let version = this.getActiveBusinessGraphVersion(graph.id);
+    if (!version) {
+      const created = this.createBusinessGraphVersion({
+        graphId: graph.id,
+        sourceSummary: ["自动学习页面资产"],
+        status: "active"
+      });
+      this.setActiveBusinessGraphVersion(graph.id, created.id);
+      version = this.getBusinessGraphVersion(created.id);
+    }
+    if (!version) throw new Error(`Page asset library has no active version: ${graph.id}`);
+
+    const existing = version.nodes.find((node) =>
+      node.nodeType === "page"
+      && node.status === "active"
+      && node.metadata?.assetRecordingConfirmed === true
+      && (node.key === proposal.key || normalizeLearningText(node.name) === normalizeLearningText(proposal.name))
+    );
+    if (existing) return existing.id;
+
+    const proposedTexts = new Set(proposal.stableTexts.map(normalizeLearningText));
+    const conflict = version.nodes.find((node) => {
+      if (node.nodeType !== "page" || node.status !== "active" || node.metadata?.assetRecordingConfirmed !== true) return false;
+      const existingTexts = new Set(node.matchers
+        .filter((matcher) => matcher.type === "ocr_text")
+        .map((matcher) => normalizeLearningText(matcher.value)));
+      return [...proposedTexts].filter((text) => existingTexts.has(text)).length >= 2;
+    });
+    if (conflict) {
+      throw new Error(`Page identity conflicts with existing asset: ${conflict.name}`);
+    }
+
+    const observations = this.listLearningObservations(aggregate.id);
+    const platformScope = aggregate.platform === "android" || aggregate.platform === "ios"
+      ? aggregate.platform
+      : undefined;
+    const node = this.createBusinessNode({
+      graphVersionId: version.id,
+      key: proposal.key,
+      name: proposal.name,
+      nodeType: "page",
+      tags: ["automatic-learning"],
+      status: "active",
+      ...(platformScope ? { platformScope } : {}),
+      matchers: proposal.stableTexts.map((text) => ({
+        id: createId("matcher"),
+        type: "ocr_text" as const,
+        value: text,
+        weight: 2,
+        critical: true,
+        ...(platformScope ? { platformScope } : {}),
+        source: { sourceType: "ai_draft" as const }
+      })),
+      defaultExpectations: [],
+      metadata: {
+        assetRecordingConfirmed: true,
+        automaticLearning: true,
+        learningAggregateId: aggregate.id,
+        representativeCandidateId: candidate.id,
+        evidenceRunIds: observations.map((item) => item.runId),
+        evidenceArtifactIds: uniqueStrings(observations.flatMap((item) => item.evidenceArtifactIds)),
+        learnedAt: nowIso(),
+        aiAnalysis: analysis
+      }
+    });
+    return node.id;
+  }
+
   updateLearningCandidateStatus(id: string, status: LearningCandidateStatus): LearningCandidate | undefined {
     const current = this.db.prepare("SELECT session_id FROM learning_candidates WHERE id = ?").get(id) as Row | undefined;
     if (!current) return undefined;
@@ -398,6 +702,23 @@ export class Storage {
     return rows.map(rowToInteractionAsset);
   }
 
+  getInteractionAssetHealth(assetId: string): (InteractionAssetHealth & {
+    lastRunId?: string;
+    lastError?: string;
+    updatedAt: string;
+  }) | undefined {
+    const row = this.db.prepare("SELECT * FROM interaction_asset_health WHERE asset_id = ?").get(assetId) as Row | undefined;
+    if (!row) return undefined;
+    return {
+      status: String(row.status) as InteractionAssetHealth["status"],
+      consecutiveLocatorFailures: Number(row.consecutive_locator_failures),
+      successfulRunCount: Number(row.successful_run_count),
+      lastRunId: stringOrUndefined(row.last_run_id),
+      lastError: stringOrUndefined(row.last_error),
+      updatedAt: String(row.updated_at)
+    };
+  }
+
   listNavigationEntries(filter: { appId: string; platform?: ScriptFlow["platform"] }): NavigationEntry[] {
     const rows = filter.platform
       ? this.db.prepare(
@@ -416,7 +737,7 @@ export class Storage {
   } {
     const session = this.getLearningSession(sessionId);
     if (!session) throw new Error(`Learning session not found: ${sessionId}`);
-    if (session.status !== "ready" || !session.executionPassed || !["verified", "human_confirmed"].includes(session.outcomeStatus)) {
+    if (!["ready", "accepted"].includes(session.status) || !session.executionPassed || !["verified", "human_confirmed"].includes(session.outcomeStatus)) {
       throw new Error("Learning session is not ready for acceptance");
     }
     const selectedIds = [...new Set(candidateIds)];
@@ -623,7 +944,7 @@ export class Storage {
     }
     if (decision === "confirmed") {
       this.refreshPageNavigationIndex();
-      this.automaticallyPromoteLearningCandidates(current.id);
+      this.aggregateLearningSession(current.id);
     }
     const session = this.getLearningSessionForRun(runId);
     if (!session) throw new Error(`Learning session not found for run: ${runId}`);
@@ -1053,6 +1374,9 @@ export class Storage {
     if (status === "passed") {
       this.recordPassedTrialVerification(runId);
     }
+    if (status === "passed" || status === "failed") {
+      this.recordInteractionAssetHealth(runId);
+    }
     if (isFinalStatus) {
       this.recordTrialLearningSession(runId, status);
     }
@@ -1201,7 +1525,18 @@ export class Storage {
 
   listRunsForCleanup(): StoredRunForCleanup[] {
     const rows = this.db
-      .prepare("SELECT id, status, created_at, ended_at FROM runs WHERE status NOT IN ('pending', 'running', 'paused') ORDER BY created_at ASC")
+      .prepare(
+        `SELECT runs.id, runs.status, runs.created_at, runs.ended_at
+         FROM runs
+         WHERE runs.status NOT IN ('pending', 'running', 'paused')
+           AND NOT EXISTS (
+             SELECT 1 FROM learning_observations observation
+             JOIN learning_aggregates aggregate ON aggregate.id = observation.aggregate_id
+             WHERE observation.run_id = runs.id
+               AND aggregate.status IN ('collecting', 'awaiting_ai', 'ready', 'analysis_failed')
+           )
+         ORDER BY runs.created_at ASC`
+      )
       .all() as Row[];
     return rows.map((row) => ({
       id: String(row.id),
@@ -1276,6 +1611,91 @@ export class Storage {
       batteryTemperatureC: numberOrUndefined(row.battery_temperature_c),
       raw: JSON.parse(String(row.raw_json))
     }));
+  }
+
+  private recordInteractionAssetHealth(runId: string): void {
+    const rows = this.db.prepare(
+      `SELECT status, error_code, error_message, metadata_json
+       FROM step_results WHERE run_id = ? ORDER BY iteration_index ASC, step_order ASC`
+    ).all(runId) as Row[];
+    const outcomes = new Map<string, {
+      outcome: "passed" | "locator_failed" | "ignored_failure";
+      error?: string;
+    }>();
+    for (const row of rows) {
+      const metadata = parseJsonObject(String(row.metadata_json ?? "{}"));
+      const assetId = nonEmptyString(metadata.interactionAssetId);
+      if (!assetId) continue;
+      const outcome = classifyInteractionAssetStepOutcome({
+        status: String(row.status),
+        errorCode: stringOrUndefined(row.error_code),
+        errorMessage: stringOrUndefined(row.error_message)
+      });
+      const previous = outcomes.get(assetId);
+      if (previous?.outcome === "passed") continue;
+      if (outcome === "passed" || outcome === "locator_failed" || !previous) {
+        outcomes.set(assetId, {
+          outcome,
+          error: outcome === "locator_failed" ? stringOrUndefined(row.error_message) : undefined
+        });
+      }
+    }
+
+    const runRow = this.db.prepare("SELECT device_serial FROM runs WHERE id = ?").get(runId) as Row | undefined;
+    for (const [assetId, result] of outcomes) {
+      if (result.outcome === "ignored_failure") continue;
+      const assetRow = this.db.prepare("SELECT id, name, status FROM interaction_assets WHERE id = ?").get(assetId) as Row | undefined;
+      if (!assetRow) continue;
+      const existing = this.getInteractionAssetHealth(assetId);
+      const current: InteractionAssetHealth = existing ?? {
+        status: String(assetRow.status) === "degraded" ? "degraded" : "active",
+        consecutiveLocatorFailures: 0,
+        successfulRunCount: 0
+      };
+      const next = nextInteractionAssetHealth(current, result.outcome);
+      const updatedAt = nowIso();
+      this.db.prepare(
+        `INSERT INTO interaction_asset_health
+          (asset_id, status, consecutive_locator_failures, successful_run_count, last_run_id, last_error, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(asset_id) DO UPDATE SET
+           status = excluded.status,
+           consecutive_locator_failures = excluded.consecutive_locator_failures,
+           successful_run_count = excluded.successful_run_count,
+           last_run_id = excluded.last_run_id,
+           last_error = excluded.last_error,
+           updated_at = excluded.updated_at`
+      ).run(
+        assetId,
+        next.status,
+        next.consecutiveLocatorFailures,
+        next.successfulRunCount,
+        runId,
+        result.error ?? null,
+        updatedAt
+      );
+      if (current.status !== "degraded" && next.status === "degraded") {
+        this.db.prepare("UPDATE interaction_assets SET status = 'degraded', updated_at = ? WHERE id = ?").run(updatedAt, assetId);
+        this.db.prepare("UPDATE learning_aggregates SET status = 'degraded', last_error = ?, updated_at = ? WHERE asset_id = ?").run(
+          result.error ?? "连续三次未能定位目标",
+          updatedAt,
+          assetId
+        );
+        if (runRow) {
+          this.addDeviceEvent({
+            id: createId("event"),
+            runId,
+            deviceSerial: String(runRow.device_serial),
+            type: "interaction_asset_degraded",
+            severity: "warning",
+            occurredAt: updatedAt,
+            summary: `定位资产“${String(assetRow.name)}”已自动停用`,
+            detail: "该定位资产已连续三次无法找到目标，后续测试将不再复用它，需要通过新的成功执行重新学习该操作。",
+            artifactIds: []
+          });
+        }
+      }
+    }
   }
 
   private getDeviceEvents(runId: string): DeviceEvent[] {
@@ -1358,10 +1778,14 @@ export class Storage {
     if (!row || this.getLearningSessionForRun(runId)) return;
     const runSnapshot = JSON.parse(String(row.run_snapshot_json)) as Record<string, unknown>;
     const sourceSnapshot = scriptFlowSourceSnapshot(runSnapshot).sourceSnapshot;
+    const isTrial = sourceSnapshot?.executionPurpose === "trial";
+    const isVerifiedNormal = sourceSnapshot?.executionPurpose === "normal"
+      && sourceSnapshot.verificationAssessment?.status === "verified";
     if (
-      sourceSnapshot?.executionPurpose !== "trial"
+      (!isTrial && !isVerifiedNormal)
       || !sourceSnapshot.sourceHash
       || !sourceSnapshot.verificationAssessment
+      || (isVerifiedNormal && runStatus !== "passed")
     ) {
       return;
     }
@@ -1371,13 +1795,13 @@ export class Storage {
     if (typeof appRecord.id !== "string" || typeof appRecord.platform !== "string") return;
 
     const executionPassed = runStatus === "passed";
-    const unresolvedOutcome = sourceSnapshot.verificationAssessment.unresolvedOutcome;
+    const unresolvedOutcome = isTrial && sourceSnapshot.verificationAssessment.unresolvedOutcome;
     const now = nowIso();
     const summary = {
       pageCandidates: 0,
       interactionCandidates: 0,
       navigationCandidates: 0,
-      testCandidates: executionPassed ? 1 : 0,
+      testCandidates: executionPassed && isTrial ? 1 : 0,
       issues: executionPassed
         ? unresolvedOutcome ? ["试运行没有自动结果判定，需要确认业务结果"] : []
         : ["试运行未通过，不能从本次执行学习资产"]
@@ -1404,6 +1828,9 @@ export class Storage {
     if (executionPassed) {
       const run = this.getRun(runId);
       if (run) {
+        for (const candidate of pageCandidatesFromTrial(run)) {
+          this.createLearningCandidate({ sessionId, ...candidate });
+        }
         for (const candidate of interactionCandidatesFromTrial(run)) {
           this.createLearningCandidate({ sessionId, ...candidate });
         }
@@ -1411,17 +1838,112 @@ export class Storage {
           this.createLearningCandidate({ sessionId, ...candidate });
         }
       }
-      if (!unresolvedOutcome) this.automaticallyPromoteLearningCandidates(sessionId);
+      if (!unresolvedOutcome) this.aggregateLearningSession(sessionId);
     }
   }
 
-  private automaticallyPromoteLearningCandidates(sessionId: string): void {
+  private aggregateLearningSession(sessionId: string): void {
     const session = this.getLearningSession(sessionId);
-    if (!session || session.status !== "ready") return;
-    const candidateIds = this.listLearningCandidates(sessionId)
-      .filter((candidate) => automaticLearningDecision(candidate).accept)
-      .map((candidate) => candidate.id);
-    if (candidateIds.length > 0) this.acceptLearningSession(sessionId, candidateIds);
+    if (
+      !session
+      || !session.executionPassed
+      || !["verified", "human_confirmed"].includes(session.outcomeStatus)
+    ) return;
+    for (const candidate of this.listLearningCandidates(sessionId)) {
+      if (
+        !candidate.stableKey
+        || candidate.kind === "test"
+        || !["validated", "needs_review"].includes(candidate.status)
+      ) continue;
+      this.aggregateLearningCandidate(session, candidate);
+    }
+  }
+
+  private aggregateLearningCandidate(session: LearningSession, candidate: LearningCandidate): void {
+    if (!candidate.stableKey || candidate.kind === "test") return;
+    const now = nowIso();
+    let row = this.db.prepare(
+      `SELECT * FROM learning_aggregates
+       WHERE app_id = ? AND platform = ? AND kind = ? AND stable_key = ?`
+    ).get(session.appId, session.platform, candidate.kind, candidate.stableKey) as Row | undefined;
+    const aggregateId = row ? String(row.id) : createId("learning_aggregate");
+    if (!row) {
+      this.db.prepare(
+        `INSERT INTO learning_aggregates
+          (id, app_id, platform, kind, stable_key, representative_candidate_id, status,
+           successful_run_count, distinct_evidence_count, analysis_required, analysis_json,
+           asset_id, last_error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'collecting', 0, 0, ?, NULL, NULL, NULL, ?, ?)`
+      ).run(
+        aggregateId,
+        session.appId,
+        session.platform,
+        candidate.kind,
+        candidate.stableKey,
+        candidate.id,
+        requiresAiLearningAnalysis(candidate) ? 1 : 0,
+        now,
+        now
+      );
+      row = this.db.prepare("SELECT * FROM learning_aggregates WHERE id = ?").get(aggregateId) as Row;
+    }
+
+    if (String(row.status) === "degraded") {
+      this.db.prepare("DELETE FROM learning_observations WHERE aggregate_id = ?").run(aggregateId);
+      this.db.prepare(
+        `UPDATE learning_aggregates
+         SET status = 'collecting', successful_run_count = 0, distinct_evidence_count = 0,
+             analysis_json = NULL, last_error = NULL, updated_at = ?
+         WHERE id = ?`
+      ).run(now, aggregateId);
+      row = this.db.prepare("SELECT * FROM learning_aggregates WHERE id = ?").get(aggregateId) as Row;
+    }
+
+    const evidenceFingerprint = learningEvidenceFingerprint(candidate);
+    this.db.prepare(
+      `INSERT OR IGNORE INTO learning_observations
+        (id, aggregate_id, session_id, candidate_id, run_id, evidence_fingerprint,
+         evidence_artifact_ids_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      createId("learning_observation"),
+      aggregateId,
+      session.id,
+      candidate.id,
+      session.runId,
+      evidenceFingerprint,
+      JSON.stringify(candidate.evidenceArtifactIds),
+      now
+    );
+
+    const counts = this.db.prepare(
+      `SELECT COUNT(DISTINCT run_id) AS successful_runs,
+              COUNT(DISTINCT evidence_fingerprint) AS distinct_evidence
+       FROM learning_observations WHERE aggregate_id = ?`
+    ).get(aggregateId) as Row;
+    const current = rowToLearningAggregate(
+      this.db.prepare("SELECT * FROM learning_aggregates WHERE id = ?").get(aggregateId) as Row
+    );
+    const successfulRunCount = Number(counts.successful_runs);
+    const distinctEvidenceCount = Number(counts.distinct_evidence);
+    const readiness = learningAggregateReadiness({ candidate, successfulRunCount, distinctEvidenceCount });
+    const status = ["active", "degraded", "rejected"].includes(current.status)
+      ? current.status
+      : readiness.status;
+    this.db.prepare(
+      `UPDATE learning_aggregates
+       SET representative_candidate_id = ?, status = ?, successful_run_count = ?,
+           distinct_evidence_count = ?, analysis_required = ?, last_error = NULL, updated_at = ?
+       WHERE id = ?`
+    ).run(
+      candidate.id,
+      status,
+      successfulRunCount,
+      distinctEvidenceCount,
+      requiresAiLearningAnalysis(candidate) ? 1 : 0,
+      now,
+      aggregateId
+    );
   }
 
   private refreshLearningSummary(sessionId: string): void {
@@ -1554,6 +2076,25 @@ export class Storage {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS temporary_tests (
+        id TEXT PRIMARY KEY,
+        source_hash TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        name TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        source_yaml TEXT NOT NULL,
+        parsed_json TEXT NOT NULL,
+        parameter_values_json TEXT NOT NULL DEFAULT '{}',
+        last_run_id TEXT NOT NULL,
+        run_count INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(app_id, platform, source_hash)
+      );
+
 
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
@@ -1611,6 +2152,37 @@ export class Storage {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS learning_aggregates (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        stable_key TEXT NOT NULL,
+        representative_candidate_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        successful_run_count INTEGER NOT NULL DEFAULT 0,
+        distinct_evidence_count INTEGER NOT NULL DEFAULT 0,
+        analysis_required INTEGER NOT NULL DEFAULT 0,
+        analysis_json TEXT,
+        asset_id TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(app_id, platform, kind, stable_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS learning_observations (
+        id TEXT PRIMARY KEY,
+        aggregate_id TEXT NOT NULL REFERENCES learning_aggregates(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        evidence_fingerprint TEXT NOT NULL,
+        evidence_artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        UNIQUE(aggregate_id, run_id)
+      );
+
       CREATE TABLE IF NOT EXISTS interaction_assets (
         id TEXT PRIMARY KEY,
         asset_key TEXT NOT NULL,
@@ -1638,6 +2210,16 @@ export class Storage {
         snapshot_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         UNIQUE(asset_id, version)
+      );
+
+      CREATE TABLE IF NOT EXISTS interaction_asset_health (
+        asset_id TEXT PRIMARY KEY REFERENCES interaction_assets(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        consecutive_locator_failures INTEGER NOT NULL DEFAULT 0,
+        successful_run_count INTEGER NOT NULL DEFAULT 0,
+        last_run_id TEXT,
+        last_error TEXT,
+        updated_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS navigation_entries (
@@ -1754,13 +2336,17 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_script_flow_versions_flow ON script_flow_versions(flow_id, version);
       CREATE INDEX IF NOT EXISTS idx_script_navigation_route ON script_navigation_segments(app_id, platform, from_page, to_page);
       CREATE INDEX IF NOT EXISTS idx_script_navigation_flow ON script_navigation_segments(flow_id, flow_version);
+      CREATE INDEX IF NOT EXISTS idx_temporary_tests_app ON temporary_tests(app_id, platform, updated_at);
       CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
       CREATE INDEX IF NOT EXISTS idx_flow_verifications_source ON flow_verifications(source_hash, app_id, platform, app_version, status, created_at);
       CREATE INDEX IF NOT EXISTS idx_flow_verifications_run ON flow_verifications(run_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_learning_sessions_source ON learning_sessions(source_hash, app_id, platform, status, updated_at);
       CREATE INDEX IF NOT EXISTS idx_learning_candidates_session ON learning_candidates(session_id, kind, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_learning_aggregates_state ON learning_aggregates(status, analysis_required, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_learning_observations_aggregate ON learning_observations(aggregate_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_interaction_assets_owner ON interaction_assets(app_id, owner_kind, owner_key, status, updated_at);
       CREATE INDEX IF NOT EXISTS idx_interaction_asset_versions_asset ON interaction_asset_versions(asset_id, version);
+      CREATE INDEX IF NOT EXISTS idx_interaction_asset_health_status ON interaction_asset_health(status, updated_at);
       CREATE INDEX IF NOT EXISTS idx_navigation_entries_route ON navigation_entries(app_id, platform_scope, from_kind, from_key, to_page, status);
       CREATE INDEX IF NOT EXISTS idx_navigation_entry_versions_entry ON navigation_entry_versions(entry_id, version);
       CREATE INDEX IF NOT EXISTS idx_step_results_run ON step_results(run_id, iteration_index, step_order);
@@ -1825,6 +2411,7 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_graph_versions_graph ON business_graph_versions(graph_id, version);
       CREATE INDEX IF NOT EXISTS idx_business_nodes_version ON business_nodes(graph_version_id, status);
     `);
+    this.migrateLearningEvidenceSchema();
     this.refreshPageNavigationIndex();
     this.sanitizeAiModelSettings();
   }
@@ -1937,6 +2524,62 @@ export class Storage {
     this.db.exec(`
       DROP TABLE IF EXISTS interaction_asset_versions;
       DROP TABLE IF EXISTS interaction_assets;
+    `);
+  }
+
+  private migrateLearningEvidenceSchema(): void {
+    const aggregateSchema = this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'learning_aggregates'"
+    ).get() as Row | undefined;
+    const observationSchema = this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'learning_observations'"
+    ).get() as Row | undefined;
+    const hasRunBoundEvidence = /REFERENCES\s+(?:learning_candidates|learning_sessions|runs)/i.test(
+      `${String(aggregateSchema?.sql ?? "")} ${String(observationSchema?.sql ?? "")}`
+    );
+    if (!hasRunBoundEvidence) return;
+    this.db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN;
+      ALTER TABLE learning_observations RENAME TO learning_observations_legacy;
+      ALTER TABLE learning_aggregates RENAME TO learning_aggregates_legacy;
+      CREATE TABLE learning_aggregates (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        stable_key TEXT NOT NULL,
+        representative_candidate_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        successful_run_count INTEGER NOT NULL DEFAULT 0,
+        distinct_evidence_count INTEGER NOT NULL DEFAULT 0,
+        analysis_required INTEGER NOT NULL DEFAULT 0,
+        analysis_json TEXT,
+        asset_id TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(app_id, platform, kind, stable_key)
+      );
+      INSERT INTO learning_aggregates SELECT * FROM learning_aggregates_legacy;
+      CREATE TABLE learning_observations (
+        id TEXT PRIMARY KEY,
+        aggregate_id TEXT NOT NULL REFERENCES learning_aggregates(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        evidence_fingerprint TEXT NOT NULL,
+        evidence_artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        UNIQUE(aggregate_id, run_id)
+      );
+      INSERT INTO learning_observations SELECT * FROM learning_observations_legacy;
+      DROP TABLE learning_observations_legacy;
+      DROP TABLE learning_aggregates_legacy;
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+      CREATE INDEX IF NOT EXISTS idx_learning_aggregates_state ON learning_aggregates(status, analysis_required, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_learning_observations_aggregate ON learning_observations(aggregate_id, created_at);
     `);
   }
 }
@@ -2069,6 +2712,30 @@ function rowToScriptFlow(row: Row): ScriptFlow {
   };
 }
 
+function rowToTemporaryTest(row: Row): TemporaryTest {
+  return {
+    id: String(row.id),
+    appId: String(row.app_id),
+    platform: row.platform as TemporaryTest["platform"],
+    kind: row.kind === "scenario" ? "scenario" : "case",
+    purpose: temporaryTestPurpose(row.purpose),
+    name: String(row.name),
+    prompt: String(row.prompt),
+    sourceYaml: String(row.source_yaml),
+    parsed: JSON.parse(String(row.parsed_json ?? "{}")) as Record<string, unknown>,
+    parameterValues: JSON.parse(String(row.parameter_values_json ?? "{}")) as TemporaryTest["parameterValues"],
+    lastRunId: String(row.last_run_id),
+    ...(stringOrUndefined(row.last_run_status) ? { lastRunStatus: row.last_run_status as TestRun["status"] } : {}),
+    runCount: Number(row.run_count),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function temporaryTestPurpose(value: unknown): TemporaryTest["purpose"] {
+  return value === "navigation" || value === "fixture" || value === "recovery" ? value : "business";
+}
+
 function rowToScriptFlowVersion(row: Row): ScriptFlowVersion {
   return {
     id: String(row.id),
@@ -2127,6 +2794,82 @@ function rowToLearningCandidate(row: Row): LearningCandidate {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)
   };
+}
+
+function rowToLearningAggregate(row: Row): LearningAggregate {
+  const analysis = row.analysis_json
+    ? JSON.parse(String(row.analysis_json)) as Record<string, unknown>
+    : undefined;
+  return {
+    id: String(row.id),
+    appId: String(row.app_id),
+    platform: row.platform as LearningAggregate["platform"],
+    kind: row.kind as LearningAggregate["kind"],
+    stableKey: String(row.stable_key),
+    representativeCandidateId: String(row.representative_candidate_id),
+    status: row.status as LearningAggregate["status"],
+    successfulRunCount: Number(row.successful_run_count),
+    distinctEvidenceCount: Number(row.distinct_evidence_count),
+    analysisRequired: Boolean(row.analysis_required),
+    ...(analysis ? { analysis } : {}),
+    ...(stringOrUndefined(row.asset_id) ? { assetId: String(row.asset_id) } : {}),
+    ...(stringOrUndefined(row.last_error) ? { lastError: String(row.last_error) } : {}),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function rowToLearningObservation(row: Row): LearningObservation {
+  return {
+    id: String(row.id),
+    aggregateId: String(row.aggregate_id),
+    sessionId: String(row.session_id),
+    candidateId: String(row.candidate_id),
+    runId: String(row.run_id),
+    evidenceFingerprint: String(row.evidence_fingerprint),
+    evidenceArtifactIds: JSON.parse(String(row.evidence_artifact_ids_json ?? "[]")) as string[],
+    createdAt: String(row.created_at)
+  };
+}
+
+function learningEvidenceFingerprint(candidate: LearningCandidate): string {
+  const evidence = [...new Set(candidate.evidenceArtifactIds)].sort();
+  const fingerprintSource = evidence.length > 0
+    ? evidence.join("\n")
+    : JSON.stringify({ sourceStepId: candidate.sourceStepId, payload: candidate.payload });
+  return createHash("sha256").update(fingerprintSource).digest("hex");
+}
+
+function approvedPageLearningProposal(analysis: Record<string, unknown> | undefined): {
+  key: string;
+  name: string;
+  stableTexts: string[];
+} {
+  if (!analysis || analysis.decision !== "approve") {
+    throw new Error("Page learning requires an approved AI proposal");
+  }
+  const confidence = typeof analysis.confidence === "number" ? analysis.confidence : 0;
+  const validationIssues = Array.isArray(analysis.validationIssues) ? analysis.validationIssues : [];
+  const stableTexts = uniqueStrings(
+    Array.isArray(analysis.stableTexts)
+      ? analysis.stableTexts.flatMap((value) => nonEmptyString(value) ? [nonEmptyString(value)!] : [])
+      : []
+  );
+  if (confidence < 0.9 || validationIssues.length > 0 || stableTexts.length < 2) {
+    throw new Error("Page learning proposal does not meet deterministic publication rules");
+  }
+  const name = nonEmptyString(analysis.canonicalName);
+  if (!name) throw new Error("Page learning proposal has no canonical name");
+  const proposedKey = nonEmptyString(analysis.canonicalKey)
+    ?.toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  const key = proposedKey || `learned-page-${createHash("sha256").update(stableTexts.join("\n")).digest("hex").slice(0, 12)}`;
+  return { key, name, stableTexts };
+}
+
+function normalizeLearningText(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, "");
 }
 
 function rowToInteractionAsset(row: Row): InteractionAsset {

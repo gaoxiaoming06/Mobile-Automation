@@ -129,6 +129,41 @@ describe("Storage", () => {
     expect(context.storage.getRun(run.id)?.sourceSnapshot).toEqual(expect.objectContaining({ sourceYaml: secondYaml }));
   });
 
+  it("keeps reusable temporary test history isolated by app and updates the latest run", async () => {
+    context = await createStorageContext();
+    const document = {
+      ...scriptFlowDocument("从主页进入班级详情"),
+      purpose: "navigation" as const
+    };
+    const first = context.storage.recordTemporaryTest({
+      prompt: "从主页进入班级四十二号",
+      sourceYaml: "version: 1\nname: 从主页进入班级详情",
+      document,
+      parameterValues: { className: "班级四十二号" },
+      runId: "run-1"
+    });
+    const second = context.storage.recordTemporaryTest({
+      prompt: "从主页进入班级四十二号",
+      sourceYaml: "version: 1\nname: 从主页进入班级详情",
+      document,
+      parameterValues: { className: "班级四十二号" },
+      runId: "run-2"
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(context.storage.listTemporaryTests({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        prompt: "从主页进入班级四十二号",
+        purpose: "navigation",
+        parameterValues: { className: "班级四十二号" },
+        lastRunId: "run-2",
+        runCount: 2
+      })
+    ]);
+    expect(context.storage.listTemporaryTests({ appId: "another.app" })).toEqual([]);
+  });
+
   it("persists trial snapshot fields and finds verification by exact source hash", async () => {
     context = await createStorageContext();
     const sourceYaml = "version: 1\nname: 打开主页\napp: { id: cn.eeo.classin, platform: android }\nsteps: []\n";

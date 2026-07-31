@@ -95,36 +95,10 @@ describe("trial learning storage", () => {
     expect(storage.listLearningCandidates(session.id)).toEqual([]);
   });
 
-  it("automatically promotes safe interaction candidates after an automatic outcome is verified", async () => {
+  it("keeps a first successful interaction observation inert instead of publishing an asset", async () => {
     ({ storage, tempRoot } = await createStorage());
     const run = createTrialRun(storage, { unresolvedOutcome: false });
-    storage.addStepResult({
-      id: "result-1",
-      runId: run.id,
-      iterationIndex: 0,
-      stepId: "open-add-friend",
-      stepOrder: 1,
-      type: "tap",
-      status: "passed",
-      startedAt: "2026-07-30T00:00:00.000Z",
-      endedAt: "2026-07-30T00:00:01.000Z",
-      afterScreenshotId: "artifact-1",
-      artifacts: [],
-      metadata: {
-        onPage: "classin.home",
-        semantic: { type: "ocr_text", action: "tap", selectedLocator: { text: "添加好友", centerX: 320, centerY: 100 } }
-      }
-    });
-    storage.addArtifact({
-      id: "artifact-1",
-      runId: run.id,
-      stepResultId: "result-1",
-      type: "screenshot",
-      name: "after.png",
-      path: "runs/run-1/after.png",
-      url: "/artifacts/runs/run-1/after.png",
-      createdAt: "2026-07-30T00:00:01.000Z"
-    });
+    addInteractionEvidence(storage, run.id, "1");
 
     storage.updateRunStatus(run.id, "passed");
 
@@ -133,18 +107,125 @@ describe("trial learning storage", () => {
       expect.objectContaining({
         kind: "interaction",
         stableKey: "classin.home.tap.text.添加好友",
-        status: "accepted",
+        status: "validated",
         payload: expect.objectContaining({ semanticContract: { text: "添加好友" } })
       })
     ]);
-    expect(storage.getLearningSession(session.id)).toMatchObject({ status: "accepted" });
-    expect(storage.listInteractionAssets({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
-      expect.objectContaining({ key: "classin.home.tap.text.添加好友", status: "active" })
+    expect(storage.getLearningSession(session.id)).toMatchObject({ status: "ready" });
+    expect(storage.listLearningAggregates({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+      expect.objectContaining({
+        kind: "interaction",
+        stableKey: "classin.home.tap.text.添加好友",
+        status: "collecting",
+        successfulRunCount: 1,
+        distinctEvidenceCount: 1
+      })
     ]);
+    expect(storage.listInteractionAssets({ appId: "cn.eeo.classin", platform: "android" })).toEqual([]);
     expect(session.summary).toMatchObject({ interactionCandidates: 1 });
   });
 
-  it("automatically promotes navigation candidates only for verified page transitions", async () => {
+  it("marks a deterministic interaction ready only after three runs and two evidence samples", async () => {
+    ({ storage, tempRoot } = await createStorage());
+    for (const suffix of ["1", "2", "3"]) {
+      const run = createTrialRun(storage, { unresolvedOutcome: false });
+      addInteractionEvidence(storage, run.id, suffix);
+      storage.updateRunStatus(run.id, "passed");
+    }
+
+    expect(storage.listLearningAggregates({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+      expect.objectContaining({
+        status: "ready",
+        successfulRunCount: 3,
+        distinctEvidenceCount: 3,
+        analysisRequired: false
+      })
+    ]);
+    expect(storage.listInteractionAssets({ appId: "cn.eeo.classin", platform: "android" })).toEqual([]);
+  });
+
+  it("combines the first trial with later verified normal runs for the learning threshold", async () => {
+    ({ storage, tempRoot } = await createStorage());
+    const runs = [
+      createTrialRun(storage, { unresolvedOutcome: false }),
+      createTrialRun(storage, { unresolvedOutcome: false, executionPurpose: "normal", verificationStatus: "verified" }),
+      createTrialRun(storage, { unresolvedOutcome: false, executionPurpose: "normal", verificationStatus: "verified" })
+    ];
+    runs.forEach((run, index) => {
+      addInteractionEvidence(storage!, run.id, `mixed-${index}`);
+      storage!.updateRunStatus(run.id, "passed");
+    });
+
+    expect(storage.listLearningAggregates({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+      expect.objectContaining({ status: "ready", successfulRunCount: 3, distinctEvidenceCount: 3 })
+    ]);
+    expect(runs.every((run) => storage!.getLearningSessionForRun(run.id)?.outcomeStatus === "verified")).toBe(true);
+  });
+
+  it("publishes a ready deterministic aggregate through the background promotion boundary", async () => {
+    ({ storage, tempRoot } = await createStorage());
+    for (const suffix of ["promote-1", "promote-2", "promote-3"]) {
+      const run = createTrialRun(storage, { unresolvedOutcome: false });
+      addInteractionEvidence(storage, run.id, suffix);
+      storage.updateRunStatus(run.id, "passed");
+    }
+    const aggregate = storage.listLearningAggregates({ status: "ready" })[0]!;
+
+    const promoted = storage.promoteLearningAggregate(aggregate.id);
+
+    expect(promoted).toMatchObject({ status: "active", assetId: expect.any(String) });
+    expect(storage.listInteractionAssets({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+      expect.objectContaining({ key: aggregate.stableKey, status: "active" })
+    ]);
+  });
+
+  it("creates a confirmed page asset only from an approved multi-sample page aggregate", async () => {
+    ({ storage, tempRoot } = await createStorage());
+    const steps: ScriptFlowDocument["steps"] = [{
+      id: "verify-class-detail",
+      name: "确认进入班级详情页",
+      assertText: { text: "新课程", match: "contains" }
+    }];
+    for (const suffix of ["page-1", "page-2", "page-3"]) {
+      const run = createTrialRun(storage, { unresolvedOutcome: false, steps });
+      addPageEvidence(storage, run.id, suffix);
+      storage.updateRunStatus(run.id, "passed");
+    }
+    const aggregate = storage.listLearningAggregates({ status: "awaiting_ai" })[0]!;
+    const analysis = {
+      decision: "approve",
+      canonicalName: "班级详情",
+      canonicalKey: "class-detail",
+      stableTexts: ["新课程", "创建教学方案"],
+      dynamicTexts: [],
+      confidence: 0.98,
+      reason: "三次成功样本均包含稳定身份文案",
+      validationIssues: []
+    } as const;
+    storage.updateLearningAggregate({ id: aggregate.id, status: "ready", analysis });
+
+    const promoted = storage.promoteLearningAggregate(aggregate.id, analysis);
+
+    expect(promoted).toMatchObject({ status: "active", assetId: expect.any(String) });
+    const graph = storage.findBusinessGraphByAppId("cn.eeo.classin")!;
+    expect(storage.getActiveBusinessGraphVersion(graph.id)?.nodes).toEqual([
+      expect.objectContaining({
+        id: promoted.assetId,
+        key: "class-detail",
+        name: "班级详情",
+        nodeType: "page",
+        status: "active",
+        platformScope: "android",
+        matchers: expect.arrayContaining([
+          expect.objectContaining({ type: "ocr_text", value: "新课程", critical: true }),
+          expect.objectContaining({ type: "ocr_text", value: "创建教学方案", critical: true })
+        ]),
+        metadata: expect.objectContaining({ assetRecordingConfirmed: true, automaticLearning: true })
+      })
+    ]);
+  });
+
+  it("collects navigation evidence only for verified page transitions", async () => {
     ({ storage, tempRoot } = await createStorage());
     const run = createTrialRun(storage, { unresolvedOutcome: false, steps: [{
       id: "open-growth",
@@ -192,17 +273,18 @@ describe("trial learning storage", () => {
       expect.objectContaining({
         kind: "navigation",
         stableKey: "classin.home.tap.text.成长.area.bottomBar.to.classin.growth",
-        status: "accepted"
+        status: "validated"
       })
     ]));
-    expect(storage.listNavigationEntries({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+    expect(storage.listLearningAggregates({ appId: "cn.eeo.classin", platform: "android" })).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        key: "classin.home.tap.text.成长.area.bottomBar.to.classin.growth",
-        from: { kind: "page", key: "classin.home" },
-        toPage: "classin.growth",
-        status: "active"
+        kind: "navigation",
+        stableKey: "classin.home.tap.text.成长.area.bottomBar.to.classin.growth",
+        status: "collecting",
+        successfulRunCount: 1
       })
-    ]);
+    ]));
+    expect(storage.listNavigationEntries({ appId: "cn.eeo.classin", platform: "android" })).toEqual([]);
     expect(session.summary).toMatchObject({ navigationCandidates: 1 });
   });
 
@@ -248,11 +330,34 @@ describe("trial learning storage", () => {
 
     const reviewed = storage.reviewTrialOutcome(run.id, "confirmed");
 
-    expect(reviewed.session).toMatchObject({ status: "accepted", outcomeStatus: "human_confirmed" });
+    expect(reviewed.session).toMatchObject({ status: "ready", outcomeStatus: "human_confirmed" });
     expect(storage.listLearningCandidates(pending.id)).toEqual([
-      expect.objectContaining({ status: "accepted" })
+      expect.objectContaining({ status: "validated" })
     ]);
-    expect(storage.listInteractionAssets({ appId: "cn.eeo.classin", platform: "android" })).toHaveLength(1);
+    expect(storage.listLearningAggregates({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+      expect.objectContaining({ status: "collecting", successfulRunCount: 1 })
+    ]);
+    expect(storage.listInteractionAssets({ appId: "cn.eeo.classin", platform: "android" })).toEqual([]);
+  });
+
+  it("isolates learning aggregates by App ID and platform", async () => {
+    ({ storage, tempRoot } = await createStorage());
+    const runs = [
+      createTrialRun(storage, { unresolvedOutcome: false, appId: "cn.eeo.classin", platform: "android" }),
+      createTrialRun(storage, { unresolvedOutcome: false, appId: "cn.eeo.classin", platform: "ios" }),
+      createTrialRun(storage, { unresolvedOutcome: false, appId: "com.example.other", platform: "android" })
+    ];
+    runs.forEach((run, index) => {
+      addInteractionEvidence(storage!, run.id, `isolated-${index}`);
+      storage!.updateRunStatus(run.id, "passed");
+    });
+
+    expect(storage.listLearningAggregates()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ appId: "cn.eeo.classin", platform: "android", successfulRunCount: 1 }),
+      expect.objectContaining({ appId: "cn.eeo.classin", platform: "ios", successfulRunCount: 1 }),
+      expect.objectContaining({ appId: "com.example.other", platform: "android", successfulRunCount: 1 })
+    ]));
+    expect(storage.listLearningAggregates()).toHaveLength(3);
   });
 
   it("atomically accepts selected interaction candidates into the reusable asset catalog", async () => {
@@ -297,6 +402,65 @@ describe("trial learning storage", () => {
       coverage: expect.objectContaining({ interactionAssetIds: [accepted.assets[0]!.id] })
     });
     expect(JSON.stringify(accepted.assets)).not.toMatch(/"x"|"y"|coordinate|region/i);
+  });
+
+  it("degrades a reusable interaction asset after three failed runs cannot locate it", async () => {
+    ({ storage, tempRoot } = await createStorage());
+    for (const suffix of ["source-1", "source-2", "source-3"]) {
+      const run = createTrialRun(storage, { unresolvedOutcome: false });
+      addInteractionEvidence(storage, run.id, suffix);
+      storage.updateRunStatus(run.id, "passed");
+    }
+    const initialAggregate = storage.listLearningAggregates({ appId: "cn.eeo.classin", platform: "android" })[0]!;
+    const initialPromotion = storage.promoteLearningAggregate(initialAggregate.id);
+    const asset = storage.listInteractionAssets({ appId: "cn.eeo.classin", platform: "android" })[0]!;
+    expect(initialPromotion).toMatchObject({ status: "active", assetId: asset.id });
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const run = createTrialRun(storage, { unresolvedOutcome: false });
+      addAssetExecutionResult(storage, run.id, asset.id, attempt);
+      storage.updateRunStatus(run.id, "failed");
+      expect(storage.getInteractionAssetHealth(asset.id)).toMatchObject({
+        status: attempt === 3 ? "degraded" : "active",
+        consecutiveLocatorFailures: attempt
+      });
+      if (attempt === 3) {
+        expect(storage.getRun(run.id)?.events).toEqual([
+          expect.objectContaining({
+            type: "interaction_asset_degraded",
+            severity: "warning",
+            summary: "定位资产“添加好友”已自动停用"
+          })
+        ]);
+      }
+    }
+
+    expect(storage.listInteractionAssets({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+      expect.objectContaining({ id: asset.id, status: "degraded" })
+    ]);
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const run = createTrialRun(storage, { unresolvedOutcome: false });
+      addInteractionEvidence(storage, run.id, `relearn-${attempt}`);
+      storage.updateRunStatus(run.id, "passed");
+      expect(storage.listLearningAggregates({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+        expect.objectContaining({
+          status: attempt === 3 ? "ready" : "collecting",
+          successfulRunCount: attempt
+        })
+      ]);
+    }
+
+    const aggregate = storage.listLearningAggregates({ appId: "cn.eeo.classin", platform: "android" })[0]!;
+    const promoted = storage.promoteLearningAggregate(aggregate.id);
+    expect(promoted).toMatchObject({ status: "active", assetId: asset.id });
+    expect(storage.getInteractionAssetHealth(asset.id)).toMatchObject({
+      status: "active",
+      consecutiveLocatorFailures: 0
+    });
+    expect(storage.listInteractionAssets({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+      expect.objectContaining({ id: asset.id, status: "active", version: 2 })
+    ]);
   });
 
   it("accepts a verified navigation candidate into the runtime navigation index", async () => {
@@ -519,6 +683,8 @@ function createTrialRun(storage: Storage, input: {
   appId?: string;
   platform?: ScriptFlowDocument["app"]["platform"];
   steps?: ScriptFlowDocument["steps"];
+  executionPurpose?: "trial" | "normal";
+  verificationStatus?: "verified" | "needs_trial" | "blocked";
 }) {
   const platform = input.platform ?? "android";
   const appId = input.appId ?? "cn.eeo.classin";
@@ -548,10 +714,10 @@ function createTrialRun(storage: Storage, input: {
         flowId: flow.id,
         version: flow.version,
         planDigest: "3".repeat(64),
-        executionPurpose: "trial",
+        executionPurpose: input.executionPurpose ?? "trial",
         sourceHash,
         verificationAssessment: {
-          status: "needs_trial",
+          status: input.verificationStatus ?? "needs_trial",
           sourceHash,
           reasons: ["当前脚本版本尚未通过试运行"],
           unresolvedStepIds: ["open-add-friend"],
@@ -563,5 +729,96 @@ function createTrialRun(storage: Storage, input: {
       }
     }),
     steps: []
+  });
+}
+
+function addInteractionEvidence(storage: Storage, runId: string, suffix: string): void {
+  const resultId = `result-${suffix}`;
+  const artifactId = `artifact-${suffix}`;
+  storage.addStepResult({
+    id: resultId,
+    runId,
+    iterationIndex: 0,
+    stepId: "open-add-friend",
+    stepOrder: 1,
+    type: "tap",
+    status: "passed",
+    startedAt: "2026-07-30T00:00:00.000Z",
+    endedAt: "2026-07-30T00:00:01.000Z",
+    afterScreenshotId: artifactId,
+    artifacts: [],
+    metadata: {
+      onPage: "classin.home",
+      semantic: { type: "ocr_text", action: "tap", selectedLocator: { text: "添加好友" } }
+    }
+  });
+  storage.addArtifact({
+    id: artifactId,
+    runId,
+    stepResultId: resultId,
+    type: "screenshot",
+    name: "after.png",
+    path: `runs/${runId}/after-${suffix}.png`,
+    url: `/artifacts/runs/${runId}/after-${suffix}.png`,
+    createdAt: "2026-07-30T00:00:01.000Z"
+  });
+}
+
+function addAssetExecutionResult(storage: Storage, runId: string, assetId: string, attempt: number): void {
+  storage.addStepResult({
+    id: `asset-failure-${attempt}`,
+    runId,
+    iterationIndex: 0,
+    stepId: "open-add-friend",
+    stepOrder: 1,
+    type: "tap",
+    status: "failed",
+    startedAt: "2026-07-30T00:00:00.000Z",
+    endedAt: "2026-07-30T00:00:01.000Z",
+    errorCode: "SEMANTIC_TARGET_NOT_FOUND",
+    errorMessage: "Element target 添加好友 was not found",
+    artifacts: [],
+    metadata: {
+      interactionAssetId: assetId,
+      interactionAssetKey: "classin.home.tap.text.添加好友"
+    }
+  });
+}
+
+function addPageEvidence(storage: Storage, runId: string, suffix: string): void {
+  const resultId = `result-${suffix}`;
+  const artifactId = `artifact-${suffix}`;
+  storage.addStepResult({
+    id: resultId,
+    runId,
+    iterationIndex: 0,
+    stepId: "verify-class-detail",
+    stepOrder: 1,
+    type: "wait",
+    status: "passed",
+    startedAt: "2026-07-30T00:00:00.000Z",
+    endedAt: "2026-07-30T00:00:01.000Z",
+    afterScreenshotId: artifactId,
+    artifacts: [],
+    expectationResults: [{
+      id: `expectation-${suffix}`,
+      expectationId: "after:verify-class-detail",
+      type: "text",
+      status: "passed",
+      expected: "新课程",
+      actual: "新课程",
+      evidenceArtifactIds: [artifactId],
+      checkedAt: "2026-07-30T00:00:01.000Z"
+    }]
+  });
+  storage.addArtifact({
+    id: artifactId,
+    runId,
+    stepResultId: resultId,
+    type: "screenshot",
+    name: "after.png",
+    path: `runs/${runId}/after-${suffix}.png`,
+    url: `/artifacts/runs/${runId}/after-${suffix}.png`,
+    createdAt: "2026-07-30T00:00:01.000Z"
   });
 }

@@ -32,6 +32,8 @@ export type ScriptFlowApiStorage = Pick<
   | "getScriptFlow"
   | "updateScriptFlow"
   | "deleteScriptFlow"
+  | "recordTemporaryTest"
+  | "listTemporaryTests"
   | "getRun"
 >;
 
@@ -46,6 +48,14 @@ export function registerScriptFlowRoutes(
   app.get("/api/script-flows", (req, res) => {
     try {
       res.json({ flows: deps.storage.listScriptFlows(scriptFlowFilter(req.query)) });
+    } catch (error) {
+      sendScriptFlowError(res, error);
+    }
+  });
+
+  app.get("/api/temporary-tests", (req, res) => {
+    try {
+      res.json({ tests: deps.storage.listTemporaryTests(temporaryTestFilter(req.query)) });
     } catch (error) {
       sendScriptFlowError(res, error);
     }
@@ -68,6 +78,7 @@ export function registerScriptFlowRoutes(
   app.post("/api/script-flows", (req, res) => {
     try {
       const input = readWriteInput(req.body);
+      assertCaseCenterEligible(input.document);
       assertActivationAllowed(deps.storage, input, input.status ?? "draft");
       res.status(201).json({ flow: deps.storage.createScriptFlow(input) });
     } catch (error) {
@@ -94,6 +105,7 @@ export function registerScriptFlowRoutes(
       const body = strictBody(req.body, ["sourceYaml", "status", "expectedVersion"]);
       assertExpectedVersion(existing, body.expectedVersion);
       const input = readWriteBody(body);
+      assertCaseCenterEligible(input.document);
       assertActivationAllowed(deps.storage, input, input.status ?? existing.status);
       res.json({ flow: deps.storage.updateScriptFlow(req.params.id, input) });
     } catch (error) {
@@ -208,6 +220,7 @@ export function registerScriptFlowRoutes(
 }
 
 const DRAFT_RUN_FIELDS = [
+  "prompt",
   "sourceYaml",
   "deviceSerial",
   "planDigest",
@@ -222,7 +235,9 @@ const DRAFT_RUN_FIELDS = [
   "androidAppMonitor"
 ];
 
-const PERSISTED_RUN_FIELDS = DRAFT_RUN_FIELDS.filter((field) => field !== "sourceYaml").concat("expectedVersion");
+const PERSISTED_RUN_FIELDS = DRAFT_RUN_FIELDS.filter(
+  (field) => field !== "sourceYaml" && field !== "prompt",
+).concat("expectedVersion");
 
 async function startDraftExecution(
   req: express.Request,
@@ -260,9 +275,29 @@ async function startDraftExecution(
       resolveFlow: compiled.resolveFlow,
       ...(purpose === "trial" ? trialRunOptions(body) : runOptions(body))
     });
+    deps.storage.recordTemporaryTest({
+      prompt: optionalString(body.prompt) ?? document.description ?? document.name,
+      sourceYaml: root.sourceYaml,
+      document,
+      parameterValues: nonSensitiveParameterValues(document, parameters),
+      runId: run.id
+    });
     res.status(202).json({ run });
   } catch (error) {
     sendScriptFlowError(res, error);
+  }
+}
+
+function nonSensitiveParameterValues(
+  document: ScriptFlowDocument,
+  parameters: Record<string, ScriptParameterValue>
+): Record<string, ScriptParameterValue> {
+  return Object.fromEntries(Object.entries(parameters).filter(([key]) => document.parameters[key]?.sensitive !== true));
+}
+
+function assertCaseCenterEligible(document: ScriptFlowDocument): void {
+  if (document.purpose === "navigation") {
+    throw new ScriptFlowApiError(409, "导航流程由系统内部复用，不保存到用例中心");
   }
 }
 
@@ -488,6 +523,24 @@ function scriptFlowFilter(query: express.Request["query"]): {
     ...(appId ? { appId } : {}),
     ...(platform ? { platform: platform as ScriptFlow["platform"] } : {}),
     ...(status ? { status: status as ScriptFlow["status"] } : {})
+  };
+}
+
+function temporaryTestFilter(query: express.Request["query"]): {
+  appId?: string;
+  platform?: ScriptFlow["platform"];
+  limit?: number;
+} {
+  const base = scriptFlowFilter({ appId: query.appId, platform: query.platform });
+  const rawLimit = optionalString(query.limit);
+  const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
+    throw new ScriptFlowApiError(400, "limit must be an integer between 1 and 200");
+  }
+  return {
+    ...(base.appId ? { appId: base.appId } : {}),
+    ...(base.platform ? { platform: base.platform } : {}),
+    ...(limit ? { limit } : {})
   };
 }
 

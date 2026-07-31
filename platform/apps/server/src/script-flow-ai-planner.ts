@@ -17,6 +17,8 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "你是移动自动化 ScriptFlow 规划器，只生成可审查的脚本草稿，不操作设备。",
   "规划阶段禁止识别实时设备页面；start、onPage 和 expectPage 表达运行时页面约束。",
   "先判断测试类型：单一业务目标标记为 case；多个可独立成立的业务目标标记为 scenario。导航、登录态准备和结果验证不算额外业务目标。",
+  "必须用顶层 purpose 标记测试主要目的：navigation、fixture、business 或 recovery。navigation 只到达状态，fixture 准备测试环境，business 验证业务行为，recovery 恢复可执行状态。",
+  "每个步骤必须显式标记 role：setup、navigation、business、assertion、cleanup 或 recovery。role 按该步骤在整个测试中的语义填写，不能仅根据动作类型猜测。",
   "使用 entry 和 outcome 声明测试入口与结果状态：page 表示页面，session 只能是 authenticated 或 unauthenticated，登录后可用 role 表示角色。不要把准备动作展开进业务步骤。",
   "页面目录只负责页面身份。动作目标必须且只能使用 text、semantic、icon 或 control：已知屏幕原文用 text，不知道准确标签时用 semantic 描述操作意图，常见标准图标用 icon，通用表单控件用 control。",
   "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。semantic 用于‘进入教学方案的入口’这类概念目标，不能伪装成屏幕原文。",
@@ -54,6 +56,7 @@ type ScriptFlowAiGeneratedDraft = {
       summary: string;
       assumptions: string[];
       verification: ScriptFlowVerificationAssessment;
+      sourceFlow?: { id: string; version: number; name: string };
       channel: "codex" | "openai-compatible";
       model: string;
     };
@@ -85,9 +88,13 @@ export async function generateScriptFlowDraft(input: {
   if (!input.config.enabled) {
     throw new Error(input.config.reason === "missing_config" ? "AI 配置不完整" : "AI 生成未启用");
   }
+  const matchedDraft = input.existingFlow
+    ? undefined
+    : findMatchingDraftFlow(input.prompt, input.flows, input.pageCatalog, input.appId, input.platform);
+  const existingFlow = input.existingFlow ?? matchedDraft;
   const catalog = buildScriptFlowPlannerCatalog(
     input.pageCatalog,
-    input.existingFlow ? input.flows.filter((flow) => flow.id !== input.existingFlow?.id) : input.flows,
+    existingFlow ? input.flows.filter((flow) => flow.id !== existingFlow.id) : input.flows,
     input.appId,
     input.platform,
     input.navigationEntries ?? []
@@ -99,7 +106,27 @@ export async function generateScriptFlowDraft(input: {
     model: input.config.model,
     timeoutMs: input.config.timeoutMs
   };
-  const existingDocument = input.existingFlow ? parseScriptFlow(input.existingFlow.sourceYaml) : undefined;
+  const existingDocument = existingFlow ? parseScriptFlow(existingFlow.sourceYaml) : undefined;
+  const sourceFlow = existingFlow ? savedFlowReference(existingFlow) : undefined;
+  if (matchedDraft && extractExplicitOperationContract(input.prompt).length === 0 && existingDocument) {
+    const verification = assessScriptFlowVerification({
+      document: existingDocument,
+      sourceYaml: matchedDraft.sourceYaml
+    });
+    return {
+      status: verification.status === "verified" ? "ready" : "trial_ready",
+      sourceYaml: matchedDraft.sourceYaml,
+      document: existingDocument,
+      kind: existingDocument.kind,
+      parameterValues: {},
+      summary: `已找到用例中心中的待验证草稿“${matchedDraft.name}”，可以直接执行验证。`,
+      assumptions: ["复用已有草稿进行验证，不将其视为已验证导航路径。"],
+      verification,
+      sourceFlow,
+      channel,
+      model: input.config.model
+    };
+  }
   const plannerPrompt = buildScriptFlowPlannerPrompt(input.prompt, input.appId, input.platform, catalog, existingDocument);
   const result = await runAiJsonRequest(requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
@@ -157,6 +184,7 @@ export async function generateScriptFlowDraft(input: {
     ...parsed,
     status: verification.status === "verified" ? "ready" : "trial_ready",
     verification,
+    ...(sourceFlow ? { sourceFlow } : {}),
     channel,
     model: input.config.model
   };
@@ -183,6 +211,11 @@ export function buildScriptFlowPlannerCatalog(
       return {
         id: flow.id,
         kind: flow.parsed.kind === "scenario" ? "scenario" as const : "case" as const,
+        purpose: flow.parsed.purpose === "navigation"
+          || flow.parsed.purpose === "fixture"
+          || flow.parsed.purpose === "recovery"
+          ? flow.parsed.purpose
+          : "business" as const,
         name: flow.name,
         description: stringValue(flow.parsed.description),
         parameters: recordValue(flow.parsed.parameters),
@@ -250,6 +283,7 @@ export function buildScriptFlowPlannerPrompt(
       document: {
         version: 1,
         kind: "case | scenario",
+        purpose: "navigation | fixture | business | recovery",
         name: "测试名称",
         description: "测试说明",
         app: { id: appId, platform },
@@ -262,7 +296,7 @@ export function buildScriptFlowPlannerPrompt(
       }
     }, null, 2),
     "可用动作：launchApp、tap、inputText、clearText、selectText、swipe、scrollUntilVisible、reachPage、waitForPage、assertPage、assertText、runFlow、repeat、when。",
-    "每个 steps 项必须包含非空 id，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
+    "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
     "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
     "target 必须且只能使用 text、semantic、icon 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；不知道准确标签时改用 semantic。icon 必须带 area 和 position；control 当前只支持 checkbox，并且必须带 area: content 和 nearText；禁止元素资产 ID、坐标、区域和临时视觉模板。",
@@ -290,35 +324,40 @@ function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Re
   const page = catalog.pages[0];
   const pageReference = page?.key ?? page?.id ?? "<目录中的 page key>";
   const examples: Record<string, unknown>[] = [
-    { id: "launch-app", launchApp: { appId } },
+    { id: "launch-app", role: "setup", launchApp: { appId } },
     {
       id: "tap-content-text",
+      role: "business",
       onPage: pageReference,
       tap: { target: { text: "内容文字", area: "content" }, search: { mode: "auto", direction: "down", maxSwipes: 6 } }
     },
     {
       id: "tap-semantic-entry",
+      role: "navigation",
       onPage: pageReference,
       tap: { target: { semantic: "进入目标功能的入口", area: "content" }, search: { mode: "auto", direction: "down", maxSwipes: 6 } }
     },
     {
       id: "tap-standard-icon",
+      role: "navigation",
       onPage: pageReference,
       tap: { target: { icon: "add", area: "topBar", position: "trailing" }, search: { mode: "visibleOnly" } }
     },
     {
       id: "tap-floating-add",
+      role: "business",
       onPage: pageReference,
       tap: { target: { icon: "add", area: "content", position: "trailing" }, search: { mode: "visibleOnly" } }
     },
     {
       id: "check-agreement",
+      role: "business",
       onPage: pageReference,
       tap: { target: { control: "checkbox", area: "content", nearText: "我已阅读并同意" }, search: { mode: "visibleOnly" } }
     },
-    { id: "reach-page", reachPage: { page: pageReference, policy: "safe" } },
-    { id: "assert-page", assertPage: pageReference },
-    { id: "assert-stable-text", assertText: { text: "用户明确提供的页面独有文字", match: "contains" } }
+    { id: "reach-page", role: "navigation", reachPage: { page: pageReference, policy: "safe" } },
+    { id: "assert-page", role: "assertion", assertPage: pageReference },
+    { id: "assert-stable-text", role: "assertion", assertText: { text: "用户明确提供的页面独有文字", match: "contains" } }
   ];
   return examples;
 }
@@ -349,13 +388,14 @@ export function parseScriptFlowAiResponse(
     assertKnownResponseFields(root, ["status", "clarification"]);
     const clarification = stringValue(root.clarification);
     if (!clarification) throw new Error("AI 请求补充信息但没有给出问题");
-    return { status: "needs_clarification", clarification };
+    return { status: "needs_clarification", clarification: humanizePageReferences(clarification, input.catalog) };
   }
   if (root.status !== "ready") {
     throw new Error("AI 返回了未知的规划状态");
   }
   assertKnownResponseFields(root, ["status", "summary", "assumptions", "parameterValues", "document"]);
   assertNoLegacyGeneratedFields(root.document);
+  assertGeneratedClassification(root.document);
   const validated = validateScriptFlowDocument(root.document);
   const hydrated = validateScriptFlowDocument(hydrateGeneratedParameters(validated, input.catalog));
   const { document, parameterValues } = extractEphemeralParameterValues(hydrated, root.parameterValues);
@@ -372,6 +412,95 @@ export function parseScriptFlowAiResponse(
     summary: stringValue(root.summary) ?? `已生成 ${document.name}`,
     assumptions: stringArray(root.assumptions)
   };
+}
+
+function assertGeneratedClassification(value: unknown): void {
+  const document = recordValue(value);
+  if (!stringValue(document.purpose)) {
+    throw new Error("AI 草稿必须显式标记 purpose");
+  }
+  const steps = Array.isArray(document.steps) ? document.steps : [];
+  assertGeneratedStepRoles(steps, "document.steps");
+}
+
+function assertGeneratedStepRoles(steps: unknown[], path: string): void {
+  steps.forEach((value, index) => {
+    const step = recordValue(value);
+    if (!stringValue(step.role)) {
+      throw new Error(`AI 草稿的 ${path}[${index}] 必须显式标记 role`);
+    }
+    const repeat = recordValue(step.repeat);
+    const when = recordValue(step.when);
+    if (Array.isArray(repeat.steps)) assertGeneratedStepRoles(repeat.steps, `${path}[${index}].repeat.steps`);
+    if (Array.isArray(when.steps)) assertGeneratedStepRoles(when.steps, `${path}[${index}].when.steps`);
+  });
+}
+
+function findMatchingDraftFlow(
+  prompt: string,
+  flows: ScriptFlow[],
+  pageCatalog: PageAssetCatalog,
+  appId: string,
+  platform: PageAssetPlatform
+): ScriptFlow | undefined {
+  const candidates = flows.filter((flow) =>
+    flow.appId === appId && flow.platform === platform && flow.status === "draft"
+  );
+  const normalizedPrompt = compactGroundingText(prompt);
+  const exact = candidates.filter((flow) => compactGroundingText(flow.name) === normalizedPrompt);
+  if (exact.length === 1) return exact[0];
+
+  const pages = pageCatalog.listPages(appId, platform);
+  const pageNames = new Map<string, string>();
+  for (const page of pages) {
+    pageNames.set(page.id, page.name);
+    pageNames.set(page.key, page.name);
+    pageNames.set(page.name, page.name);
+  }
+  const endpointMatches = candidates.filter((flow) => {
+    const endpoints = flowPageEndpoints(flow.parsed);
+    const targetName = endpoints.target ? pageNames.get(endpoints.target) : undefined;
+    const sourceName = endpoints.source ? pageNames.get(endpoints.source) : undefined;
+    if (!targetName || !normalizedPrompt.includes(compactGroundingText(targetName))) return false;
+    return !sourceName || normalizedPrompt.includes(compactGroundingText(sourceName));
+  });
+  return endpointMatches.length === 1 ? endpointMatches[0] : undefined;
+}
+
+function flowPageEndpoints(parsed: Record<string, unknown>): { source?: string; target?: string } {
+  const entry = recordValue(parsed.entry);
+  const outcome = recordValue(parsed.outcome);
+  const steps = flattenRecords(Array.isArray(parsed.steps) ? parsed.steps : []);
+  const first = steps[0];
+  const source = stringValue(entry.page)
+    ?? stringValue(first?.waitForPage)
+    ?? stringValue(first?.onPage);
+  const target = stringValue(outcome.page)
+    ?? [...steps].reverse().flatMap((step) => [
+      stringValue(step.expectPage),
+      stringValue(recordValue(step.reachPage).page),
+      stringValue(step.assertPage),
+      stringValue(step.waitForPage)
+    ]).find(Boolean);
+  return { ...(source ? { source } : {}), ...(target ? { target } : {}) };
+}
+
+function savedFlowReference(flow: ScriptFlow): { id: string; version: number; name: string } {
+  return { id: flow.id, version: flow.version, name: flow.name };
+}
+
+function humanizePageReferences(message: string, catalog: ScriptFlowPlannerCatalog): string {
+  const references = catalog.pages
+    .flatMap((page) => [page.id, page.key].map((reference) => ({ reference, name: page.name })))
+    .sort((left, right) => right.reference.length - left.reference.length);
+  return references.reduce((result, item) => result.replace(
+    new RegExp(`["'\`“”]?${escapeRegExp(item.reference)}["'\`“”]?`, "g"),
+    `“${item.name}”`
+  ), message).replace(/\s*“/g, "“").replace(/”\s*/g, "”");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 type ExplicitOperationKind = "launch" | "tap" | "input" | "clear" | "swipe";

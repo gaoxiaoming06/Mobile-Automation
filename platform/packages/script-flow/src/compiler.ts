@@ -47,6 +47,7 @@ export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScri
   const preparationSteps: Omit<ScriptExecutionPlanStep, "order">[] = entryPage && !entryAlreadyExplicit ? [{
     id: "__prepare.entry-page",
     phase: "preparation",
+    role: "setup",
     name: `准备进入 ${entryPage}`,
     action: "reachPage",
     input: { pageId: entryPage, policy: "safe" },
@@ -60,6 +61,7 @@ export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScri
     ? [{
         id: "__verify.outcome-page",
         phase: "test",
+        role: "assertion",
         name: `确认到达 ${outcomePage}`,
         action: "assertPage",
         input: { pageId: outcomePage },
@@ -71,6 +73,7 @@ export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScri
   return {
     flowName: flow.name,
     kind: flow.kind,
+    purpose: flow.purpose ?? "business",
     app: flow.app,
     ...(flow.start ? { start: flow.start } : {}),
     ...(flow.entry ? { entry: flow.entry } : {}),
@@ -181,6 +184,7 @@ function expandChildFlow(
   return [...childSteps, {
     id: joinId(expandedId, "__verify.outcome-page"),
     name: `确认到达 ${outcomePage}`,
+    role: "assertion",
     action: "assertPage",
     input: { pageId: outcomePage },
     risk: "none",
@@ -207,6 +211,7 @@ function compileExecutableStep(
   return {
     id,
     ...(step.name ? { name: interpolateString(step.name, context.renderedParameters) } : {}),
+    role: step.role ?? "business",
     action,
     input,
     ...(onPage ? { onPage } : {}),

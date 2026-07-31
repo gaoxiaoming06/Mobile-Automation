@@ -1,5 +1,6 @@
 import type { LearningCandidate, TestRun } from "@mobile-automation/shared";
 import type { ScriptStep, ScriptTarget } from "@mobile-automation/script-flow";
+import { canLearnFromSuccessfulRun } from "./learning-run-eligibility.js";
 
 export type LearnedNavigationCandidate = Omit<
   LearningCandidate,
@@ -7,8 +8,9 @@ export type LearnedNavigationCandidate = Omit<
 >;
 
 export function navigationCandidatesFromTrial(run: TestRun): LearnedNavigationCandidate[] {
-  if (run.status !== "passed" || run.sourceSnapshot?.executionPurpose !== "trial") return [];
-  const steps = parsedSteps(run.sourceSnapshot.parsed);
+  if (!canLearnFromSuccessfulRun(run)) return [];
+  const sourceSnapshot = run.sourceSnapshot!;
+  const steps = parsedSteps(sourceSnapshot.parsed);
   const candidates = run.stepResults.flatMap((result) => {
     if (result.status !== "passed") return [];
     const step = steps.get(result.stepId);

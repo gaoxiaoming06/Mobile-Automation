@@ -2,6 +2,10 @@ export type ScriptFlowPlatform = "android" | "ios" | "harmony" | "flutter";
 
 export type ScriptFlowKind = "case" | "scenario";
 
+export type ScriptFlowPurpose = "navigation" | "fixture" | "business" | "recovery";
+
+export type ScriptStepRole = "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery";
+
 export type ScriptSessionState = "authenticated" | "unauthenticated";
 
 export type ScriptFlowState = {
@@ -63,6 +67,7 @@ export type ScriptStepRisk = "none" | "interaction" | "submit" | "publish" | "de
 export type ScriptStepBase = {
   id: string;
   name?: string;
+  role?: ScriptStepRole;
   onPage?: string;
   expectPage?: string;
   timeoutMs?: number;
@@ -179,6 +184,7 @@ export type ScriptStep =
 export type ScriptFlowDocument = {
   version: 1;
   kind: ScriptFlowKind;
+  purpose?: ScriptFlowPurpose;
   name: string;
   description?: string;
   app: {
@@ -212,6 +218,7 @@ export type ScriptExecutionPlanStep = {
   id: string;
   order: number;
   phase: "preparation" | "test";
+  role: ScriptStepRole;
   name?: string;
   action: ScriptExecutableAction;
   input: Record<string, unknown>;
@@ -234,6 +241,7 @@ export type ScriptRiskConfirmation = {
 export type ScriptExecutionPlan = {
   flowName: string;
   kind: ScriptFlowKind;
+  purpose: ScriptFlowPurpose;
   app: ScriptFlowDocument["app"];
   start?: ScriptFlowDocument["start"];
   entry?: ScriptFlowState;

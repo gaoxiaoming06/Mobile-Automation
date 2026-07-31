@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
-import type { FlowVerification, InteractionAsset, ScriptFlow, ScriptFlowVersion, TestRun } from "@mobile-automation/shared";
+import type { FlowVerification, InteractionAsset, ScriptFlow, ScriptFlowVersion, TemporaryTest, TestRun } from "@mobile-automation/shared";
 import { derivePageNavigationSegments } from "./page-navigation.js";
 import { registerScriptFlowRoutes, type ScriptFlowApiStorage } from "./script-flow-api.js";
 import type { StartScriptFlowRunInput } from "./script-flow-runner.js";
@@ -134,6 +134,69 @@ describe("ScriptFlow API", () => {
     expect(deleted.body).toEqual({ deleted: true });
     expect(context.storage.listScriptFlowVersions(created.id)).toEqual([]);
     expect((await get(context.baseUrl, `/api/script-flow-runs/${runId}`)).status).toBe(200);
+  });
+
+  it("records draft executions as reusable temporary history without sensitive values", async () => {
+    const context = await apiContext(servers);
+    const loginSource = `
+version: 1
+purpose: fixture
+name: 教师登录
+app: { id: cn.eeo.classin, platform: android }
+parameters:
+  account: { type: string, required: true }
+  password: { type: string, required: true, sensitive: true }
+steps:
+  - id: login
+    role: setup
+    risk: submit
+    tap: { target: { text: 登录 } }
+`;
+    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
+      sourceYaml: loginSource,
+      parameters: { account: "teacher@example.com", password: "secret" }
+    });
+
+    const started = await post(context.baseUrl, "/api/script-flow-drafts/trial-runs", {
+      prompt: "登录教师账号",
+      sourceYaml: loginSource,
+      planDigest: (preview.body as { planDigest: string }).planDigest,
+      deviceSerial: "device-1",
+      parameters: { account: "teacher@example.com", password: "secret" }
+    });
+    const history = await get(context.baseUrl, "/api/temporary-tests?appId=cn.eeo.classin&platform=android");
+
+    expect(started.status).toBe(202);
+    expect(history.body).toEqual({
+      tests: [expect.objectContaining({
+        prompt: "登录教师账号",
+        purpose: "fixture",
+        parameterValues: { account: "teacher@example.com" },
+        lastRunId: "run-1"
+      })]
+    });
+  });
+
+  it("keeps navigation-only flows out of the case center", async () => {
+    const context = await apiContext(servers);
+    const response = await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: `
+version: 1
+kind: case
+purpose: navigation
+name: 从主页进入添加好友
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: reach-friend
+    role: navigation
+    reachPage: { page: classin.friend.add, policy: safe }
+`
+    });
+
+    expect(response).toEqual({
+      status: 409,
+      body: { error: "导航流程由系统内部复用，不保存到用例中心" }
+    });
   });
 
   it("rejects preview and execution when the client version is stale", async () => {
@@ -493,6 +556,7 @@ class MemoryScriptFlowStorage implements ScriptFlowApiStorage {
   private readonly versions = new Map<string, ScriptFlowVersion[]>();
   private readonly runs = new Map<string, TestRun>();
   private readonly verifiedSourceHashes = new Set<string>();
+  private readonly temporaryTests = new Map<string, TemporaryTest>();
   private interactionAssets: InteractionAsset[] = [];
 
   setInteractionAssets(assets: InteractionAsset[]): void {
@@ -570,6 +634,43 @@ class MemoryScriptFlowStorage implements ScriptFlowApiStorage {
   deleteScriptFlow(id: string): boolean {
     this.versions.delete(id);
     return this.flows.delete(id);
+  }
+
+  recordTemporaryTest(input: {
+    prompt: string;
+    sourceYaml: string;
+    document: ScriptFlowDocument;
+    parameterValues: Record<string, string | number | boolean>;
+    runId: string;
+  }): TemporaryTest {
+    const key = `${input.document.app.id}:${input.document.app.platform}:${createHash("sha256").update(input.sourceYaml).digest("hex")}`;
+    const existing = this.temporaryTests.get(key);
+    const next: TemporaryTest = {
+      id: existing?.id ?? `temporary-${this.temporaryTests.size + 1}`,
+      appId: input.document.app.id,
+      platform: input.document.app.platform,
+      kind: input.document.kind,
+      purpose: input.document.purpose ?? "business",
+      name: input.document.name,
+      prompt: input.prompt,
+      sourceYaml: input.sourceYaml,
+      parsed: input.document as unknown as Record<string, unknown>,
+      parameterValues: input.parameterValues,
+      lastRunId: input.runId,
+      lastRunStatus: this.runs.get(input.runId)?.status,
+      runCount: (existing?.runCount ?? 0) + 1,
+      createdAt: existing?.createdAt ?? "2026-07-30T00:00:00.000Z",
+      updatedAt: "2026-07-30T01:00:00.000Z"
+    };
+    this.temporaryTests.set(key, next);
+    return next;
+  }
+
+  listTemporaryTests(filter: { appId?: string; platform?: ScriptFlow["platform"]; limit?: number } = {}): TemporaryTest[] {
+    return [...this.temporaryTests.values()]
+      .filter((test) => !filter.appId || test.appId === filter.appId)
+      .filter((test) => !filter.platform || test.platform === filter.platform)
+      .slice(0, filter.limit ?? 50);
   }
 
   listScriptFlowVersions(id: string): ScriptFlowVersion[] { return this.versions.get(id) ?? []; }

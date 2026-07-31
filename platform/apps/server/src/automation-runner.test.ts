@@ -393,6 +393,12 @@ describe("AutomationRunner regression flow", () => {
     driver.device.capabilities.recordVideo = false;
     const runner = new AutomationRunner(storage, driver);
     const step = driver.createTapStep(120, 240);
+    step.params = {
+      ...step.params,
+      interactionAssetId: "asset-home-add",
+      interactionAssetKey: "classin.home.tap.icon.add",
+      interactionAssetVersion: 2
+    };
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -411,6 +417,9 @@ describe("AutomationRunner regression flow", () => {
     expect(run.stepResults[0]?.status).toBe("passed");
     expect(run.stepResults[0]?.metadata).toEqual(
       expect.objectContaining({
+        interactionAssetId: "asset-home-add",
+        interactionAssetKey: "classin.home.tap.icon.add",
+        interactionAssetVersion: 2,
         actionBackend: expect.objectContaining({
           driverChannel: "mock"
         })

@@ -25,6 +25,18 @@ describe("trial interaction learning", () => {
     expect(JSON.stringify(candidates)).not.toMatch(/"x"|"y"|coordinate|region/i);
   });
 
+  it("also learns from later normal executions only when the script version is verified", () => {
+    const verified = trialRun();
+    verified.sourceSnapshot!.executionPurpose = "normal";
+    verified.sourceSnapshot!.verificationAssessment!.status = "verified";
+    verified.sourceSnapshot!.verificationAssessment!.unresolvedStepIds = [];
+
+    expect(interactionCandidatesFromTrial(verified)).toHaveLength(1);
+
+    verified.sourceSnapshot!.verificationAssessment!.status = "needs_trial";
+    expect(interactionCandidatesFromTrial(verified)).toEqual([]);
+  });
+
   it("does not learn from failures, raw driver taps, or targets without an owner page", () => {
     const run = trialRun();
     run.stepResults = [

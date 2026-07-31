@@ -266,6 +266,44 @@ export type LearningCandidate = {
   updatedAt: string;
 };
 
+export type LearningAggregateStatus =
+  | "collecting"
+  | "awaiting_ai"
+  | "ready"
+  | "active"
+  | "rejected"
+  | "analysis_failed"
+  | "degraded";
+
+export type LearningAggregate = {
+  id: string;
+  appId: string;
+  platform: ScriptFlowPlatform;
+  kind: "page" | "interaction" | "navigation";
+  stableKey: string;
+  representativeCandidateId: string;
+  status: LearningAggregateStatus;
+  successfulRunCount: number;
+  distinctEvidenceCount: number;
+  analysisRequired: boolean;
+  analysis?: Record<string, unknown>;
+  assetId?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LearningObservation = {
+  id: string;
+  aggregateId: string;
+  sessionId: string;
+  candidateId: string;
+  runId: string;
+  evidenceFingerprint: string;
+  evidenceArtifactIds: string[];
+  createdAt: string;
+};
+
 export type InteractionAsset = {
   id: string;
   key: string;
@@ -291,7 +329,7 @@ export type InteractionAsset = {
     descriptor: Record<string, unknown>;
     confidence: number;
   }>;
-  status: "draft" | "active" | "deprecated" | "rejected";
+  status: "draft" | "active" | "degraded" | "deprecated" | "rejected";
   version: number;
   provenance: { runIds: string[]; stepIds: string[]; artifactIds: string[] };
   createdAt: string;
@@ -343,6 +381,24 @@ export type ScriptFlow = {
   status: ScriptFlowStatus;
   version: number;
   tags: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TemporaryTest = {
+  id: string;
+  appId: string;
+  platform: ScriptFlowPlatform;
+  kind: "case" | "scenario";
+  purpose: "navigation" | "fixture" | "business" | "recovery";
+  name: string;
+  prompt: string;
+  sourceYaml: string;
+  parsed: Record<string, unknown>;
+  parameterValues: Record<string, string | number | boolean>;
+  lastRunId: string;
+  lastRunStatus?: TestRun["status"];
+  runCount: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -553,7 +609,8 @@ export type DeviceEvent = {
     | "native_crash"
     | "process_death"
     | "performance_threshold"
-    | "android_app_monitor";
+    | "android_app_monitor"
+    | "interaction_asset_degraded";
   severity: "info" | "warning" | "error";
   occurredAt: string;
   summary: string;
