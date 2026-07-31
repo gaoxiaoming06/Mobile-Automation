@@ -56,7 +56,9 @@ describe("AiScriptFlowsPanel", () => {
 
     expect(markup).toContain("最近测试");
     expect(markup).toContain("从主页进入添加好友页面");
-    expect(markup).toContain("再次执行");
+    expect(markup).toContain("加载测试：从主页进入添加好友");
+    expect(markup).toContain("查看“从主页进入添加好友”的最近执行结果");
+    expect(markup).not.toContain("再次执行");
     expect(markup).toContain("导航");
     expect(markup).not.toContain("保存到用例中心");
   });

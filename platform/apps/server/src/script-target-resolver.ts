@@ -136,19 +136,23 @@ export class ScriptTargetResolver {
       };
     }
     if (input.action === "selectText") {
+      const selectedValue = requiredValue(input);
+      const pickerMode = runtimePickerMode(text, selectedValue);
       return {
         type: "tap_on_image",
         strategy: "runtime_picker",
         params: {
           fieldType: "picker_select",
           targetText: text,
-          selectedValue: requiredValue(input),
+          selectedValue,
           ...(input.confirmText ? { confirmText: input.confirmText } : {}),
           locatorKind: "structural_locator",
           structuralLocator: {
             strategy: "ocr_runtime_picker",
-            text
+            text,
+            ...(pickerMode ? { pickerMode } : {})
           },
+          ...(pickerMode ? { verifySelectedValue: true } : {}),
           ...search,
           allowRegionFallback: false
         }
@@ -212,6 +216,16 @@ export class ScriptTargetResolver {
       }
     };
   }
+}
+
+function runtimePickerMode(targetText: string, selectedValue: string): "duration_hours_minutes" | undefined {
+  const compactTarget = targetText.toLowerCase().replace(/\s+/g, "");
+  const compactValue = selectedValue.replace(/\s+/g, "");
+  const durationValue = /^(?:(\d+)小时)?(?:(\d+)分钟)?$/u.exec(compactValue);
+  if (!durationValue || (!durationValue[1] && !durationValue[2])) return undefined;
+  return /时长|持续时间|duration/u.test(compactTarget) || Boolean(durationValue[1] && durationValue[2])
+    ? "duration_hours_minutes"
+    : undefined;
 }
 
 function validateInteractionAsset(input: ScriptTargetResolutionInput, asset: InteractionAsset): void {

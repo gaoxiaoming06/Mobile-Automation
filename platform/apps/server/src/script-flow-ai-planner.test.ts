@@ -15,7 +15,8 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止擅自增加");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("未录入页面");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("完整操作链");
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("必须补充结果验证依据");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("系统标记为结果待确认");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不能因此返回 needs_clarification");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("用户确认业务结果");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("search");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("一个 tap 只执行一次点击");
@@ -40,6 +41,9 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("明确操作是硬约束");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止元素资产 ID");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("唯一 JSON 对象");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("具体选中值");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("selectText");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止猜测固定滑动次数");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toMatch(/\bref\b/i);
 });
 
@@ -193,6 +197,332 @@ describe("ScriptFlow AI planner", () => {
     })).toMatchObject({
       status: "ready",
       document: { steps: [{ tap: expect.any(Object) }, { tap: expect.any(Object) }] }
+    });
+  });
+
+  it("does not reject an actionable click only because it has no page or result oracle", async () => {
+    const response = readyResponse();
+    response.summary = "点击左上角返回按钮";
+    response.document.name = "点击左上角返回";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.steps = [{
+      id: "tap-top-left-back",
+      role: "navigation",
+      risk: "interaction",
+      tap: {
+        target: { icon: "back", area: "topBar", position: "leading" },
+        search: { mode: "visibleOnly" }
+      }
+    }];
+    let callCount = 0;
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "点击左上角返回",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: pageCatalog(),
+      flows: [],
+      fetchImpl: async () => {
+        callCount += 1;
+        const content = callCount === 1
+          ? { status: "needs_clarification", clarification: "请补充当前页面 key 或返回后的结果验证。" }
+          : response;
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 });
+      }
+    });
+
+    expect(callCount).toBe(2);
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      document: {
+        steps: [{
+          tap: {
+            target: { icon: "back", area: "topBar", position: "leading" },
+            search: { mode: "visibleOnly" }
+          }
+        }]
+      },
+      verification: { unresolvedOutcome: true }
+    });
+  });
+
+  it.each([
+    {
+      label: "文字点击",
+      prompt: "点击课堂报告",
+      step: {
+        id: "tap-class-report",
+        role: "business" as const,
+        risk: "interaction" as const,
+        tap: { target: { text: "课堂报告", area: "content" as const }, search: { mode: "auto" as const } }
+      }
+    },
+    {
+      label: "标准图标点击",
+      prompt: "点击右上角分享图标",
+      step: {
+        id: "tap-share",
+        role: "business" as const,
+        risk: "interaction" as const,
+        tap: {
+          target: { icon: "share", area: "topBar" as const, position: "trailing" as const },
+          search: { mode: "visibleOnly" as const }
+        }
+      }
+    },
+    {
+      label: "文字输入",
+      prompt: "在课堂名称中输入自动化测试",
+      step: {
+        id: "input-class-name",
+        role: "business" as const,
+        inputText: {
+          target: { text: "课堂名称", area: "content" as const },
+          value: "自动化测试",
+          search: { mode: "auto" as const }
+        }
+      }
+    },
+    {
+      label: "页面滑动",
+      prompt: "向上滑动",
+      step: {
+        id: "swipe-up",
+        role: "business" as const,
+        swipe: { direction: "up" as const }
+      }
+    }
+  ])("accepts $label as an executable trial without inventing an outcome", ({ prompt, step }) => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = prompt;
+    response.document.purpose = "business";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.steps = [step];
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt
+    })).toMatchObject({
+      status: "ready",
+      document: { steps: [expect.objectContaining({ id: step.id })] }
+    });
+  });
+
+  it("canonicalizes an explicit picker sequence without losing its selected value", () => {
+    const prompt = "主页进入班级四十二号，打开创建课堂页面，然后点击课堂时长，再弹出的时间选择中滑动选择10小时40分钟，点确定，然后点击发布";
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "设置课堂时长并发布";
+    response.document.purpose = "business";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.steps = [
+      {
+        id: "select-duration",
+        role: "business",
+        risk: "interaction",
+        selectText: {
+          target: { text: "课堂时长", area: "content" },
+          value: "10小时40分钟",
+          confirmText: "确定",
+          search: { mode: "auto" }
+        }
+      },
+      {
+        id: "publish",
+        role: "business",
+        risk: "publish",
+        tap: { target: { text: "发布" }, search: { mode: "visibleOnly" } }
+      }
+    ];
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt
+    })).toMatchObject({
+      status: "ready",
+      document: { steps: [{ id: "select-duration" }, { id: "publish" }] }
+    });
+  });
+
+  it.each(["topBar", "content"] as const)("rejects an ungrounded %s constraint for a publish target", (area) => {
+    const prompt = "点击发布";
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "发布课堂";
+    response.document.purpose = "business";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.steps = [{
+      id: "publish",
+      role: "business",
+      risk: "publish",
+      tap: {
+        target: { text: "发布", area },
+        search: { mode: "visibleOnly" }
+      }
+    }];
+
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt
+    })).toThrow(new RegExp(`发布.*${area}.*没有.*位置依据`));
+  });
+
+  it("rejects guessed swipes when the user supplied an exact picker value", () => {
+    const prompt = "点击课堂时长，在弹出的时间选择中滑动选择10小时40分钟，点确定";
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "设置课堂时长";
+    response.document.purpose = "business";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.steps = [
+      {
+        id: "tap-duration",
+        role: "business",
+        risk: "interaction",
+        tap: { target: { text: "课堂时长", area: "content" }, search: { mode: "auto" } }
+      },
+      { id: "swipe-duration", role: "business", swipe: { direction: "up" } },
+      {
+        id: "confirm-duration",
+        role: "business",
+        risk: "interaction",
+        tap: { target: { text: "确定", area: "content" }, search: { mode: "visibleOnly" } }
+      }
+    ];
+
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt
+    })).toThrow(/10小时40分钟.*selectText/);
+  });
+
+  it("rejects a redundant field tap before a compound picker selection", () => {
+    const prompt = "点击课堂时长，在弹出的时间选择中滑动选择10小时40分钟，点确定";
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "设置课堂时长";
+    response.document.purpose = "business";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.steps = [
+      {
+        id: "tap-duration",
+        role: "business",
+        risk: "interaction",
+        tap: { target: { text: "课堂时长", area: "content" }, search: { mode: "auto" } }
+      },
+      {
+        id: "select-duration",
+        role: "business",
+        risk: "interaction",
+        selectText: {
+          target: { text: "课堂时长", area: "content" },
+          value: "10小时40分钟",
+          confirmText: "确定",
+          search: { mode: "auto" }
+        }
+      }
+    ];
+
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt
+    })).toThrow(/selectText.*前置.*tap/);
+  });
+
+  it("still allows clarification when an explicit operation is missing a real parameter", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+
+    expect(parseScriptFlowAiResponse(JSON.stringify({
+      status: "needs_clarification",
+      clarification: "请提供要点击的具体班级名称。"
+    }), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "点击指定班级"
+    })).toEqual({
+      status: "needs_clarification",
+      clarification: "请提供要点击的具体班级名称。"
+    });
+  });
+
+  it("reviews a clarification once and extracts a parameter already present in the user request", async () => {
+    const response = readyResponse();
+    response.document.name = "进入指定班级的新建课堂页面";
+    response.document.outcome = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
+    response.document.parameters = {};
+    response.document.steps = [{ id: "open-create-lesson", role: "navigation", runFlow: "flow-open-lesson" }];
+    response.parameterValues = { className: "班级四十二号" };
+    let callCount = 0;
+    let reviewRequest = "";
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "进入班级四十二号的新建课堂页面",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: planningFlows(),
+      fetchImpl: async (_url, init) => {
+        callCount += 1;
+        if (callCount === 2) reviewRequest = String(init?.body ?? "");
+        const content = callCount === 1
+          ? { status: "needs_clarification", clarification: "请补充要进入的班级名称。" }
+          : response;
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 });
+      }
+    });
+
+    expect(callCount).toBe(2);
+    expect(reviewRequest).toContain("可能已经给出了班级");
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      parameterValues: { className: "班级四十二号" }
+    });
+  });
+
+  it("returns the clarification after one review when the required value is truly absent", async () => {
+    let callCount = 0;
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "进入指定班级的新建课堂页面",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: planningFlows(),
+      fetchImpl: async () => {
+        callCount += 1;
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({
+            status: "needs_clarification",
+            clarification: "请补充要进入的班级名称。"
+          }) } }]
+        }), { status: 200 });
+      }
+    });
+
+    expect(callCount).toBe(2);
+    expect(result).toMatchObject({
+      status: "needs_clarification",
+      clarification: "请补充要进入的班级名称。"
     });
   });
 
@@ -459,15 +789,15 @@ describe("ScriptFlow AI planner", () => {
     })).toThrow("未允许的外层字段");
   });
 
-  it("rejects prose or Markdown wrapped around the JSON response", () => {
+  it("safely unwraps a single Markdown JSON fence before strict schema validation", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = `\`\`\`json\n${JSON.stringify(readyResponse())}\n\`\`\``;
 
-    expect(() => parseScriptFlowAiResponse(response, {
+    expect(parseScriptFlowAiResponse(response, {
       appId: "cn.eeo.classin",
       platform: "android",
       catalog
-    })).toThrow("唯一、完整的 JSON 对象");
+    })).toMatchObject({ status: "ready", document: { name: "打开添加好友" } });
   });
 
   it("builds a draft from page identity without exposing element locator assets", async () => {
@@ -659,7 +989,7 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it("asks for stable result evidence before accepting an unrecorded outcome", async () => {
+  it("accepts an explicit operation chain without an oracle as a trial requiring outcome review", async () => {
     const response = readyResponse();
     response.document.name = "进入未录入的教学方案页面";
     response.document.entry = undefined;
@@ -690,8 +1020,9 @@ describe("ScriptFlow AI planner", () => {
     });
 
     expect(result).toMatchObject({
-      status: "needs_clarification",
-      clarification: expect.stringMatching(/稳定文字|验证结果/)
+      status: "trial_ready",
+      document: { steps: [{ tap: expect.any(Object) }, { tap: expect.any(Object) }] },
+      verification: { unresolvedOutcome: true }
     });
   });
 

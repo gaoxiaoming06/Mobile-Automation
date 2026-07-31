@@ -115,6 +115,31 @@ describe("ScriptTargetResolver", () => {
     }));
   });
 
+  it("routes an hour-minute duration value to the bounded duration picker", () => {
+    const resolver = new ScriptTargetResolver();
+
+    const result = resolver.resolve({
+      action: "selectText",
+      target: { text: "课堂时长" },
+      value: "10小时40分钟",
+      confirmText: "确定",
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+
+    expect(result.params).toMatchObject({
+      targetText: "课堂时长",
+      selectedValue: "10小时40分钟",
+      confirmText: "确定",
+      structuralLocator: {
+        strategy: "ocr_runtime_picker",
+        text: "课堂时长",
+        pickerMode: "duration_hours_minutes"
+      },
+      verifySelectedValue: true
+    });
+  });
+
   it("resolves a standard top-bar icon without consulting the page locator catalog", () => {
     const resolver = new ScriptTargetResolver();
 

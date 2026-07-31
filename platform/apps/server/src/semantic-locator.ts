@@ -2387,10 +2387,14 @@ export class SemanticStepResolver {
     let attempt = 0;
     let totalSwipes = 0;
     const selectedParts: string[] = [];
+    let failureReason = "picker_value_not_found";
+    let stalledAt: string | undefined;
 
     const selectColumn = async (column: "hours" | "minutes", target: number): Promise<boolean> => {
       const unit = column === "hours" ? "小时" : "分钟";
       const centerXPercent = column === "hours" ? 25 : 75;
+      let previousCenterValue: number | undefined;
+      let repeatedCenterCount = 0;
       for (let swipes = 0; swipes <= maxSwipes; swipes += 1) {
         attempt += 1;
         const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
@@ -2398,21 +2402,55 @@ export class SemanticStepResolver {
         const layout = await this.deps.ocr.locateText!({ image: screenshot.png, mode: "contains" });
         const candidates = pickerColumnNumberCandidates(layout, unit, centerXPercent);
         const selectedCenterY = pickerSelectedCenterY(layout);
-        const targetCandidate = candidates
-          .filter((candidate) => candidate.value === target)
+        const current = candidates
+          .slice()
           .sort((left, right) => Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY))[0];
-        if (targetCandidate && Math.abs(targetCandidate.candidate.centerY - selectedCenterY) <= layout.height * 0.12) {
+        if (current?.value === target) {
           selectedParts.push(`${target}${unit}`);
           return true;
         }
         if (swipes >= maxSwipes || !candidates.length) {
           return false;
         }
-        const current = candidates
-          .slice()
-          .sort((left, right) => Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY))[0]!;
+        if (!current) return false;
+
+        if (previousCenterValue === current.value) {
+          repeatedCenterCount += 1;
+        } else {
+          repeatedCenterCount = 0;
+        }
+        previousCenterValue = current.value;
+        if (repeatedCenterCount >= 2) {
+          failureReason = "picker_no_progress";
+          stalledAt = `${current.value}${unit}`;
+          return false;
+        }
+
+        const visibleTarget = candidates
+          .filter((candidate) => candidate.value === target)
+          .sort((left, right) =>
+            Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY)
+          )[0];
+        if (visibleTarget) {
+          const action = {
+            type: "tap",
+            x: scaleCoordinate(visibleTarget.candidate.centerX, layout.width, input.deviceSize?.width),
+            y: scaleCoordinate(visibleTarget.candidate.centerY, layout.height, input.deviceSize?.height)
+          } satisfies DeviceActionRequest;
+          actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action)) ?? actionResult;
+          if (intervalMs > 0) {
+            await sleep(intervalMs);
+          }
+          continue;
+        }
+
         const direction = target > current.value ? "increase" : "decrease";
-        const action = pickerColumnSwipeAction(centerXPercent, direction, input.deviceSize);
+        const action = pickerColumnSwipeAction(centerXPercent, direction, input.deviceSize, {
+          layout,
+          centerY: selectedCenterY,
+          rowSpacing: pickerColumnRowSpacing(candidates, layout.height),
+          rows: pickerColumnMovementRows(candidates, current.value, target)
+        });
         actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action)) ?? actionResult;
         totalSwipes += 1;
         if (intervalMs > 0) {
@@ -2434,10 +2472,11 @@ export class SemanticStepResolver {
           type: "image_region",
           action: "fail",
           ...pageTaskSemanticMetadata(input.step.params),
-          reason: "picker_value_not_found",
+          reason: failureReason,
           pickerMode: "duration_hours_minutes",
           selectedValue,
           selectedParts,
+          ...(stalledAt ? { stalledAt } : {}),
           attempts: attempt,
           swipes: totalSwipes,
           region
@@ -2480,6 +2519,46 @@ export class SemanticStepResolver {
     actionResult = normalizeActionResult(await this.deps.performAction(input.serial, confirmAction)) ?? actionResult;
     await sleep(positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
 
+    let verifiedSelectedValue: string | undefined;
+    if (input.step.params.verifySelectedValue === true) {
+      attempt += 1;
+      const verificationScreenshot = await this.deps.captureLocatorScreenshot(
+        input.runId,
+        input.stepResultId,
+        input.serial,
+        input.step.id,
+        attempt
+      );
+      artifacts.push(verificationScreenshot.artifact);
+      const verificationLayout = await this.deps.ocr.locateText!({ image: verificationScreenshot.png, mode: "contains" });
+      const targetText = textParam(input.step.params.targetText).trim();
+      const actualValue = findDurationFieldValue(verificationLayout, targetText);
+      if (actualValue !== selectedValue) {
+        return {
+          supported: true,
+          resolved: false,
+          action: confirmAction,
+          actionResult,
+          message: `Duration picker applied "${actualValue ?? "unknown"}" instead of "${selectedValue}".`,
+          artifacts,
+          metadata: {
+            type: "image_region",
+            action: "fail",
+            ...pageTaskSemanticMetadata(input.step.params),
+            reason: "picker_value_not_applied",
+            pickerMode: "duration_hours_minutes",
+            selectedValue,
+            actualValue,
+            selectedParts,
+            attempts: attempt,
+            swipes: totalSwipes,
+            region
+          }
+        };
+      }
+      verifiedSelectedValue = actualValue;
+    }
+
     return {
       supported: true,
       resolved: true,
@@ -2496,6 +2575,7 @@ export class SemanticStepResolver {
         semanticArea,
         opener,
         selectedValue,
+        ...(verifiedSelectedValue ? { verifiedSelectedValue } : {}),
         selectedParts,
         attempts: attempt,
         swipes: totalSwipes,
@@ -4439,16 +4519,89 @@ function pickerColumnNumberCandidates(
 function pickerColumnSwipeAction(
   centerXPercent: number,
   direction: "increase" | "decrease",
-  deviceSize?: { width: number; height: number }
+  deviceSize?: { width: number; height: number },
+  geometry?: {
+    layout: Pick<OcrLayoutResult, "width" | "height">;
+    centerY: number;
+    rowSpacing: number;
+    rows: number;
+  }
 ): Extract<DeviceActionRequest, { type: "swipe" }> {
   const width = deviceSize?.width ?? 1080;
   const height = deviceSize?.height ?? 2400;
-  const x = Math.round(width * centerXPercent / 100);
-  const lowerY = Math.round(height * 0.9);
-  const upperY = Math.round(height * 0.72);
+  const x = geometry
+    ? scaleCoordinate(geometry.layout.width * centerXPercent / 100, geometry.layout.width, width)
+    : Math.round(width * centerXPercent / 100);
+  const gestureDistance = geometry
+    ? Math.min(
+        geometry.layout.height * 0.14,
+        Math.max(geometry.layout.height * 0.035, geometry.rowSpacing * geometry.rows)
+      )
+    : height * 0.18;
+  const lowerY = geometry
+    ? scaleCoordinate(geometry.centerY + gestureDistance / 2, geometry.layout.height, height)
+    : Math.round(height * 0.9);
+  const upperY = geometry
+    ? scaleCoordinate(geometry.centerY - gestureDistance / 2, geometry.layout.height, height)
+    : Math.round(height * 0.72);
+  const durationMs = geometry ? Math.min(320, 180 + geometry.rows * 35) : 350;
   return direction === "increase"
-    ? { type: "swipe", startX: x, startY: lowerY, endX: x, endY: upperY, durationMs: 350 }
-    : { type: "swipe", startX: x, startY: upperY, endX: x, endY: lowerY, durationMs: 350 };
+      ? { type: "swipe", startX: x, startY: lowerY, endX: x, endY: upperY, durationMs }
+      : { type: "swipe", startX: x, startY: upperY, endX: x, endY: lowerY, durationMs };
+}
+
+function pickerColumnRowSpacing(
+  candidates: Array<{ value: number; candidate: TextLocatorCandidate }>,
+  layoutHeight: number
+): number {
+  const centerYs = [...new Set(candidates.map((entry) => Math.round(entry.candidate.centerY)))].sort((left, right) => left - right);
+  const distances = centerYs
+    .slice(1)
+    .map((centerY, index) => centerY - centerYs[index]!)
+    .filter((distance) => distance >= layoutHeight * 0.025 && distance <= layoutHeight * 0.12)
+    .sort((left, right) => left - right);
+  return distances[Math.floor(distances.length / 2)] ?? layoutHeight * 0.045;
+}
+
+function pickerColumnMovementRows(
+  candidates: Array<{ value: number; candidate: TextLocatorCandidate }>,
+  current: number,
+  target: number
+): number {
+  const values = [...new Set(candidates.map((entry) => entry.value))].sort((left, right) => left - right);
+  const increments = values
+    .slice(1)
+    .map((value, index) => value - values[index]!)
+    .filter((increment) => increment > 0)
+    .sort((left, right) => left - right);
+  const valueStep = increments[0] ?? 1;
+  return Math.max(1, Math.min(3, Math.ceil(Math.abs(target - current) / valueStep)));
+}
+
+function findDurationFieldValue(layout: OcrLayoutResult, targetText: string): string | undefined {
+  const anchor = targetText ? findTextCandidate(layout, targetText, { mode: "contains" }) : undefined;
+  const directCandidates = layout.boxes.flatMap((box) => {
+    const compactBox = compactPickerText(box.text);
+    if (!compactBox.includes("小时") || !compactBox.includes("分钟")) return [];
+    const parsed = parseDurationPickerValue(box.text);
+    if (!parsed) return [];
+    return [{
+      value: `${parsed.hours}小时${parsed.minutes}分钟`,
+      centerY: box.y + box.height / 2
+    }];
+  });
+  if (anchor && directCandidates.length) {
+    const nearest = directCandidates
+      .slice()
+      .sort((left, right) => Math.abs(left.centerY - anchor.centerY) - Math.abs(right.centerY - anchor.centerY))[0];
+    if (nearest && Math.abs(nearest.centerY - anchor.centerY) <= layout.height * 0.08) return nearest.value;
+  }
+  if (directCandidates.length === 1) return directCandidates[0]!.value;
+
+  const compact = compactPickerText(layout.text);
+  const matches = [...compact.matchAll(/(\d+)小时(\d+)分钟/gu)]
+    .map((match) => `${Number(match[1])}小时${Number(match[2])}分钟`);
+  return [...new Set(matches)].length === 1 ? matches[0] : undefined;
 }
 
 function findSplitPickerValueCandidate(
@@ -6116,6 +6269,9 @@ function selectCurrentTopBarIconComponent(
     return components.slice().sort((left, right) =>
       (right.roleScore ?? 0) - (left.roleScore ?? 0) || right.score - left.score
     )[0];
+  }
+  if (options.role === "avatar") {
+    return components.slice().sort((left, right) => right.score - left.score)[0];
   }
   const byVisualOrder = components
     .slice()

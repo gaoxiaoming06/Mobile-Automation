@@ -4950,7 +4950,7 @@ button:disabled {
 .temporary-test-history > header,
 .temporary-test-history > header div,
 .temporary-test-actions,
-.temporary-test-copy > div {
+.temporary-test-title {
   display: flex;
   align-items: center;
 }
@@ -4978,31 +4978,48 @@ button:disabled {
 .temporary-test-list article {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 11px 12px;
+  min-height: 76px;
+  gap: 4px;
   background: #ffffff;
 }
 
-.temporary-test-copy { min-width: 0; }
-.temporary-test-copy > div { gap: 7px; }
+.temporary-test-list article[data-selected="true"] {
+  box-shadow: inset 3px 0 0 #2f6fed;
+  background: #f3f7ff;
+}
+
+.temporary-test-select {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.temporary-test-select:hover:not(:disabled) { background: #f7f9fc; }
+.temporary-test-list article[data-selected="true"] .temporary-test-select:hover:not(:disabled) { background: #eef4ff; }
+.temporary-test-select:focus-visible { outline: 2px solid #2f6fed; outline-offset: -2px; }
+.temporary-test-copy { display: block; min-width: 0; }
+.temporary-test-title { gap: 7px; }
 .temporary-test-copy strong,
-.temporary-test-copy p {
+.temporary-test-prompt {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .temporary-test-copy strong { color: #273449; font-size: 13px; }
-.temporary-test-copy p { margin: 4px 0; color: #526176; font-size: 12px; }
-.temporary-test-actions { gap: 5px; }
+.temporary-test-prompt { margin: 4px 0; color: #526176; font-size: 12px; }
+.temporary-test-actions { gap: 5px; padding-right: 10px; }
 .temporary-test-actions button {
   display: inline-flex;
-  min-height: 30px;
+  width: 32px;
+  min-height: 32px;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 4px 8px;
+  padding: 4px;
 }
-.temporary-test-actions button:last-child { width: 30px; padding: 4px; }
 .temporary-test-empty { margin: 0; padding: 14px 0; }
 
 .test-purpose-badge {

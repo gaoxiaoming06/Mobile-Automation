@@ -1,4 +1,4 @@
-import { ExternalLink, History, RotateCcw, Save, Sparkles } from "lucide-react";
+import { FileSearch, History, Save, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { publicExecutionFailureFromRun } from "@mobile-automation/shared";
 import type {
@@ -92,6 +92,7 @@ export function AiScriptFlowsPanel({
   const [platform, setPlatform] = useState<ScriptFlow["platform"]>("android");
   const [draft, setDraft] = useState<AiDraft | undefined>(initialDraft);
   const [history, setHistory] = useState<TemporaryTest[]>(initialHistory);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string>();
   const generatedDraft = draft?.status === "ready" || draft?.status === "trial_ready" ? draft : undefined;
   const trialRequired = generatedDraft?.status === "trial_ready";
   const [parameterValues, setParameterValues] = useState<Record<string, ScriptParameterValue>>(() => draftParameterValues(generatedDraft));
@@ -99,7 +100,7 @@ export function AiScriptFlowsPanel({
   const [plan, setPlan] = useState<CasePlanView>();
   const [lastRun, setLastRun] = useState<TestRun>();
   const [learning, setLearning] = useState<LearningSummaryResponse>();
-  const [busyAction, setBusyAction] = useState<"generate" | "save" | "run" | "review">();
+  const [busyAction, setBusyAction] = useState<"generate" | "save" | "run" | "review" | "select">();
   const lastRunFailure = lastRun ? publicExecutionFailureFromRun(lastRun) : undefined;
 
   useEffect(() => {
@@ -140,6 +141,12 @@ export function AiScriptFlowsPanel({
     if (!prompt.trim() || (!revision && !appId.trim())) return;
     try {
       setBusyAction("generate");
+      setDraft(undefined);
+      setParameterValues({});
+      setLastRun(undefined);
+      setLearning(undefined);
+      setPlan(undefined);
+      setSelectedHistoryId(undefined);
       const body = revision
         ? { prompt: prompt.trim(), flowId: revision.flowId, expectedVersion: revision.version }
         : { prompt: prompt.trim(), appId: appId.trim(), platform };
@@ -152,9 +159,6 @@ export function AiScriptFlowsPanel({
         ? await reconcileDraftVerification(response.draft)
         : response.draft;
       setDraft(nextDraft);
-      setLastRun(undefined);
-      setLearning(undefined);
-      setPlan(undefined);
       if (nextDraft.status === "ready" || nextDraft.status === "trial_ready") {
         setParameterValues(draftParameterValues(nextDraft));
         setMessage(nextDraft.summary);
@@ -239,14 +243,14 @@ export function AiScriptFlowsPanel({
     }
   }
 
-  async function rerunTemporaryTest(item: TemporaryTest) {
+  async function selectTemporaryTest(item: TemporaryTest) {
     const document = readCaseDocument(item.parsed);
     if (!document) {
-      setMessage("历史测试快照已损坏，无法再次执行");
+      setMessage("历史测试快照已损坏，无法加载");
       return;
     }
     try {
-      setBusyAction("run");
+      setBusyAction("select");
       const base: GeneratedDraft = {
         status: "trial_ready",
         sourceYaml: item.sourceYaml,
@@ -267,12 +271,8 @@ export function AiScriptFlowsPanel({
       setLastRun(undefined);
       setLearning(undefined);
       setPlan(undefined);
-      const missing = missingRequiredParameters(document, values);
-      if (missing.length) {
-        setMessage(`请先补充运行参数：${missing.join("、")}`);
-        return;
-      }
-      await executeDraft(nextDraft, values, item.prompt);
+      setSelectedHistoryId(item.id);
+      setMessage(`已加载最近测试：${item.name}`);
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -343,15 +343,23 @@ export function AiScriptFlowsPanel({
           </button>
           {!revision ? <section className="temporary-test-history">
             <header><div><History size={16} /><strong>最近测试</strong></div><span>{history.length} 条</span></header>
-            {history.length ? <div className="temporary-test-list">{history.map((item) => <article key={item.id}>
-              <div className="temporary-test-copy">
-                <div><span className={`test-purpose-badge ${item.purpose}`}>{testPurposeLabel(item.purpose)}</span><strong>{item.name}</strong></div>
-                <p>{item.prompt}</p>
-                <small>{testKindLabel(item.kind)} · {item.lastRunStatus ? runStatusLabel(item.lastRunStatus) : "已记录"} · 执行 {item.runCount} 次</small>
-              </div>
+            {history.length ? <div className="temporary-test-list">{history.map((item) => <article key={item.id} data-selected={selectedHistoryId === item.id}>
+              <button
+                className="temporary-test-select"
+                type="button"
+                aria-pressed={selectedHistoryId === item.id}
+                aria-label={`加载测试：${item.name}`}
+                onClick={() => void selectTemporaryTest(item)}
+                disabled={busy}
+              >
+                <span className="temporary-test-copy">
+                  <span className="temporary-test-title"><span className={`test-purpose-badge ${item.purpose}`}>{testPurposeLabel(item.purpose)}</span><strong>{item.name}</strong></span>
+                  <span className="temporary-test-prompt">{item.prompt}</span>
+                  <small>{testKindLabel(item.kind)} · {item.lastRunStatus ? runStatusLabel(item.lastRunStatus) : "已记录"} · 执行 {item.runCount} 次</small>
+                </span>
+              </button>
               <div className="temporary-test-actions">
-                <button type="button" onClick={() => void rerunTemporaryTest(item)} disabled={busy}><RotateCcw size={14} /><span>再次执行</span></button>
-                <button type="button" title="查看最近执行结果" onClick={() => onOpenRun(item.lastRunId)}><ExternalLink size={14} /></button>
+                <button type="button" title="查看最近执行结果" aria-label={`查看“${item.name}”的最近执行结果`} onClick={() => onOpenRun(item.lastRunId)}><FileSearch size={15} /></button>
               </div>
             </article>)}</div> : <p className="temporary-test-empty">执行过的临时测试会保留在这里。</p>}
           </section> : null}
@@ -418,19 +426,6 @@ function runStatusLabel(status: TestRun["status"]): string {
   if (status === "running" || status === "pending") return "执行中";
   if (status === "stopped") return "已停止";
   return status;
-}
-
-function missingRequiredParameters(
-  document: CaseDocumentView,
-  values: Record<string, ScriptParameterValue>
-): string[] {
-  return Object.entries(document.parameters).flatMap(([key, definition]) => {
-    if (!definition.required) return [];
-    const value = values[key];
-    return value === undefined || value === null || (typeof value === "string" && !value.trim())
-      ? [definition.label ?? key]
-      : [];
-  });
 }
 
 async function refreshHistory(appId: string, platform: string): Promise<TemporaryTest[]> {

@@ -23,16 +23,19 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "页面目录只负责页面身份。动作目标必须且只能使用 text、semantic、icon 或 control：已知屏幕原文用 text，不知道准确标签时用 semantic 描述操作意图，常见标准图标用 icon，通用表单控件用 control。",
   "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。semantic 用于‘进入教学方案的入口’这类概念目标，不能伪装成屏幕原文。",
   "text、semantic、icon 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
+  "text 或 semantic 目标默认不要猜测 topBar/bottomBar。只有用户明确说顶部、底部、左上角、右上角等位置，或目录中的已验证导航入口/原用例已经给出同一目标位置时，才可增加窄区域约束；否则省略 area，让执行器在当前屏幕查找。",
+  "发布、提交、删除、支付等操作按钮可能位于顶部、内容区或底部；用户或已验证知识未提供位置时必须省略 area，禁止根据动作名称猜测区域。",
   "icon 必须描述 area 和 position。顶部栏标准图标使用 topBar；内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
   "用户明确说‘点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复、reachPage 或重启。",
   "control 当前只支持 checkbox，必须描述 area: content 和 nearText；执行器会在文字附近识别并校验勾选状态。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
   "用户明确操作是硬约束：点击、输入、清空、滑动、启动或重启等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。资产只可补充定位、页面约束和结果验证。",
+  "用户描述打开选择器、滑动到具体选中值并确认时，必须把这组机械操作规范化为一个 selectText：target 保留字段入口，value 完整保留用户指定值，confirmText 保留确认文字。selectText 自身会点击并打开字段，由执行器动态查找选项；禁止保留前置 tap，也禁止猜测固定滑动次数。",
   "用户只表达进入、打开、前往或回到某页面时，这是目标状态而不是操作方式。只有目标是 navigationAnchors 中的状态入口，或 transitions 中存在到该目标的路径时，才生成 reachPage；不要因为‘回到’推断系统返回或重启。",
   "navigationEntries 是试运行验证并经用户确认的导航入口。目标型请求只能使用 navigationEntries、已验证 transitions 或 navigationAnchors；页面标签和页面名称不能作为入口推断依据。",
   "只有用户明确描述点击、返回、重启等过程时才生成对应过程；reachPage 的运行时执行器只使用已验证导航索引和受控入口恢复，不会猜测未知点击路径。",
   "动作会进入另一个页面时，把目标页写在该动作的 expectPage；不要再紧跟一个独立 assertPage。assertPage 只用于用户明确要求单独验证当前页面的场景。",
-  "目标页面未录入时禁止引用或编造 page key。用户提供完整操作链时必须保留这些操作；有独有稳定文字时用最终 assertText 验证，没有稳定文字时必须补充结果验证依据，不能生成无结果判据的页面导航草稿。",
+  "目标页面未录入时禁止引用或编造 page key。用户提供明确操作或完整操作链时必须先生成可试运行的直接动作；有独有稳定文字时用最终 assertText 验证，没有稳定文字时省略未知页面约束和结果断言，由系统标记为结果待确认，不能因此返回 needs_clarification。",
   "只能引用目录中存在的 page key 和 active ScriptFlow id。禁止元素资产 ID、坐标、bounds、region_center、圈选区域或固定屏幕区域点击。",
   "用户只说到达一个未录入页面、又没有提供操作路径时返回 needs_clarification，请用户补充从已知状态开始的完整点击过程或目标页独有稳定文字。不要要求用户先录制资产。",
   "目标型请求生成 reachPage；过程型请求按用户描述保留每个动作，不擅自扩展成创建、发布、提交或删除。场景编排命中完全匹配的启用用例时自动使用 runFlow，不要求用户再确认复用；用户明确描述具体操作过程时则保留该过程。",
@@ -146,10 +149,10 @@ export async function generateScriptFlowDraft(input: {
         model: input.config.model
       };
     }
-    if (firstError instanceof MissingResultOracleError) {
+    if (firstError instanceof UnresolvedGoalOnlyNavigationError) {
       return {
         status: "needs_clarification",
-        clarification: missingResultOracleClarification(input.prompt),
+        clarification: unresolvedGoalOnlyNavigationClarification(input.prompt),
         channel,
         model: input.config.model
       };
@@ -170,10 +173,10 @@ export async function generateScriptFlowDraft(input: {
           model: input.config.model
         };
       }
-      if (repairError instanceof MissingResultOracleError) {
+      if (repairError instanceof UnresolvedGoalOnlyNavigationError) {
         return {
           status: "needs_clarification",
-          clarification: missingResultOracleClarification(input.prompt),
+          clarification: unresolvedGoalOnlyNavigationClarification(input.prompt),
           channel,
           model: input.config.model
         };
@@ -187,6 +190,19 @@ export async function generateScriptFlowDraft(input: {
         };
       }
       throw new Error(`AI 未能生成有效的 ScriptFlow 草稿：${compactError(repairError)}`);
+    }
+  }
+  if (parsed.status === "needs_clarification") {
+    const initialClarification = parsed;
+    const reviewed = await runAiJsonRequest(requestConfig, {
+      developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
+      userContent: buildScriptFlowClarificationReviewPrompt(plannerPrompt, parsed.clarification),
+      effort: "medium"
+    }, input.fetchImpl ?? fetch);
+    try {
+      parsed = parseScriptFlowAiResponse(reviewed.content, parseInput);
+    } catch {
+      parsed = initialClarification;
     }
   }
   if (parsed.status === "needs_clarification") {
@@ -317,11 +333,15 @@ export function buildScriptFlowPlannerPrompt(
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
     "target 必须且只能使用 text、semantic、icon 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；不知道准确标签时改用 semantic。icon 必须带 area 和 position；control 当前只支持 checkbox，并且必须带 area: content 和 nearText；禁止元素资产 ID、坐标、区域和临时视觉模板。",
     "tap、inputText、clearText 和 selectText 使用同一 search 合同，search.mode 可用 auto、visibleOnly 或 scroll。普通内容目标默认用 auto；瞬时菜单和顶栏/底栏目标用 visibleOnly。执行器负责在允许时逐屏查找，脚本不要展开成机械滑动步骤。",
+    "用户为选择器给出具体选中值时，把“点击字段、滑动选择该值、点击确定/完成”合并为一个 selectText，value 必须精确保留，confirmText 使用用户说出的确认文字；selectText 自身会打开字段，前面禁止再生成 tap，也禁止生成固定次数 swipe 来猜选项位置。",
     "只表达目标页面时，仅当目标属于 navigationAnchors，或能通过 navigationEntries、已验证 transitions 到达时使用 reachPage: { page: <目录页面>, policy: safe }。不要因为“回到”推断系统返回或重启，也不要根据页面名称或标签猜测导航入口。reachPage 自身会验证目标页，不要追加 assertPage。",
     "tap 与 selectText 默认标记 risk: interaction。明确属于提交、发布、删除或支付时，risk 分别填写 submit、publish、delete 或 payment；这些标记仅用于报告审计，无需运行前确认；禁止 risk: none。",
     explicitOperations.length
       ? `用户明确操作契约（必须按顺序生成直接动作，不能用 reachPage 或 runFlow 代替）：${explicitOperations.map((operation) => operation.phrase).join(" -> ")}`
       : "用户没有明确指定操作过程；可以使用已验证导航知识补全目标型请求。",
+    explicitOperations.length
+      ? "明确操作即使缺少当前页面 key、目标页面资产或自动结果判据，也必须返回 ready 并生成可试运行动作；省略无法确定的 onPage、expectPage、outcome 和断言，系统会将结果标记为待确认。只有缺少班级名、账号、输入值等实际执行参数时才能返回 needs_clarification。"
+      : "目标型请求没有已验证路径或可用结果依据时返回 needs_clarification。",
     existingDocument ? "修改现有用例：" : "输入：",
     JSON.stringify({ prompt, appId, platform, ...(existingDocument ? { existingDocument } : {}), catalog }, null, 2)
   ].join("\n\n");
@@ -333,6 +353,15 @@ function buildScriptFlowRepairPrompt(plannerPrompt: string, invalidResponse: str
     "上一稿未通过 ScriptFlow v1 校验。请重新输出唯一、完整的 JSON 对象，不要 Markdown、代码围栏、解释文字、额外字段，也不要沿用无效字段。",
     `校验错误：${compactError(error)}`,
     `上一稿：${invalidResponse.slice(0, 12_000)}`
+  ].join("\n\n");
+}
+
+function buildScriptFlowClarificationReviewPrompt(plannerPrompt: string, clarification: string): string {
+  return [
+    plannerPrompt,
+    "上一稿准备向用户追问。请重新逐字检查原始输入：用户可能已经给出了班级、账号、时间、输入值或完整操作过程。已经提供的信息必须提取到 parameterValues 或对应动作中，不能重复追问。",
+    "如果信息实际已经足够，返回 ready 草稿；只有执行所需的具体值确实不存在且无法从现有用例或目录补齐时，才再次返回 needs_clarification。",
+    `上一稿的问题：${clarification}`
   ].join("\n\n");
 }
 
@@ -414,12 +443,7 @@ export function parseScriptFlowAiResponse(
     existingDocument?: ScriptFlowDocument;
   }
 ): ParsedScriptFlowAiDraft {
-  let value: unknown;
-  try {
-    value = JSON.parse(raw.trim());
-  } catch {
-    throw new Error("AI 返回必须是唯一、完整的 JSON 对象，不能包含 Markdown 或解释文字");
-  }
+  const value = parseAiJsonObject(raw);
   const root = recordValue(value);
   if (root.status === "needs_clarification") {
     assertKnownResponseFields(root, ["status", "clarification"]);
@@ -439,8 +463,10 @@ export function parseScriptFlowAiResponse(
   validateGeneratedReferences(document, input);
   validateGeneratedNavigationReachability(document, input.catalog);
   validateGeneratedTargetGrounding(document, input);
-  validateExplicitOperationContract(document, input.prompt);
-  validateGeneratedResultOracle(document, input.prompt);
+  validateGeneratedTargetAreaGrounding(document, input);
+  validateExactPickerSelections(document, input.prompt, parameterValues);
+  validateExplicitOperationContract(document, input.prompt, parameterValues);
+  validateGoalOnlyNavigationEvidence(document, input.prompt);
   return {
     status: "ready",
     sourceYaml: serializeScriptFlow(document),
@@ -450,6 +476,52 @@ export function parseScriptFlowAiResponse(
     summary: stringValue(root.summary) ?? `已生成 ${document.name}`,
     assumptions: stringArray(root.assumptions)
   };
+}
+
+function parseAiJsonObject(raw: string): unknown {
+  const trimmed = raw.trim();
+  const candidates = [trimmed];
+  const fenced = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/giu)];
+  if (fenced.length === 1 && fenced[0]?.[1]) candidates.push(fenced[0][1].trim());
+  const extracted = extractBalancedJsonObject(trimmed);
+  if (extracted) candidates.push(extracted);
+
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      const value: unknown = JSON.parse(candidate);
+      if (value && typeof value === "object" && !Array.isArray(value)) return value;
+    } catch {
+      // Try the next safe representation before rejecting the response.
+    }
+  }
+  throw new Error("AI 返回中没有可解析的唯一 JSON 对象");
+}
+
+function extractBalancedJsonObject(value: string): string | undefined {
+  const start = value.indexOf("{");
+  if (start < 0) return undefined;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === "\"") inString = false;
+      continue;
+    }
+    if (character === "\"") {
+      inString = true;
+      continue;
+    }
+    if (character === "{") depth += 1;
+    else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return value.slice(start, index + 1);
+    }
+  }
+  return undefined;
 }
 
 function assertGeneratedClassification(value: unknown): void {
@@ -543,43 +615,72 @@ function escapeRegExp(value: string): string {
 
 type ExplicitOperationKind = "launch" | "tap" | "input" | "clear" | "swipe";
 
+type GeneratedOperationKind = ExplicitOperationKind | "select";
+
 type ExplicitOperationContract = {
   kind: ExplicitOperationKind;
   phrase: string;
 };
 
 function extractExplicitOperationContract(prompt: string): ExplicitOperationContract[] {
-  const operationPattern = /向上滑动|向下滑动|上滑|下滑|点击|点按|轻触|输入|填写|键入|清空|滑动|启动|重启/gu;
-  const matches = [...prompt.matchAll(operationPattern)];
-  return matches.map((match, index) => {
-    const verb = match[0];
-    const start = match.index ?? 0;
-    const end = matches[index + 1]?.index ?? prompt.length;
-    const phrase = prompt.slice(start, end)
-      .replace(/[\s，,。；;]*(?:然后|再|接着|之后)[\s，,。；;]*$/u, "")
-      .trim();
-    return {
-      kind: explicitOperationKind(verb),
-      phrase: phrase || verb
-    };
+  const operationPattern = /向上滑动|向下滑动|上滑|下滑|点击|点按|轻触|点(?=\s*(?:确定|取消|发布|提交|完成|下一步|返回))|输入|填写|键入|清空|滑动|启动|重启/gu;
+  const clauses = prompt
+    .split(/[\n，,。；;]+|(?:然后|接着|之后|随后|再(?:次)?|并(?:且)?)(?=\s*[^，,。；;])/gu)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  return clauses.flatMap((clause) => {
+    const matches = [...clause.matchAll(operationPattern)];
+    return matches.map((match, index) => {
+      const verb = match[0];
+      const start = index === 0 ? 0 : match.index ?? 0;
+      const end = matches[index + 1]?.index ?? clause.length;
+      const phrase = clause.slice(start, end).trim();
+      return {
+        kind: explicitOperationKind(verb),
+        phrase: phrase || verb
+      };
+    });
   });
 }
 
 function explicitOperationKind(verb: string): ExplicitOperationKind {
-  if (/点击|点按|轻触/u.test(verb)) return "tap";
+  if (/点击|点按|轻触|点/u.test(verb)) return "tap";
   if (/输入|填写|键入/u.test(verb)) return "input";
   if (verb === "清空") return "clear";
   if (/滑/u.test(verb)) return "swipe";
   return "launch";
 }
 
-function validateExplicitOperationContract(document: ScriptFlowDocument, prompt?: string): void {
+function validateExplicitOperationContract(
+  document: ScriptFlowDocument,
+  prompt?: string,
+  parameterValues: Record<string, ScriptParameterValue> = {}
+): void {
   if (!prompt) return;
   const contract = extractExplicitOperationContract(prompt);
   if (!contract.length) return;
   const generated = generatedDirectOperations(document);
   let cursor = 0;
-  for (const operation of contract) {
+  let operationIndex = 0;
+  while (operationIndex < contract.length) {
+    const pickerAt = generated.findIndex((candidate, index) => index >= cursor
+      && candidate.kind === "select"
+      && pickerSequenceMatches(contract, operationIndex, candidate.step, parameterValues));
+    if (pickerAt > cursor) {
+      throw new Error("selectText 自身会打开选择字段，禁止保留重复的前置 tap 或机械滑动步骤");
+    }
+    const candidate = generated[cursor];
+    if (pickerAt === cursor && candidate?.kind === "select" && pickerSequenceMatches(
+      contract,
+      operationIndex,
+      candidate.step,
+      parameterValues
+    )) {
+      operationIndex += 3;
+      cursor += 1;
+      continue;
+    }
+    const operation = contract[operationIndex]!;
     const foundAt = generated.findIndex((candidate, index) => index >= cursor && candidate.kind === operation.kind);
     if (foundAt < 0) {
       throw new Error(`用户明确操作“${operation.phrase}”没有按顺序保留；明确操作不能被 reachPage、runFlow 或已有资产替代`);
@@ -588,22 +689,71 @@ function validateExplicitOperationContract(document: ScriptFlowDocument, prompt?
       throw new Error(`用户明确操作“${operation.phrase}”对应的动作目标与描述不一致或顺序错误`);
     }
     cursor = foundAt + 1;
+    operationIndex += 1;
   }
 }
 
-function generatedDirectOperations(document: ScriptFlowDocument): Array<{ kind: ExplicitOperationKind; step?: ScriptStep }> {
-  const operations: Array<{ kind: ExplicitOperationKind; step?: ScriptStep }> = [];
+function generatedDirectOperations(document: ScriptFlowDocument): Array<{ kind: GeneratedOperationKind; step?: ScriptStep }> {
+  const operations: Array<{ kind: GeneratedOperationKind; step?: ScriptStep }> = [];
   if (["launchApp", "restartApp", "clearDataAndLaunch"].includes(document.start?.strategy ?? "")) {
     operations.push({ kind: "launch" });
   }
   for (const step of flattenSteps(document.steps)) {
     if ("launchApp" in step) operations.push({ kind: "launch", step });
     else if ("tap" in step) operations.push({ kind: "tap", step });
-    else if ("inputText" in step || "selectText" in step) operations.push({ kind: "input", step });
+    else if ("inputText" in step) operations.push({ kind: "input", step });
+    else if ("selectText" in step) operations.push({ kind: "select", step });
     else if ("clearText" in step) operations.push({ kind: "clear", step });
     else if ("swipe" in step || "scrollUntilVisible" in step) operations.push({ kind: "swipe", step });
   }
   return operations;
+}
+
+function validateExactPickerSelections(
+  document: ScriptFlowDocument,
+  prompt: string | undefined,
+  parameterValues: Record<string, ScriptParameterValue>
+): void {
+  if (!prompt) return;
+  const requestedValues = [...prompt.matchAll(
+    /(?:滑动|滚动)[^，,。；;\n]{0,40}?(?:选择(?!中)|选中|调整到|设置为)\s*([^，,。；;\n]+?)(?=\s*(?:，|,|。|；|;|然后|接着|之后|随后|再(?:次)?|并(?:且)?|点(?:击|按)?\s*(?:确定|完成)|$))/gu
+  )].map((match) => match[1]?.trim()).filter((value): value is string => Boolean(value));
+  if (!requestedValues.length) return;
+  const selections = flattenSteps(document.steps)
+    .filter((step): step is Extract<ScriptStep, { selectText: unknown }> => "selectText" in step)
+    .map((step) => resolvedScriptValue(step.selectText.value, parameterValues));
+  for (const requestedValue of requestedValues) {
+    const compactRequested = compactGroundingText(requestedValue);
+    if (selections.some((value) => compactGroundingText(value) === compactRequested)) continue;
+    throw new Error(`具体选中值“${requestedValue}”必须使用 selectText 精确保留，不能转换为固定次数滑动`);
+  }
+}
+
+function pickerSequenceMatches(
+  contract: ExplicitOperationContract[],
+  index: number,
+  step: ScriptStep | undefined,
+  parameterValues: Record<string, ScriptParameterValue>
+): boolean {
+  if (!step || !("selectText" in step)) return false;
+  const [open, choose, confirm] = contract.slice(index, index + 3);
+  if (open?.kind !== "tap" || choose?.kind !== "swipe" || confirm?.kind !== "tap") return false;
+  if (!explicitOperationTargetMatches(open, step)) return false;
+  const selectedValue = resolvedScriptValue(step.selectText.value, parameterValues);
+  if (!selectedValue || !compactGroundingText(choose.phrase).includes(compactGroundingText(selectedValue))) return false;
+  const confirmText = step.selectText.confirmText?.trim() || "确定";
+  return compactGroundingText(confirm.phrase).includes(compactGroundingText(confirmText))
+    || (!step.selectText.confirmText && /完成/u.test(confirm.phrase));
+}
+
+function resolvedScriptValue(
+  value: string,
+  parameterValues: Record<string, ScriptParameterValue>
+): string {
+  const parameter = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value.trim());
+  if (!parameter) return value;
+  const resolved = parameterValues[parameter[1]!];
+  return resolved === undefined ? value : String(resolved);
 }
 
 function explicitOperationTargetMatches(operation: ExplicitOperationContract, step?: ScriptStep): boolean {
@@ -664,15 +814,16 @@ function iconAliases(icon: string): string[] {
   return aliases[icon.toLowerCase()] ?? [icon];
 }
 
-function validateGeneratedResultOracle(document: ScriptFlowDocument, prompt?: string): void {
+function validateGoalOnlyNavigationEvidence(document: ScriptFlowDocument, prompt?: string): void {
   if (hasGeneratedResultOracle(document)) return;
+  if (prompt && extractExplicitOperationContract(prompt).length > 0) return;
   const lastStep = flattenSteps(document.steps).at(-1);
   const semantic = lastStep ? stepSemanticTarget(lastStep) : undefined;
   const describesPageDestination = /(?:进入|打开|前往|跳转|到达|去往).{0,30}(?:页面|页)/u
     .test(`${prompt ?? ""} ${document.name} ${document.description ?? ""}`)
     || Boolean(semantic && /进入|打开|前往|跳转|页面|页/u.test(semantic));
   if (document.purpose === "navigation" && describesPageDestination) {
-    throw new MissingResultOracleError();
+    throw new UnresolvedGoalOnlyNavigationError();
   }
 }
 
@@ -920,6 +1071,50 @@ function validateGeneratedTargetGrounding(
   }
 }
 
+function validateGeneratedTargetAreaGrounding(
+  document: ScriptFlowDocument,
+  input: { prompt?: string; existingDocument?: ScriptFlowDocument; catalog: ScriptFlowPlannerCatalog }
+): void {
+  if (!input.prompt) return;
+  const explicitAreas = new Set<string>();
+  if (/顶部|顶栏|上方|左上角|右上角/u.test(input.prompt)) explicitAreas.add("topBar");
+  if (/底部|底栏|下方|左下角|右下角/u.test(input.prompt)) explicitAreas.add("bottomBar");
+  if (/内容区|页面中(?:间|部)?|列表中|表单中/u.test(input.prompt)) explicitAreas.add("content");
+  const existingTargets = flattenSteps(input.existingDocument?.steps ?? [])
+    .map((step) => operationTarget(step))
+    .filter((target): target is Record<string, string> => Boolean(target));
+  const knownTargets: Array<Record<string, unknown>> = [
+    ...existingTargets,
+    ...input.catalog.navigationEntries.map((entry) => ({ ...entry.action.target }))
+  ];
+
+  for (const step of flattenSteps(document.steps)) {
+    const target = operationTarget(step);
+    const area = target?.area;
+    const positionSensitiveRisk = step.risk === "publish"
+      || step.risk === "submit"
+      || step.risk === "delete"
+      || step.risk === "payment";
+    if (!target
+      || (!target.text && !target.semantic)
+      || !area
+      || (area === "content" && !positionSensitiveRisk)
+      || explicitAreas.has(area)) continue;
+    const grounded = knownTargets.some((known) => known.area === area && sameSemanticTarget(target, known));
+    if (grounded) continue;
+    const label = target.text ?? target.semantic ?? target.icon ?? target.control ?? "动作目标";
+    throw new Error(`动作目标“${label}”的 ${area} 约束没有来自用户描述或已验证导航知识的位置依据`);
+  }
+}
+
+function sameSemanticTarget(left: Record<string, string>, right: Record<string, unknown>): boolean {
+  return ["text", "semantic", "icon", "control"].some((key) => {
+    const leftValue = left[key];
+    const rightValue = stringValue(right[key]);
+    return Boolean(leftValue && rightValue && compactGroundingText(leftValue) === compactGroundingText(rightValue));
+  });
+}
+
 function stepTargetText(step: ScriptStep): string | undefined {
   if ("tap" in step) return step.tap.target.text;
   if ("inputText" in step) return step.inputText.target.text;
@@ -939,9 +1134,9 @@ function missingPageClarification(prompt: string): string {
   return `当前还不知道如何到达“${request}”。请补充从已知状态开始的完整操作过程，或提供目标页独有的稳定文字用于验证结果。`;
 }
 
-function missingResultOracleClarification(prompt: string): string {
+function unresolvedGoalOnlyNavigationClarification(prompt: string): string {
   const request = prompt.replace(/\s+/g, " ").trim().slice(0, 80);
-  return `“${request}”缺少可确定验证结果的依据。请提供目标页独有的稳定文字，或明确成功后应看到的内容。`;
+  return `当前没有完成“${request}”的已验证路径，也没有可确定的结果依据。请补充完整操作过程，或提供成功后应看到的稳定内容。`;
 }
 
 function validatePageReference(
@@ -969,10 +1164,10 @@ class UnreachableReachPageError extends Error {
   }
 }
 
-class MissingResultOracleError extends Error {
+class UnresolvedGoalOnlyNavigationError extends Error {
   constructor() {
-    super("页面导航草稿缺少结果验证依据");
-    this.name = "MissingResultOracleError";
+    super("目标型导航既没有已验证路径，也没有可审查的结果依据");
+    this.name = "UnresolvedGoalOnlyNavigationError";
   }
 }
 

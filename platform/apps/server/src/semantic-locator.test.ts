@@ -499,6 +499,47 @@ describe("SemanticStepResolver", () => {
     expect(outcome?.metadata).toEqual(expect.objectContaining({ relocatedBy: "top_bar_current_visual" }));
   });
 
+  it("prefers the avatar near the recorded candidate over a lower leading round component", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(topBarLayout()),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: topBarAvatarComponentsScreenshot(1200, 2000, [
+          { centerX: 105, centerY: 200, radius: 38 },
+          { centerX: 81, centerY: 327, radius: 28 }
+        ])
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-avatar-with-distractor",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "top-bar-icon:avatar",
+        locatorKind: "top_bar_icon_locator",
+        role: "avatar",
+        slot: "leading",
+        anchorText: "主页",
+        semanticArea: "top",
+        visualLocator: {
+          candidates: [
+            { role: "avatar", label: "头像", score: 0.93, semanticArea: "top", region: { x: 6.8, y: 8.1, width: 4, height: 3.8 } }
+          ]
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 105, y: 200 }]);
+    expect(actions).not.toContainEqual({ type: "tap", x: 81, y: 327 });
+    expect(outcome?.metadata).toEqual(expect.objectContaining({ relocatedBy: "top_bar_current_visual" }));
+  });
+
   it("resolves top bar trailing icons from current screenshot visuals instead of candidate centers", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -3159,6 +3200,183 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("taps a visible duration value and verifies that it reaches the picker center", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        durationPickerLayout("10小时", "30分钟", "40分钟"),
+        durationPickerLayout("10小时", "30分钟", "40分钟"),
+        durationPickerLayout("10小时", "40分钟", "45分钟"),
+        durationPickerLayout("10小时", "40分钟", "45分钟"),
+        fieldValueLayout("课堂时长", "10小时40分钟")
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 8, y: 38, width: 84, height: 7 },
+        fieldType: "picker_select",
+        targetText: "课堂时长",
+        selectedValue: "10小时40分钟",
+        confirmText: "确定",
+        verifySelectedValue: true,
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        pickerScrollIntervalMs: 1,
+        structuralLocator: { pickerMode: "duration_hours_minutes" }
+      })
+    });
+
+    expect(actions).toContainEqual({ type: "tap", x: 765, y: 1730 });
+    expect(actions).not.toContainEqual(expect.objectContaining({ type: "swipe", startX: 750, endX: 750 }));
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        selectedValue: "10小时40分钟",
+        verifiedSelectedValue: "10小时40分钟"
+      })
+    }));
+  });
+
+  it("selects the adjacent visible hour instead of overshooting it with a coarse swipe", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        durationPickerLayout("10小时", "40分钟", "45分钟", "11小时"),
+        durationPickerLayout("11小时", "40分钟", "45分钟", "12小时"),
+        durationPickerLayout("11小时", "40分钟", "45分钟", "12小时"),
+        durationPickerLayout("11小时", "40分钟", "45分钟", "12小时"),
+        fieldValueLayout("课堂时长", "11小时40分钟")
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-adjacent-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-adjacent",
+      stepResultId: "step-result-adjacent",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 8, y: 38, width: 84, height: 7 },
+        fieldType: "picker_select",
+        targetText: "课堂时长",
+        selectedValue: "11小时40分钟",
+        confirmText: "确定",
+        verifySelectedValue: true,
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        pickerScrollIntervalMs: 1,
+        structuralLocator: { pickerMode: "duration_hours_minutes" }
+      })
+    });
+
+    expect(actions).toContainEqual({ type: "tap", x: 205, y: 1730 });
+    expect(actions).not.toContainEqual(expect.objectContaining({ type: "swipe", startX: 250, endX: 250 }));
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        selectedValue: "11小时40分钟",
+        verifiedSelectedValue: "11小时40分钟"
+      })
+    }));
+  });
+
+  it("stops a duration wheel after repeated swipes make no progress", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const stuckLayout = durationPickerLayout("10小时", "55分钟", "50分钟");
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        stuckLayout,
+        stuckLayout,
+        stuckLayout,
+        stuckLayout
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-stuck-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-stuck",
+      stepResultId: "step-result-stuck",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 8, y: 38, width: 84, height: 7 },
+        fieldType: "picker_select",
+        selectedValue: "10小时40分钟",
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        pickerScrollIntervalMs: 1,
+        structuralLocator: { pickerMode: "duration_hours_minutes" }
+      })
+    });
+
+    expect(actions.filter((action) => action.type === "swipe")).toHaveLength(2);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: false,
+      metadata: expect.objectContaining({
+        reason: "picker_no_progress",
+        stalledAt: "55分钟"
+      })
+    }));
+  });
+
+  it("fails a duration selection when the field does not contain the requested value after confirmation", async () => {
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        durationPickerLayout("10小时", "40分钟", "45分钟"),
+        durationPickerLayout("10小时", "40分钟", "45分钟"),
+        durationPickerLayout("10小时", "40分钟", "45分钟"),
+        fieldValueLayout("课堂时长", "10小时30分钟")
+      ]),
+      performAction: async () => ({ driverChannel: "mock" }),
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 8, y: 38, width: 84, height: 7 },
+        fieldType: "picker_select",
+        targetText: "课堂时长",
+        selectedValue: "10小时40分钟",
+        confirmText: "确定",
+        verifySelectedValue: true,
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        structuralLocator: { pickerMode: "duration_hours_minutes" }
+      })
+    });
+
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: false,
+      metadata: expect.objectContaining({
+        reason: "picker_value_not_applied",
+        selectedValue: "10小时40分钟",
+        actualValue: "10小时30分钟"
+      })
+    }));
+  });
+
   it("relocates a runtime picker row after scrolling before selecting duration columns", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -4998,6 +5216,42 @@ function topBarLayout(): OcrLayoutResult {
   };
 }
 
+function durationPickerLayout(
+  hours: string,
+  selectedMinutes: string,
+  visibleMinutes: string,
+  visibleHours?: string
+): OcrLayoutResult {
+  return {
+    text: `确定 ${hours} ${selectedMinutes} ${visibleMinutes}`,
+    engine: "fake-layout",
+    lang: "test",
+    width: 1000,
+    height: 2000,
+    boxes: [
+      { text: "确定", confidence: 0.99, x: 820, y: 1100, width: 100, height: 50 },
+      { text: hours, confidence: 0.99, x: 120, y: 1550, width: 170, height: 60 },
+      ...(visibleHours ? [{ text: visibleHours, confidence: 0.95, x: 120, y: 1700, width: 170, height: 60 }] : []),
+      { text: selectedMinutes, confidence: 0.99, x: 680, y: 1550, width: 170, height: 60 },
+      { text: visibleMinutes, confidence: 0.95, x: 680, y: 1700, width: 170, height: 60 }
+    ]
+  };
+}
+
+function fieldValueLayout(label: string, value: string): OcrLayoutResult {
+  return {
+    text: `${label} ${value}`,
+    engine: "fake-layout",
+    lang: "test",
+    width: 1000,
+    height: 2000,
+    boxes: [
+      { text: label, confidence: 0.99, x: 80, y: 760, width: 180, height: 55 },
+      { text: value, confidence: 0.99, x: 650, y: 760, width: 260, height: 55 }
+    ]
+  };
+}
+
 function screenshot(id: string): ScreenshotCapture {
   return {
     artifact: artifact(id),
@@ -5113,14 +5367,24 @@ function topBarAvatarScreenshot(
   height: number,
   avatar: { centerX: number; centerY: number; radius: number }
 ): Buffer {
+  return topBarAvatarComponentsScreenshot(width, height, [avatar]);
+}
+
+function topBarAvatarComponentsScreenshot(
+  width: number,
+  height: number,
+  avatars: Array<{ centerX: number; centerY: number; radius: number }>
+): Buffer {
   const pixels = Array.from({ length: width * height }, () => 255);
-  for (let y = avatar.centerY - avatar.radius; y <= avatar.centerY + avatar.radius; y += 1) {
-    for (let x = avatar.centerX - avatar.radius; x <= avatar.centerX + avatar.radius; x += 1) {
-      if (x < 0 || x >= width || y < 0 || y >= height) {
-        continue;
-      }
-      if (Math.hypot(x - avatar.centerX, y - avatar.centerY) <= avatar.radius) {
-        pixels[y * width + x] = 232;
+  for (const avatar of avatars) {
+    for (let y = avatar.centerY - avatar.radius; y <= avatar.centerY + avatar.radius; y += 1) {
+      for (let x = avatar.centerX - avatar.radius; x <= avatar.centerX + avatar.radius; x += 1) {
+        if (x < 0 || x >= width || y < 0 || y >= height) {
+          continue;
+        }
+        if (Math.hypot(x - avatar.centerX, y - avatar.centerY) <= avatar.radius) {
+          pixels[y * width + x] = 232;
+        }
       }
     }
   }
