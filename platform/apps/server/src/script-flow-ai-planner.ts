@@ -5,7 +5,8 @@ import {
   type ScriptFlowDocument,
   type ScriptParameterDefinition,
   type ScriptParameterValue,
-  type ScriptStep
+  type ScriptStep,
+  type ScriptFlowTestLevel
 } from "@mobile-automation/script-flow";
 import type { NavigationEntry, ScriptFlow, ScriptFlowVerificationAssessment } from "@mobile-automation/shared";
 import { isCodexAppServerProvider, runAiJsonRequest, type AiClientFetch } from "./ai-client.js";
@@ -301,6 +302,7 @@ export function buildScriptFlowPlannerPrompt(
   existingDocument?: ScriptFlowDocument
 ): string {
   const explicitOperations = extractExplicitOperationContract(prompt);
+  const systemTestLevel = existingDocument?.testLevel ?? classifyScriptFlowTestLevel(prompt);
   return [
     existingDocument
       ? "根据用户要求修改现有用例，输出修改后的完整 ScriptFlow v1 草稿。未提及的步骤、参数和约束保持不变。"
@@ -316,6 +318,7 @@ export function buildScriptFlowPlannerPrompt(
         version: 1,
         kind: "case | scenario",
         purpose: "navigation | fixture | business | recovery",
+        testLevel: systemTestLevel,
         name: "测试名称",
         description: "测试说明",
         app: { id: appId, platform },
@@ -328,6 +331,8 @@ export function buildScriptFlowPlannerPrompt(
       }
     }, null, 2),
     "可用动作：launchApp、tap、inputText、clearText、selectText、swipe、scrollUntilVisible、reachPage、waitForPage、assertPage、assertText、runFlow、repeat、when。",
+    `系统判定的 testLevel：${systemTestLevel}。document.testLevel 必须保持这个值，不能由模型自行改成其它层级。`,
+    "testLevel 含义：probe=临时验证单点问题，component=字段/控件能力用例，business_smoke=最小业务主链路，full_regression=全字段或全配置回归。",
     "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
     "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
@@ -345,6 +350,23 @@ export function buildScriptFlowPlannerPrompt(
     existingDocument ? "修改现有用例：" : "输入：",
     JSON.stringify({ prompt, appId, platform, ...(existingDocument ? { existingDocument } : {}), catalog }, null, 2)
   ].join("\n\n");
+}
+
+export function classifyScriptFlowTestLevel(prompt: string): ScriptFlowTestLevel {
+  const compact = compactGroundingText(prompt);
+  if (/所有表单|全部表单|全字段|全部字段|所有配置|全部配置|全量|完整覆盖/u.test(prompt)) {
+    return "full_regression";
+  }
+  if (/临时|先验证一下|验证一下|排查|复现|看看.*能不能/u.test(prompt)) {
+    return "probe";
+  }
+  if (/创建|发布|提交|完成|下单|支付|删除|登录|退出|业务|主链路/u.test(prompt)) {
+    return "business_smoke";
+  }
+  if (/课堂时长|字段|表单项|控件|滚轮|选择器|输入框|输入|填写|清空|开关|复选框|checkbox|picker|slider/i.test(prompt)) {
+    return "component";
+  }
+  return compact.length <= 18 && /测试|验证|检查/u.test(prompt) ? "probe" : "business_smoke";
 }
 
 function buildScriptFlowRepairPrompt(plannerPrompt: string, invalidResponse: string, error: unknown): string {
@@ -456,7 +478,7 @@ export function parseScriptFlowAiResponse(
   }
   assertKnownResponseFields(root, ["status", "summary", "assumptions", "parameterValues", "document"]);
   assertNoLegacyGeneratedFields(root.document);
-  assertGeneratedClassification(root.document);
+  assertGeneratedClassification(root.document, input.existingDocument?.testLevel ?? (input.prompt ? classifyScriptFlowTestLevel(input.prompt) : undefined));
   const validated = validateScriptFlowDocument(root.document);
   const hydrated = validateScriptFlowDocument(hydrateGeneratedParameters(validated, input.catalog));
   const { document, parameterValues } = extractEphemeralParameterValues(hydrated, root.parameterValues);
@@ -524,10 +546,17 @@ function extractBalancedJsonObject(value: string): string | undefined {
   return undefined;
 }
 
-function assertGeneratedClassification(value: unknown): void {
+function assertGeneratedClassification(value: unknown, expectedTestLevel?: ScriptFlowTestLevel): void {
   const document = recordValue(value);
   if (!stringValue(document.purpose)) {
     throw new Error("AI 草稿必须显式标记 purpose");
+  }
+  const testLevel = stringValue(document.testLevel);
+  if (!testLevel) {
+    throw new Error("AI 草稿必须显式标记 testLevel");
+  }
+  if (expectedTestLevel && testLevel !== expectedTestLevel) {
+    throw new Error(`AI 草稿 testLevel 必须保持系统判定的 ${expectedTestLevel}，实际为 ${testLevel}`);
   }
   const steps = Array.isArray(document.steps) ? document.steps : [];
   assertGeneratedStepRoles(steps, "document.steps");

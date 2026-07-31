@@ -16,6 +16,7 @@ export type {
   ScriptFlowPurpose,
   ScriptFlowPlatform,
   ScriptFlowState,
+  ScriptFlowTestLevel,
   ScriptSessionState,
   ScriptFlowStartStrategy,
   ScriptParameterDefinition,

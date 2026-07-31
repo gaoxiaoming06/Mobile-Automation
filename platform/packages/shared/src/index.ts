@@ -393,6 +393,7 @@ export type TemporaryTest = {
   platform: ScriptFlowPlatform;
   kind: "case" | "scenario";
   purpose: "navigation" | "fixture" | "business" | "recovery";
+  testLevel?: "probe" | "component" | "business_smoke" | "full_regression";
   name: string;
   prompt: string;
   sourceYaml: string;

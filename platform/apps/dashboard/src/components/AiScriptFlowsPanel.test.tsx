@@ -63,6 +63,65 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).not.toContain("保存到用例中心");
   });
 
+  it("shows the generated test level and keeps probe drafts out of the case center", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialHistory={[{
+        id: "temporary-1",
+        appId: "cn.eeo.classin",
+        platform: "android",
+        kind: "case",
+        purpose: "business",
+        testLevel: "component",
+        name: "设置课堂时长",
+        prompt: "测试一下课堂时长",
+        sourceYaml: "version: 1",
+        parsed: { testLevel: "component" },
+        parameterValues: {},
+        lastRunId: "run-1",
+        lastRunStatus: "passed",
+        runCount: 1,
+        createdAt: "2026-07-30T00:00:00.000Z",
+        updatedAt: "2026-07-30T01:00:00.000Z"
+      }]}
+      initialDraft={{
+        status: "trial_ready",
+        sourceYaml: "version: 1\nname: 临时验证发布按钮",
+        document: {
+          version: 1,
+          kind: "case",
+          purpose: "business",
+          testLevel: "probe",
+          name: "临时验证发布按钮",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [{ id: "tap-publish", role: "business", tap: { target: { text: "发布" } } }],
+          tags: []
+        },
+        summary: "临时验证发布按钮能否定位",
+        assumptions: [],
+        verification: {
+          status: "needs_trial",
+          sourceHash: "b".repeat(64),
+          reasons: ["当前脚本版本尚未通过试运行"],
+          unresolvedStepIds: ["tap-publish"],
+          unresolvedOutcome: true
+        },
+        channel: "codex",
+        model: "planner"
+      } as never}
+    />);
+
+    expect(markup).toContain("控件能力");
+    expect(markup).toContain("临时验证");
+    expect(markup).not.toContain("保存到用例中心");
+  });
+
   it("updates the matched saved draft instead of creating a duplicate use case", () => {
     expect(draftSaveDestination(undefined, {
       id: "flow-add-friend",

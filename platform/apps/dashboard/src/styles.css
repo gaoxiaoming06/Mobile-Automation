@@ -5041,6 +5041,24 @@ button:disabled {
 .test-purpose-badge.navigation { border-color: #b9d2f5; background: #edf5ff; color: #245db0 !important; }
 .test-purpose-badge.fixture { border-color: #d7c69b; background: #fff9e8; color: #80601a !important; }
 .test-purpose-badge.recovery { border-color: #e3bcb9; background: #fff1f0; color: #a33b35 !important; }
+.test-level-badge {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 20px;
+  align-items: center;
+  margin-right: 7px;
+  padding: 1px 7px;
+  border: 1px solid #c8d2dc;
+  border-radius: 4px;
+  background: #f4f7fa;
+  color: #46566b !important;
+  font-size: 11px !important;
+  font-weight: 700;
+  line-height: 16px;
+}
+.test-level-badge.probe { border-color: #e1c2c0; background: #fff3f1; color: #9f4039 !important; }
+.test-level-badge.component { border-color: #bdd7cc; background: #eef9f4; color: #246f4f !important; }
+.test-level-badge.full_regression { border-color: #cbbde9; background: #f6f2ff; color: #6445a2 !important; }
 .navigation-flow-note { margin: 0; color: #526176; font-size: 12px; }
 
 .ai-script-result {

@@ -4,6 +4,8 @@ export type ScriptFlowKind = "case" | "scenario";
 
 export type ScriptFlowPurpose = "navigation" | "fixture" | "business" | "recovery";
 
+export type ScriptFlowTestLevel = "probe" | "component" | "business_smoke" | "full_regression";
+
 export type ScriptStepRole = "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery";
 
 export type ScriptSessionState = "authenticated" | "unauthenticated";
@@ -188,6 +190,7 @@ export type ScriptFlowDocument = {
   version: 1;
   kind: ScriptFlowKind;
   purpose?: ScriptFlowPurpose;
+  testLevel?: ScriptFlowTestLevel;
   name: string;
   description?: string;
   app: {
@@ -245,6 +248,7 @@ export type ScriptExecutionPlan = {
   flowName: string;
   kind: ScriptFlowKind;
   purpose: ScriptFlowPurpose;
+  testLevel: ScriptFlowTestLevel;
   app: ScriptFlowDocument["app"];
   start?: ScriptFlowDocument["start"];
   entry?: ScriptFlowState;

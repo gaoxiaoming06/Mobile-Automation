@@ -6,6 +6,7 @@ import {
   SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
   buildScriptFlowPlannerCatalog,
   buildScriptFlowPlannerPrompt,
+  classifyScriptFlowTestLevel,
   generateScriptFlowDraft,
   parseScriptFlowAiResponse
 } from "./script-flow-ai-planner.js";
@@ -67,6 +68,56 @@ describe("ScriptFlow AI planner", () => {
       catalog,
       prompt: "从主页进入添加好友页面"
     })).toThrow(/role/);
+
+    const missingLevel = readyResponse();
+    delete missingLevel.document.testLevel;
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(missingLevel), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "测试一下课堂时长能不能选到10小时40分钟"
+    })).toThrow(/testLevel/);
+  });
+
+  it("classifies user requests into system-controlled test levels", () => {
+    expect(classifyScriptFlowTestLevel("测试一下课堂时长能不能选到10小时40分钟")).toBe("component");
+    expect(classifyScriptFlowTestLevel("创建课堂，设置时长10小时40分钟，然后发布")).toBe("business_smoke");
+    expect(classifyScriptFlowTestLevel("创建课堂页面所有表单都填一遍")).toBe("full_regression");
+    expect(classifyScriptFlowTestLevel("临时验证一下发布按钮能不能找到")).toBe("probe");
+  });
+
+  it("requires the AI response to keep the system-classified test level", async () => {
+    let requestBody = "";
+    const componentResponse = readyResponse();
+    componentResponse.document.purpose = "business";
+    componentResponse.document.testLevel = "business_smoke";
+    componentResponse.document.name = "设置课堂时长";
+    componentResponse.document.steps = [{
+      id: "select-duration",
+      role: "business",
+      risk: "interaction",
+      selectText: {
+        target: { text: "课堂时长", area: "content" },
+        value: "10小时40分钟",
+        confirmText: "确定",
+        search: { mode: "auto" }
+      }
+    }];
+
+    await expect(generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "测试一下课堂时长能不能选到10小时40分钟",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: pageCatalog(),
+      flows: [],
+      fetchImpl: async (_url, init) => {
+        requestBody = String(init?.body ?? "");
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(componentResponse) } }] }), { status: 200 });
+      }
+    })).rejects.toThrow(/testLevel.*component/);
+
+    expect(requestBody).toContain("系统判定的 testLevel：component");
   });
 
   it("reuses an exactly matching saved draft as a trial candidate without calling AI", async () => {
@@ -299,6 +350,7 @@ describe("ScriptFlow AI planner", () => {
     const response = readyResponse();
     response.document.name = prompt;
     response.document.purpose = "business";
+    response.document.testLevel = classifyScriptFlowTestLevel(prompt);
     response.document.entry = undefined;
     response.document.outcome = undefined;
     response.document.steps = [step];
@@ -385,6 +437,7 @@ describe("ScriptFlow AI planner", () => {
     const response = readyResponse();
     response.document.name = "设置课堂时长";
     response.document.purpose = "business";
+    response.document.testLevel = "component";
     response.document.entry = undefined;
     response.document.outcome = undefined;
     response.document.steps = [
@@ -417,6 +470,7 @@ describe("ScriptFlow AI planner", () => {
     const response = readyResponse();
     response.document.name = "设置课堂时长";
     response.document.purpose = "business";
+    response.document.testLevel = "component";
     response.document.entry = undefined;
     response.document.outcome = undefined;
     response.document.steps = [
@@ -842,6 +896,7 @@ describe("ScriptFlow AI planner", () => {
         version: 1,
         kind: "case",
         purpose: "navigation",
+        testLevel: "business_smoke",
         name: "进入主页",
         app: { id: "cn.eeo.classin", platform: "android" },
         parameters: {},
@@ -1161,6 +1216,7 @@ function readyResponse(): {
       version: 1 as const,
       kind: "case" as const,
       purpose: "navigation" as const,
+      testLevel: "business_smoke" as const,
       name: "打开添加好友",
       app: { id: "cn.eeo.classin", platform: "android" as const },
       start: { strategy: "keepCurrent" as const },

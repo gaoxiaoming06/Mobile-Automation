@@ -4,6 +4,7 @@ export type CaseDocumentView = {
   version: 1;
   kind: "case" | "scenario";
   purpose?: "navigation" | "fixture" | "business" | "recovery";
+  testLevel?: "probe" | "component" | "business_smoke" | "full_regression";
   name: string;
   description?: string;
   app: { id: string; platform: string };
@@ -63,6 +64,13 @@ export function testPurposeLabel(purpose: CaseDocumentView["purpose"]): string {
   if (purpose === "fixture") return "准备";
   if (purpose === "recovery") return "恢复";
   return "业务";
+}
+
+export function testLevelLabel(testLevel: CaseDocumentView["testLevel"]): string {
+  if (testLevel === "probe") return "临时验证";
+  if (testLevel === "component") return "控件能力";
+  if (testLevel === "full_regression") return "全字段回归";
+  return "业务冒烟";
 }
 
 export function defaultCaseParameterValues(document: CaseDocumentView | undefined): Record<string, ScriptParameterValue> {

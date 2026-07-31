@@ -6,6 +6,7 @@ import type {
   ScriptFlowPlatform,
   ScriptFlowState,
   ScriptFlowStartStrategy,
+  ScriptFlowTestLevel,
   ScriptParameterDefinition,
   ScriptParameterOption,
   ScriptParameterType,
@@ -29,7 +30,7 @@ export class ScriptFlowValidationError extends Error {
   }
 }
 
-const rootFields = new Set(["version", "kind", "purpose", "name", "description", "app", "start", "entry", "outcome", "parameters", "steps", "tags"]);
+const rootFields = new Set(["version", "kind", "purpose", "testLevel", "name", "description", "app", "start", "entry", "outcome", "parameters", "steps", "tags"]);
 const stepBaseFields = new Set(["id", "name", "role", "onPage", "expectPage", "timeoutMs", "risk", "with"]);
 const actionFields = [
   "launchApp",
@@ -71,6 +72,7 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
   }
   const kind = readKind(root.kind, issues);
   const purpose = readPurpose(root.purpose, issues);
+  const testLevel = readTestLevel(root.testLevel, issues);
   const name = requiredString(root.name, "name", issues);
   const description = optionalString(root.description, "description", issues);
   const app = readApp(root.app, issues);
@@ -93,6 +95,7 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
     version: 1,
     kind,
     purpose,
+    testLevel,
     name,
     ...(description ? { description } : {}),
     app,
@@ -103,6 +106,13 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
     steps,
     tags
   };
+}
+
+function readTestLevel(value: unknown, issues: ScriptFlowValidationIssue[]): ScriptFlowTestLevel {
+  if (value === undefined) return "business_smoke";
+  if (value === "probe" || value === "component" || value === "business_smoke" || value === "full_regression") return value;
+  issues.push({ path: "testLevel", message: "Test level must be probe, component, business_smoke, or full_regression" });
+  return "business_smoke";
 }
 
 function readPurpose(value: unknown, issues: ScriptFlowValidationIssue[]): ScriptFlowPurpose {

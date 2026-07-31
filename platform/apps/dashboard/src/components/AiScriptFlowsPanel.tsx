@@ -18,6 +18,7 @@ import {
   defaultCaseParameterValues,
   readCaseDocument,
   testKindLabel,
+  testLevelLabel,
   testPurposeLabel,
   type CaseDocumentView,
   type CasePlanView
@@ -353,7 +354,7 @@ export function AiScriptFlowsPanel({
                 disabled={busy}
               >
                 <span className="temporary-test-copy">
-                  <span className="temporary-test-title"><span className={`test-purpose-badge ${item.purpose}`}>{testPurposeLabel(item.purpose)}</span><strong>{item.name}</strong></span>
+                  <span className="temporary-test-title"><span className={`test-purpose-badge ${item.purpose}`}>{testPurposeLabel(item.purpose)}</span><span className={`test-level-badge ${item.testLevel ?? "business_smoke"}`}>{testLevelLabel(item.testLevel)}</span><strong>{item.name}</strong></span>
                   <span className="temporary-test-prompt">{item.prompt}</span>
                   <small>{testKindLabel(item.kind)} · {item.lastRunStatus ? runStatusLabel(item.lastRunStatus) : "已记录"} · 执行 {item.runCount} 次</small>
                 </span>
@@ -368,7 +369,7 @@ export function AiScriptFlowsPanel({
           {!draft ? <div className="empty"><strong>{revision ? "等待修改说明" : "等待生成"}</strong><span>规划时不会读取或改变当前设备页面。</span></div> : null}
           {draft?.status === "needs_clarification" ? <div className="ai-script-clarification"><strong>需要补充信息</strong><p>{draft.clarification}</p></div> : null}
           {generatedDraft ? <>
-            <header><div><span className={`test-kind-badge ${generatedDraft.document.kind}`}>{testKindLabel(generatedDraft.document.kind)}</span><span className={`test-purpose-badge ${generatedDraft.document.purpose ?? "business"}`}>{testPurposeLabel(generatedDraft.document.purpose)}</span><h3>{generatedDraft.document.name}</h3><p>{generatedDraft.summary}</p></div><span>{steps.length} 个步骤</span></header>
+            <header><div><span className={`test-kind-badge ${generatedDraft.document.kind}`}>{testKindLabel(generatedDraft.document.kind)}</span><span className={`test-purpose-badge ${generatedDraft.document.purpose ?? "business"}`}>{testPurposeLabel(generatedDraft.document.purpose)}</span><span className={`test-level-badge ${generatedDraft.document.testLevel ?? "business_smoke"}`}>{testLevelLabel(generatedDraft.document.testLevel)}</span><h3>{generatedDraft.document.name}</h3><p>{generatedDraft.summary}</p></div><span>{steps.length} 个步骤</span></header>
             {generatedDraft.assumptions.length ? <div className="ai-script-assumptions"><strong>生成假设</strong>{generatedDraft.assumptions.map((item) => <p key={item}>{item}</p>)}</div> : null}
             <section className="ai-case-logic">
               <header><h3>执行逻辑</h3><span>{steps.length} 个步骤</span></header>
@@ -376,9 +377,9 @@ export function AiScriptFlowsPanel({
                 {steps.map((step) => <li key={step.id}><span>{step.order}</span><div><strong>{step.name}</strong><small>{step.context ?? step.id}</small></div></li>)}
               </ol>
             </section>
-            {caseCenterEligible(generatedDraft.document.purpose) ? <div className="ai-case-actions">
+            {caseCenterEligible(generatedDraft.document) ? <div className="ai-case-actions">
               <button type="button" onClick={() => void saveDraft()} disabled={busy}><Save size={16} /><span>{revision ? "保存修改" : generatedDraft.sourceFlow ? "更新用例中心" : "保存到用例中心"}</span></button>
-            </div> : <p className="navigation-flow-note">导航流程执行成功后会作为系统内部导航能力复用。</p>}
+            </div> : <p className="navigation-flow-note">{generatedDraft.document.testLevel === "probe" ? "临时验证默认只保留在最近测试，不进入用例中心。" : "导航流程执行成功后会作为系统内部导航能力复用。"}</p>}
             <ScriptRunForm
               parameters={generatedDraft.document.parameters}
               values={parameterValues}
@@ -416,8 +417,8 @@ export function ExecutionFailureNotice({
   return <div className="execution-failure-notice"><strong>执行未完成</strong><p>{failure.message}</p><button type="button" onClick={onOpenReport}>查看执行结果</button></div>;
 }
 
-export function caseCenterEligible(purpose: CaseDocumentView["purpose"]): boolean {
-  return purpose !== "navigation";
+export function caseCenterEligible(document: Pick<CaseDocumentView, "purpose" | "testLevel"> | undefined): boolean {
+  return document?.purpose !== "navigation" && document?.testLevel !== "probe";
 }
 
 function runStatusLabel(status: TestRun["status"]): string {

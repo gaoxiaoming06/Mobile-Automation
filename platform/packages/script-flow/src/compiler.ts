@@ -74,6 +74,7 @@ export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScri
     flowName: flow.name,
     kind: flow.kind,
     purpose: flow.purpose ?? "business",
+    testLevel: flow.testLevel ?? "business_smoke",
     app: flow.app,
     ...(flow.start ? { start: flow.start } : {}),
     ...(flow.entry ? { entry: flow.entry } : {}),

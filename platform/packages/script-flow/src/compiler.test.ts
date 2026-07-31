@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { ScriptFlowCompileError, compileScriptFlow, parseScriptFlow } from "./index.js";
 
 describe("compileScriptFlow", () => {
-  it("keeps purpose and semantic roles in the execution plan", () => {
+  it("keeps purpose, test level, and semantic roles in the execution plan", () => {
     const flow = parseScriptFlow(`
 version: 1
 purpose: fixture
+testLevel: component
 name: 教师登录
 app: { id: cn.eeo.classin, platform: android }
 entry: { session: unauthenticated }
@@ -21,6 +22,7 @@ steps:
 
     expect(plan).toMatchObject({
       purpose: "fixture",
+      testLevel: "component",
       steps: [{ id: "submit-login", role: "setup" }]
     });
   });

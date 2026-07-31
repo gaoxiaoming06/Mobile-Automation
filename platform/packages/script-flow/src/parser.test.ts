@@ -47,6 +47,7 @@ describe("parseScriptFlow", () => {
 version: 1
 kind: scenario
 purpose: business
+testLevel: business_smoke
 name: 创建课堂场景
 app: { id: cn.eeo.classin, platform: android }
 steps:
@@ -65,6 +66,7 @@ steps:
     expect(flow).toMatchObject({
       kind: "scenario",
       purpose: "business",
+      testLevel: "business_smoke",
       steps: [
         { id: "prepare-home", role: "navigation" },
         { id: "publish-lesson", role: "business" },
@@ -109,9 +111,22 @@ steps:
 
     expect(flow).toMatchObject({
       kind: "case",
+      testLevel: "business_smoke",
       entry: { page: "classin.teacher.login", session: "unauthenticated" },
       outcome: { page: "classin.teacher.classes", session: "authenticated", role: "teacher" }
     });
+  });
+
+  it("rejects unknown test levels", () => {
+    expect(() => parseScriptFlow(`
+version: 1
+testLevel: journey
+name: invalid level
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: assert-home
+    assertText: { text: 主页 }
+`)).toThrow(/testLevel.*probe, component, business_smoke, or full_regression/i);
   });
 
   it("rejects unknown test kinds", () => {

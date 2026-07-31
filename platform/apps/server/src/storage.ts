@@ -2724,16 +2724,18 @@ function rowToScriptFlow(row: Row): ScriptFlow {
 }
 
 function rowToTemporaryTest(row: Row): TemporaryTest {
+  const parsed = JSON.parse(String(row.parsed_json ?? "{}")) as Record<string, unknown>;
   return {
     id: String(row.id),
     appId: String(row.app_id),
     platform: row.platform as TemporaryTest["platform"],
     kind: row.kind === "scenario" ? "scenario" : "case",
     purpose: temporaryTestPurpose(row.purpose),
+    testLevel: temporaryTestLevel(parsed.testLevel),
     name: String(row.name),
     prompt: String(row.prompt),
     sourceYaml: String(row.source_yaml),
-    parsed: JSON.parse(String(row.parsed_json ?? "{}")) as Record<string, unknown>,
+    parsed,
     parameterValues: JSON.parse(String(row.parameter_values_json ?? "{}")) as TemporaryTest["parameterValues"],
     lastRunId: String(row.last_run_id),
     ...(stringOrUndefined(row.last_run_status) ? { lastRunStatus: row.last_run_status as TestRun["status"] } : {}),
@@ -2745,6 +2747,10 @@ function rowToTemporaryTest(row: Row): TemporaryTest {
 
 function temporaryTestPurpose(value: unknown): TemporaryTest["purpose"] {
   return value === "navigation" || value === "fixture" || value === "recovery" ? value : "business";
+}
+
+function temporaryTestLevel(value: unknown): NonNullable<TemporaryTest["testLevel"]> {
+  return value === "probe" || value === "component" || value === "full_regression" ? value : "business_smoke";
 }
 
 function rowToScriptFlowVersion(row: Row): ScriptFlowVersion {
