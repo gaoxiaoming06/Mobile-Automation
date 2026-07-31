@@ -122,6 +122,16 @@ export class DefaultPageStateService implements PageStateService {
     }
     const matched = result.match.node ? pages.find((page) => page.id === result.match.node?.id) : undefined;
     if (result.match.status === "matched" && matched && (!expectedPageId || matched.id === expectedPageId)) {
+      const conflicts = pagesWithSharedOnlyMatchedEvidence(matched, pages, result.diagnostics);
+      if (conflicts.length > 0) {
+        return {
+          status: "multiple_candidates",
+          candidates: [matched, ...conflicts].map(stripNode),
+          observation: result.observation,
+          diagnostics: result.diagnostics,
+          reason: "ambiguous_evidence"
+        };
+      }
       return {
         status: "matched",
         page: stripNode(matched),
@@ -170,6 +180,52 @@ export class DefaultPageStateService implements PageStateService {
     }
     return { observation };
   }
+}
+
+function pagesWithSharedOnlyMatchedEvidence(
+  matched: PageAsset,
+  pages: PageAsset[],
+  diagnostics: PageMatcherDiagnostics
+): PageAsset[] {
+  const matchedSignatures = new Set(
+    diagnostics.matchedEvidence
+      .filter((evidence) => evidence.type !== "package" && evidence.type !== "bundle_id")
+      .map((evidence) => identitySignature(evidence.type, evidence.expected))
+      .filter(Boolean)
+  );
+  if (matchedSignatures.size === 0) {
+    return [];
+  }
+  const others = pages.filter((page) => page.id !== matched.id);
+  const signaturesByPage = others.map((page) => ({
+    page,
+    signatures: new Set(
+      page.node.matchers
+        .filter((matcher) => matcher.type !== "package" && matcher.type !== "bundle_id")
+        .map((matcher) => identitySignature(matcher.type, matcher.value))
+        .filter(Boolean)
+    )
+  }));
+  const hasExclusiveEvidence = [...matchedSignatures].some((signature) =>
+    !signaturesByPage.some((candidate) => candidate.signatures.has(signature))
+  );
+  if (hasExclusiveEvidence) {
+    return [];
+  }
+  return signaturesByPage
+    .filter((candidate) => [...matchedSignatures].some((signature) => candidate.signatures.has(signature)))
+    .map((candidate) => candidate.page);
+}
+
+function identitySignature(type: string, value: string): string {
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    // Keep malformed legacy values comparable without failing page recognition.
+  }
+  const normalized = decoded.trim().toLocaleLowerCase().replace(/\s+/g, "");
+  return normalized ? `${type}:${normalized}` : "";
 }
 
 function graphForPages(pages: PageAsset[]): BusinessGraphVersion {

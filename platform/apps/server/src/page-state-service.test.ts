@@ -51,6 +51,60 @@ describe("DefaultPageStateService", () => {
     expect(result.candidates.map((item) => item.id)).toEqual(expect.arrayContaining(["home", "home-copy"]));
   });
 
+  it("does not confirm a page when every matched identity signal is shared with a more specific page", async () => {
+    const teachingPlan = page("teaching-plan", "classin.teaching.plan", "教学方案", ["教学方案"]);
+    const classDetail = page("class-detail", "classin.class.detail", "班级详情", ["教学方案", "班级详情"]);
+    const service = serviceFor(
+      [teachingPlan, classDetail],
+      new QueueObservationCollector([observation("教学方案")])
+    );
+
+    const result = await service.verifyExpectedPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageId: "teaching-plan"
+    });
+
+    expect(result.status).toBe("multiple_candidates");
+    expect(result.reason).toBe("ambiguous_evidence");
+    expect(result.candidates.map((item) => item.id)).toEqual(expect.arrayContaining(["teaching-plan", "class-detail"]));
+  });
+
+  it("returns unknown instead of accepting a changed dynamic identity value", async () => {
+    const service = serviceFor(
+      [page("class-detail", "classin.class.detail", "班级详情", ["班级详情", "班级四十二号"])],
+      new QueueObservationCollector([observation("班级详情 班级四十三号")])
+    );
+
+    const result = await service.identifyCurrentPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+
+    expect(result.status).toBe("unknown");
+  });
+
+  it("keeps the page ambiguous when a half-screen surface exposes two page identities", async () => {
+    const service = serviceFor(
+      [
+        page("home", "classin.home", "主页"),
+        page("permission-sheet", "classin.permission.sheet", "权限申请")
+      ],
+      new QueueObservationCollector([observation("主页 权限申请")])
+    );
+
+    const result = await service.identifyCurrentPage({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+
+    expect(result.status).toBe("multiple_candidates");
+    expect(result.candidates.map((item) => item.id)).toEqual(expect.arrayContaining(["home", "permission-sheet"]));
+  });
+
   it("does not scan unrelated pages while verifying a known target", async () => {
     const home = page("home", "classin.home", "主页");
     const settings = page("settings", "classin.settings", "设置");
@@ -212,7 +266,8 @@ function graph(nodes: BusinessNode[]): BusinessGraphVersion {
   };
 }
 
-function page(id: string, key: string, name: string, evidence = name): BusinessNode {
+function page(id: string, key: string, name: string, evidence: string | string[] = name): BusinessNode {
+  const evidenceValues = Array.isArray(evidence) ? evidence : [evidence];
   return {
     id,
     graphVersionId: "version",
@@ -221,7 +276,7 @@ function page(id: string, key: string, name: string, evidence = name): BusinessN
     nodeType: "page",
     tags: ["page-asset"],
     status: "active",
-    matchers: [matcher("package", "cn.eeo.classin"), matcher("ocr_text", evidence)],
+    matchers: [matcher("package", "cn.eeo.classin"), ...evidenceValues.map((value) => matcher("ocr_text", value))],
     defaultExpectations: [],
     platformScope: "mobile-both",
     metadata: { assetRecordingConfirmed: true }

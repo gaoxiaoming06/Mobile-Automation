@@ -303,15 +303,15 @@ git commit -m "feat: 统一语义目标的屏内与屏外查找"
 - 修改：`platform/apps/server/src/script-flow-runner.ts`
 - 修改：`platform/apps/server/src/script-flow-runner.test.ts`
 
-- [ ] **步骤 1：编写页面身份冲突测试**
+- [x] **步骤 1：编写页面身份冲突测试**
 
 覆盖两个页面共享“教学方案”等稳定文字、账号/班级名动态变化、遮罩提示和半屏弹层。共享证据不能单独确认页面，低置信结果返回 unknown。
 
-- [ ] **步骤 2：编写多入口根页面恢复测试**
+- [x] **步骤 2：编写多入口根页面恢复测试**
 
 导航根不是固定主页。测试登录页和教师主页均可成为停止恢复的 anchor；返回导致离开目标 App 时立即停止并报 `recovery_left_app`，不能继续返回到桌面。
 
-- [ ] **步骤 3：运行测试并确认失败**
+- [x] **步骤 3：运行测试并确认失败**
 
 运行：
 
@@ -319,7 +319,7 @@ git commit -m "feat: 统一语义目标的屏内与屏外查找"
 pnpm vitest run platform/apps/server/src/page-state-service.test.ts platform/apps/server/src/automation-runner.test.ts platform/apps/server/src/script-flow-runner.test.ts
 ```
 
-- [ ] **步骤 4：实现严格匹配与恢复顺序**
+- [x] **步骤 4：实现严格匹配与恢复顺序**
 
 ```text
 识别当前页面
@@ -332,11 +332,11 @@ pnpm vitest run platform/apps/server/src/page-state-service.test.ts platform/app
 
 不得把“固定起点是目标页”当成设备实时状态。
 
-- [ ] **步骤 5：运行测试并确认通过**
+- [x] **步骤 5：运行测试并确认通过**
 
 运行任务 4 步骤 3 的同一命令，预期全部通过。
 
-- [ ] **步骤 6：提交页面与恢复逻辑**
+- [x] **步骤 6：提交页面与恢复逻辑**
 
 ```bash
 git add platform/apps/server/src/page-state-service.ts platform/apps/server/src/page-state-service.test.ts platform/apps/server/src/automation-runner.ts platform/apps/server/src/automation-runner.test.ts platform/apps/server/src/script-flow-runner.ts platform/apps/server/src/script-flow-runner.test.ts
