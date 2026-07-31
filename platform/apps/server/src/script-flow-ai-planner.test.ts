@@ -120,6 +120,50 @@ describe("ScriptFlow AI planner", () => {
     expect(requestBody).toContain("系统判定的 testLevel：component");
   });
 
+  it("asks for field coverage before accepting full form regression drafts without explicit fields", async () => {
+    const response = fullRegressionLessonResponse();
+    let aiCalls = 0;
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "创建课堂页面所有表单都填一遍",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: [],
+      fetchImpl: async () => {
+        aiCalls += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 });
+      }
+    });
+
+    expect(aiCalls).toBe(1);
+    expect(result).toMatchObject({
+      status: "needs_clarification",
+      clarification: expect.stringContaining("字段")
+    });
+  });
+
+  it("accepts full form regression drafts when the prompt explicitly lists covered fields", async () => {
+    const response = fullRegressionLessonResponse();
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "创建课堂页面全字段覆盖，字段包括课堂名称、课堂说明",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: [],
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 })
+    });
+
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      document: { testLevel: "full_regression" }
+    });
+  });
+
   it("reuses an exactly matching saved draft as a trial candidate without calling AI", async () => {
     const candidate = draftAddFriendFlow();
     let aiCalled = false;
@@ -1293,6 +1337,40 @@ function readyResponse(): {
       tags: ["ai-generated"]
     }
   };
+}
+
+function fullRegressionLessonResponse(): ReturnType<typeof readyResponse> {
+  const response = readyResponse();
+  response.document.name = "创建课堂全字段回归";
+  response.document.purpose = "business";
+  response.document.testLevel = "full_regression";
+  response.document.entry = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
+  response.document.outcome = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
+  response.document.steps = [
+    {
+      id: "fill-lesson-name",
+      role: "business",
+      onPage: "classin.lesson.create",
+      risk: "interaction",
+      inputText: {
+        target: { semantic: "课堂名称输入框", area: "content" },
+        value: "自动化课堂",
+        search: { mode: "auto" }
+      }
+    },
+    {
+      id: "fill-lesson-summary",
+      role: "business",
+      onPage: "classin.lesson.create",
+      risk: "interaction",
+      inputText: {
+        target: { semantic: "课堂说明输入框", area: "content" },
+        value: "自动化说明",
+        search: { mode: "auto" }
+      }
+    }
+  ];
+  return response;
 }
 
 function draftAddFriendFlow(): ScriptFlow {

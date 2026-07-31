@@ -61,7 +61,17 @@ node --version
 - 三种模式都必须保持 App ID 与平台隔离。
 - 测试可以注入模式验证边界，正式服务只能读取源码常量；资产本身继续按 App ID 和平台隔离。
 
-### 3. 阶段准入标准
+### 3. 字段覆盖边界
+
+第一阶段不维护 PageAsset 级表单模型，也不让 AI 根据页面名称自动猜“所有字段”。当系统判定 `testLevel=full_regression` 时，必须满足以下任一条件才生成可执行草稿：
+
+1. 用户输入中明确列出本次覆盖的字段或配置项。
+2. 用户正在修改一份已有 `full_regression` 用例，原用例本身已经提供覆盖来源。
+3. 后续阶段存在从已验证 ScriptFlow、InteractionAsset 和 FlowVerification 派生出的字段覆盖摘要。
+
+当前实现只支持前两类来源；缺少来源时返回 `needs_clarification`，要求用户补充字段清单。字段的定位经验继续归 InteractionAsset，全流程覆盖继续归 ScriptFlow/用例中心，验证资格继续归 FlowVerification。未来如需要“页面字段覆盖视图”，应作为派生索引或覆盖摘要建设，不写入 PageAsset。
+
+### 4. 阶段准入标准
 
 第一阶段满足以下条件后，才允许通过独立代码提交把常量改为 `shadow`：
 

@@ -206,6 +206,8 @@ tap:
 
 预览时由 `onPage + target 语义指纹 + action` 查询 InteractionAsset，冻结命中的资产 ID、版本和定位策略到执行计划。没有命中时继续走现有通用 OCR、图标和控件语义定位。这样能够利用学习结果，又不会把脚本重新变成元素 ID 编排。
 
+字段覆盖不新增为 PageAsset 的表单模型。全字段/全配置回归的字段清单应来自用户明确列出的用例输入、已有 verified/full_regression ScriptFlow，或后续由 verified ScriptFlow + InteractionAsset + FlowVerification 派生出的覆盖摘要。InteractionAsset 只回答单个动作目标如何定位，不能被提升为“页面有哪些字段”的事实来源；覆盖摘要如果落地，也应作为派生索引供 AI 规划参考，不能让 ScriptFlow 引用其内部 ID。
+
 ### 5. NavigationEntry
 
 NavigationEntry 描述“从已知页面执行一个已验证语义动作后到达哪个已知页面”。它只从通过试运行、通过步骤和通过 `state_is` 页面断言中提取，经用户确认后进入导航索引；同一 stableKey 再次出现时合并 provenance 和版本，不重复建条目。提取复用现有定位 metadata、执行后截图和页面断言，不增加截图或 OCR 调用。

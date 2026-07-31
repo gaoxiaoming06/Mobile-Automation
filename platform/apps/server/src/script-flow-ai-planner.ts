@@ -163,6 +163,14 @@ export async function generateScriptFlowDraft(input: {
   try {
     parsed = parseScriptFlowAiResponse(result.content, parseInput);
   } catch (firstError) {
+    if (firstError instanceof MissingFullRegressionFieldCoverageError) {
+      return {
+        status: "needs_clarification",
+        clarification: missingFullRegressionFieldCoverageClarification(),
+        channel,
+        model: input.config.model
+      };
+    }
     if (firstError instanceof UnrecordedPageReferenceError) {
       return {
         status: "needs_clarification",
@@ -187,6 +195,14 @@ export async function generateScriptFlowDraft(input: {
     try {
       parsed = parseScriptFlowAiResponse(repaired.content, parseInput);
     } catch (repairError) {
+      if (repairError instanceof MissingFullRegressionFieldCoverageError) {
+        return {
+          status: "needs_clarification",
+          clarification: missingFullRegressionFieldCoverageClarification(),
+          channel,
+          model: input.config.model
+        };
+      }
       if (repairError instanceof UnrecordedPageReferenceError) {
         return {
           status: "needs_clarification",
@@ -354,6 +370,7 @@ export function buildScriptFlowPlannerPrompt(
     "可用动作：launchApp、tap、inputText、clearText、selectText、swipe、scrollUntilVisible、reachPage、waitForPage、assertPage、assertText、runFlow、repeat、when。",
     `系统判定的 testLevel：${systemTestLevel}。document.testLevel 必须保持这个值，不能由模型自行改成其它层级。`,
     "testLevel 含义：probe=临时验证单点问题，component=字段/控件能力用例，business_smoke=最小业务主链路，full_regression=全字段或全配置回归。",
+    "full_regression 不允许凭页面名称自动枚举字段；除非用户明确列出字段/配置项，或正在修改已有 full_regression 用例，否则返回 needs_clarification 让用户补充字段清单。",
     "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
     "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
@@ -388,6 +405,34 @@ export function classifyScriptFlowTestLevel(prompt: string): ScriptFlowTestLevel
     return "component";
   }
   return compact.length <= 18 && /测试|验证|检查/u.test(prompt) ? "probe" : "business_smoke";
+}
+
+function assertFullRegressionFieldCoverage(
+  document: ScriptFlowDocument,
+  input: { prompt?: string; existingDocument?: ScriptFlowDocument }
+): void {
+  if (document.testLevel !== "full_regression") return;
+  if (hasExplicitFullRegressionFieldList(input.prompt)) return;
+  if (hasExistingFullRegressionCoverage(input.existingDocument)) return;
+  throw new MissingFullRegressionFieldCoverageError();
+}
+
+function hasExplicitFullRegressionFieldList(prompt: string | undefined): boolean {
+  if (!prompt) return false;
+  if (/(?:字段|表单项|配置项)(?:包括|包含|有|为|是|:|：)\s*[\p{L}\p{N}]/u.test(prompt)) return true;
+  const withoutRegressionKeywords = prompt.replace(/所有表单|全部表单|全字段|全部字段|所有配置|全部配置|全量|完整覆盖/gu, "");
+  return /[、,，;；]/u.test(withoutRegressionKeywords)
+    && /字段|表单|配置|输入|选择|开关|复选|名称|标题|时间|日期|时长|类型|选项|checkbox|picker|slider/iu.test(withoutRegressionKeywords);
+}
+
+function hasExistingFullRegressionCoverage(document: ScriptFlowDocument | undefined): boolean {
+  if (!document || document.testLevel !== "full_regression") return false;
+  return flattenSteps(document.steps).some((step) =>
+    "inputText" in step
+    || "clearText" in step
+    || "selectText" in step
+    || ("tap" in step && step.tap.target.control === "checkbox")
+  );
 }
 
 function buildScriptFlowRepairPrompt(plannerPrompt: string, invalidResponse: string, error: unknown): string {
@@ -501,6 +546,7 @@ export function parseScriptFlowAiResponse(
   assertNoLegacyGeneratedFields(root.document);
   assertGeneratedClassification(root.document, input.existingDocument?.testLevel ?? (input.prompt ? classifyScriptFlowTestLevel(input.prompt) : undefined));
   const validated = validateScriptFlowDocument(root.document);
+  assertFullRegressionFieldCoverage(validated, input);
   const hydrated = validateScriptFlowDocument(hydrateGeneratedParameters(validated, input.catalog));
   const { document, parameterValues } = extractEphemeralParameterValues(hydrated, root.parameterValues);
   validateGeneratedReferences(document, input);
@@ -1224,6 +1270,10 @@ function unresolvedGoalOnlyNavigationClarification(prompt: string): string {
   return `当前没有完成“${request}”的已验证路径，也没有可确定的结果依据。请补充完整操作过程，或提供成功后应看到的稳定内容。`;
 }
 
+function missingFullRegressionFieldCoverageClarification(): string {
+  return "当前还没有完整字段覆盖来源。请列出这次要覆盖的表单字段，或先逐项验证沉淀字段能力。";
+}
+
 function validatePageReference(
   reference: string | undefined,
   field: string,
@@ -1253,6 +1303,13 @@ class UnresolvedGoalOnlyNavigationError extends Error {
   constructor() {
     super("目标型导航既没有已验证路径，也没有可审查的结果依据");
     this.name = "UnresolvedGoalOnlyNavigationError";
+  }
+}
+
+class MissingFullRegressionFieldCoverageError extends Error {
+  constructor() {
+    super("full_regression 缺少明确字段清单或已有完整字段覆盖来源");
+    this.name = "MissingFullRegressionFieldCoverageError";
   }
 }
 
