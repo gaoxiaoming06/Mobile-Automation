@@ -48,6 +48,8 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("完整当前页控件动作");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不要补 entry、outcome、onPage、reachPage 或 runFlow");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("表单字段动作默认使用 search: { mode: auto }");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("即使 screenContext 当前首屏没有该字段");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("可执行查找策略");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toMatch(/\bref\b/i);
 });
 
@@ -454,6 +456,69 @@ describe("ScriptFlow AI planner", () => {
     if (result.status === "needs_clarification") {
       expect(result.clarification).toContain("点击");
     }
+  });
+
+  it("keeps an explicit scroll-to-field mutation without asking for a hidden edit entry", async () => {
+    const response = readyResponse();
+    response.summary = "修改课堂标题";
+    response.document.purpose = "business";
+    response.document.testLevel = "business_smoke";
+    response.document.name = "修改课堂标题";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.parameters = {
+      lessonTitle: { type: "string", required: true, label: "课堂标题" }
+    };
+    response.document.steps = [
+      {
+        id: "open-classroom-info-editor",
+        role: "business",
+        risk: "interaction",
+        tap: {
+          target: { text: "修改", area: "content" },
+          search: { mode: "visibleOnly" }
+        }
+      },
+      {
+        id: "fill-lesson-title",
+        role: "business",
+        risk: "interaction",
+        inputText: {
+          target: { text: "课堂标题", area: "content" },
+          value: "${lessonTitle}",
+          search: { mode: "visibleOnly" }
+        }
+      }
+    ];
+    response.parameterValues = { lessonTitle: "111" };
+    let aiCalls = 0;
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "在本页面通过滑动找到第一个条目课堂标题，然后修改课堂标题为111",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: [],
+      screenContext: lessonCreateEditEntryScreenContext(),
+      fetchImpl: async () => {
+        aiCalls += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 });
+      }
+    });
+
+    expect(aiCalls).toBe(1);
+    expect(result.status).toBe("trial_ready");
+    if (result.status === "needs_clarification") throw new Error(result.clarification);
+    expect(result.document.steps).toEqual([expect.objectContaining({
+      id: "fill-lesson-title",
+      inputText: expect.objectContaining({
+        target: { text: "课堂标题", area: "content" },
+        value: "${lessonTitle}",
+        search: expect.objectContaining({ mode: "auto" })
+      })
+    })]);
+    expect(result.parameterValues).toEqual({ lessonTitle: "111" });
   });
 
   it("asks for field coverage before accepting full form regression drafts without explicit fields", async () => {

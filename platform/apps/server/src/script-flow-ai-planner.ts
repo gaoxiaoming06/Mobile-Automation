@@ -31,7 +31,8 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "text、semantic、icon 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
   "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、onPage、reachPage 或 runFlow，也不要把页面目录当成动作前置条件。",
   "表单字段动作默认使用 search: { mode: auto }。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或受控 screenContext 明确给出当前可见候选时，才使用 visibleOnly。",
-  "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确说点击某个入口时，禁止擅自补“点击修改”或其他桥接动作；当前屏幕没有证实目标字段时返回 needs_clarification，询问准确字段位置或完整操作路径。",
+  "用户说通过滑动、滚动、查找、找到、定位或搜索某字段/条目/控件时，这是目标动作的运行时查找策略，不是独立 swipe 步骤；即使 screenContext 当前首屏没有该字段，也应生成该字段的直接动作并使用 search: { mode: auto }，不能因此追问。",
+  "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确说点击某个入口时，禁止擅自补“点击修改”或其他桥接动作；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification 询问准确字段位置或完整操作路径。",
   "text 或 semantic 目标默认不要猜测 topBar/bottomBar。只有用户明确说顶部、底部、左上角、右上角等位置，或目录中的已验证导航入口/原用例已经给出同一目标位置时，才可增加窄区域约束；否则省略 area，让执行器在当前屏幕查找。",
   "发布、提交、删除、支付等操作按钮可能位于顶部、内容区或底部；用户或已验证知识未提供位置时必须省略 area，禁止根据动作名称猜测区域。",
   "icon 必须描述 area 和 position。顶部栏标准图标使用 topBar；内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
@@ -454,9 +455,10 @@ export function buildScriptFlowPlannerPrompt(
         ].join("\n")
       : "未启用当前屏幕上下文；不要假装读取了设备页面。",
     "tap、inputText、clearText 和 selectText 使用同一 search 合同，search.mode 可用 auto、visibleOnly 或 scroll。普通内容目标默认用 auto；瞬时菜单和顶栏/底栏目标用 visibleOnly。执行器负责在允许时逐屏查找，脚本不要展开成机械滑动步骤。",
-  "用户已经给出字段/控件名以及状态或输入值、且没有明确要求页面导航时，这是完整当前页控件动作。必须只生成直接动作，省略 entry、outcome、onPage、expectPage、reachPage、runFlow、waitForPage 和 assertPage；如果字段标签不确定或开关缺少开启/关闭状态，再返回 needs_clarification。",
+    "用户已经给出字段/控件名以及状态或输入值、且没有明确要求页面导航时，这是完整当前页控件动作。必须只生成直接动作，省略 entry、outcome、onPage、expectPage、reachPage、runFlow、waitForPage 和 assertPage；如果字段标签不确定或开关缺少开启/关闭状态，再返回 needs_clarification。",
     "表单字段动作默认使用 search: { mode: auto }，避免当前屏幕滚动位置变化后找错控件。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或使用 screenContext 中明确可见的受控候选时，才使用 visibleOnly。",
-    "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确点击某个入口时，不得补充“点击修改”等桥接步骤；当前屏幕没有证实目标字段时返回 needs_clarification。",
+    "用户说通过滑动、滚动、查找、找到、定位或搜索某字段/条目/控件时，这是目标动作的运行时查找策略，不是独立 swipe 步骤；即使 screenContext 当前首屏没有该字段，也应生成该字段的直接动作并使用 search: { mode: auto }，不能因此追问。",
+    "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确点击某个入口时，不得补充“点击修改”等桥接步骤；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification。",
     "用户为选择器给出具体选中值时，把“点击字段、滑动选择该值、点击确定/完成”合并为一个 selectText，value 必须精确保留，confirmText 使用用户说出的确认文字；selectText 自身会打开字段，前面禁止再生成 tap，也禁止生成固定次数 swipe 来猜选项位置。",
     "只表达目标页面时，仅当目标属于 navigationAnchors，或能通过 navigationEntries、已验证 transitions 到达时使用 reachPage: { page: <目录页面>, policy: safe }。不要因为“回到”推断系统返回或重启，也不要根据页面名称或标签猜测导航入口。reachPage 自身会验证目标页，不要追加 assertPage。",
     "tap 与 selectText 默认标记 risk: interaction。明确属于提交、发布、删除或支付时，risk 分别填写 submit、publish、delete 或 payment；这些标记仅用于报告审计，无需运行前确认；禁止 risk: none。",
@@ -907,6 +909,10 @@ function validateExplicitOperationContract(
       continue;
     }
     const operation = contract[operationIndex]!;
+    if (searchOnlyDiscoveryOperationCovered(operation, generated.slice(cursor), requestedFieldLabels(prompt))) {
+      operationIndex += 1;
+      continue;
+    }
     const foundAt = generated.findIndex((candidate, index) => index >= cursor && candidate.kind === operation.kind);
     if (foundAt < 0) {
       throw new Error(`用户明确操作“${operation.phrase}”没有按顺序保留；明确操作不能被 reachPage、runFlow 或已有资产替代`);
@@ -933,6 +939,46 @@ function generatedDirectOperations(document: ScriptFlowDocument): Array<{ kind: 
     else if ("swipe" in step || "scrollUntilVisible" in step) operations.push({ kind: "swipe", step });
   }
   return operations;
+}
+
+function searchOnlyDiscoveryOperationCovered(
+  operation: ExplicitOperationContract,
+  candidates: Array<{ kind: GeneratedOperationKind; step?: ScriptStep }>,
+  requestedLabels: string[]
+): boolean {
+  if (!isSearchOnlyDiscoveryOperation(operation)) return false;
+  const labels = [...requestedLabels, ...searchDiscoveryTargetLabels(operation.phrase)];
+  if (!labels.length) return false;
+  return candidates.some((candidate) => {
+    if (!candidate.step || !["tap", "input", "clear", "select"].includes(candidate.kind)) return false;
+    const action = stepTargetAction(candidate.step);
+    if (!action) return false;
+    if (action.search?.mode !== "auto" && action.search?.mode !== "scroll") return false;
+    return labels.some((label) => targetUsesRequestedFieldLabel(action.target, label));
+  });
+}
+
+function isSearchOnlyDiscoveryOperation(operation: ExplicitOperationContract): boolean {
+  if (operation.kind !== "swipe") return false;
+  if (!/(?:找到|查找|定位|搜索|出现|可见)/u.test(operation.phrase)) return false;
+  return !/(?:选择|选中|调整到|设置为|设为)/u.test(operation.phrase);
+}
+
+function searchDiscoveryTargetLabels(phrase: string): string[] {
+  const labels = new Set<string>();
+  for (const match of phrase.matchAll(/(?:找到|查找|定位|搜索)\s*([^，,。；;\n]{2,40})/gu)) {
+    const label = sanitizeRequestedFieldLabel(match[1]);
+    if (label) labels.add(label);
+  }
+  return [...labels];
+}
+
+function stepTargetAction(step: ScriptStep): { target: ScriptTarget; search?: ScriptSearchPolicy } | undefined {
+  if ("tap" in step) return step.tap;
+  if ("inputText" in step) return step.inputText;
+  if ("clearText" in step) return step.clearText;
+  if ("selectText" in step) return step.selectText;
+  return undefined;
 }
 
 function validateExactPickerSelections(
@@ -1284,9 +1330,10 @@ function normalizeGeneratedExecutableTargets(
     screenContext?: ScreenUnderstandingContext;
   }
 ): ScriptFlowDocument {
+  const normalizedSteps = normalizeExecutableTargetSteps(document.steps, input);
   return {
     ...document,
-    steps: normalizeExecutableTargetSteps(document.steps, input)
+    steps: stripInferredEditBridgeTaps(normalizedSteps, input)
   };
 }
 
@@ -1362,6 +1409,54 @@ function normalizeExecutableTargetSteps(
     }
     return step;
   });
+}
+
+function stripInferredEditBridgeTaps(
+  steps: ScriptStep[],
+  input: {
+    prompt?: string;
+    existingDocument?: ScriptFlowDocument;
+    catalog: ScriptFlowPlannerCatalog;
+    screenContext?: ScreenUnderstandingContext;
+  }
+): ScriptStep[] {
+  if (!input.prompt || hasExplicitTapOperation(input.prompt) || !hasExplicitFieldDiscovery(input.prompt)) {
+    return steps;
+  }
+  const requestedLabels = requestedFieldLabels(input.prompt);
+  if (!requestedLabels.length) return steps;
+  let seenFieldMutation = false;
+  const stripped: ScriptStep[] = [];
+  for (const step of steps) {
+    if ("repeat" in step) {
+      stripped.push({
+        ...step,
+        repeat: {
+          ...step.repeat,
+          steps: stripInferredEditBridgeTaps(step.repeat.steps, input)
+        }
+      });
+      continue;
+    }
+    if ("when" in step) {
+      stripped.push({
+        ...step,
+        when: {
+          ...step.when,
+          steps: stripInferredEditBridgeTaps(step.when.steps, input)
+        }
+      });
+      continue;
+    }
+    if (!seenFieldMutation && "tap" in step && isInferredEditBridgeTap(step.tap.target, requestedLabels)) {
+      continue;
+    }
+    if ("inputText" in step || "clearText" in step || "selectText" in step) {
+      seenFieldMutation = true;
+    }
+    stripped.push(step);
+  }
+  return stripped;
 }
 
 function normalizeNonTapSemanticTarget(
@@ -1755,9 +1850,23 @@ function hasGeneratedFieldValueMutation(document: ScriptFlowDocument): boolean {
   );
 }
 
+function hasExplicitFieldDiscovery(prompt: string): boolean {
+  return /滑动|滚动|查找|找到|定位|搜索|第一个条目|本页|当前页|当前页面/u.test(prompt)
+    && /课堂|标题|名称|字段|输入框|表单|开关|复选框/u.test(prompt);
+}
+
+function isInferredEditBridgeTap(target: ScriptTarget, requestedLabels: string[]): boolean {
+  const targetText = [target.text, target.semantic].find((value) => typeof value === "string" && value.trim());
+  if (!targetText) return false;
+  const normalizedTarget = compactGroundingText(targetText);
+  if (requestedLabels.some((label) => compactGroundingText(label) === normalizedTarget)) return false;
+  return /修改|编辑|设置|更改|进入|打开|点击/u.test(targetText);
+}
+
 function sanitizeRequestedFieldLabel(value: string | undefined): string | undefined {
   const label = (value ?? "")
     .replace(/^(?:请|把|将|当前页面|当前屏幕|当前|页面|屏幕|最上方|最上面|最下面|上方|下方|左侧|右侧|的|选择|点击|点按|轻触|打开|关闭|开启|启用|禁用)+/u, "")
+    .replace(/^(?:第[一二三四五六七八九十\d]+个)?(?:条目|字段|输入框|文本框|控件|表单项)?/u, "")
     .replace(/(?:输入框|文本框|字段|表单项|选择器|下拉框|开关|复选框|按钮|用例)$/u, "")
     .trim();
   if (!label || /^[0-9]+$/.test(label)) return undefined;
