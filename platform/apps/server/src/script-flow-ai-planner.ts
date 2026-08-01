@@ -919,12 +919,13 @@ function validateExplicitOperationContract(
     if (foundAt < 0) {
       throw new Error(`用户明确操作“${operation.phrase}”没有按顺序保留；明确操作不能被 reachPage、runFlow 或已有资产替代`);
     }
-    if (!explicitOperationTargetMatches(operation, generated[foundAt]!.step)
-      && !genericTapUsesPendingDiscoveryTarget(operation, generated[foundAt]!.step, pendingDiscoveryLabels)) {
+    const matchedStep = generated[foundAt]!.step;
+    if (!explicitOperationTargetMatches(operation, matchedStep)
+      && !genericTapUsesPendingDiscoveryTarget(operation, matchedStep, pendingDiscoveryLabels)) {
       throw new Error(`用户明确操作“${operation.phrase}”对应的动作目标与描述不一致或顺序错误`);
     }
     cursor = foundAt + 1;
-    pendingDiscoveryLabels = [];
+    pendingDiscoveryLabels = matchedSearchOnlyDiscoveryLabels(operation, matchedStep, requestedFieldLabels(prompt));
     operationIndex += 1;
   }
 }
@@ -964,6 +965,18 @@ function searchOnlyDiscoveryOperationCovered(
 
 function searchOnlyDiscoveryLabels(operation: ExplicitOperationContract, requestedLabels: string[]): string[] {
   return [...requestedLabels, ...searchDiscoveryTargetLabels(operation.phrase)];
+}
+
+function matchedSearchOnlyDiscoveryLabels(
+  operation: ExplicitOperationContract,
+  step: ScriptStep | undefined,
+  requestedLabels: string[]
+): string[] {
+  if (!isSearchOnlyDiscoveryOperation(operation) || !step) return [];
+  const labels = searchOnlyDiscoveryLabels(operation, requestedLabels);
+  const target = operationTarget(step);
+  if (!target) return [];
+  return labels.some((label) => targetUsesRequestedFieldLabel(target, label)) ? labels : [];
 }
 
 function genericTapUsesPendingDiscoveryTarget(
@@ -1086,6 +1099,8 @@ function operationTarget(step: ScriptStep): Record<string, string> | undefined {
         ? step.clearText
         : "selectText" in step
           ? step.selectText
+          : "scrollUntilVisible" in step
+            ? step.scrollUntilVisible
           : undefined;
   if (!action) return undefined;
   return Object.fromEntries(
@@ -1295,6 +1310,15 @@ function normalizeRawRunFlowSteps(
   return steps.map((value) => {
     const step = recordValue(value);
     const normalizedStep: Record<string, unknown> = { ...step };
+    const scrollUntilVisible = recordValue(normalizedStep.scrollUntilVisible);
+    if (scrollUntilVisible && typeof scrollUntilVisible.text === "string") {
+      const target = recordValue(scrollUntilVisible.target);
+      normalizedStep.scrollUntilVisible = {
+        ...scrollUntilVisible,
+        target: Object.keys(target).length ? target : { text: scrollUntilVisible.text }
+      };
+      delete (normalizedStep.scrollUntilVisible as Record<string, unknown>).text;
+    }
     if (typeof step.runFlow === "string" && !step.runFlow.trim()) {
       if (hasRawActionOtherThanRunFlow(step)) {
         delete normalizedStep.runFlow;

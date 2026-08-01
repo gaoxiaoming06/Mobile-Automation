@@ -1687,6 +1687,60 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
+  it("normalizes legacy scrollUntilVisible text targets before validating explicit follow-up taps", () => {
+    const catalog = buildScriptFlowPlannerCatalog(emptyPageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "打开班级详情页";
+    response.document.purpose = "navigation";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.steps = [
+      {
+        id: "open-messages",
+        role: "navigation",
+        risk: "interaction",
+        tap: { target: { text: "消息", area: "content" }, search: { mode: "visibleOnly" } }
+      },
+      {
+        id: "find-class",
+        role: "navigation",
+        scrollUntilVisible: {
+          text: "班里四十二号",
+          direction: "down",
+          maxSwipes: 6
+        }
+      } as unknown as ScriptFlowDocument["steps"][number],
+      {
+        id: "open-found-class",
+        role: "navigation",
+        risk: "interaction",
+        tap: { target: { text: "班里四十二号", area: "content" }, search: { mode: "visibleOnly" } }
+      },
+      {
+        id: "verify-class-detail",
+        role: "assertion",
+        assertText: { text: "班级详情", match: "contains" }
+      }
+    ];
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "从主页点击消息 然后滑动找到班里四十二号 然后点击进入班级。确认到达班级详情"
+    })).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [
+          expect.anything(),
+          { scrollUntilVisible: { target: { text: "班里四十二号" }, direction: "down", maxSwipes: 6 } },
+          { tap: { target: { text: "班里四十二号" } } },
+          { assertText: { text: "班级详情" } }
+        ]
+      }
+    });
+  });
+
   it("rejects page references invented by the model", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
