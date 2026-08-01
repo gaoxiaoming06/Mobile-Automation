@@ -22,4 +22,61 @@ describe("caseStepViews", () => {
       context: "教学方案列表"
     })]);
   });
+
+  it("presents source action targets instead of page keys for form and switch steps", () => {
+    const document: CaseDocumentView = {
+      version: 1,
+      kind: "case",
+      purpose: "business",
+      testLevel: "component",
+      name: "新建课堂字段验证",
+      app: { id: "cn.eeo.classin", platform: "android" },
+      parameters: {},
+      steps: [
+        {
+          id: "enable-recording",
+          onPage: "classin.lesson.create",
+          tap: {
+            target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true },
+            search: { mode: "visibleOnly" }
+          }
+        },
+        {
+          id: "fill-title",
+          onPage: "classin.lesson.create",
+          inputText: {
+            target: { text: "课堂标题", area: "content" },
+            value: "${classTitle}",
+            search: { mode: "auto" }
+          }
+        },
+        {
+          id: "clear-title",
+          onPage: "classin.lesson.create",
+          clearText: {
+            target: { text: "课堂标题", area: "content" },
+            search: { mode: "auto" }
+          }
+        },
+        {
+          id: "select-duration",
+          onPage: "classin.lesson.create",
+          selectText: {
+            target: { text: "课堂时长", area: "content" },
+            value: "11小时20分钟",
+            confirmText: "确定",
+            search: { mode: "auto" }
+          }
+        }
+      ],
+      tags: []
+    };
+
+    expect(caseStepViews(document).map((step) => [step.action, step.context])).toEqual([
+      ["tap", "录制ClassIn教室 开关：开启"],
+      ["inputText", "课堂标题 = ${classTitle}"],
+      ["clearText", "课堂标题"],
+      ["selectText", "课堂时长 → 11小时20分钟"]
+    ]);
+  });
 });

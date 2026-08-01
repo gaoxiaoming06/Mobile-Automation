@@ -45,6 +45,9 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("具体选中值");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("selectText");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止猜测固定滑动次数");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("完整当前页控件动作");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不要补 entry、outcome、onPage、reachPage 或 runFlow");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("表单字段动作默认使用 search: { mode: auto }");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toMatch(/\bref\b/i);
 });
 
@@ -202,7 +205,8 @@ describe("ScriptFlow AI planner", () => {
       appId: "cn.eeo.classin",
       platform: "android",
       catalog: buildScriptFlowPlannerCatalog(planningPageCatalog(), [], "cn.eeo.classin", "android"),
-      prompt: "把当前页面最上方的课堂名称输入框改成 自动化课堂字段验证0801，改完停在当前页。"
+      prompt: "把当前页面最上方的课堂名称输入框改成 自动化课堂字段验证0801，改完停在当前页。",
+      screenContext: lessonCreateScreenContext()
     })).toMatchObject({
       status: "ready",
       document: {
@@ -222,12 +226,9 @@ describe("ScriptFlow AI planner", () => {
     response.document.purpose = "business";
     response.document.testLevel = "component";
     response.document.name = "打开录制ClassIn教室";
-    response.document.entry = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
-    response.document.outcome = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
     response.document.steps = [{
       id: "enable-record-classin",
       role: "business",
-      onPage: "classin.lesson.create",
       risk: "interaction",
       tap: {
         target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true },
@@ -246,13 +247,150 @@ describe("ScriptFlow AI planner", () => {
       fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 })
     });
 
-    expect(result).toMatchObject({
-      status: "trial_ready",
+    expect(result.status).toBe("trial_ready");
+    if (result.status === "needs_clarification") throw new Error(result.clarification);
+    expect(result.document.entry).toBeUndefined();
+    expect(result.document.outcome).toBeUndefined();
+    expect(result.document.steps[0]?.onPage).toBeUndefined();
+    expect(result.document).toMatchObject({
+      testLevel: "component",
+      steps: [{
+        tap: {
+          target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true }
+        }
+      }]
+    });
+  });
+
+  it("repairs current-page control intents that invent navigation context", async () => {
+    const badResponse = readyResponse();
+    badResponse.summary = "打开录制ClassIn教室开关";
+    badResponse.document.purpose = "business";
+    badResponse.document.testLevel = "business_smoke";
+    badResponse.document.name = "打开录制ClassIn教室";
+    badResponse.document.entry = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
+    badResponse.document.outcome = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
+    badResponse.document.steps = [
+      { id: "reach-create-lesson", role: "navigation", reachPage: { page: "classin.lesson.create", policy: "safe" } },
+      {
+        id: "enable-record-classin",
+        role: "business",
+        onPage: "classin.lesson.create",
+        risk: "interaction",
+        tap: {
+          target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true },
+          search: { mode: "visibleOnly" }
+        }
+      }
+    ];
+    const fixedResponse = readyResponse();
+    fixedResponse.summary = "打开录制ClassIn教室开关";
+    fixedResponse.document.purpose = "business";
+    fixedResponse.document.testLevel = "business_smoke";
+    fixedResponse.document.name = "打开录制ClassIn教室";
+    fixedResponse.document.entry = undefined;
+    fixedResponse.document.outcome = undefined;
+    fixedResponse.document.steps = [{
+      id: "enable-record-classin",
+      role: "business",
+      risk: "interaction",
+      tap: {
+        target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true },
+        search: { mode: "visibleOnly" }
+      }
+    }];
+    let callCount = 0;
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "选择录制ClassIn教室 开启",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: [],
+      fetchImpl: async () => {
+        callCount += 1;
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(callCount === 1 ? badResponse : fixedResponse) } }]
+        }), { status: 200 });
+      }
+    });
+
+    expect(callCount).toBe(2);
+    expect(result.status).toBe("trial_ready");
+    if (result.status === "needs_clarification") throw new Error(result.clarification);
+    expect(result.document.entry).toBeUndefined();
+    expect(result.document.outcome).toBeUndefined();
+    expect(result.document.steps).toHaveLength(1);
+    expect(result.document.steps[0]).toMatchObject({
+      tap: {
+        target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true }
+      }
+    });
+    expect(result.document.steps[0]).not.toHaveProperty("onPage");
+    expect(result.document.steps[0]).not.toHaveProperty("reachPage");
+    expect(result.document.steps[0]).not.toHaveProperty("runFlow");
+  });
+
+  it("rejects text field locators scoped only by page title instead of the requested field label", () => {
+    const response = readyResponse();
+    response.summary = "修改课堂标题";
+    response.document.purpose = "business";
+    response.document.testLevel = "business_smoke";
+    response.document.name = "修改课堂标题";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.parameters = {};
+    response.document.steps = [{
+      id: "fill-lesson-title",
+      role: "business",
+      risk: "interaction",
+      inputText: {
+        target: { control: "textField", area: "content", scopeText: "新建课堂", ordinal: 1 },
+        value: "11111",
+        search: { mode: "visibleOnly" }
+      }
+    }];
+
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog: buildScriptFlowPlannerCatalog(planningPageCatalog(), [], "cn.eeo.classin", "android"),
+      prompt: "把课堂标题改成11111"
+    })).toThrow(/课堂标题.*定位|字段标签/);
+  });
+
+  it("normalizes reusable form field searches to auto when the prompt does not pin the visible viewport", () => {
+    const response = readyResponse();
+    response.summary = "修改课堂标题";
+    response.document.purpose = "business";
+    response.document.testLevel = "business_smoke";
+    response.document.name = "修改课堂标题";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.parameters = {};
+    response.document.steps = [{
+      id: "fill-lesson-title",
+      role: "business",
+      risk: "interaction",
+      inputText: {
+        target: { control: "textField", area: "content", scopeText: "课堂标题", ordinal: 1 },
+        value: "11111",
+        search: { mode: "visibleOnly" }
+      }
+    }];
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog: buildScriptFlowPlannerCatalog(planningPageCatalog(), [], "cn.eeo.classin", "android"),
+      prompt: "把课堂标题改成11111"
+    })).toMatchObject({
       document: {
-        testLevel: "component",
         steps: [{
-          tap: {
-            target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true }
+          inputText: {
+            target: { control: "textField", scopeText: "课堂标题" },
+            search: { mode: "auto" }
           }
         }]
       }

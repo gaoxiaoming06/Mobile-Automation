@@ -5,6 +5,7 @@ import {
   type ScriptFlowDocument,
   type ScriptParameterDefinition,
   type ScriptParameterValue,
+  type ScriptSearchPolicy,
   type ScriptStep,
   type ScriptTarget,
   type ScriptFlowTestLevel
@@ -28,6 +29,8 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "页面 key、页面 id、ScriptFlow id 和类似 classin.teacher.xxx 的内部引用不能作为 tap、inputText、clearText、selectText 或 scrollUntilVisible 的动作目标。",
   "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。semantic 用于‘进入教学方案的入口’这类概念目标，不能伪装成屏幕原文。",
   "text、semantic、icon 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
+  "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、onPage、reachPage 或 runFlow，也不要把页面目录当成动作前置条件。",
+  "表单字段动作默认使用 search: { mode: auto }。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或受控 screenContext 明确给出当前可见候选时，才使用 visibleOnly。",
   "text 或 semantic 目标默认不要猜测 topBar/bottomBar。只有用户明确说顶部、底部、左上角、右上角等位置，或目录中的已验证导航入口/原用例已经给出同一目标位置时，才可增加窄区域约束；否则省略 area，让执行器在当前屏幕查找。",
   "发布、提交、删除、支付等操作按钮可能位于顶部、内容区或底部；用户或已验证知识未提供位置时必须省略 area，禁止根据动作名称猜测区域。",
   "icon 必须描述 area 和 position。顶部栏标准图标使用 topBar；内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
@@ -165,7 +168,14 @@ export async function generateScriptFlowDraft(input: {
     userContent: plannerPrompt,
     effort: "medium"
   }, input.fetchImpl ?? fetch), { channel, model: input.config.model, screenContext: Boolean(input.screenContext) });
-  const parseInput = { appId: input.appId, platform: input.platform, catalog, prompt: input.prompt, existingDocument };
+  const parseInput = {
+    appId: input.appId,
+    platform: input.platform,
+    catalog,
+    prompt: input.prompt,
+    existingDocument,
+    screenContext: input.screenContext
+  };
   let parsed: ParsedScriptFlowAiDraft;
   try {
     parsed = parseScriptFlowAiResponse(result.content, parseInput);
@@ -427,6 +437,8 @@ export function buildScriptFlowPlannerPrompt(
         ].join("\n")
       : "未启用当前屏幕上下文；不要假装读取了设备页面。",
     "tap、inputText、clearText 和 selectText 使用同一 search 合同，search.mode 可用 auto、visibleOnly 或 scroll。普通内容目标默认用 auto；瞬时菜单和顶栏/底栏目标用 visibleOnly。执行器负责在允许时逐屏查找，脚本不要展开成机械滑动步骤。",
+    "用户已经给出字段/控件名以及状态或输入值、且没有明确要求页面导航时，这是完整当前页控件动作。必须只生成直接动作，省略 entry、outcome、onPage、expectPage、reachPage、runFlow、waitForPage 和 assertPage；如果字段标签不确定或开关缺少开启/关闭状态，再返回 needs_clarification。",
+    "表单字段动作默认使用 search: { mode: auto }，避免当前屏幕滚动位置变化后找错控件。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或使用 screenContext 中明确可见的受控候选时，才使用 visibleOnly。",
     "用户为选择器给出具体选中值时，把“点击字段、滑动选择该值、点击确定/完成”合并为一个 selectText，value 必须精确保留，confirmText 使用用户说出的确认文字；selectText 自身会打开字段，前面禁止再生成 tap，也禁止生成固定次数 swipe 来猜选项位置。",
     "只表达目标页面时，仅当目标属于 navigationAnchors，或能通过 navigationEntries、已验证 transitions 到达时使用 reachPage: { page: <目录页面>, policy: safe }。不要因为“回到”推断系统返回或重启，也不要根据页面名称或标签猜测导航入口。reachPage 自身会验证目标页，不要追加 assertPage。",
     "tap 与 selectText 默认标记 risk: interaction。明确属于提交、发布、删除或支付时，risk 分别填写 submit、publish、delete 或 payment；这些标记仅用于报告审计，无需运行前确认；禁止 risk: none。",
@@ -586,6 +598,7 @@ export function parseScriptFlowAiResponse(
     catalog: ScriptFlowPlannerCatalog;
     prompt?: string;
     existingDocument?: ScriptFlowDocument;
+    screenContext?: ScreenUnderstandingContext;
   }
 ): ParsedScriptFlowAiDraft {
   const value = parseAiJsonObject(raw);
@@ -610,7 +623,9 @@ export function parseScriptFlowAiResponse(
   const document = validateScriptFlowDocument(normalizeGeneratedExecutableTargets(extractedDocument, input));
   validateGeneratedReferences(document, input);
   validateGeneratedActionTargetReferences(document, input.catalog);
+  validateCurrentPageActionDoesNotInventNavigation(document, input);
   validateGeneratedExecutableTargetContracts(document);
+  validateGeneratedFieldLocatorGrounding(document, input);
   validateGeneratedNavigationReachability(document, input.catalog);
   validateGeneratedTargetGrounding(document, input);
   validateGeneratedTargetAreaGrounding(document, input);
@@ -1243,7 +1258,12 @@ function uniqueReusableFlowForStep(
 
 function normalizeGeneratedExecutableTargets(
   document: ScriptFlowDocument,
-  input: { prompt?: string; existingDocument?: ScriptFlowDocument; catalog: ScriptFlowPlannerCatalog }
+  input: {
+    prompt?: string;
+    existingDocument?: ScriptFlowDocument;
+    catalog: ScriptFlowPlannerCatalog;
+    screenContext?: ScreenUnderstandingContext;
+  }
 ): ScriptFlowDocument {
   return {
     ...document,
@@ -1253,7 +1273,12 @@ function normalizeGeneratedExecutableTargets(
 
 function normalizeExecutableTargetSteps(
   steps: ScriptStep[],
-  input: { prompt?: string; existingDocument?: ScriptFlowDocument; catalog: ScriptFlowPlannerCatalog }
+  input: {
+    prompt?: string;
+    existingDocument?: ScriptFlowDocument;
+    catalog: ScriptFlowPlannerCatalog;
+    screenContext?: ScreenUnderstandingContext;
+  }
 ): ScriptStep[] {
   return steps.map((step) => {
     if ("repeat" in step) {
@@ -1275,29 +1300,35 @@ function normalizeExecutableTargetSteps(
       };
     }
     if ("selectText" in step) {
+      const target = normalizeNonTapSemanticTarget(step.selectText.target, input);
       return {
         ...step,
         selectText: {
           ...step.selectText,
-          target: normalizeNonTapSemanticTarget(step.selectText.target, input)
+          target,
+          search: normalizeFormSearchPolicy(step.selectText.search, target, input)
         }
       };
     }
     if ("inputText" in step) {
+      const target = normalizeNonTapSemanticTarget(step.inputText.target, input);
       return {
         ...step,
         inputText: {
           ...step.inputText,
-          target: normalizeNonTapSemanticTarget(step.inputText.target, input)
+          target,
+          search: normalizeFormSearchPolicy(step.inputText.search, target, input)
         }
       };
     }
     if ("clearText" in step) {
+      const target = normalizeNonTapSemanticTarget(step.clearText.target, input);
       return {
         ...step,
         clearText: {
           ...step.clearText,
-          target: normalizeNonTapSemanticTarget(step.clearText.target, input)
+          target,
+          search: normalizeFormSearchPolicy(step.clearText.search, target, input)
         }
       };
     }
@@ -1321,6 +1352,26 @@ function normalizeNonTapSemanticTarget(
   if (!target.semantic || target.text || target.icon || target.control) return target;
   const literal = literalTargetFromSemantic(target.semantic, input);
   return literal ? { ...target, text: literal, semantic: undefined } : target;
+}
+
+function normalizeFormSearchPolicy(
+  search: ScriptSearchPolicy | undefined,
+  target: ScriptTarget,
+  input: { prompt?: string; screenContext?: ScreenUnderstandingContext }
+): ScriptSearchPolicy | undefined {
+  if (search?.mode !== "visibleOnly" || isVisibleOnlyGroundedForFormAction(target, input)) return search;
+  return { ...search, mode: "auto" };
+}
+
+function isVisibleOnlyGroundedForFormAction(
+  target: ScriptTarget,
+  input: { prompt?: string; screenContext?: ScreenUnderstandingContext }
+): boolean {
+  if (target.area === "topBar" || target.area === "bottomBar") return true;
+  if (input.prompt && /当前(?:屏幕|页面)?可见|屏幕上|顶部|顶栏|底部|底栏|弹窗|弹层|浮层|菜单/u.test(input.prompt)) {
+    return true;
+  }
+  return Boolean(input.screenContext && screenControlCandidateMatchesTarget(target, input.screenContext));
 }
 
 function literalTargetFromSemantic(
@@ -1397,6 +1448,39 @@ function validateGeneratedActionTargetReferences(
   }
 }
 
+function validateCurrentPageActionDoesNotInventNavigation(
+  document: ScriptFlowDocument,
+  input: { prompt?: string; catalog: ScriptFlowPlannerCatalog }
+): void {
+  if (!isCurrentPageActionIntent(input.prompt, input.catalog)) return;
+  if (document.start?.strategy && document.start.strategy !== "keepCurrent") {
+    throw new Error("完整当前页控件动作不能改变启动策略或补充页面导航");
+  }
+  if (document.entry?.page) {
+    throw new Error("完整当前页控件动作不能补 entry.page；请基于当前页面生成直接动作");
+  }
+  if (document.outcome?.page) {
+    throw new Error("完整当前页控件动作不能补 outcome.page；请基于当前页面生成直接动作");
+  }
+  for (const step of flattenSteps(document.steps)) {
+    if (step.onPage) {
+      throw new Error("完整当前页控件动作不能补 onPage；请基于当前页面生成直接动作");
+    }
+    if (step.expectPage) {
+      throw new Error("完整当前页控件动作不能补 expectPage；请基于当前页面生成直接动作");
+    }
+    if ("reachPage" in step) {
+      throw new Error("完整当前页控件动作不能补 reachPage；请基于当前页面生成直接动作");
+    }
+    if ("runFlow" in step) {
+      throw new Error("完整当前页控件动作不能补 runFlow；请基于当前页面生成直接动作");
+    }
+    if ("waitForPage" in step || "assertPage" in step) {
+      throw new Error("完整当前页控件动作不能补页面等待或页面断言；请基于当前页面生成直接动作");
+    }
+  }
+}
+
 function validateGeneratedExecutableTargetContracts(document: ScriptFlowDocument): void {
   for (const step of flattenSteps(document.steps)) {
     if ("selectText" in step && !isTextTarget(step.selectText.target)) {
@@ -1411,6 +1495,28 @@ function validateGeneratedExecutableTargetContracts(document: ScriptFlowDocument
     if ("clearText" in step && !isTextOrTextFieldTarget(step.clearText.target)) {
       throw new UnsupportedExecutableTargetError("clearText");
     }
+  }
+}
+
+function validateGeneratedFieldLocatorGrounding(
+  document: ScriptFlowDocument,
+  input: {
+    prompt?: string;
+    catalog: ScriptFlowPlannerCatalog;
+    screenContext?: ScreenUnderstandingContext;
+  }
+): void {
+  const requestedLabels = requestedFieldLabels(input.prompt);
+  for (const step of flattenSteps(document.steps)) {
+    const target = fieldOperationTarget(step);
+    if (!target) continue;
+    if (target.control === "textField" && target.scopeText && isKnownPageTitle(target.scopeText, input.catalog)) {
+      throw new Error(`字段定位不能只使用页面标题“${target.scopeText}”加 ordinal；请使用用户字段标签或当前屏幕受控候选`);
+    }
+    if (!requestedLabels.length || screenControlCandidateMatchesTarget(target, input.screenContext)) continue;
+    const matched = requestedLabels.some((label) => targetUsesRequestedFieldLabel(target, label));
+    if (matched) continue;
+    throw new Error(`用户描述的字段标签“${requestedLabels[0]}”没有进入动作定位；请把它写入 text、nearText 或 scopeText`);
   }
 }
 
@@ -1546,6 +1652,101 @@ function sameSemanticTarget(left: Record<string, string>, right: Record<string, 
     const leftValue = left[key];
     const rightValue = stringValue(right[key]);
     return Boolean(leftValue && rightValue && compactGroundingText(leftValue) === compactGroundingText(rightValue));
+  });
+}
+
+function isCurrentPageActionIntent(prompt: string | undefined, catalog: ScriptFlowPlannerCatalog): boolean {
+  if (!prompt) return false;
+  if (hasExplicitPageOrNavigationContext(prompt, catalog)) return false;
+  return /点击|点按|轻触|输入|填写|键入|清空|改成|改为|修改|设置|设为|选择|选中|勾选|开启|打开|启用|关闭|关掉|禁用/u.test(prompt);
+}
+
+function hasExplicitPageOrNavigationContext(prompt: string, catalog: ScriptFlowPlannerCatalog): boolean {
+  if (/进入|前往|到达|跳转|回到|返回到|去到|先到|切到|切换到/u.test(prompt)) return true;
+  if (/打开[^，,。；;\n]{0,30}(?:页面|页|主页|首页)/u.test(prompt)) return true;
+  if (/从[^，,。；;\n]{0,40}(?:到|进入|打开|前往)/u.test(prompt)) return true;
+  const normalizedPrompt = compactGroundingText(prompt);
+  return catalog.pages.some((page) => {
+    const references = [page.name, page.key, page.id].map((value) => compactGroundingText(value)).filter(Boolean);
+    return references.some((reference) => normalizedPrompt.includes(reference));
+  });
+}
+
+function fieldOperationTarget(step: ScriptStep): ScriptTarget | undefined {
+  if ("inputText" in step) return step.inputText.target;
+  if ("clearText" in step) return step.clearText.target;
+  if ("selectText" in step) return step.selectText.target;
+  if ("tap" in step && step.tap.target.control) return step.tap.target;
+  return undefined;
+}
+
+function isKnownPageTitle(scopeText: string, catalog: ScriptFlowPlannerCatalog): boolean {
+  const normalizedScope = compactGroundingText(scopeText);
+  return catalog.pages.some((page) =>
+    [page.name, page.key, page.id].some((reference) => compactGroundingText(reference) === normalizedScope)
+  );
+}
+
+function requestedFieldLabels(prompt: string | undefined): string[] {
+  if (!prompt) return [];
+  const labels = new Set<string>();
+  for (const match of prompt.matchAll(
+    /(?:把|将)?\s*(?:当前(?:页面|屏幕)的?)?\s*([^，,。；;\n]{2,32}?)(?:输入框|文本框|字段|表单项|选择器|下拉框|开关|复选框)?\s*(?:改成|改为|修改为|设置为|设为|输入|填写|填入|清空|开启|打开|关闭|关掉|启用|禁用|选中|勾选)/gu
+  )) {
+    const label = sanitizeRequestedFieldLabel(match[1]);
+    if (label) labels.add(label);
+  }
+  for (const match of prompt.matchAll(
+    /(?:选择|点击|点按|轻触|打开|关闭|开启|启用|禁用)?\s*([^，,。；;\n]{2,32}?)(?:开关|复选框)?\s*(?:开启|打开|关闭|关掉|启用|禁用|选中|勾选)(?=$|[，,。；;\n])/gu
+  )) {
+    const label = sanitizeRequestedFieldLabel(match[1]);
+    if (label) labels.add(label);
+  }
+  return [...labels];
+}
+
+function sanitizeRequestedFieldLabel(value: string | undefined): string | undefined {
+  const label = (value ?? "")
+    .replace(/^(?:请|把|将|当前页面|当前屏幕|当前|页面|屏幕|最上方|最上面|最下面|上方|下方|左侧|右侧|的|选择|点击|点按|轻触|打开|关闭|开启|启用|禁用)+/u, "")
+    .replace(/(?:输入框|文本框|字段|表单项|选择器|下拉框|开关|复选框|按钮|用例)$/u, "")
+    .trim();
+  if (!label || /^[0-9]+$/.test(label)) return undefined;
+  return label;
+}
+
+function targetUsesRequestedFieldLabel(target: ScriptTarget, label: string): boolean {
+  const normalizedLabel = compactGroundingText(label);
+  return [target.text, target.nearText, target.scopeText].some((value) => {
+    if (!value) return false;
+    const normalizedTarget = compactGroundingText(value);
+    return normalizedTarget.includes(normalizedLabel) || normalizedLabel.includes(normalizedTarget);
+  });
+}
+
+function screenControlCandidateMatchesTarget(
+  target: ScriptTarget,
+  screenContext: ScreenUnderstandingContext | undefined
+): boolean {
+  if (!screenContext) return false;
+  return screenContext.controlCandidates.some((candidate) => {
+    if (target.control && candidate.control !== target.control) return false;
+    if (target.control === "textField") {
+      return Boolean(target.scopeText
+        && candidate.scopeText
+        && compactGroundingText(target.scopeText) === compactGroundingText(candidate.scopeText)
+        && target.ordinal === candidate.ordinal);
+    }
+    if (target.control === "switch" || target.control === "checkbox") {
+      return Boolean(target.nearText
+        && candidate.nearText
+        && compactGroundingText(target.nearText) === compactGroundingText(candidate.nearText));
+    }
+    return [target.text, target.nearText, target.scopeText].some((value) => {
+      if (!value) return false;
+      return [candidate.nearText, candidate.scopeText, candidate.semanticName].some((candidateValue) =>
+        Boolean(candidateValue && compactGroundingText(value) === compactGroundingText(candidateValue))
+      );
+    });
   });
 }
 

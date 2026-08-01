@@ -166,9 +166,76 @@ function sourceStepContext(step: CaseSourceStep): string | undefined {
   if (typeof assertText?.text === "string") {
     return assertText.text;
   }
+  const tap = actionTargetRecord(step.tap);
+  if (tap) return targetContext(tap.target);
+  const inputText = actionTargetRecord(step.inputText);
+  if (inputText) {
+    const label = targetLabel(inputText.target);
+    const value = stringValue(inputText.action.value);
+    return label && value ? `${label} = ${value}` : label;
+  }
+  const clearText = actionTargetRecord(step.clearText);
+  if (clearText) return targetLabel(clearText.target);
+  const selectText = actionTargetRecord(step.selectText);
+  if (selectText) {
+    const label = targetLabel(selectText.target);
+    const value = stringValue(selectText.action.value);
+    return label && value ? `${label} → ${value}` : label;
+  }
+  const scrollUntilVisible = actionTargetRecord(step.scrollUntilVisible);
+  if (scrollUntilVisible) return targetLabel(scrollUntilVisible.target);
   return pageContext(step.onPage, step.expectPage);
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function actionTargetRecord(value: unknown): { action: Record<string, unknown>; target: Record<string, unknown> } | undefined {
+  const action = recordValue(value);
+  const target = recordValue(action?.target);
+  return action && target ? { action, target } : undefined;
+}
+
+function targetContext(target: Record<string, unknown>): string | undefined {
+  const control = stringValue(target.control);
+  if (control === "switch") {
+    const label = targetLabel(target);
+    const checked = typeof target.checked === "boolean" ? target.checked : undefined;
+    if (!label) return checked === undefined ? "开关" : `开关：${checked ? "开启" : "关闭"}`;
+    return checked === undefined ? `${label} 开关` : `${label} 开关：${checked ? "开启" : "关闭"}`;
+  }
+  if (control === "checkbox") {
+    const label = targetLabel(target);
+    return label ? `${label} 复选框` : "复选框";
+  }
+  if (control === "textField") return targetLabel(target) ?? "输入框";
+  return targetLabel(target);
+}
+
+function targetLabel(target: Record<string, unknown>): string | undefined {
+  return stringValue(target.text)
+    ?? stringValue(target.nearText)
+    ?? stringValue(target.scopeText)
+    ?? stringValue(target.semantic)
+    ?? iconLabel(stringValue(target.icon))
+    ?? stringValue(target.control);
+}
+
+function iconLabel(icon: string | undefined): string | undefined {
+  if (!icon) return undefined;
+  const labels: Record<string, string> = {
+    add: "新增图标",
+    back: "返回图标",
+    close: "关闭图标",
+    home: "主页图标",
+    more: "更多图标",
+    search: "搜索图标",
+    share: "分享图标"
+  };
+  return labels[icon] ?? `${icon} 图标`;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
