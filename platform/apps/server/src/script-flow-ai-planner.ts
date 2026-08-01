@@ -890,6 +890,7 @@ function validateExplicitOperationContract(
   const generated = generatedDirectOperations(document);
   let cursor = 0;
   let operationIndex = 0;
+  let pendingDiscoveryLabels: string[] = [];
   while (operationIndex < contract.length) {
     const pickerAt = generated.findIndex((candidate, index) => index >= cursor
       && candidate.kind === "select"
@@ -910,6 +911,7 @@ function validateExplicitOperationContract(
     }
     const operation = contract[operationIndex]!;
     if (searchOnlyDiscoveryOperationCovered(operation, generated.slice(cursor), requestedFieldLabels(prompt))) {
+      pendingDiscoveryLabels = searchOnlyDiscoveryLabels(operation, requestedFieldLabels(prompt));
       operationIndex += 1;
       continue;
     }
@@ -917,10 +919,12 @@ function validateExplicitOperationContract(
     if (foundAt < 0) {
       throw new Error(`用户明确操作“${operation.phrase}”没有按顺序保留；明确操作不能被 reachPage、runFlow 或已有资产替代`);
     }
-    if (!explicitOperationTargetMatches(operation, generated[foundAt]!.step)) {
+    if (!explicitOperationTargetMatches(operation, generated[foundAt]!.step)
+      && !genericTapUsesPendingDiscoveryTarget(operation, generated[foundAt]!.step, pendingDiscoveryLabels)) {
       throw new Error(`用户明确操作“${operation.phrase}”对应的动作目标与描述不一致或顺序错误`);
     }
     cursor = foundAt + 1;
+    pendingDiscoveryLabels = [];
     operationIndex += 1;
   }
 }
@@ -947,7 +951,7 @@ function searchOnlyDiscoveryOperationCovered(
   requestedLabels: string[]
 ): boolean {
   if (!isSearchOnlyDiscoveryOperation(operation)) return false;
-  const labels = [...requestedLabels, ...searchDiscoveryTargetLabels(operation.phrase)];
+  const labels = searchOnlyDiscoveryLabels(operation, requestedLabels);
   if (!labels.length) return false;
   return candidates.some((candidate) => {
     if (!candidate.step || !["tap", "input", "clear", "select"].includes(candidate.kind)) return false;
@@ -956,6 +960,26 @@ function searchOnlyDiscoveryOperationCovered(
     if (action.search?.mode !== "auto" && action.search?.mode !== "scroll") return false;
     return labels.some((label) => targetUsesRequestedFieldLabel(action.target, label));
   });
+}
+
+function searchOnlyDiscoveryLabels(operation: ExplicitOperationContract, requestedLabels: string[]): string[] {
+  return [...requestedLabels, ...searchDiscoveryTargetLabels(operation.phrase)];
+}
+
+function genericTapUsesPendingDiscoveryTarget(
+  operation: ExplicitOperationContract,
+  step: ScriptStep | undefined,
+  pendingDiscoveryLabels: string[]
+): boolean {
+  if (operation.kind !== "tap" || !pendingDiscoveryLabels.length || !isGenericFollowupTap(operation.phrase)) return false;
+  const target = step ? operationTarget(step) : undefined;
+  if (!target) return false;
+  return pendingDiscoveryLabels.some((label) => targetUsesRequestedFieldLabel(target, label));
+}
+
+function isGenericFollowupTap(phrase: string): boolean {
+  return /(?:进入|打开|查看|点进|进去)/u.test(phrase)
+    && !/(?:确定|完成|提交|发布|取消|返回)/u.test(phrase);
 }
 
 function isSearchOnlyDiscoveryOperation(operation: ExplicitOperationContract): boolean {
