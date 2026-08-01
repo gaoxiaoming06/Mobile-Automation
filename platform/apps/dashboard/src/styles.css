@@ -4937,6 +4937,22 @@ button:disabled {
 
 .ai-script-prompt span { color: #475569; font-size: 13px; font-weight: 650; }
 .ai-script-prompt textarea { min-height: 210px; resize: vertical; }
+.screen-assist-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 3px 8px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 650;
+}
+.screen-assist-toggle input { margin: 0; }
+.screen-assist-toggle small {
+  grid-column: 2;
+  color: #718096;
+  font-size: 11px;
+  font-weight: 600;
+}
 .ai-script-generate { min-height: 42px; }
 
 .temporary-test-history {

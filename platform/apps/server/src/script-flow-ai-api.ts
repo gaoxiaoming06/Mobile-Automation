@@ -3,11 +3,17 @@ import type { ScriptFlow } from "@mobile-automation/shared";
 import type { PageAssetPlatform } from "./page-asset-catalog.js";
 import type { ScriptFlowAiDraft } from "./script-flow-ai-planner.js";
 
+export type ScriptFlowScreenAssistRequest = {
+  mode: "current";
+  deviceSerial: string;
+};
+
 export type ScriptFlowAiDraftGenerator = (input: {
   prompt: string;
   appId: string;
   platform: PageAssetPlatform;
   existingFlow?: ScriptFlow;
+  screenAssist?: ScriptFlowScreenAssistRequest;
 }) => Promise<ScriptFlowAiDraft>;
 
 export function registerScriptFlowAiRoutes(
@@ -19,12 +25,14 @@ export function registerScriptFlowAiRoutes(
       const body = strictBody(req.body);
       const prompt = requiredString(body.prompt, "prompt");
       const flowId = optionalString(body.flowId);
+      const screenAssist = screenAssistValue(body.screenAssist);
       const draft = flowId
-        ? await generateRevisionDraft(deps, flowId, body.expectedVersion, prompt)
+        ? await generateRevisionDraft(deps, flowId, body.expectedVersion, prompt, screenAssist)
         : await deps.generateDraft({
             prompt,
             appId: requiredString(body.appId, "appId"),
-            platform: platformValue(body.platform)
+            platform: platformValue(body.platform),
+            ...(screenAssist ? { screenAssist } : {})
           });
       res.json({ draft });
     } catch (error) {
@@ -39,7 +47,7 @@ function strictBody(value: unknown): Record<string, unknown> {
     throw new ScriptFlowAiApiError(400, "Request body must be an object");
   }
   const body = value as Record<string, unknown>;
-  const unknown = Object.keys(body).find((key) => !["prompt", "appId", "platform", "flowId", "expectedVersion"].includes(key));
+  const unknown = Object.keys(body).find((key) => !["prompt", "appId", "platform", "flowId", "expectedVersion", "screenAssist"].includes(key));
   if (unknown) throw new ScriptFlowAiApiError(400, `Unknown request field: ${unknown}`);
   return body;
 }
@@ -48,7 +56,8 @@ async function generateRevisionDraft(
   deps: { generateDraft: ScriptFlowAiDraftGenerator; getFlow: (id: string) => ScriptFlow | undefined },
   flowId: string,
   expectedVersion: unknown,
-  prompt: string
+  prompt: string,
+  screenAssist: ScriptFlowScreenAssistRequest | undefined
 ): Promise<ScriptFlowAiDraft> {
   const existingFlow = deps.getFlow(flowId);
   if (!existingFlow) {
@@ -64,7 +73,8 @@ async function generateRevisionDraft(
     prompt,
     appId: existingFlow.appId,
     platform: existingFlow.platform,
-    existingFlow
+    existingFlow,
+    ...(screenAssist ? { screenAssist } : {})
   });
 }
 
@@ -77,6 +87,33 @@ function requiredString(value: unknown, field: string): string {
     throw new ScriptFlowAiApiError(400, `${field} is required`);
   }
   return value.trim();
+}
+
+function screenAssistValue(value: unknown): ScriptFlowScreenAssistRequest | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const screenAssist = recordValue(value, "screenAssist");
+  const mode = requiredString(screenAssist.mode, "screenAssist.mode");
+  if (mode !== "current") {
+    throw new ScriptFlowAiApiError(400, "screenAssist.mode must be current");
+  }
+  return {
+    mode: "current",
+    deviceSerial: requiredString(screenAssist.deviceSerial, "screenAssist.deviceSerial")
+  };
+}
+
+function recordValue(value: unknown, field: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ScriptFlowAiApiError(400, `${field} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const unknown = Object.keys(record).find((key) => !["mode", "deviceSerial"].includes(key));
+  if (unknown) {
+    throw new ScriptFlowAiApiError(400, `Unknown ${field} field: ${unknown}`);
+  }
+  return record;
 }
 
 function platformValue(value: unknown): PageAssetPlatform {

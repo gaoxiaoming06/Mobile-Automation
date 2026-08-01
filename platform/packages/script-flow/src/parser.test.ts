@@ -465,6 +465,89 @@ steps:
     });
   });
 
+  it("accepts a switch described by nearby text and desired state", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: enable recording
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: enable-recording
+    tap:
+      target:
+        control: switch
+        nearText: 录制ClassIn教室
+        area: content
+        checked: true
+`);
+
+    expect(flow.steps[0]).toMatchObject({
+      tap: { target: { control: "switch", nearText: "录制ClassIn教室", area: "content", checked: true } }
+    });
+  });
+
+  it("requires switch control targets to use a nearby text anchor and desired state", () => {
+    expect(() => parseScriptFlow(`
+version: 1
+name: invalid switch
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: enable-recording
+    tap:
+      target:
+        control: switch
+        area: content
+`)).toThrow(/switch.*nearText.*checked.*area content/i);
+  });
+
+  it("accepts a text field described by scope and ordinal without using dynamic current text", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: fill lesson title
+app: { id: cn.eeo.classin, platform: android }
+parameters:
+  lessonName: { type: string, required: true }
+steps:
+  - id: fill-title
+    role: business
+    inputText:
+      target:
+        control: textField
+        area: content
+        scopeText: 课堂信息
+        ordinal: 1
+      value: \${lessonName}
+      search: { mode: visibleOnly }
+`);
+
+    expect(flow.steps[0]).toMatchObject({
+      inputText: {
+        target: {
+          control: "textField",
+          area: "content",
+          scopeText: "课堂信息",
+          ordinal: 1
+        }
+      }
+    });
+  });
+
+  it("requires text field control targets to use content scope and positive ordinal", () => {
+    expect(() => parseScriptFlow(`
+version: 1
+name: invalid text field
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: fill-title
+    inputText:
+      target:
+        control: textField
+        area: topBar
+        scopeText: 课堂信息
+        ordinal: 0
+      value: 自动化课堂
+`)).toThrow(/textField.*scopeText.*ordinal.*area content/i);
+  });
+
   it("rejects risk none for click-like interactions", () => {
     expect(() => parseScriptFlow(`
 version: 1

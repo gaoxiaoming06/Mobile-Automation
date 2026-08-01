@@ -1362,8 +1362,7 @@ export class SemanticStepResolver {
       const layout = await locateText({ image: screenshot.png, mode: "contains" });
       return { screenshot, layout };
     };
-    const findAnchor = (layout: OcrLayoutResult): TextLocatorCandidate | undefined => findTextCandidate(layout, locator.anchorText, {
-      mode: "contains",
+    const findAnchor = (layout: OcrLayoutResult): TextLocatorCandidate | undefined => findTrailingSwitchAnchorCandidate(layout, locator.anchorText, {
       semanticArea: readSemanticArea(input.step.params.semanticArea) ?? "content",
       deviceSize: input.deviceSize
     });
@@ -2904,11 +2903,13 @@ export class SemanticStepResolver {
     };
 
     const tapCandidate = async (candidate: TextLocatorCandidate, layout: OcrLayoutResult): Promise<SemanticResolutionOutcome> => {
-      const action = {
+      const ocrAction = {
         type: "tap",
         x: scaleCoordinate(candidate.centerX, layout.width, input.deviceSize?.width),
         y: scaleCoordinate(candidate.centerY, layout.height, input.deviceSize?.height)
       } satisfies DeviceActionRequest;
+      const hierarchyTap = await this.resolveTextTapClickableContainer(input, candidate, mode, ocrAction);
+      const action = hierarchyTap?.action ?? ocrAction;
       const actionResult = (await this.deps.performAction(input.serial, action)) ?? undefined;
       return {
         supported: true,
@@ -2925,6 +2926,10 @@ export class SemanticStepResolver {
           matchStrategy: latestMatchStrategy,
           attempts: attempt,
           locator: candidate,
+          ...(hierarchyTap ? {
+            tapPointSource: "ui_clickable_ancestor",
+            uiCandidate: hierarchyTap.candidate
+          } : { tapPointSource: "ocr_text_center" }),
           search: {
             mode: searchMode,
             direction: searchDirection,
@@ -3041,6 +3046,51 @@ export class SemanticStepResolver {
       }
       };
     }
+  }
+
+  private async resolveTextTapClickableContainer(
+    input: {
+      step: ActionStep;
+      serial: string;
+      deviceSize?: { width: number; height: number };
+    },
+    candidate: TextLocatorCandidate,
+    mode: "contains" | "equals",
+    ocrAction: Extract<DeviceActionRequest, { type: "tap" }>
+  ): Promise<{ action: Extract<DeviceActionRequest, { type: "tap" }>; candidate: UiElementCandidate } | undefined> {
+    if (!this.deps.dumpUiHierarchy) return undefined;
+    const targetTexts = [...new Set([candidate.text, ...tapTextTargets(input.step.params)].map((item) => item.trim()).filter(Boolean))];
+    if (!targetTexts.length) return undefined;
+
+    let xml: string;
+    try {
+      xml = await this.deps.dumpUiHierarchy(input.serial);
+    } catch {
+      return undefined;
+    }
+
+    for (const text of targetTexts) {
+      const uiCandidate = findElementByLocator(xml, {
+        text,
+        textMatchMode: mode,
+        tapTarget: "clickable_ancestor"
+      }, {
+        preferredPoint: ocrAction,
+        maxDistance: 180
+      });
+      if (!uiCandidate || !isReasonableClickableTextContainer(uiCandidate, ocrAction, input.deviceSize)) {
+        continue;
+      }
+      return {
+        action: {
+          type: "tap",
+          x: uiCandidate.bounds.centerX,
+          y: uiCandidate.bounds.centerY
+        },
+        candidate: uiCandidate
+      };
+    }
+    return undefined;
   }
 
   private async resolveTapOnElement(input: {
@@ -3845,7 +3895,7 @@ export class SemanticStepResolver {
   ): Promise<{
     point?: { x: number; y: number };
     recordedCenter?: { x: number; y: number };
-    resolvedBy: "ocr_text_semantic" | "ocr_relative_structure" | "ui_edit_text_structural" | "tap_point_percent" | "region_center" | "region_center_disabled";
+    resolvedBy: "ocr_text_semantic" | "ocr_relative_structure" | "scoped_text_field" | "ui_edit_text_structural" | "tap_point_percent" | "region_center" | "region_center_disabled";
     candidate?: TextLocatorCandidate;
     uiCandidate?: UiElementCandidate;
     artifacts: ArtifactRef[];
@@ -3866,7 +3916,11 @@ export class SemanticStepResolver {
         const point = textCandidateDevicePoint(candidate, layout, input.deviceSize);
         return {
           point,
-          resolvedBy: isRelativeInputStructure(input.step.params) ? "ocr_relative_structure" : "ocr_text_semantic",
+          resolvedBy: isRelativeInputStructure(input.step.params)
+            ? "ocr_relative_structure"
+            : isScopedTextFieldStructure(input.step.params)
+              ? "scoped_text_field"
+              : "ocr_text_semantic",
           candidate,
           artifacts: [screenshot.artifact],
           signature
@@ -4245,6 +4299,40 @@ export function findTextCandidate(
   } = {}
 ): TextLocatorCandidate | undefined {
   return findTextCandidates(layout, expected, options)[0];
+}
+
+function findTrailingSwitchAnchorCandidate(
+  layout: OcrLayoutResult,
+  expected: string,
+  options: {
+    semanticArea?: VisualSemanticArea;
+    deviceSize?: { width: number; height: number };
+  } = {}
+): TextLocatorCandidate | undefined {
+  const direct = findTextCandidate(layout, expected, {
+    mode: "contains",
+    semanticArea: options.semanticArea,
+    deviceSize: options.deviceSize
+  });
+  if (direct) return direct;
+
+  const expectedKey = normalizeOcrConfusableKey(expected);
+  if (!expectedKey) return undefined;
+  return layout.boxes
+    .map((box) => toCandidate(box))
+    .filter((candidate) => {
+      const actualKey = normalizeOcrConfusableKey(candidate.text);
+      return Boolean(actualKey && (actualKey.includes(expectedKey) || expectedKey.includes(actualKey)));
+    })
+    .filter((candidate) => !options.semanticArea || options.semanticArea === "unknown" || textCandidateSemanticArea(candidate, layout, options.deviceSize) === options.semanticArea)
+    .sort((left, right) => candidateScore(right) - candidateScore(left))[0];
+}
+
+function normalizeOcrConfusableKey(value: string): string {
+  return normalizeOcrText(value)
+    .toLowerCase()
+    .replace(/[il1|]/g, "i")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
 function findTextCandidates(
@@ -4704,6 +4792,29 @@ function findTextCandidateSelectionFromTargets(
   return { ambiguous: true, candidateCount: candidates.length };
 }
 
+function isReasonableClickableTextContainer(
+  candidate: UiElementCandidate,
+  point: { x: number; y: number },
+  deviceSize?: { width: number; height: number }
+): boolean {
+  if (!candidate.enabled || !candidate.clickable) return false;
+  if (!pointInsideUiBounds(candidate, point)) return false;
+  if (!deviceSize) return true;
+  const viewportArea = deviceSize.width * deviceSize.height;
+  if (!viewportArea) return true;
+  const areaRatio = candidate.area / viewportArea;
+  if (areaRatio > 0.45) return false;
+  if (candidate.bounds.width > deviceSize.width * 0.98 && candidate.bounds.height > deviceSize.height * 0.5) return false;
+  return true;
+}
+
+function pointInsideUiBounds(candidate: UiElementCandidate, point: { x: number; y: number }): boolean {
+  return point.x >= candidate.bounds.left
+    && point.x <= candidate.bounds.right
+    && point.y >= candidate.bounds.top
+    && point.y <= candidate.bounds.bottom;
+}
+
 export function findNearestTextCandidate(
   layout: OcrLayoutResult,
   point: { x: number; y: number },
@@ -4728,6 +4839,10 @@ function findInputFocusCandidate(
   if (!candidates.length) {
     return undefined;
   }
+  const scopedCandidate = findScopedTextFieldFocusCandidate(layout, candidates, params);
+  if (scopedCandidate) {
+    return scopedCandidate;
+  }
   if (targets.length) {
     const targeted = candidates.filter((candidate) => targets.some((target) => textMatchesLoosely(candidate.text, target)));
     const directCandidate = targeted
@@ -4738,6 +4853,56 @@ function findInputFocusCandidate(
     }
   }
   return findRelativeInputFocusCandidate(layout, candidates, params);
+}
+
+function findScopedTextFieldFocusCandidate(
+  layout: OcrLayoutResult,
+  candidates: TextLocatorCandidate[],
+  params: Record<string, unknown>
+): TextLocatorCandidate | undefined {
+  const structuralLocator = readRecord(params.structuralLocator);
+  if (textParam(structuralLocator?.strategy).trim() !== "scoped_text_field") {
+    return undefined;
+  }
+  const scopeText = textParam(structuralLocator?.scopeText ?? params.scopeText).trim();
+  const ordinal = Math.max(1, Math.floor(positiveNumberParam(structuralLocator?.ordinal, 1)));
+  if (!scopeText) {
+    return undefined;
+  }
+  const scope = candidates
+    .filter((candidate) => textMatchesLoosely(candidate.text, scopeText))
+    .sort((left, right) => candidateScore(right) - candidateScore(left))[0];
+  if (!scope) {
+    return undefined;
+  }
+  const maxGapPercent = positiveNumberParam(structuralLocator?.maxVerticalGapPercent, 24);
+  const maxGap = Math.max(160, layout.height * maxGapPercent / 100);
+  const stableNonInputTexts = new Set([
+    normalizeOcrText(scopeText),
+    "修改",
+    "编辑",
+    "教师",
+    "老师",
+    "课堂时长",
+    "开始时间",
+    "结束时间"
+  ].filter(Boolean));
+  return candidates
+    .filter((candidate) => candidate !== scope)
+    .filter((candidate) => candidate.centerY >= scope.centerY)
+    .map((candidate) => ({
+      candidate,
+      verticalGap: candidate.y - (scope.y + scope.height),
+      horizontalBias: Math.abs(candidate.centerX - scope.centerX)
+    }))
+    .filter((entry) => entry.verticalGap >= 0 && entry.verticalGap <= maxGap)
+    .filter((entry) => !stableNonInputTexts.has(normalizeOcrText(entry.candidate.text)))
+    .sort((left, right) =>
+      left.candidate.y - right.candidate.y ||
+      left.candidate.x - right.candidate.x ||
+      left.horizontalBias - right.horizontalBias ||
+      candidateScore(right.candidate) - candidateScore(left.candidate)
+    )[ordinal - 1]?.candidate;
 }
 
 function findRelativeInputFocusCandidate(
@@ -4785,6 +4950,11 @@ function findRelativeInputFocusCandidate(
 function isRelativeInputStructure(params: Record<string, unknown>): boolean {
   const structuralLocator = readRecord(params.structuralLocator);
   return textParam(structuralLocator?.strategy).trim() === "ocr_relative_input";
+}
+
+function isScopedTextFieldStructure(params: Record<string, unknown>): boolean {
+  const structuralLocator = readRecord(params.structuralLocator);
+  return textParam(structuralLocator?.strategy).trim() === "scoped_text_field";
 }
 
 function inputFocusTextTargets(params: Record<string, unknown>): string[] {
@@ -5731,7 +5901,8 @@ function isRuntimeInputStructuralLocator(params: Record<string, unknown>): boole
   return locatorKind === "structural_locator" ||
     locator.startsWith("runtime-locator:") ||
     textParam(structuralLocator?.strategy).trim() === "ocr_or_edittext" ||
-    textParam(structuralLocator?.strategy).trim() === "ocr_or_edittext_in_region";
+    textParam(structuralLocator?.strategy).trim() === "ocr_or_edittext_in_region" ||
+    textParam(structuralLocator?.strategy).trim() === "scoped_text_field";
 }
 
 function runtimeInputRevealSettings(

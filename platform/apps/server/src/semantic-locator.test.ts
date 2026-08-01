@@ -84,6 +84,49 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("taps the clickable container for a text target inside a card", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "班级四十二号",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1080,
+        height: 2400,
+        boxes: [
+          { text: "班级四十二号", confidence: 0.99, x: 601, y: 1386, width: 232, height: 40 }
+        ]
+      }),
+      dumpUiHierarchy: async () => cardTextHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-card-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-card",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: tapOnTextStep("班级四十二号", 0, 0, {
+        searchMode: "auto",
+        searchDirection: "down"
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 750, y: 1490 }]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        tapPointSource: "ui_clickable_ancestor",
+        uiCandidate: expect.objectContaining({
+          selector: "id=cn.eeo.classin:id/class_card"
+        })
+      })
+    }));
+  });
+
   it("grounds a semantic query to one unambiguous visible OCR candidate", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -1505,6 +1548,83 @@ describe("SemanticStepResolver", () => {
         })
       })
     );
+  });
+
+  it("resolves a scoped text field by ordinal without relying on a dynamic current value as a label", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "新建课堂 课堂信息 小王 教师 修改 课堂时长 30分钟",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "新建课堂", confidence: 0.99, x: 145, y: 150, width: 180, height: 50 },
+            { text: "课堂信息", confidence: 0.99, x: 90, y: 300, width: 160, height: 52 },
+            { text: "小王", confidence: 0.92, x: 90, y: 380, width: 90, height: 52 },
+            { text: "教师", confidence: 0.92, x: 260, y: 380, width: 90, height: 52 },
+            { text: "修改", confidence: 0.98, x: 820, y: 380, width: 90, height: 52 },
+            { text: "课堂时长", confidence: 0.99, x: 90, y: 560, width: 160, height: 52 },
+            { text: "30分钟", confidence: 0.99, x: 720, y: 560, width: 120, height: 52 }
+          ]
+        },
+        {
+          text: "新建课堂 课堂信息 自动化课堂 教师 修改 课堂时长 30分钟",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "自动化课堂", confidence: 0.99, x: 90, y: 380, width: 240, height: 52 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-scoped-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-scoped-field",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "自动化课堂",
+        clearFirst: true,
+        focusDelayMs: 1,
+        inputVerificationDelayMs: 1,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "课堂信息",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 135, y: 406 },
+      { type: "clear_text" },
+      { type: "input_text", text: "自动化课堂" }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: true,
+      metadata: expect.objectContaining({
+        resolvedBy: "runtime_structural_locator",
+        focusResolvedBy: "scoped_text_field",
+        inputVerified: true
+      })
+    }));
   });
 
   it("restores the content area to the top before resolving a hidden runtime input", async () => {
@@ -4119,6 +4239,61 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("matches trailing switch anchors with common mixed Latin OCR confusions", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const screenshots = [trailingSwitchScreenshot(false), trailingSwitchScreenshot(true)];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "录制Classln教室",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: [
+          { text: "录制Classln教室", confidence: 0.99, x: 90, y: 1200, width: 360, height: 60 }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        artifact: artifact(`artifact-confusable-${attempt}`),
+        png: screenshots.shift() ?? trailingSwitchScreenshot(true)
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-confusable",
+      stepResultId: "step-result-confusable",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "structural_locator",
+        targetText: "录制ClassIn教室",
+        semanticArea: "content",
+        fieldType: "toggle_set",
+        desiredState: "on",
+        toggleVerifyDelayMs: 1,
+        structuralLocator: {
+          strategy: "ocr_trailing_switch",
+          anchorText: "录制ClassIn教室"
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 840, y: 1230 }]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        action: "toggle_set",
+        currentState: "off",
+        desiredState: "on",
+        verifiedState: "on"
+      })
+    }));
+  });
+
   it("searches the full content area for an offscreen trailing switch", async () => {
     const actions: DeviceActionRequest[] = [];
     const screenshots = [
@@ -5168,6 +5343,17 @@ function hierarchy(resourceId: string): string {
 <hierarchy rotation="0">
   <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2400]">
     <node index="0" text="进入课堂" resource-id="${resourceId}" class="android.widget.Button" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[120,200][360,280]" />
+  </node>
+</hierarchy>`;
+}
+
+function cardTextHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2400]">
+    <node index="0" text="" resource-id="cn.eeo.classin:id/class_card" class="android.view.ViewGroup" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[490,1240][1010,1740]">
+      <node index="0" text="班级四十二号" resource-id="cn.eeo.classin:id/class_name" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[601,1386][833,1426]" />
+    </node>
   </node>
 </hierarchy>`;
 }

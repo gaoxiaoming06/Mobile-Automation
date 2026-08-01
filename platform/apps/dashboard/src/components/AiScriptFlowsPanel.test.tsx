@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { AiScriptFlowsPanel, draftRunEndpoint, draftSaveDestination, ExecutionFailureNotice, TrialOutcomeReview } from "./AiScriptFlowsPanel.js";
+import { AiScriptFlowsPanel, buildAiGenerateRequestBody, draftRunEndpoint, draftSaveDestination, ExecutionFailureNotice, TrialOutcomeReview } from "./AiScriptFlowsPanel.js";
 
 describe("AiScriptFlowsPanel", () => {
   it("uses separate execution endpoints for verified and trial-ready drafts", () => {
@@ -132,6 +132,49 @@ describe("AiScriptFlowsPanel", () => {
       method: "PUT",
       expectedVersion: 4
     });
+  });
+
+  it("builds screen assist request only when current-screen generation is explicitly enabled", () => {
+    expect(buildAiGenerateRequestBody({
+      prompt: "当前页面第一个输入框改成自动化课堂",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      useCurrentScreen: false,
+      deviceSerial: "device-1"
+    })).toEqual({
+      prompt: "当前页面第一个输入框改成自动化课堂",
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+
+    expect(buildAiGenerateRequestBody({
+      prompt: "当前页面第一个输入框改成自动化课堂",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      useCurrentScreen: true,
+      deviceSerial: "device-1"
+    })).toEqual({
+      prompt: "当前页面第一个输入框改成自动化课堂",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      screenAssist: { mode: "current", deviceSerial: "device-1" }
+    });
+  });
+
+  it("disables current-screen generation when no device is selected", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[]}
+      selectedSerial=""
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+    />);
+
+    expect(markup).toContain("结合当前屏幕生成");
+    expect(markup).toContain("请选择设备后可用");
+    expect(markup).toContain("type=\"checkbox\"");
+    expect(markup).toContain("disabled=\"\"");
   });
 
   it("labels a matched saved draft as an update", () => {

@@ -194,6 +194,12 @@ export class ScriptTargetResolver {
   }
 
   private resolveSemanticControl(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
+    if (input.target.control === "textField") {
+      return this.resolveTextFieldControl(input);
+    }
+    if (input.target.control === "switch") {
+      return this.resolveSwitchControl(input);
+    }
     if (input.action !== "tap") {
       throw new ScriptTargetResolutionError(`Control targets do not support ${input.action}`);
     }
@@ -210,6 +216,59 @@ export class ScriptTargetResolver {
           role: "checkbox",
           anchorText: input.target.nearText,
           clickTarget: "leading_checkbox"
+        },
+        ...searchParams(input.target, input.search),
+        allowRegionFallback: false
+      }
+    };
+  }
+
+  private resolveSwitchControl(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
+    if (input.action !== "tap") {
+      throw new ScriptTargetResolutionError(`Switch targets do not support ${input.action}`);
+    }
+    if (input.target.area !== "content" || !input.target.nearText || input.target.checked === undefined) {
+      throw new ScriptTargetResolutionError("Switch targets require nearText, checked, and area content");
+    }
+    return {
+      type: "tap_on_image",
+      strategy: "semantic_control",
+      params: {
+        fieldType: "toggle_set",
+        desiredState: input.target.checked ? "on" : "off",
+        targetText: input.target.nearText,
+        locatorKind: "structural_locator",
+        structuralLocator: {
+          strategy: "ocr_trailing_switch",
+          anchorText: input.target.nearText,
+          ...switchRevealParams(input.search)
+        },
+        ...searchParams(input.target, input.search),
+        allowRegionFallback: false
+      }
+    };
+  }
+
+  private resolveTextFieldControl(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
+    if (input.action !== "inputText" && input.action !== "clearText") {
+      throw new ScriptTargetResolutionError(`Text field targets do not support ${input.action}`);
+    }
+    if (input.target.area !== "content" || !input.target.scopeText || !input.target.ordinal) {
+      throw new ScriptTargetResolutionError("Text field targets require scopeText, ordinal, and area content");
+    }
+    return {
+      type: "input_text_to_element",
+      strategy: "semantic_control",
+      params: {
+        text: input.value ?? "",
+        clearFirst: true,
+        ...(input.action === "clearText" ? { clearOnly: true } : {}),
+        locatorKind: "structural_locator",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: input.target.scopeText,
+          ordinal: input.target.ordinal,
+          role: "text_input"
         },
         ...searchParams(input.target, input.search),
         allowRegionFallback: false
@@ -312,6 +371,20 @@ function semanticAreaParam(area: ScriptTarget["area"]): "top" | "content" | "bot
   if (area === "bottomBar") return "bottom";
   if (area === "content") return "content";
   return undefined;
+}
+
+function switchRevealParams(policy: ScriptSearchPolicy | undefined): Record<string, unknown> {
+  if (!policy || policy.mode === "visibleOnly") {
+    return {};
+  }
+  const maxSwipes = policy.maxSwipes && Number.isFinite(policy.maxSwipes)
+    ? Math.max(1, Math.floor(policy.maxSwipes))
+    : 6;
+  return {
+    revealStrategy: "search_content",
+    restoreMaxSwipes: maxSwipes,
+    searchMaxSwipes: maxSwipes
+  };
 }
 
 function requiredValue(input: ScriptTargetResolutionInput): string {

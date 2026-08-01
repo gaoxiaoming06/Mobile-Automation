@@ -56,6 +56,8 @@ import { registerScriptFlowRoutes } from "./script-flow-api.js";
 import { registerScriptFlowAiRoutes } from "./script-flow-ai-api.js";
 import { registerTrialLearningRoutes } from "./trial-learning-api.js";
 import { generateScriptFlowDraft } from "./script-flow-ai-planner.js";
+import { createScriptFlowAiTimingContext, timedScriptFlowAiStage } from "./script-flow-ai-timing.js";
+import { understandScreenForScriptFlow } from "./script-flow-screen-understanding.js";
 import { pageStateExpectationVerifier, ScriptFlowRunner } from "./script-flow-runner.js";
 import { ScriptTargetResolver } from "./script-target-resolver.js";
 import {
@@ -124,16 +126,40 @@ registerTrialLearningRoutes(app, { storage });
 registerPageAssetLibraryRoutes(app, { storage });
 registerScriptFlowAiRoutes(app, {
   getFlow: (id) => storage.getScriptFlow(id),
-  generateDraft: ({ prompt, appId, platform, existingFlow }) => generateScriptFlowDraft({
-    config: resolveAiModelConfig(process.env, storage.getAiModelSettings()),
-    prompt,
-    appId,
-    platform,
-    existingFlow,
-    pageCatalog: pageAssetCatalog,
-    flows: storage.listScriptFlows({ appId, platform }),
-    navigationEntries: storage.listNavigationEntries({ appId, platform })
-  })
+  generateDraft: async ({ prompt, appId, platform, existingFlow, screenAssist }) => {
+    const timingContext = createScriptFlowAiTimingContext(prompt);
+    return timedScriptFlowAiStage(timingContext, "total", async () => {
+      const config = resolveAiModelConfig(process.env, storage.getAiModelSettings());
+      const observation = screenAssist
+        ? await timedScriptFlowAiStage(timingContext, "collect_observation", () => observationService.collect(screenAssist.deviceSerial, {
+            includeScreenshot: true,
+            includeUiTree: true,
+            includeOcr: true
+          }), { deviceSerial: screenAssist.deviceSerial })
+        : undefined;
+      const screenContext = observation
+        ? await timedScriptFlowAiStage(timingContext, "understand_screen", () => understandScreenForScriptFlow({
+            config,
+            prompt,
+            appId,
+            platform,
+            observation
+          }), { deviceSerial: screenAssist?.deviceSerial })
+        : undefined;
+      return generateScriptFlowDraft({
+        config,
+        prompt,
+        appId,
+        platform,
+        existingFlow,
+        ...(screenContext ? { screenContext } : {}),
+        timingContext,
+        pageCatalog: pageAssetCatalog,
+        flows: storage.listScriptFlows({ appId, platform }),
+        navigationEntries: storage.listNavigationEntries({ appId, platform })
+      });
+    }, { screenAssist: Boolean(screenAssist), appId, platform });
+  }
 });
 
 app.get("/api/settings/ai-model", (_req, res) => {

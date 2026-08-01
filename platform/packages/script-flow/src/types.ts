@@ -43,7 +43,7 @@ export type ScriptTargetArea = "topBar" | "content" | "bottomBar";
 
 export type ScriptTargetPosition = "leading" | "trailing";
 
-export type ScriptTargetControl = "checkbox";
+export type ScriptTargetControl = "checkbox" | "switch" | "textField";
 
 export type ScriptTarget = {
   text?: string;
@@ -53,6 +53,9 @@ export type ScriptTarget = {
   area?: ScriptTargetArea;
   position?: ScriptTargetPosition;
   nearText?: string;
+  scopeText?: string;
+  ordinal?: number;
+  checked?: boolean;
   match?: "contains" | "exact";
 };
 

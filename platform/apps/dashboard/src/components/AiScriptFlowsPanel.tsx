@@ -102,6 +102,7 @@ export function AiScriptFlowsPanel({
   const [lastRun, setLastRun] = useState<TestRun>();
   const [learning, setLearning] = useState<LearningSummaryResponse>();
   const [busyAction, setBusyAction] = useState<"generate" | "save" | "run" | "review" | "select">();
+  const [useCurrentScreen, setUseCurrentScreen] = useState(false);
   const lastRunFailure = lastRun ? publicExecutionFailureFromRun(lastRun) : undefined;
 
   useEffect(() => {
@@ -148,9 +149,14 @@ export function AiScriptFlowsPanel({
       setLearning(undefined);
       setPlan(undefined);
       setSelectedHistoryId(undefined);
-      const body = revision
-        ? { prompt: prompt.trim(), flowId: revision.flowId, expectedVersion: revision.version }
-        : { prompt: prompt.trim(), appId: appId.trim(), platform };
+      const body = buildAiGenerateRequestBody({
+        prompt: prompt.trim(),
+        appId: appId.trim(),
+        platform,
+        revision,
+        useCurrentScreen,
+        deviceSerial
+      });
       const response = await apiFetchJson<{ draft: AiDraft }>("/api/script-flow-drafts/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -339,6 +345,16 @@ export function AiScriptFlowsPanel({
               placeholder={revision ? "例如：登录成功后增加主页校验，失败时保留截图" : "例如：启动 App，进入班级四十二号，打开新建课堂，填写课堂名称但不要发布"}
             />
           </label>
+          <label className="screen-assist-toggle">
+            <input
+              type="checkbox"
+              checked={useCurrentScreen}
+              disabled={!deviceSerial || busy}
+              onChange={(event) => setUseCurrentScreen(event.target.checked)}
+            />
+            <span>结合当前屏幕生成</span>
+            <small>{deviceSerial ? "默认优先使用资产库" : "请选择设备后可用"}</small>
+          </label>
           <button className="primary-button ai-script-generate" type="button" onClick={() => void generate()} disabled={busy || !prompt.trim() || (!revision && !appId.trim())}>
             <Sparkles size={17} /><span>{busyAction === "generate" ? "生成中" : revision ? "生成修改方案" : "生成测试"}</span>
           </button>
@@ -487,6 +503,32 @@ function draftParameterValues(draft: GeneratedDraft | undefined): Record<string,
 
 export function draftRunEndpoint(status: GeneratedDraft["status"]): string {
   return status === "trial_ready" ? "/api/script-flow-drafts/trial-runs" : "/api/script-flow-drafts/runs";
+}
+
+export function buildAiGenerateRequestBody(input: {
+  prompt: string;
+  appId: string;
+  platform: ScriptFlow["platform"];
+  revision?: CaseRevision;
+  useCurrentScreen: boolean;
+  deviceSerial: string;
+}): Record<string, unknown> {
+  const screenAssist = input.useCurrentScreen && input.deviceSerial
+    ? { screenAssist: { mode: "current" as const, deviceSerial: input.deviceSerial } }
+    : {};
+  return input.revision
+    ? {
+        prompt: input.prompt,
+        flowId: input.revision.flowId,
+        expectedVersion: input.revision.version,
+        ...screenAssist
+      }
+    : {
+        prompt: input.prompt,
+        appId: input.appId,
+        platform: input.platform,
+        ...screenAssist
+      };
 }
 
 async function reconcileDraftVerification(draft: GeneratedDraft): Promise<GeneratedDraft> {

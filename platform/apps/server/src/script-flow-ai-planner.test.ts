@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { serializeScriptFlow, type ScriptFlowDocument } from "@mobile-automation/script-flow";
-import type { NavigationEntry, ScriptFlow } from "@mobile-automation/shared";
+import type { NavigationEntry, ScreenUnderstandingContext, ScriptFlow } from "@mobile-automation/shared";
 import type { PageAssetCatalog } from "./page-asset-catalog.js";
 import {
   SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
@@ -118,6 +118,145 @@ describe("ScriptFlow AI planner", () => {
     })).rejects.toThrow(/testLevel.*component/);
 
     expect(requestBody).toContain("系统判定的 testLevel：component");
+  });
+
+  it("grounds current-screen wording with the explicit screen context text field candidate", async () => {
+    const response = readyResponse();
+    response.summary = "填写当前页面课堂名称";
+    response.document.purpose = "business";
+    response.document.testLevel = "component";
+    response.document.name = "填写课堂名称";
+    response.document.parameters = {
+      lessonName: { type: "string", required: true, label: "课堂名称" }
+    };
+    response.document.steps = [{
+      id: "fill-lesson-name",
+      role: "business",
+      inputText: {
+        target: { control: "textField", area: "content", scopeText: "课堂信息", ordinal: 1 },
+        value: "${lessonName}",
+        search: { mode: "visibleOnly" }
+      }
+    }];
+    response.parameterValues = { lessonName: "自动化课堂" };
+    let plannerPrompt = "";
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "请根据当前页面生成课堂名称字段用例，值为自动化课堂",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: [],
+      screenContext: lessonCreateScreenContext(),
+      fetchImpl: async (_url, init) => {
+        const request = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+        plannerPrompt = request.messages[1]?.content ?? "";
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 });
+      }
+    });
+
+    expect(plannerPrompt).toContain("当前屏幕理解上下文");
+    expect(plannerPrompt).toContain("\"screenContext\"");
+    expect(plannerPrompt).toContain("\"control\": \"textField\"");
+    expect(plannerPrompt).toContain("target: { control: \"textField\", area: \"content\", scopeText, ordinal }");
+    expect(plannerPrompt).not.toContain("小王");
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      document: {
+        testLevel: "component",
+        steps: [{
+          inputText: {
+            target: { control: "textField", area: "content", scopeText: "课堂信息", ordinal: 1 }
+          }
+        }]
+      },
+      parameterValues: { lessonName: "自动化课堂" }
+    });
+  });
+
+  it("accepts explicit text field editing when screen context supplies the scoped field target", () => {
+    const response = readyResponse();
+    response.summary = "修改当前页面课堂名称";
+    response.document.purpose = "business";
+    response.document.testLevel = "component";
+    response.document.name = "修改课堂名称";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.parameters = {
+      lessonName: { type: "string", required: true, label: "课堂名称" }
+    };
+    response.document.steps = [{
+      id: "fill-lesson-name",
+      role: "business",
+      risk: "interaction",
+      inputText: {
+        target: { control: "textField", area: "content", scopeText: "课堂信息", ordinal: 1 },
+        value: "${lessonName}",
+        search: { mode: "visibleOnly" }
+      }
+    }];
+    response.parameterValues = { lessonName: "自动化课堂字段验证0801" };
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog: buildScriptFlowPlannerCatalog(planningPageCatalog(), [], "cn.eeo.classin", "android"),
+      prompt: "把当前页面最上方的课堂名称输入框改成 自动化课堂字段验证0801，改完停在当前页。"
+    })).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [{
+          inputText: {
+            target: { control: "textField", area: "content", scopeText: "课堂信息", ordinal: 1 }
+          }
+        }]
+      },
+      parameterValues: { lessonName: "自动化课堂字段验证0801" }
+    });
+  });
+
+  it("grounds current-screen switch requests with a stateful switch control target", async () => {
+    const response = readyResponse();
+    response.summary = "打开录制ClassIn教室开关";
+    response.document.purpose = "business";
+    response.document.testLevel = "component";
+    response.document.name = "打开录制ClassIn教室";
+    response.document.entry = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
+    response.document.outcome = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
+    response.document.steps = [{
+      id: "enable-record-classin",
+      role: "business",
+      onPage: "classin.lesson.create",
+      risk: "interaction",
+      tap: {
+        target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true },
+        search: { mode: "visibleOnly" }
+      }
+    }];
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "把当前页面的录制ClassIn教室开关打开，改完停在当前页。",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: [],
+      screenContext: lessonCreateScreenContext(),
+      fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 })
+    });
+
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      document: {
+        testLevel: "component",
+        steps: [{
+          tap: {
+            target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true }
+          }
+        }]
+      }
+    });
   });
 
   it("asks for field coverage before accepting full form regression drafts without explicit fields", async () => {
@@ -973,7 +1112,7 @@ describe("ScriptFlow AI planner", () => {
     expect(requestBody).not.toContain('"locators"');
   });
 
-  it("asks the model to repair an invalid ScriptFlow response once", async () => {
+	  it("asks the model to repair an invalid ScriptFlow response once", async () => {
     const catalog = pageCatalog();
     const requestBodies: string[] = [];
     const invalidResponse = {
@@ -1023,10 +1162,83 @@ describe("ScriptFlow AI planner", () => {
     const repairPrompt = JSON.parse(requestBodies[1]) as { messages: Array<{ content: string }> };
     expect(repairPrompt.messages[1]?.content).toContain("steps[0].action: Unknown field");
     expect(repairPrompt.messages[1]?.content).toContain('"assertPage": "classin.home"');
-    expect(repairPrompt.messages[1]?.content).toContain("不要输出 action 或 page 字段");
-  });
+	    expect(repairPrompt.messages[1]?.content).toContain("不要输出 action 或 page 字段");
+	  });
 
-  it("repairs literal target text invented by the model instead of executing it", async () => {
+	  it("fills an empty runFlow reference from a unique reusable flow outcome without repair", async () => {
+	    let calls = 0;
+	    const response = readyResponse();
+	    response.document.name = "进入新建课堂";
+	    response.document.purpose = "business";
+	    response.document.entry = { page: "classin.home", session: "authenticated", role: "teacher" };
+	    response.document.outcome = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
+	    response.document.steps = [{
+	      id: "open-create-lesson-flow",
+	      role: "navigation",
+	      expectPage: "classin.lesson.create",
+	      runFlow: ""
+	    }];
+
+	    const result = await generateScriptFlowDraft({
+	      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+	      prompt: "进入新建课堂",
+	      appId: "cn.eeo.classin",
+	      platform: "android",
+	      pageCatalog: planningPageCatalog(),
+	      flows: planningFlows(),
+	      fetchImpl: async () => {
+	        calls += 1;
+	        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 });
+	      }
+	    });
+
+	    expect(calls).toBe(1);
+	    expect(result).toMatchObject({
+	      status: "trial_ready",
+	      document: {
+	        steps: [{ runFlow: "flow-open-lesson" }]
+	      }
+	    });
+	  });
+
+	  it("drops an empty runFlow placeholder when the step already has an executable action", async () => {
+	    let calls = 0;
+	    const response = readyResponse();
+	    response.document.name = "进入新建课堂";
+	    response.document.purpose = "business";
+	    response.document.entry = { page: "classin.home", session: "authenticated", role: "teacher" };
+	    response.document.outcome = { page: "classin.lesson.create", session: "authenticated", role: "teacher" };
+	    response.document.steps = [{
+	      id: "reach-create-lesson",
+	      role: "navigation",
+	      runFlow: "",
+	      reachPage: { page: "classin.lesson.create", policy: "safe" }
+	    } as unknown as ScriptFlowDocument["steps"][number]];
+
+	    const result = await generateScriptFlowDraft({
+	      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+	      prompt: "进入新建课堂",
+	      appId: "cn.eeo.classin",
+	      platform: "android",
+	      pageCatalog: planningPageCatalog(),
+	      flows: planningFlows(),
+	      fetchImpl: async () => {
+	        calls += 1;
+	        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 });
+	      }
+	    });
+
+	    expect(calls).toBe(1);
+	    expect(result).toMatchObject({
+	      status: "trial_ready",
+	      document: {
+	        steps: [{ reachPage: { page: "classin.lesson.create" } }]
+	      }
+	    });
+	    expect(result.status === "trial_ready" || result.status === "ready" ? result.document.steps[0] : {}).not.toHaveProperty("runFlow");
+	  });
+
+	  it("repairs literal target text invented by the model instead of executing it", async () => {
     const catalog = pageCatalog();
     const requestBodies: string[] = [];
     const invented = readyResponse();
@@ -1179,6 +1391,113 @@ describe("ScriptFlow AI planner", () => {
       platform: "android",
       catalog
     })).toThrow("未录入页面");
+  });
+
+  it("rejects page references used as executable action targets", async () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "选择添加好友页面";
+    response.document.purpose = "business";
+    response.document.testLevel = "component";
+    response.document.steps = [{
+      id: "select-page-key",
+      role: "business",
+      risk: "interaction",
+      selectText: {
+        target: { text: "classin.friend.add" },
+        value: "10小时40分钟",
+        search: { mode: "auto" }
+      }
+    }];
+
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog
+    })).toThrow(/页面引用.*动作目标/);
+
+    let calls = 0;
+    await expect(generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "打开新建课堂，然后修改课堂时长为11小时20分钟。班级：班级四十二号",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: pageCatalog(),
+      flows: [],
+      fetchImpl: async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 });
+      }
+    })).resolves.toMatchObject({
+      status: "needs_clarification",
+      clarification: expect.stringContaining("字段或按钮原文")
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("canonicalizes grounded picker semantic targets into executable text targets", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "设置课堂时长";
+    response.document.purpose = "business";
+    response.document.testLevel = "component";
+    response.document.steps = [{
+      id: "select-duration",
+      role: "business",
+      risk: "interaction",
+      selectText: {
+        target: { semantic: "课堂时长" },
+        value: "11小时20分钟",
+        search: { mode: "auto" }
+      }
+    }];
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "修改课堂时长为11小时20分钟"
+    })).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [{
+          selectText: { target: { text: "课堂时长" } }
+        }]
+      }
+    });
+  });
+
+  it("asks for clarification when a non-tap action target is not executable", async () => {
+    const response = readyResponse();
+    response.document.name = "设置未知字段";
+    response.document.purpose = "business";
+    response.document.testLevel = "component";
+    response.document.steps = [{
+      id: "select-unknown",
+      role: "business",
+      risk: "interaction",
+      selectText: {
+        target: { semantic: "要调整的选择器" },
+        value: "11小时20分钟",
+        search: { mode: "auto" }
+      }
+    }];
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "把当前页面字段改成11小时20分钟",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: pageCatalog(),
+      flows: [],
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 })
+    });
+
+    expect(result).toMatchObject({
+      status: "needs_clarification",
+      clarification: expect.stringContaining("字段或按钮原文")
+    });
   });
 
   it("keeps page element locators out of the AI planner catalog", () => {
@@ -1336,6 +1655,38 @@ function readyResponse(): {
       ],
       tags: ["ai-generated"]
     }
+  };
+}
+
+function lessonCreateScreenContext(): ScreenUnderstandingContext {
+  return {
+    used: true,
+    observationId: "observation-lesson-create",
+    visionUsed: true,
+    page: { key: "classin.lesson.create", name: "新建课堂", confidence: 0.92 },
+    visibleStableTexts: ["课堂信息", "课堂时长", "录制ClassIn教室", "发布"],
+    controlCandidates: [
+      {
+        candidateId: "field.lessonName",
+        control: "textField",
+        semanticName: "lessonName",
+        scopeText: "课堂信息",
+        ordinal: 1,
+        valueKind: "dynamicValue",
+        confidence: 0.78,
+        assetEligible: false
+      },
+      {
+        candidateId: "switch.recordClassIn",
+        control: "switch",
+        semanticName: "recordClassIn",
+        nearText: "录制ClassIn教室",
+        valueKind: "unknown",
+        confidence: 0.82,
+        assetEligible: false
+      }
+    ],
+    rejectedReasons: ["controlCandidates[0].currentValue removed because valueKind is dynamicValue"]
   };
 }
 

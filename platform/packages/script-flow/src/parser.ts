@@ -48,7 +48,7 @@ const actionFields = [
   "repeat",
   "when"
 ] as const;
-const targetFields = new Set(["text", "semantic", "icon", "control", "area", "position", "nearText", "match"]);
+const targetFields = new Set(["text", "semantic", "icon", "control", "area", "position", "nearText", "scopeText", "ordinal", "checked", "match"]);
 const parameterReferencePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 export function parseScriptFlow(source: string): ScriptFlowDocument {
@@ -597,6 +597,9 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
     ...readTargetArea(target.area, `${path}.area`, issues),
     ...readTargetPosition(target.position, `${path}.position`, issues),
     ...optionalStringProperty(target.nearText, `${path}.nearText`, "nearText", issues),
+    ...optionalStringProperty(target.scopeText, `${path}.scopeText`, "scopeText", issues),
+    ...optionalOrdinalProperty(target.ordinal, `${path}.ordinal`, issues),
+    ...optionalBooleanProperty(target.checked, `${path}.checked`, "checked", issues),
     ...readTargetMatch(target.match, `${path}.match`, issues)
   };
   if ([result.text, result.semantic, result.icon, result.control].filter(Boolean).length !== 1) {
@@ -617,8 +620,17 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
   if (result.match && !result.text) {
     issues.push({ path: `${path}.match`, message: "Match is only supported for text targets" });
   }
-  if (result.control && (!result.nearText || result.area !== "content")) {
+  if (result.checked !== undefined && result.control !== "switch") {
+    issues.push({ path: `${path}.checked`, message: "checked is only supported for switch targets" });
+  }
+  if (result.control === "checkbox" && (!result.nearText || result.area !== "content")) {
     issues.push({ path, message: "Control targets require nearText and area content" });
+  }
+  if (result.control === "switch" && (!result.nearText || result.area !== "content" || result.checked === undefined)) {
+    issues.push({ path, message: "switch control targets require nearText, checked, and area content" });
+  }
+  if (result.control === "textField" && (!result.scopeText || !result.ordinal || result.area !== "content")) {
+    issues.push({ path, message: "textField control targets require scopeText, ordinal, and area content" });
   }
   return result;
 }
@@ -678,10 +690,10 @@ function readTargetControl(value: unknown, path: string, issues: ScriptFlowValid
   if (value === undefined) {
     return {};
   }
-  if (value === "checkbox") {
+  if (value === "checkbox" || value === "switch" || value === "textField") {
     return { control: value };
   }
-  issues.push({ path, message: "Target control must be checkbox" });
+  issues.push({ path, message: "Target control must be checkbox, switch, or textField" });
   return {};
 }
 
@@ -845,6 +857,15 @@ function optionalStringProperty<K extends string>(
 ): Partial<Record<K, string>> {
   const result = optionalString(value, path, issues);
   return result ? { [key]: result } as Record<K, string> : {};
+}
+
+function optionalOrdinalProperty(
+  value: unknown,
+  path: string,
+  issues: ScriptFlowValidationIssue[]
+): Pick<ScriptTarget, "ordinal"> {
+  const result = optionalInteger(value, path, issues, 1, 100);
+  return result === undefined ? {} : { ordinal: result };
 }
 
 function optionalBooleanProperty<K extends string>(

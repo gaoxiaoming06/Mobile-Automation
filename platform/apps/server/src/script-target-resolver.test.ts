@@ -246,6 +246,87 @@ describe("ScriptTargetResolver", () => {
     })).toThrow(ScriptTargetResolutionError);
   });
 
+  it("resolves a switch target to a stateful trailing switch locator", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true },
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "tap_on_image",
+      strategy: "semantic_control",
+      params: {
+        fieldType: "toggle_set",
+        desiredState: "on",
+        targetText: "录制ClassIn教室",
+        locatorKind: "structural_locator",
+        structuralLocator: {
+          strategy: "ocr_trailing_switch",
+          anchorText: "录制ClassIn教室"
+        },
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      }
+    });
+  });
+
+  it("enables content search for switch targets when requested by the script", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: { control: "switch", area: "content", nearText: "AI 内容总结", checked: false },
+      search: { mode: "auto", direction: "down", maxSwipes: 3 },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual(expect.objectContaining({
+      params: expect.objectContaining({
+        desiredState: "off",
+        structuralLocator: expect.objectContaining({
+          strategy: "ocr_trailing_switch",
+          anchorText: "AI 内容总结",
+          revealStrategy: "search_content",
+          restoreMaxSwipes: 3,
+          searchMaxSwipes: 3
+        })
+      })
+    }));
+  });
+
+  it("resolves a scoped text field control to a runtime structural input locator", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "inputText",
+      target: { control: "textField", area: "content", scopeText: "课堂信息", ordinal: 1 },
+      value: "自动化课堂",
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "input_text_to_element",
+      strategy: "semantic_control",
+      params: {
+        text: "自动化课堂",
+        clearFirst: true,
+        locatorKind: "structural_locator",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "课堂信息",
+          ordinal: 1,
+          role: "text_input"
+        },
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      }
+    });
+  });
+
   it("uses a frozen interaction asset locator without exposing coordinates", () => {
     const resolver = new ScriptTargetResolver();
     const result = resolver.resolve({

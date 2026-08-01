@@ -4,7 +4,7 @@
 
 **目标：** 先把“自然语言描述测试 -> 生成确定性 ScriptFlow -> 在真实设备稳定执行 -> 输出可诊断结果”做成可靠主链路，再通过可控的三态持续学习模式逐步引入页面、交互和导航资产学习。
 
-**架构：** ScriptFlow 始终是测试事实来源，现有 active 资产始终只作为可选增强信息读取。持续学习使用服务端源码常量 `disabled | shadow | active` 控制证据写入、候选聚合、AI 分析和资产发布；默认 `disabled`，不提供设置、API 或环境变量开关。第一阶段验收通过后通过代码评审改为 `shadow`，影子数据达到质量门槛后再通过代码评审改为 `active`。生成阶段不读取设备，执行阶段负责页面识别、目标查找、受控恢复和结果验证。
+**架构：** ScriptFlow 始终是测试事实来源，现有 active 资产始终只作为可选增强信息读取。持续学习使用服务端源码常量 `disabled | shadow | active` 控制证据写入、候选聚合、AI 分析和资产发布；默认 `disabled`，不提供设置、API 或环境变量开关。第一阶段验收通过后可以先进入阶段 1.5 的显式看屏辅助生成：只有用户主动开启时才读取当前设备截图，并且只作为生成上下文，不创建学习候选。第二阶段才通过代码评审改为 `shadow`，影子数据达到质量门槛后再通过代码评审改为 `active`。执行阶段负责页面识别、目标查找、受控恢复和结果验证。
 
 **技术栈：** TypeScript、React、Express、Node.js 24 `node:sqlite`、Vitest、Vite、现有 OCR/视觉定位器、ScriptFlow v1。
 
@@ -29,9 +29,17 @@ node --version
 
 1. 用户输入明确操作时，系统完整保留操作顺序和动作类型。
 2. 用户只描述模糊目标时，系统只使用已验证用例、导航索引和页面目录补齐路径。
-3. 无法安全补齐时要求用户补充操作过程，不猜测、不读取当前设备辅助规划。
+3. 无法安全补齐时要求用户补充操作过程，不猜测；阶段 1.5 可以在用户显式开启时读取当前屏幕辅助理解，但不能把看屏结果沉淀为资产。
 4. 生成结果经过 schema、语义约束、参数和结果验证检查后才允许执行。
 5. 执行器处理当前屏定位、屏外查找、页面验证、受控恢复和失败归因。
+
+阶段 1.5 是可选的“看屏辅助生成”增强，介于第一阶段和第二阶段之间：
+
+1. 默认仍然优先使用页面目录、已验证用例、InteractionAsset 和 NavigationEntry，不读取当前设备。
+2. 用户显式开启“结合当前屏幕生成”后，服务端采集当前 Observation 和截图，AI 先输出屏幕理解候选。
+3. 系统对屏幕理解候选做脱敏、去坐标、去平台私有字段和动态值过滤，只把受控 `ScreenUnderstandingContext` 交给 ScriptFlow 生成器。
+4. 看屏结果只用于生成更准确的 ScriptFlow，例如把“课堂信息区域第一个输入框”表达为 `control: textField + scopeText + ordinal`。
+5. 阶段 1.5 不创建 LearningCandidate，不写 PageAsset、InteractionAsset 或 NavigationEntry，不改变 `ASSET_LEARNING_MODE=disabled` 的采集边界。
 
 第二阶段才启用“持续学习主线”：
 
@@ -420,9 +428,9 @@ git add platform/apps/server/src/script-flow-api.ts platform/apps/server/src/scr
 git commit -m "feat: 完成测试生成执行第一阶段闭环"
 ```
 
-### 任务 6：第一阶段通过后进入 shadow 并扩展全过程证据
+### 任务 6：第二阶段进入 shadow 并扩展全过程证据
 
-**前置条件：** 任务 5 的真实设备验收已通过，并由项目负责人通过独立代码提交把 `ASSET_LEARNING_MODE` 从 disabled 改为 shadow。
+**前置条件：** 任务 5 的真实设备验收已通过。若项目选择先做阶段 1.5，则显式看屏辅助生成也必须完成验收，并确认它不写 learning 表、不创建候选、不改变 `ASSET_LEARNING_MODE`。随后由项目负责人通过独立代码提交把 `ASSET_LEARNING_MODE` 从 disabled 改为 shadow。
 
 **文件：**
 - 修改：`platform/apps/server/src/automation-runner.ts`
@@ -585,17 +593,18 @@ git commit -m "feat: 完成持续学习健康治理与灰度准入"
 2. 不录页面/元素资产，输入完整明确操作，生成并执行测试。
 3. 输入模糊目标，验证仅从已存在的可靠能力补齐；无能力时要求补充。
 4. 验证 disabled 下数据库不新增 learning session、candidate、aggregate，AI 学习调用为零。
-5. 通过独立代码提交把 `ASSET_LEARNING_MODE` 改为 shadow，重复执行代表流程，验证只积累候选且不发布、不影响计划摘要。
-6. 运行影子质量报告并满足准入门槛。
-7. 通过独立代码提交把 `ASSET_LEARNING_MODE` 改为 active，验证达到门槛的聚合按规则发布。
-8. 模拟 App UI 变化导致 locator failure，验证资产降级且报告给出可操作提示。
-9. 通过独立代码提交改回 disabled，验证普通生成和执行继续工作，已有可靠 active 资产仍可读取。
+5. 在不改变 `ASSET_LEARNING_MODE` 的前提下，显式开启看屏辅助生成，验证它只读取当前屏幕生成 ScriptFlow，不写 learning 表。
+6. 通过独立代码提交把 `ASSET_LEARNING_MODE` 改为 shadow，重复执行代表流程，验证只积累候选且不发布、不影响计划摘要。
+7. 运行影子质量报告并满足准入门槛。
+8. 通过独立代码提交把 `ASSET_LEARNING_MODE` 改为 active，验证达到门槛的聚合按规则发布。
+9. 模拟 App UI 变化导致 locator failure，验证资产降级且报告给出可操作提示。
+10. 通过独立代码提交改回 disabled，验证普通生成和执行继续工作，已有可靠 active 资产仍可读取。
 
 ## 五、明确不在本方案中实现
 
 - 不恢复 `ref`、元素资产 ID、固定坐标或截图区域脚本。
 - 不让用户维护 YAML 或人工审核每一个学习候选。
-- 不在生成阶段读取或操作当前设备。
+- 不在默认生成阶段读取或操作当前设备；阶段 1.5 的显式看屏辅助生成只能读取截图和 Observation 作为生成上下文，不能操作设备或沉淀资产。
 - 不提供用户可操作的学习设置、HTTP API 或环境变量覆盖。
 - 不为每个 App 增加独立学习开关；模式只允许通过源码评审变更。
 - 不在 Android 第一阶段通过前并行开展 iOS、鸿蒙和 Flutter 驱动适配。

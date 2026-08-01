@@ -226,6 +226,51 @@ export type FlowVerification = {
   createdAt: string;
 };
 
+export type ScreenControlCandidate = {
+  candidateId: string;
+  control: "button" | "textField" | "checkbox" | "switch" | "select" | "text";
+  semanticName?: string;
+  text?: string;
+  scopeText?: string;
+  nearText?: string;
+  ordinal?: number;
+  currentValue?: string;
+  valueKind?: "stableLabel" | "dynamicValue" | "sensitiveValue" | "unknown";
+  confidence: number;
+  assetEligible: boolean;
+};
+
+export type ScreenUnderstandingCandidate = {
+  page: {
+    key?: string;
+    name?: string;
+    confidence: number;
+  };
+  visibleStableTexts: string[];
+  dynamicTexts: Array<{
+    text: string;
+    reason: "account" | "phone" | "email" | "name" | "date" | "time" | "number" | "unknown_dynamic";
+  }>;
+  controlCandidates: ScreenControlCandidate[];
+  warnings: string[];
+};
+
+export type ScreenUnderstandingContext = {
+  used: true;
+  observationId: string;
+  visionUsed: boolean;
+  page: {
+    key?: string;
+    name?: string;
+    confidence: number;
+  };
+  visibleStableTexts: string[];
+  controlCandidates: Array<Omit<ScreenControlCandidate, "currentValue" | "valueKind"> & {
+    valueKind?: "stableLabel" | "dynamicValue" | "unknown";
+  }>;
+  rejectedReasons: string[];
+};
+
 export type LearningSessionStatus = "analyzing" | "needs_outcome_review" | "ready" | "accepted" | "rejected" | "invalid";
 export type LearningOutcomeStatus = "verified" | "human_confirmed" | "rejected" | "unverified";
 
