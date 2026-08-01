@@ -1,7 +1,16 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { AiScriptFlowsPanel, buildAiGenerateRequestBody, draftRunEndpoint, draftSaveDestination, ExecutionFailureNotice, TrialOutcomeReview } from "./AiScriptFlowsPanel.js";
+import {
+  AiScriptFlowsPanel,
+  buildAiGenerateRequestBody,
+  draftRunEndpoint,
+  draftSaveDestination,
+  ExecutionFailureNotice,
+  stepReviewItems,
+  TrialOutcomeReview,
+  updateDraftStepLocator
+} from "./AiScriptFlowsPanel.js";
 
 describe("AiScriptFlowsPanel", () => {
   it("uses separate execution endpoints for verified and trial-ready drafts", () => {
@@ -120,6 +129,107 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("控件能力");
     expect(markup).toContain("临时验证");
     expect(markup).not.toContain("保存到用例中心");
+  });
+
+  it("renders generated steps as a manual review checklist with editable locator fields", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialDraft={{
+        status: "trial_ready",
+        sourceYaml: "version: 1\nname: 修改课堂标题",
+        document: {
+          version: 1,
+          kind: "case",
+          purpose: "business",
+          testLevel: "component",
+          name: "修改课堂标题",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [{
+            id: "fill-lesson-title",
+            role: "business",
+            inputText: {
+              target: { text: "课堂标题", area: "content" },
+              value: "111",
+              search: { mode: "visibleOnly" }
+            }
+          }],
+          tags: []
+        },
+        summary: "修改课堂标题",
+        assumptions: [],
+        channel: "codex",
+        model: "planner"
+      } as never}
+    />);
+
+    expect(markup).toContain("步骤审查");
+    expect(markup).toContain("0/1 已确认");
+    expect(markup).toContain("确认步骤 1：输入文本");
+    expect(markup).toContain("元素定位");
+    expect(markup).toContain("目标类型");
+    expect(markup).toContain("目标值");
+    expect(markup).toContain('value="课堂标题"');
+    expect(markup).toContain("search.mode");
+    expect(markup).toContain("visibleOnly");
+    expect(markup).toContain("确认所有步骤后才能执行或保存");
+    expect(markup).toContain("disabled");
+  });
+
+  it("updates a generated draft when a step locator is edited", () => {
+    const draft = {
+      status: "ready" as const,
+      sourceYaml: "version: 1\nname: 修改课堂标题",
+      document: {
+        version: 1 as const,
+        kind: "case" as const,
+        purpose: "business" as const,
+        testLevel: "component" as const,
+        name: "修改课堂标题",
+        app: { id: "cn.eeo.classin", platform: "android" },
+        parameters: {},
+        steps: [{
+          id: "fill-lesson-title",
+          role: "business" as const,
+          inputText: {
+            target: { text: "课堂标题", area: "content" },
+            value: "111",
+            search: { mode: "visibleOnly" as const }
+          }
+        }],
+        tags: []
+      },
+      summary: "修改课堂标题",
+      assumptions: [],
+      channel: "codex",
+      model: "planner"
+    };
+
+    const [step] = stepReviewItems(draft.document);
+    const updated = updateDraftStepLocator(draft, step!.key, {
+      targetKind: "control",
+      targetValue: "textField",
+      scopeText: "课堂标题",
+      ordinal: "1",
+      searchMode: "auto",
+      direction: "down",
+      maxSwipes: "6"
+    });
+
+    expect(updated.status).toBe("trial_ready");
+    expect(updated.document.steps[0]).toMatchObject({
+      inputText: {
+        target: { control: "textField", scopeText: "课堂标题", ordinal: 1, area: "content" },
+        search: { mode: "auto", direction: "down", maxSwipes: 6 }
+      }
+    });
+    expect(updated.sourceYaml).toContain('control: "textField"');
+    expect(updated.sourceYaml).toContain('mode: "auto"');
   });
 
   it("updates the matched saved draft instead of creating a duplicate use case", () => {

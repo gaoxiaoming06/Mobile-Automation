@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@mobile-automation/script-flow": "workspace:*",
     "@mobile-automation/shared": "workspace:*",
     "@vitejs/plugin-react": "^5.1.2",
     "@yume-chan/scrcpy": "^2.3.0",

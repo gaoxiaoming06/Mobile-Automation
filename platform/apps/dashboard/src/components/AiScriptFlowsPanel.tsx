@@ -1,5 +1,6 @@
 import { FileSearch, History, Save, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
+import { serializeScriptFlow, type ScriptFlowDocument } from "@mobile-automation/script-flow";
 import { publicExecutionFailureFromRun } from "@mobile-automation/shared";
 import type {
   AndroidAppMonitorConfig,
@@ -21,10 +22,11 @@ import {
   testLevelLabel,
   testPurposeLabel,
   type CaseDocumentView,
-  type CasePlanView
+  type CasePlanView,
+  type CaseSourceStep
 } from "./case-view.js";
 
-type GeneratedDraft = {
+export type GeneratedDraft = {
   status: "ready" | "trial_ready";
   sourceYaml: string;
   document: CaseDocumentView;
@@ -50,6 +52,39 @@ type LearningSummaryResponse = {
   session: LearningSession;
   verification?: FlowVerification;
 };
+
+type TargetKind = "text" | "semantic" | "icon" | "control";
+
+type StepLocatorView = {
+  targetKind: TargetKind;
+  targetValue: string;
+  usesSearchPolicy: boolean;
+  area?: string;
+  position?: string;
+  nearText?: string;
+  scopeText?: string;
+  ordinal?: string;
+  checked?: string;
+  searchMode?: string;
+  direction?: string;
+  maxSwipes?: string;
+  resetToTop?: string;
+  container?: string;
+};
+
+export type StepReviewItem = {
+  key: string;
+  path: number[];
+  id: string;
+  order: number;
+  name: string;
+  action: string;
+  context?: string;
+  risk: string;
+  locator?: StepLocatorView;
+};
+
+export type StepLocatorPatch = Partial<StepLocatorView>;
 
 export type CaseRevision = {
   flowId: string;
@@ -103,6 +138,7 @@ export function AiScriptFlowsPanel({
   const [learning, setLearning] = useState<LearningSummaryResponse>();
   const [busyAction, setBusyAction] = useState<"generate" | "save" | "run" | "review" | "select">();
   const [useCurrentScreen, setUseCurrentScreen] = useState(false);
+  const [confirmedStepKeys, setConfirmedStepKeys] = useState<Set<string>>(() => new Set());
   const lastRunFailure = lastRun ? publicExecutionFailureFromRun(lastRun) : undefined;
 
   useEffect(() => {
@@ -149,6 +185,7 @@ export function AiScriptFlowsPanel({
       setLearning(undefined);
       setPlan(undefined);
       setSelectedHistoryId(undefined);
+      setConfirmedStepKeys(new Set());
       const body = buildAiGenerateRequestBody({
         prompt: prompt.trim(),
         appId: appId.trim(),
@@ -166,6 +203,7 @@ export function AiScriptFlowsPanel({
         ? await reconcileDraftVerification(response.draft)
         : response.draft;
       setDraft(nextDraft);
+      setConfirmedStepKeys(new Set());
       if (nextDraft.status === "ready" || nextDraft.status === "trial_ready") {
         setParameterValues(draftParameterValues(nextDraft));
         setMessage(nextDraft.summary);
@@ -182,6 +220,10 @@ export function AiScriptFlowsPanel({
 
   async function saveDraft() {
     if (!generatedDraft) return;
+    if (reviewBlocked) {
+      setMessage("请先确认所有执行步骤，再保存或执行测试。");
+      return;
+    }
     try {
       setBusyAction("save");
       const destination = draftSaveDestination(revision, generatedDraft.sourceFlow);
@@ -209,6 +251,10 @@ export function AiScriptFlowsPanel({
 
   async function runDraft() {
     if (!generatedDraft) return;
+    if (reviewBlocked) {
+      setMessage("请先确认所有执行步骤，再保存或执行测试。");
+      return;
+    }
     await executeDraft(generatedDraft, parameterValues, prompt.trim() || generatedDraft.document.description || generatedDraft.document.name);
   }
 
@@ -279,6 +325,7 @@ export function AiScriptFlowsPanel({
       setLearning(undefined);
       setPlan(undefined);
       setSelectedHistoryId(item.id);
+      setConfirmedStepKeys(new Set());
       setMessage(`已加载最近测试：${item.name}`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -317,7 +364,35 @@ export function AiScriptFlowsPanel({
   }
 
   const steps = caseStepViews(generatedDraft?.document);
+  const reviewSteps = stepReviewItems(generatedDraft?.document);
+  const confirmedStepCount = reviewSteps.filter((step) => confirmedStepKeys.has(step.key)).length;
+  const reviewBlocked = Boolean(generatedDraft && reviewSteps.length > 0 && confirmedStepCount < reviewSteps.length);
   const busy = busyAction !== undefined;
+
+  function toggleStepConfirmed(stepKey: string, confirmed: boolean) {
+    setConfirmedStepKeys((current) => {
+      const next = new Set(current);
+      if (confirmed) next.add(stepKey);
+      else next.delete(stepKey);
+      return next;
+    });
+  }
+
+  function updateStepLocator(stepKey: string, patch: StepLocatorPatch) {
+    if (!generatedDraft) return;
+    try {
+      const updated = updateDraftStepLocator(generatedDraft, stepKey, patch);
+      setDraft(updated);
+      setPlan(undefined);
+      setConfirmedStepKeys((current) => {
+        const next = new Set(current);
+        next.delete(stepKey);
+        return next;
+      });
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
 
   return (
     <section className="module-page ai-script-module">
@@ -393,8 +468,14 @@ export function AiScriptFlowsPanel({
                 {steps.map((step) => <li key={step.id}><span>{step.order}</span><div><strong>{step.name}</strong><small>{step.context ?? step.id}</small></div></li>)}
               </ol>
             </section>
+            <StepReviewPanel
+              steps={reviewSteps}
+              confirmedStepKeys={confirmedStepKeys}
+              onConfirm={toggleStepConfirmed}
+              onLocatorChange={updateStepLocator}
+            />
             {caseCenterEligible(generatedDraft.document) ? <div className="ai-case-actions">
-              <button type="button" onClick={() => void saveDraft()} disabled={busy}><Save size={16} /><span>{revision ? "保存修改" : generatedDraft.sourceFlow ? "更新用例中心" : "保存到用例中心"}</span></button>
+              <button type="button" onClick={() => void saveDraft()} disabled={busy || reviewBlocked}><Save size={16} /><span>{revision ? "保存修改" : generatedDraft.sourceFlow ? "更新用例中心" : "保存到用例中心"}</span></button>
             </div> : <p className="navigation-flow-note">{generatedDraft.document.testLevel === "probe" ? "临时验证默认只保留在最近测试，不进入用例中心。" : "导航流程执行成功后会作为系统内部导航能力复用。"}</p>}
             <ScriptRunForm
               parameters={generatedDraft.document.parameters}
@@ -402,6 +483,7 @@ export function AiScriptFlowsPanel({
               devices={devices}
               deviceSerial={deviceSerial}
               busy={busyAction === "run"}
+              disabled={reviewBlocked}
               onValueChange={(key, value) => {
                 setParameterValues((current) => ({ ...current, [key]: value }));
                 setPlan(undefined);
@@ -421,6 +503,101 @@ export function AiScriptFlowsPanel({
       </div>
     </section>
   );
+}
+
+function StepReviewPanel({
+  steps,
+  confirmedStepKeys,
+  onConfirm,
+  onLocatorChange
+}: {
+  steps: StepReviewItem[];
+  confirmedStepKeys: Set<string>;
+  onConfirm: (stepKey: string, confirmed: boolean) => void;
+  onLocatorChange: (stepKey: string, patch: StepLocatorPatch) => void;
+}) {
+  const confirmedCount = steps.filter((step) => confirmedStepKeys.has(step.key)).length;
+  const blocked = steps.length > 0 && confirmedCount < steps.length;
+  return <section className="ai-step-review">
+    <header><h3>步骤审查</h3><span>{confirmedCount}/{steps.length} 已确认</span></header>
+    {blocked ? <p className="ai-step-review-warning">确认所有步骤后才能执行或保存。</p> : <p className="ai-step-review-ready">所有步骤已确认，可以执行或保存。</p>}
+    <ol className="ai-step-review-list">
+      {steps.map((step) => <li key={step.key} data-confirmed={confirmedStepKeys.has(step.key)}>
+        <div className="ai-step-review-head">
+          <label>
+            <input
+              type="checkbox"
+              checked={confirmedStepKeys.has(step.key)}
+              onChange={(event) => onConfirm(step.key, event.target.checked)}
+            />
+            <span>确认步骤 {step.order}：{step.name}</span>
+          </label>
+          <small>{step.context ?? step.id}</small>
+        </div>
+        {step.locator ? <StepLocatorEditor stepKey={step.key} locator={step.locator} onChange={onLocatorChange} /> : (
+          <p className="ai-step-review-static">此步骤没有元素定位参数。</p>
+        )}
+      </li>)}
+    </ol>
+  </section>;
+}
+
+function StepLocatorEditor({
+  stepKey,
+  locator,
+  onChange
+}: {
+  stepKey: string;
+  locator: StepLocatorView;
+  onChange: (stepKey: string, patch: StepLocatorPatch) => void;
+}) {
+  return <div className="step-locator-editor">
+    <strong>元素定位</strong>
+    <div className="step-locator-grid">
+      <label>目标类型<select value={locator.targetKind} onChange={(event) => onChange(stepKey, { targetKind: event.target.value as TargetKind })}>
+        <option value="text">文字 text</option>
+        <option value="semantic">语义 semantic</option>
+        <option value="icon">图标 icon</option>
+        <option value="control">控件 control</option>
+      </select></label>
+      <label>目标值{locator.targetKind === "control" ? (
+        <select value={locator.targetValue} onChange={(event) => onChange(stepKey, { targetValue: event.target.value })}>
+          <option value="textField">textField</option>
+          <option value="switch">switch</option>
+          <option value="checkbox">checkbox</option>
+        </select>
+      ) : (
+        <input value={locator.targetValue} onChange={(event) => onChange(stepKey, { targetValue: event.target.value })} />
+      )}</label>
+      <label>区域<select value={locator.area ?? ""} onChange={(event) => onChange(stepKey, { area: event.target.value })}>
+        <option value="">自动</option>
+        <option value="topBar">topBar</option>
+        <option value="content">content</option>
+        <option value="bottomBar">bottomBar</option>
+      </select></label>
+      {locator.usesSearchPolicy ? <label>search.mode<select value={locator.searchMode ?? ""} onChange={(event) => onChange(stepKey, { searchMode: event.target.value })}>
+        <option value="">默认</option>
+        <option value="auto">auto</option>
+        <option value="visibleOnly">visibleOnly</option>
+        <option value="scroll">scroll</option>
+      </select></label> : null}
+      <label>方向<select value={locator.direction ?? ""} onChange={(event) => onChange(stepKey, { direction: event.target.value })}>
+        <option value="">默认</option>
+        <option value="down">down</option>
+        <option value="up">up</option>
+        <option value="both">both</option>
+      </select></label>
+      <label>最大滑动<input type="number" min="1" max="50" value={locator.maxSwipes ?? ""} onChange={(event) => onChange(stepKey, { maxSwipes: event.target.value })} /></label>
+      <label>nearText<input value={locator.nearText ?? ""} onChange={(event) => onChange(stepKey, { nearText: event.target.value })} /></label>
+      <label>scopeText<input value={locator.scopeText ?? ""} onChange={(event) => onChange(stepKey, { scopeText: event.target.value })} /></label>
+      <label>ordinal<input type="number" min="1" value={locator.ordinal ?? ""} onChange={(event) => onChange(stepKey, { ordinal: event.target.value })} /></label>
+      <label>checked<select value={locator.checked ?? ""} onChange={(event) => onChange(stepKey, { checked: event.target.value })}>
+        <option value="">不指定</option>
+        <option value="true">true</option>
+        <option value="false">false</option>
+      </select></label>
+    </div>
+  </div>;
 }
 
 export function ExecutionFailureNotice({
@@ -503,6 +680,214 @@ function draftParameterValues(draft: GeneratedDraft | undefined): Record<string,
 
 export function draftRunEndpoint(status: GeneratedDraft["status"]): string {
   return status === "trial_ready" ? "/api/script-flow-drafts/trial-runs" : "/api/script-flow-drafts/runs";
+}
+
+export function stepReviewItems(document: CaseDocumentView | undefined): StepReviewItem[] {
+  if (!document) return [];
+  const views = caseStepViews(document);
+  return flattenStepEntries(document.steps).map((entry, index) => {
+    const view = views[index];
+    const action = sourceActionName(entry.step);
+    return {
+      key: reviewStepKey(entry.path, entry.step),
+      path: entry.path,
+      id: entry.step.id,
+      order: view?.order ?? index + 1,
+      name: view?.name ?? action,
+      action,
+      context: view?.context,
+      risk: view?.risk ?? "none",
+      locator: locatorView(entry.step)
+    };
+  });
+}
+
+export function updateDraftStepLocator(
+  draft: GeneratedDraft,
+  stepKey: string,
+  patch: StepLocatorPatch
+): GeneratedDraft {
+  const document = cloneCaseDocument(draft.document);
+  const step = stepByReviewKey(document.steps, stepKey);
+  if (!step) throw new Error("没有找到要编辑的步骤");
+  const targetAction = targetActionRecord(step);
+  if (!targetAction) throw new Error("当前步骤没有可编辑的元素定位");
+  applyLocatorPatch(targetAction, patch);
+  const { verification: _verification, ...rest } = draft;
+  return {
+    ...rest,
+    status: "trial_ready",
+    document,
+    sourceYaml: serializeScriptFlow(document as unknown as ScriptFlowDocument)
+  };
+}
+
+function flattenStepEntries(
+  steps: CaseSourceStep[],
+  prefix: number[] = []
+): Array<{ path: number[]; step: CaseSourceStep }> {
+  return steps.flatMap((step, index) => {
+    const path = [...prefix, index];
+    const children = nestedSteps(step);
+    return children ? [{ path, step }, ...flattenStepEntries(children, path)] : [{ path, step }];
+  });
+}
+
+function nestedSteps(step: CaseSourceStep): CaseSourceStep[] | undefined {
+  const repeat = recordValue(step.repeat);
+  const when = recordValue(step.when);
+  if (Array.isArray(repeat?.steps)) return repeat.steps as CaseSourceStep[];
+  if (Array.isArray(when?.steps)) return when.steps as CaseSourceStep[];
+  return undefined;
+}
+
+function reviewStepKey(path: number[], step: CaseSourceStep): string {
+  return `${path.join(".")}:${step.id}`;
+}
+
+function stepByReviewKey(steps: CaseSourceStep[], key: string): CaseSourceStep | undefined {
+  const path = key.split(":")[0]?.split(".").map((item) => Number(item));
+  if (!path?.length || path.some((item) => !Number.isInteger(item) || item < 0)) return undefined;
+  let currentSteps = steps;
+  let current: CaseSourceStep | undefined;
+  for (const index of path) {
+    current = currentSteps[index];
+    if (!current) return undefined;
+    currentSteps = nestedSteps(current) ?? [];
+  }
+  return current;
+}
+
+function cloneCaseDocument(document: CaseDocumentView): CaseDocumentView {
+  return JSON.parse(JSON.stringify(document)) as CaseDocumentView;
+}
+
+function sourceActionName(step: CaseSourceStep): string {
+  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"]
+    .find((action) => action in step) ?? "unknown";
+}
+
+function targetActionRecord(step: CaseSourceStep): { actionName: string; action: Record<string, unknown>; target: Record<string, unknown> } | undefined {
+  for (const actionName of ["tap", "inputText", "clearText", "selectText", "scrollUntilVisible"]) {
+    const action = recordValue(step[actionName]);
+    const target = recordValue(action?.target);
+    if (action && target) return { actionName, action, target };
+  }
+  return undefined;
+}
+
+function locatorView(step: CaseSourceStep): StepLocatorView | undefined {
+  const targetAction = targetActionRecord(step);
+  if (!targetAction) return undefined;
+  const primary = primaryTargetValue(targetAction.target);
+  const search = recordValue(targetAction.action.search);
+  return {
+    targetKind: primary.kind,
+    targetValue: primary.value,
+    usesSearchPolicy: targetAction.actionName !== "scrollUntilVisible",
+    ...optionalStringField(targetAction.target.area, "area"),
+    ...optionalStringField(targetAction.target.position, "position"),
+    ...optionalStringField(targetAction.target.nearText, "nearText"),
+    ...optionalStringField(targetAction.target.scopeText, "scopeText"),
+    ...(typeof targetAction.target.ordinal === "number" ? { ordinal: String(targetAction.target.ordinal) } : {}),
+    ...(typeof targetAction.target.checked === "boolean" ? { checked: String(targetAction.target.checked) } : {}),
+    ...optionalStringField(search?.mode, "searchMode"),
+    ...optionalStringField(search?.direction ?? targetAction.action.direction, "direction"),
+    ...(typeof search?.maxSwipes === "number"
+      ? { maxSwipes: String(search.maxSwipes) }
+      : typeof targetAction.action.maxSwipes === "number"
+        ? { maxSwipes: String(targetAction.action.maxSwipes) }
+        : {}),
+    ...(typeof search?.resetToTop === "boolean" ? { resetToTop: String(search.resetToTop) } : {}),
+    ...optionalStringField(search?.container, "container")
+  };
+}
+
+function primaryTargetValue(target: Record<string, unknown>): { kind: TargetKind; value: string } {
+  if (typeof target.text === "string") return { kind: "text", value: target.text };
+  if (typeof target.semantic === "string") return { kind: "semantic", value: target.semantic };
+  if (typeof target.icon === "string") return { kind: "icon", value: target.icon };
+  if (typeof target.control === "string") return { kind: "control", value: target.control };
+  return { kind: "semantic", value: "" };
+}
+
+function optionalStringField<K extends keyof StepLocatorView>(
+  value: unknown,
+  key: K
+): Partial<Pick<StepLocatorView, K>> {
+  return typeof value === "string" && value ? { [key]: value } as Partial<Pick<StepLocatorView, K>> : {};
+}
+
+function applyLocatorPatch(
+  targetAction: { actionName: string; action: Record<string, unknown>; target: Record<string, unknown> },
+  patch: StepLocatorPatch
+): void {
+  applyPrimaryTargetPatch(targetAction.target, patch);
+  setOptionalString(targetAction.target, "area", patch.area);
+  setOptionalString(targetAction.target, "position", patch.position);
+  setOptionalString(targetAction.target, "nearText", patch.nearText);
+  setOptionalString(targetAction.target, "scopeText", patch.scopeText);
+  setOptionalNumber(targetAction.target, "ordinal", patch.ordinal);
+  setOptionalBoolean(targetAction.target, "checked", patch.checked);
+
+  if (targetAction.actionName === "scrollUntilVisible") {
+    setOptionalString(targetAction.action, "direction", patch.direction);
+    setOptionalNumber(targetAction.action, "maxSwipes", patch.maxSwipes);
+    return;
+  }
+
+  const search = { ...recordValue(targetAction.action.search) };
+  setOptionalString(search, "mode", patch.searchMode);
+  setOptionalString(search, "direction", patch.direction);
+  setOptionalNumber(search, "maxSwipes", patch.maxSwipes);
+  setOptionalBoolean(search, "resetToTop", patch.resetToTop);
+  setOptionalString(search, "container", patch.container);
+  if (Object.keys(search).length) targetAction.action.search = search;
+  else delete targetAction.action.search;
+}
+
+function applyPrimaryTargetPatch(target: Record<string, unknown>, patch: StepLocatorPatch): void {
+  const current = primaryTargetValue(target);
+  const kind = patch.targetKind ?? current.kind;
+  const value = patch.targetValue ?? (patch.targetKind && patch.targetKind !== current.kind ? defaultTargetValue(kind, current.value) : current.value);
+  if (patch.targetKind === undefined && patch.targetValue === undefined) return;
+  delete target.text;
+  delete target.semantic;
+  delete target.icon;
+  delete target.control;
+  if (value.trim()) target[kind] = value.trim();
+}
+
+function defaultTargetValue(kind: TargetKind, currentValue: string): string {
+  if (kind === "control") return "textField";
+  return currentValue;
+}
+
+function setOptionalString(target: Record<string, unknown>, key: string, value: string | undefined): void {
+  if (value === undefined) return;
+  if (value.trim()) target[key] = value.trim();
+  else delete target[key];
+}
+
+function setOptionalNumber(target: Record<string, unknown>, key: string, value: string | undefined): void {
+  if (value === undefined) return;
+  if (!value.trim()) {
+    delete target[key];
+    return;
+  }
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric > 0) target[key] = numeric;
+}
+
+function setOptionalBoolean(target: Record<string, unknown>, key: string, value: string | undefined): void {
+  if (value === undefined) return;
+  if (value === "true") target[key] = true;
+  else if (value === "false") target[key] = false;
+  else delete target[key];
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 export function buildAiGenerateRequestBody(input: {

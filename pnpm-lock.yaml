@@ -26,6 +26,9 @@ importers:
 
   platform/apps/dashboard:
     dependencies:
+      '@mobile-automation/script-flow':
+        specifier: workspace:*
+        version: link:../../packages/script-flow
       '@mobile-automation/shared':
         specifier: workspace:*
         version: link:../../packages/shared
