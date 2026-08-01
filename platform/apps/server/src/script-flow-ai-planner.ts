@@ -31,6 +31,7 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "text、semantic、icon 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
   "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、onPage、reachPage 或 runFlow，也不要把页面目录当成动作前置条件。",
   "表单字段动作默认使用 search: { mode: auto }。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或受控 screenContext 明确给出当前可见候选时，才使用 visibleOnly。",
+  "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确说点击某个入口时，禁止擅自补“点击修改”或其他桥接动作；当前屏幕没有证实目标字段时返回 needs_clarification，询问准确字段位置或完整操作路径。",
   "text 或 semantic 目标默认不要猜测 topBar/bottomBar。只有用户明确说顶部、底部、左上角、右上角等位置，或目录中的已验证导航入口/原用例已经给出同一目标位置时，才可增加窄区域约束；否则省略 area，让执行器在当前屏幕查找。",
   "发布、提交、删除、支付等操作按钮可能位于顶部、内容区或底部；用户或已验证知识未提供位置时必须省略 area，禁止根据动作名称猜测区域。",
   "icon 必须描述 area 和 position。顶部栏标准图标使用 topBar；内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
@@ -220,6 +221,14 @@ export async function generateScriptFlowDraft(input: {
         model: input.config.model
       };
     }
+    if (firstError instanceof MissingCurrentPageActionGroundingError) {
+      return {
+        status: "needs_clarification",
+        clarification: firstError.message,
+        channel,
+        model: input.config.model
+      };
+    }
     const repaired = await timedScriptFlowAiStage(input.timingContext, "repair_request", () => runAiJsonRequest(requestConfig, {
       developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
       userContent: buildScriptFlowRepairPrompt(plannerPrompt, result.content, firstError),
@@ -264,6 +273,14 @@ export async function generateScriptFlowDraft(input: {
         return {
           status: "needs_clarification",
           clarification: unsupportedExecutableTargetClarification(repairError.action),
+          channel,
+          model: input.config.model
+        };
+      }
+      if (repairError instanceof MissingCurrentPageActionGroundingError) {
+        return {
+          status: "needs_clarification",
+          clarification: repairError.message,
           channel,
           model: input.config.model
         };
@@ -437,8 +454,9 @@ export function buildScriptFlowPlannerPrompt(
         ].join("\n")
       : "未启用当前屏幕上下文；不要假装读取了设备页面。",
     "tap、inputText、clearText 和 selectText 使用同一 search 合同，search.mode 可用 auto、visibleOnly 或 scroll。普通内容目标默认用 auto；瞬时菜单和顶栏/底栏目标用 visibleOnly。执行器负责在允许时逐屏查找，脚本不要展开成机械滑动步骤。",
-    "用户已经给出字段/控件名以及状态或输入值、且没有明确要求页面导航时，这是完整当前页控件动作。必须只生成直接动作，省略 entry、outcome、onPage、expectPage、reachPage、runFlow、waitForPage 和 assertPage；如果字段标签不确定或开关缺少开启/关闭状态，再返回 needs_clarification。",
+  "用户已经给出字段/控件名以及状态或输入值、且没有明确要求页面导航时，这是完整当前页控件动作。必须只生成直接动作，省略 entry、outcome、onPage、expectPage、reachPage、runFlow、waitForPage 和 assertPage；如果字段标签不确定或开关缺少开启/关闭状态，再返回 needs_clarification。",
     "表单字段动作默认使用 search: { mode: auto }，避免当前屏幕滚动位置变化后找错控件。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或使用 screenContext 中明确可见的受控候选时，才使用 visibleOnly。",
+    "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确点击某个入口时，不得补充“点击修改”等桥接步骤；当前屏幕没有证实目标字段时返回 needs_clarification。",
     "用户为选择器给出具体选中值时，把“点击字段、滑动选择该值、点击确定/完成”合并为一个 selectText，value 必须精确保留，confirmText 使用用户说出的确认文字；selectText 自身会打开字段，前面禁止再生成 tap，也禁止生成固定次数 swipe 来猜选项位置。",
     "只表达目标页面时，仅当目标属于 navigationAnchors，或能通过 navigationEntries、已验证 transitions 到达时使用 reachPage: { page: <目录页面>, policy: safe }。不要因为“回到”推断系统返回或重启，也不要根据页面名称或标签猜测导航入口。reachPage 自身会验证目标页，不要追加 assertPage。",
     "tap 与 selectText 默认标记 risk: interaction。明确属于提交、发布、删除或支付时，risk 分别填写 submit、publish、delete 或 payment；这些标记仅用于报告审计，无需运行前确认；禁止 risk: none。",
@@ -624,6 +642,7 @@ export function parseScriptFlowAiResponse(
   validateGeneratedReferences(document, input);
   validateGeneratedActionTargetReferences(document, input.catalog);
   validateCurrentPageActionDoesNotInventNavigation(document, input);
+  validateCurrentPageMutationGrounding(document, input);
   validateGeneratedExecutableTargetContracts(document);
   validateGeneratedFieldLocatorGrounding(document, input);
   validateGeneratedNavigationReachability(document, input.catalog);
@@ -1481,6 +1500,19 @@ function validateCurrentPageActionDoesNotInventNavigation(
   }
 }
 
+function validateCurrentPageMutationGrounding(
+  document: ScriptFlowDocument,
+  input: { prompt?: string }
+): void {
+  if (!input.prompt || hasExplicitTapOperation(input.prompt)) return;
+  const requestedLabels = requestedFieldLabels(input.prompt);
+  if (!requestedLabels.length || !hasGeneratedFieldValueMutation(document)) return;
+  const inferredTap = flattenSteps(document.steps).find((step) => "tap" in step);
+  if (!inferredTap || !("tap" in inferredTap)) return;
+  const target = operationLiteralTargetText(inferredTap) ?? inferredTap.tap.target.semantic ?? inferredTap.tap.target.icon ?? inferredTap.tap.target.control ?? "未知入口";
+  throw new MissingCurrentPageActionGroundingError(requestedLabels[0]!, target);
+}
+
 function validateGeneratedExecutableTargetContracts(document: ScriptFlowDocument): void {
   for (const step of flattenSteps(document.steps)) {
     if ("selectText" in step && !isTextTarget(step.selectText.target)) {
@@ -1691,6 +1723,12 @@ function requestedFieldLabels(prompt: string | undefined): string[] {
   if (!prompt) return [];
   const labels = new Set<string>();
   for (const match of prompt.matchAll(
+    /(?:修改|设置|设定|填写|输入|清空)\s*([^，,。；;\n]{2,32}?)(?:为|成|到|:|：|$)/gu
+  )) {
+    const label = sanitizeRequestedFieldLabel(match[1]);
+    if (label) labels.add(label);
+  }
+  for (const match of prompt.matchAll(
     /(?:把|将)?\s*(?:当前(?:页面|屏幕)的?)?\s*([^，,。；;\n]{2,32}?)(?:输入框|文本框|字段|表单项|选择器|下拉框|开关|复选框)?\s*(?:改成|改为|修改为|设置为|设为|输入|填写|填入|清空|开启|打开|关闭|关掉|启用|禁用|选中|勾选)/gu
   )) {
     const label = sanitizeRequestedFieldLabel(match[1]);
@@ -1703,6 +1741,18 @@ function requestedFieldLabels(prompt: string | undefined): string[] {
     if (label) labels.add(label);
   }
   return [...labels];
+}
+
+function hasExplicitTapOperation(prompt: string): boolean {
+  return extractExplicitOperationContract(prompt).some((operation) => operation.kind === "tap");
+}
+
+function hasGeneratedFieldValueMutation(document: ScriptFlowDocument): boolean {
+  return flattenSteps(document.steps).some((step) =>
+    "inputText" in step
+    || "clearText" in step
+    || "selectText" in step
+  );
 }
 
 function sanitizeRequestedFieldLabel(value: string | undefined): string | undefined {
@@ -1829,6 +1879,13 @@ class UnsupportedExecutableTargetError extends Error {
   constructor(readonly action: string) {
     super(`${action} 使用了当前执行器不支持的目标定位方式`);
     this.name = "UnsupportedExecutableTargetError";
+  }
+}
+
+class MissingCurrentPageActionGroundingError extends Error {
+  constructor(readonly fieldLabel: string, readonly inferredTarget: string) {
+    super(`要修改“${fieldLabel}”，但当前输入没有说明需要点击“${inferredTarget}”这个入口，当前屏幕也不能证明它就是该字段的编辑入口。请补充完整操作路径，或说明当前页面上可直接定位的字段文字。`);
+    this.name = "MissingCurrentPageActionGroundingError";
   }
 }
 

@@ -397,6 +397,65 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
+  it("asks for clarification instead of turning an edit verb into a hidden bridge tap", async () => {
+    const response = readyResponse();
+    response.summary = "修改课堂标题";
+    response.document.purpose = "business";
+    response.document.testLevel = "business_smoke";
+    response.document.name = "修改课堂标题";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.parameters = {
+      lessonTitle: { type: "string", required: true, label: "课堂标题" }
+    };
+    response.document.steps = [
+      {
+        id: "open-classroom-info-editor",
+        role: "business",
+        risk: "interaction",
+        tap: {
+          target: { text: "修改", area: "content" },
+          search: { mode: "visibleOnly" }
+        }
+      },
+      {
+        id: "fill-lesson-title",
+        role: "business",
+        risk: "interaction",
+        inputText: {
+          target: { text: "课堂标题", area: "content" },
+          value: "${lessonTitle}",
+          search: { mode: "auto" }
+        }
+      }
+    ];
+    response.parameterValues = { lessonTitle: "123" };
+    let aiCalls = 0;
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "修改课堂标题为123",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: [],
+      screenContext: lessonCreateEditEntryScreenContext(),
+      fetchImpl: async () => {
+        aiCalls += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 });
+      }
+    });
+
+    expect(aiCalls).toBe(1);
+    expect(result).toMatchObject({
+      status: "needs_clarification",
+      clarification: expect.stringContaining("课堂标题")
+    });
+    if (result.status === "needs_clarification") {
+      expect(result.clarification).toContain("点击");
+    }
+  });
+
   it("asks for field coverage before accepting full form regression drafts without explicit fields", async () => {
     const response = fullRegressionLessonResponse();
     let aiCalls = 0;
@@ -1825,6 +1884,18 @@ function lessonCreateScreenContext(): ScreenUnderstandingContext {
       }
     ],
     rejectedReasons: ["controlCandidates[0].currentValue removed because valueKind is dynamicValue"]
+  };
+}
+
+function lessonCreateEditEntryScreenContext(): ScreenUnderstandingContext {
+  return {
+    used: true,
+    observationId: "observation-lesson-create-edit-entry",
+    visionUsed: true,
+    page: { key: "classin.lesson.create", name: "新建课堂", confidence: 0.92 },
+    visibleStableTexts: ["课堂信息", "修改", "课堂时长", "录制ClassIn教室", "发布"],
+    controlCandidates: [],
+    rejectedReasons: []
   };
 }
 
