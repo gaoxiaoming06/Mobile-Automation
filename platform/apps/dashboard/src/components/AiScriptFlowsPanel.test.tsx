@@ -131,7 +131,7 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).not.toContain("保存到用例中心");
   });
 
-  it("renders generated steps as a manual review checklist with human-readable locator fields", () => {
+  it("renders generated steps as a review checklist with only safe locator edits", () => {
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel
       defaultAppId="cn.eeo.classin"
       devices={[{ serial: "device-1", name: "YAL-AL10" }]}
@@ -172,19 +172,21 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("0/1 已确认");
     expect(markup).toContain("确认步骤 1：输入文本");
     expect(markup).toContain("这一步会操作");
-    expect(markup).toContain("操作目标");
     expect(markup).toContain("屏幕上的文字");
     expect(markup).toContain('value="课堂标题"');
     expect(markup).toContain("查找方式");
     expect(markup).toContain("只在当前屏幕查找");
     expect(markup).toContain("页面区域");
     expect(markup).toContain("底部栏");
-    expect(markup).toContain("滚动方向");
-    expect(markup).toContain("向下");
-    expect(markup).toContain("高级定位设置");
-    expect(markup).toContain("旁边有这些文字");
-    expect(markup).toContain("限定在这个区域或行内");
-    expect(markup).toContain("第几个匹配项");
+    expect(markup).not.toContain("操作目标");
+    expect(markup).not.toContain("滚动方向");
+    expect(markup).not.toContain("最多滑动次数");
+    expect(markup).not.toContain("最多滑动 6 次");
+    expect(markup).not.toContain("高级定位设置");
+    expect(markup).not.toContain("旁边有这些文字");
+    expect(markup).not.toContain("限定在这个区域或行内");
+    expect(markup).not.toContain("第几个匹配项");
+    expect(markup).not.toContain('<option value="icon">');
     expect(markup).not.toContain("search.mode");
     expect(markup).not.toContain("nearText");
     expect(markup).not.toContain("scopeText");

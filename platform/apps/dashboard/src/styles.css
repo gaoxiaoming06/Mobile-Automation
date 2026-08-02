@@ -5642,23 +5642,6 @@ button:disabled {
   font-size: 12px;
 }
 
-.step-locator-advanced {
-  display: grid;
-  gap: 8px;
-  padding-top: 2px;
-}
-
-.step-locator-advanced summary {
-  cursor: pointer;
-  color: #3b5c84;
-  font-size: 12px;
-  font-weight: 760;
-}
-
-.step-locator-advanced .step-locator-grid {
-  padding-top: 8px;
-}
-
 .ai-case-actions {
   justify-content: flex-end;
 }

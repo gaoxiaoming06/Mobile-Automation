@@ -88,12 +88,12 @@ export type StepLocatorPatch = Partial<StepLocatorView>;
 
 type LocatorOption = { value: string; label: string };
 
-const TARGET_KIND_OPTIONS: Array<{ value: TargetKind; label: string }> = [
-  { value: "text", label: "屏幕文字" },
-  { value: "semantic", label: "语义描述" },
-  { value: "icon", label: "图标" },
-  { value: "control", label: "表单控件" }
-];
+const TARGET_KIND_LABELS: Record<TargetKind, string> = {
+  text: "屏幕文字",
+  semantic: "语义描述",
+  icon: "图标",
+  control: "表单控件"
+};
 
 const CONTROL_OPTIONS: LocatorOption[] = [
   { value: "textField", label: "输入框" },
@@ -113,25 +113,6 @@ const SEARCH_MODE_OPTIONS: LocatorOption[] = [
   { value: "auto", label: "自动滚动查找" },
   { value: "visibleOnly", label: "只在当前屏幕查找" },
   { value: "scroll", label: "滚动查找" }
-];
-
-const DIRECTION_OPTIONS: LocatorOption[] = [
-  { value: "", label: "默认方向" },
-  { value: "down", label: "向下" },
-  { value: "up", label: "向上" },
-  { value: "both", label: "上下都找" }
-];
-
-const CHECKED_OPTIONS: LocatorOption[] = [
-  { value: "", label: "不指定状态" },
-  { value: "true", label: "打开/选中" },
-  { value: "false", label: "关闭/取消选中" }
-];
-
-const RESET_TO_TOP_OPTIONS: LocatorOption[] = [
-  { value: "", label: "不指定" },
-  { value: "true", label: "先回到顶部再找" },
-  { value: "false", label: "保持当前位置开始找" }
 ];
 
 export type CaseRevision = {
@@ -614,45 +595,14 @@ function StepLocatorEditor({
       <small>{locatorSearchSummary(locator)}</small>
     </div>
     <div className="step-locator-grid">
-      <label>操作目标<select value={locator.targetKind} onChange={(event) => onChange(stepKey, { targetKind: event.target.value as TargetKind })}>
-        {TARGET_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select></label>
-      <label>{targetValueLabel}{locator.targetKind === "control" ? (
-        <select value={locator.targetValue} onChange={(event) => onChange(stepKey, { targetValue: event.target.value })}>
-          {CONTROL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
-      ) : (
-        <input value={locator.targetValue} onChange={(event) => onChange(stepKey, { targetValue: event.target.value })} />
-      )}</label>
+      {locator.targetKind !== "control" ? <label>{targetValueLabel}<input value={locator.targetValue} onChange={(event) => onChange(stepKey, { targetValue: event.target.value })} /></label> : null}
       <label>页面区域<select value={locator.area ?? ""} onChange={(event) => onChange(stepKey, { area: event.target.value })}>
         {AREA_OPTIONS.map((option) => <option key={option.value || "auto"} value={option.value}>{option.label}</option>)}
       </select></label>
       {locator.usesSearchPolicy ? <label>查找方式<select value={locator.searchMode ?? ""} onChange={(event) => onChange(stepKey, { searchMode: event.target.value })}>
         {SEARCH_MODE_OPTIONS.map((option) => <option key={option.value || "default"} value={option.value}>{option.label}</option>)}
       </select></label> : null}
-      <label>滚动方向<select value={locator.direction ?? ""} onChange={(event) => onChange(stepKey, { direction: event.target.value })}>
-        {DIRECTION_OPTIONS.map((option) => <option key={option.value || "default"} value={option.value}>{option.label}</option>)}
-      </select></label>
-      <label>最多滑动次数<input type="number" min="1" max="50" value={locator.maxSwipes ?? ""} onChange={(event) => onChange(stepKey, { maxSwipes: event.target.value })} /></label>
     </div>
-    <details className="step-locator-advanced">
-      <summary>高级定位设置</summary>
-      <div className="step-locator-grid">
-        <label>旁边有这些文字<input value={locator.nearText ?? ""} onChange={(event) => onChange(stepKey, { nearText: event.target.value })} /></label>
-        <label>限定在这个区域或行内<input value={locator.scopeText ?? ""} onChange={(event) => onChange(stepKey, { scopeText: event.target.value })} /></label>
-        <label>第几个匹配项<input type="number" min="1" value={locator.ordinal ?? ""} onChange={(event) => onChange(stepKey, { ordinal: event.target.value })} /></label>
-        <label>开关或勾选状态<select value={locator.checked ?? ""} onChange={(event) => onChange(stepKey, { checked: event.target.value })}>
-          {CHECKED_OPTIONS.map((option) => <option key={option.value || "unset"} value={option.value}>{option.label}</option>)}
-        </select></label>
-        <label>位置描述<input value={locator.position ?? ""} onChange={(event) => onChange(stepKey, { position: event.target.value })} /></label>
-        {locator.usesSearchPolicy ? <>
-          <label>查找前是否回到顶部<select value={locator.resetToTop ?? ""} onChange={(event) => onChange(stepKey, { resetToTop: event.target.value })}>
-            {RESET_TO_TOP_OPTIONS.map((option) => <option key={option.value || "unset"} value={option.value}>{option.label}</option>)}
-          </select></label>
-          <label>限定查找容器<input value={locator.container ?? ""} onChange={(event) => onChange(stepKey, { container: event.target.value })} /></label>
-        </> : null}
-      </div>
-    </details>
   </div>;
 }
 
@@ -665,9 +615,7 @@ function locatorTargetSummary(locator: StepLocatorView): string {
 function locatorSearchSummary(locator: StepLocatorView): string {
   const parts = [
     `区域：${optionLabel(AREA_OPTIONS, locator.area)}`,
-    locator.usesSearchPolicy ? `查找：${optionLabel(SEARCH_MODE_OPTIONS, locator.searchMode)}` : undefined,
-    locator.direction ? `方向：${optionLabel(DIRECTION_OPTIONS, locator.direction)}` : undefined,
-    locator.maxSwipes ? `最多滑动 ${locator.maxSwipes} 次` : undefined
+    locator.usesSearchPolicy ? `查找：${optionLabel(SEARCH_MODE_OPTIONS, locator.searchMode)}` : undefined
   ].filter(Boolean);
   return parts.join(" · ");
 }
@@ -680,7 +628,7 @@ function locatorTargetValueLabel(kind: TargetKind): string {
 }
 
 function targetKindLabel(kind: TargetKind): string {
-  return TARGET_KIND_OPTIONS.find((option) => option.value === kind)?.label ?? kind;
+  return TARGET_KIND_LABELS[kind];
 }
 
 function controlLabel(value: string | undefined): string {
