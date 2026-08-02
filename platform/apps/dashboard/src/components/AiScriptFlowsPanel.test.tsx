@@ -131,7 +131,7 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).not.toContain("保存到用例中心");
   });
 
-  it("renders generated steps as a manual review checklist with editable locator fields", () => {
+  it("renders generated steps as a manual review checklist with human-readable locator fields", () => {
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel
       defaultAppId="cn.eeo.classin"
       devices={[{ serial: "device-1", name: "YAL-AL10" }]}
@@ -154,9 +154,9 @@ describe("AiScriptFlowsPanel", () => {
             id: "fill-lesson-title",
             role: "business",
             inputText: {
-              target: { text: "课堂标题", area: "content" },
+              target: { text: "课堂标题", area: "bottomBar", nearText: "班级", scopeText: "课堂信息", ordinal: 1 },
               value: "111",
-              search: { mode: "visibleOnly" }
+              search: { mode: "visibleOnly", direction: "down", maxSwipes: 6 }
             }
           }],
           tags: []
@@ -171,12 +171,28 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("步骤审查");
     expect(markup).toContain("0/1 已确认");
     expect(markup).toContain("确认步骤 1：输入文本");
-    expect(markup).toContain("元素定位");
-    expect(markup).toContain("目标类型");
-    expect(markup).toContain("目标值");
+    expect(markup).toContain("这一步会操作");
+    expect(markup).toContain("操作目标");
+    expect(markup).toContain("屏幕上的文字");
     expect(markup).toContain('value="课堂标题"');
-    expect(markup).toContain("search.mode");
-    expect(markup).toContain("visibleOnly");
+    expect(markup).toContain("查找方式");
+    expect(markup).toContain("只在当前屏幕查找");
+    expect(markup).toContain("页面区域");
+    expect(markup).toContain("底部栏");
+    expect(markup).toContain("滚动方向");
+    expect(markup).toContain("向下");
+    expect(markup).toContain("高级定位设置");
+    expect(markup).toContain("旁边有这些文字");
+    expect(markup).toContain("限定在这个区域或行内");
+    expect(markup).toContain("第几个匹配项");
+    expect(markup).not.toContain("search.mode");
+    expect(markup).not.toContain("nearText");
+    expect(markup).not.toContain("scopeText");
+    expect(markup).not.toContain("ordinal");
+    expect(markup).not.toContain("checked");
+    expect(markup).not.toContain(">visibleOnly<");
+    expect(markup).not.toContain(">bottomBar<");
+    expect(markup).not.toContain("文字 text");
     expect(markup).toContain("确认所有步骤后才能执行或保存");
     expect(markup).toContain("disabled");
   });
@@ -230,6 +246,53 @@ describe("AiScriptFlowsPanel", () => {
     });
     expect(updated.sourceYaml).toContain('control: "textField"');
     expect(updated.sourceYaml).toContain('mode: "auto"');
+  });
+
+  it("does not require step review for a draft loaded from recent test history and keeps parameter values", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialDraft={{
+        status: "trial_ready",
+        sourceYaml: "version: 1\nname: 修改课堂标题",
+        document: {
+          version: 1,
+          kind: "case",
+          purpose: "business",
+          testLevel: "component",
+          name: "修改课堂标题",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {
+            lessonTitle: { type: "string", label: "课堂标题", required: true }
+          },
+          steps: [{
+            id: "fill-lesson-title",
+            role: "business",
+            inputText: {
+              target: { text: "课堂标题", area: "content" },
+              value: "${lessonTitle}",
+              search: { mode: "auto", direction: "down", maxSwipes: 6 }
+            }
+          }],
+          tags: []
+        },
+        parameterValues: { lessonTitle: "历史课堂标题" },
+        summary: "修改课堂标题",
+        assumptions: [],
+        channel: "history",
+        model: "snapshot"
+      } as never}
+    />);
+
+    expect(markup).not.toContain("步骤审查");
+    expect(markup).not.toContain("确认所有步骤后才能执行或保存");
+    expect(markup).toContain("课堂标题");
+    expect(markup).toContain('value="历史课堂标题"');
+    expect(markup).toContain(">执行<");
   });
 
   it("updates the matched saved draft instead of creating a duplicate use case", () => {

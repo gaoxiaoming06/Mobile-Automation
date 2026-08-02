@@ -5582,9 +5582,37 @@ button:disabled {
   background: #fbfcfe;
 }
 
-.step-locator-editor > strong {
-  color: #3b4b61;
-  font-size: 12px;
+.step-locator-summary {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid #e1e8f1;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.step-locator-summary span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.step-locator-summary strong {
+  overflow: hidden;
+  color: #243044;
+  font-size: 13px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-locator-summary small {
+  overflow: hidden;
+  color: #607187;
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .step-locator-grid {
@@ -5612,6 +5640,23 @@ button:disabled {
   background: #ffffff;
   color: #1f2937;
   font-size: 12px;
+}
+
+.step-locator-advanced {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.step-locator-advanced summary {
+  cursor: pointer;
+  color: #3b5c84;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.step-locator-advanced .step-locator-grid {
+  padding-top: 8px;
 }
 
 .ai-case-actions {

@@ -86,6 +86,54 @@ export type StepReviewItem = {
 
 export type StepLocatorPatch = Partial<StepLocatorView>;
 
+type LocatorOption = { value: string; label: string };
+
+const TARGET_KIND_OPTIONS: Array<{ value: TargetKind; label: string }> = [
+  { value: "text", label: "屏幕文字" },
+  { value: "semantic", label: "语义描述" },
+  { value: "icon", label: "图标" },
+  { value: "control", label: "表单控件" }
+];
+
+const CONTROL_OPTIONS: LocatorOption[] = [
+  { value: "textField", label: "输入框" },
+  { value: "switch", label: "开关" },
+  { value: "checkbox", label: "复选框" }
+];
+
+const AREA_OPTIONS: LocatorOption[] = [
+  { value: "", label: "自动判断" },
+  { value: "topBar", label: "顶部栏" },
+  { value: "content", label: "页面内容" },
+  { value: "bottomBar", label: "底部栏" }
+];
+
+const SEARCH_MODE_OPTIONS: LocatorOption[] = [
+  { value: "", label: "默认查找" },
+  { value: "auto", label: "自动滚动查找" },
+  { value: "visibleOnly", label: "只在当前屏幕查找" },
+  { value: "scroll", label: "滚动查找" }
+];
+
+const DIRECTION_OPTIONS: LocatorOption[] = [
+  { value: "", label: "默认方向" },
+  { value: "down", label: "向下" },
+  { value: "up", label: "向上" },
+  { value: "both", label: "上下都找" }
+];
+
+const CHECKED_OPTIONS: LocatorOption[] = [
+  { value: "", label: "不指定状态" },
+  { value: "true", label: "打开/选中" },
+  { value: "false", label: "关闭/取消选中" }
+];
+
+const RESET_TO_TOP_OPTIONS: LocatorOption[] = [
+  { value: "", label: "不指定" },
+  { value: "true", label: "先回到顶部再找" },
+  { value: "false", label: "保持当前位置开始找" }
+];
+
 export type CaseRevision = {
   flowId: string;
   version: number;
@@ -139,6 +187,7 @@ export function AiScriptFlowsPanel({
   const [busyAction, setBusyAction] = useState<"generate" | "save" | "run" | "review" | "select">();
   const [useCurrentScreen, setUseCurrentScreen] = useState(false);
   const [confirmedStepKeys, setConfirmedStepKeys] = useState<Set<string>>(() => new Set());
+  const [stepReviewRequired, setStepReviewRequired] = useState(() => draftRequiresStepReview(initialDraft));
   const lastRunFailure = lastRun ? publicExecutionFailureFromRun(lastRun) : undefined;
 
   useEffect(() => {
@@ -186,6 +235,7 @@ export function AiScriptFlowsPanel({
       setPlan(undefined);
       setSelectedHistoryId(undefined);
       setConfirmedStepKeys(new Set());
+      setStepReviewRequired(false);
       const body = buildAiGenerateRequestBody({
         prompt: prompt.trim(),
         appId: appId.trim(),
@@ -205,9 +255,11 @@ export function AiScriptFlowsPanel({
       setDraft(nextDraft);
       setConfirmedStepKeys(new Set());
       if (nextDraft.status === "ready" || nextDraft.status === "trial_ready") {
+        setStepReviewRequired(true);
         setParameterValues(draftParameterValues(nextDraft));
         setMessage(nextDraft.summary);
       } else if (nextDraft.status === "needs_clarification") {
+        setStepReviewRequired(false);
         setParameterValues({});
         setMessage(nextDraft.clarification);
       }
@@ -326,6 +378,7 @@ export function AiScriptFlowsPanel({
       setPlan(undefined);
       setSelectedHistoryId(item.id);
       setConfirmedStepKeys(new Set());
+      setStepReviewRequired(false);
       setMessage(`已加载最近测试：${item.name}`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -366,7 +419,8 @@ export function AiScriptFlowsPanel({
   const steps = caseStepViews(generatedDraft?.document);
   const reviewSteps = stepReviewItems(generatedDraft?.document);
   const confirmedStepCount = reviewSteps.filter((step) => confirmedStepKeys.has(step.key)).length;
-  const reviewBlocked = Boolean(generatedDraft && reviewSteps.length > 0 && confirmedStepCount < reviewSteps.length);
+  const showStepReview = Boolean(stepReviewRequired && reviewSteps.length > 0);
+  const reviewBlocked = Boolean(generatedDraft && showStepReview && confirmedStepCount < reviewSteps.length);
   const busy = busyAction !== undefined;
 
   function toggleStepConfirmed(stepKey: string, confirmed: boolean) {
@@ -384,6 +438,7 @@ export function AiScriptFlowsPanel({
       const updated = updateDraftStepLocator(generatedDraft, stepKey, patch);
       setDraft(updated);
       setPlan(undefined);
+      setStepReviewRequired(true);
       setConfirmedStepKeys((current) => {
         const next = new Set(current);
         next.delete(stepKey);
@@ -468,12 +523,12 @@ export function AiScriptFlowsPanel({
                 {steps.map((step) => <li key={step.id}><span>{step.order}</span><div><strong>{step.name}</strong><small>{step.context ?? step.id}</small></div></li>)}
               </ol>
             </section>
-            <StepReviewPanel
+            {showStepReview ? <StepReviewPanel
               steps={reviewSteps}
               confirmedStepKeys={confirmedStepKeys}
               onConfirm={toggleStepConfirmed}
               onLocatorChange={updateStepLocator}
-            />
+            /> : null}
             {caseCenterEligible(generatedDraft.document) ? <div className="ai-case-actions">
               <button type="button" onClick={() => void saveDraft()} disabled={busy || reviewBlocked}><Save size={16} /><span>{revision ? "保存修改" : generatedDraft.sourceFlow ? "更新用例中心" : "保存到用例中心"}</span></button>
             </div> : <p className="navigation-flow-note">{generatedDraft.document.testLevel === "probe" ? "临时验证默认只保留在最近测试，不进入用例中心。" : "导航流程执行成功后会作为系统内部导航能力复用。"}</p>}
@@ -551,53 +606,89 @@ function StepLocatorEditor({
   locator: StepLocatorView;
   onChange: (stepKey: string, patch: StepLocatorPatch) => void;
 }) {
+  const targetValueLabel = locatorTargetValueLabel(locator.targetKind);
   return <div className="step-locator-editor">
-    <strong>元素定位</strong>
+    <div className="step-locator-summary">
+      <span>这一步会操作</span>
+      <strong>{locatorTargetSummary(locator)}</strong>
+      <small>{locatorSearchSummary(locator)}</small>
+    </div>
     <div className="step-locator-grid">
-      <label>目标类型<select value={locator.targetKind} onChange={(event) => onChange(stepKey, { targetKind: event.target.value as TargetKind })}>
-        <option value="text">文字 text</option>
-        <option value="semantic">语义 semantic</option>
-        <option value="icon">图标 icon</option>
-        <option value="control">控件 control</option>
+      <label>操作目标<select value={locator.targetKind} onChange={(event) => onChange(stepKey, { targetKind: event.target.value as TargetKind })}>
+        {TARGET_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select></label>
-      <label>目标值{locator.targetKind === "control" ? (
+      <label>{targetValueLabel}{locator.targetKind === "control" ? (
         <select value={locator.targetValue} onChange={(event) => onChange(stepKey, { targetValue: event.target.value })}>
-          <option value="textField">textField</option>
-          <option value="switch">switch</option>
-          <option value="checkbox">checkbox</option>
+          {CONTROL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
       ) : (
         <input value={locator.targetValue} onChange={(event) => onChange(stepKey, { targetValue: event.target.value })} />
       )}</label>
-      <label>区域<select value={locator.area ?? ""} onChange={(event) => onChange(stepKey, { area: event.target.value })}>
-        <option value="">自动</option>
-        <option value="topBar">topBar</option>
-        <option value="content">content</option>
-        <option value="bottomBar">bottomBar</option>
+      <label>页面区域<select value={locator.area ?? ""} onChange={(event) => onChange(stepKey, { area: event.target.value })}>
+        {AREA_OPTIONS.map((option) => <option key={option.value || "auto"} value={option.value}>{option.label}</option>)}
       </select></label>
-      {locator.usesSearchPolicy ? <label>search.mode<select value={locator.searchMode ?? ""} onChange={(event) => onChange(stepKey, { searchMode: event.target.value })}>
-        <option value="">默认</option>
-        <option value="auto">auto</option>
-        <option value="visibleOnly">visibleOnly</option>
-        <option value="scroll">scroll</option>
+      {locator.usesSearchPolicy ? <label>查找方式<select value={locator.searchMode ?? ""} onChange={(event) => onChange(stepKey, { searchMode: event.target.value })}>
+        {SEARCH_MODE_OPTIONS.map((option) => <option key={option.value || "default"} value={option.value}>{option.label}</option>)}
       </select></label> : null}
-      <label>方向<select value={locator.direction ?? ""} onChange={(event) => onChange(stepKey, { direction: event.target.value })}>
-        <option value="">默认</option>
-        <option value="down">down</option>
-        <option value="up">up</option>
-        <option value="both">both</option>
+      <label>滚动方向<select value={locator.direction ?? ""} onChange={(event) => onChange(stepKey, { direction: event.target.value })}>
+        {DIRECTION_OPTIONS.map((option) => <option key={option.value || "default"} value={option.value}>{option.label}</option>)}
       </select></label>
-      <label>最大滑动<input type="number" min="1" max="50" value={locator.maxSwipes ?? ""} onChange={(event) => onChange(stepKey, { maxSwipes: event.target.value })} /></label>
-      <label>nearText<input value={locator.nearText ?? ""} onChange={(event) => onChange(stepKey, { nearText: event.target.value })} /></label>
-      <label>scopeText<input value={locator.scopeText ?? ""} onChange={(event) => onChange(stepKey, { scopeText: event.target.value })} /></label>
-      <label>ordinal<input type="number" min="1" value={locator.ordinal ?? ""} onChange={(event) => onChange(stepKey, { ordinal: event.target.value })} /></label>
-      <label>checked<select value={locator.checked ?? ""} onChange={(event) => onChange(stepKey, { checked: event.target.value })}>
-        <option value="">不指定</option>
-        <option value="true">true</option>
-        <option value="false">false</option>
-      </select></label>
+      <label>最多滑动次数<input type="number" min="1" max="50" value={locator.maxSwipes ?? ""} onChange={(event) => onChange(stepKey, { maxSwipes: event.target.value })} /></label>
     </div>
+    <details className="step-locator-advanced">
+      <summary>高级定位设置</summary>
+      <div className="step-locator-grid">
+        <label>旁边有这些文字<input value={locator.nearText ?? ""} onChange={(event) => onChange(stepKey, { nearText: event.target.value })} /></label>
+        <label>限定在这个区域或行内<input value={locator.scopeText ?? ""} onChange={(event) => onChange(stepKey, { scopeText: event.target.value })} /></label>
+        <label>第几个匹配项<input type="number" min="1" value={locator.ordinal ?? ""} onChange={(event) => onChange(stepKey, { ordinal: event.target.value })} /></label>
+        <label>开关或勾选状态<select value={locator.checked ?? ""} onChange={(event) => onChange(stepKey, { checked: event.target.value })}>
+          {CHECKED_OPTIONS.map((option) => <option key={option.value || "unset"} value={option.value}>{option.label}</option>)}
+        </select></label>
+        <label>位置描述<input value={locator.position ?? ""} onChange={(event) => onChange(stepKey, { position: event.target.value })} /></label>
+        {locator.usesSearchPolicy ? <>
+          <label>查找前是否回到顶部<select value={locator.resetToTop ?? ""} onChange={(event) => onChange(stepKey, { resetToTop: event.target.value })}>
+            {RESET_TO_TOP_OPTIONS.map((option) => <option key={option.value || "unset"} value={option.value}>{option.label}</option>)}
+          </select></label>
+          <label>限定查找容器<input value={locator.container ?? ""} onChange={(event) => onChange(stepKey, { container: event.target.value })} /></label>
+        </> : null}
+      </div>
+    </details>
   </div>;
+}
+
+function locatorTargetSummary(locator: StepLocatorView): string {
+  const kind = targetKindLabel(locator.targetKind);
+  const value = locator.targetKind === "control" ? controlLabel(locator.targetValue) : locator.targetValue.trim();
+  return value ? `${kind}“${value}”` : kind;
+}
+
+function locatorSearchSummary(locator: StepLocatorView): string {
+  const parts = [
+    `区域：${optionLabel(AREA_OPTIONS, locator.area)}`,
+    locator.usesSearchPolicy ? `查找：${optionLabel(SEARCH_MODE_OPTIONS, locator.searchMode)}` : undefined,
+    locator.direction ? `方向：${optionLabel(DIRECTION_OPTIONS, locator.direction)}` : undefined,
+    locator.maxSwipes ? `最多滑动 ${locator.maxSwipes} 次` : undefined
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+function locatorTargetValueLabel(kind: TargetKind): string {
+  if (kind === "text") return "屏幕上的文字";
+  if (kind === "semantic") return "元素描述";
+  if (kind === "icon") return "图标描述";
+  return "控件类型";
+}
+
+function targetKindLabel(kind: TargetKind): string {
+  return TARGET_KIND_OPTIONS.find((option) => option.value === kind)?.label ?? kind;
+}
+
+function controlLabel(value: string | undefined): string {
+  return optionLabel(CONTROL_OPTIONS, value);
+}
+
+function optionLabel(options: LocatorOption[], value: string | undefined): string {
+  return options.find((option) => option.value === (value ?? ""))?.label ?? (value?.trim() || "默认");
 }
 
 export function ExecutionFailureNotice({
@@ -676,6 +767,10 @@ function draftParameterValues(draft: GeneratedDraft | undefined): Record<string,
     ...defaultCaseParameterValues(draft?.document),
     ...(draft?.parameterValues ?? {})
   };
+}
+
+function draftRequiresStepReview(draft: AiDraft | undefined): boolean {
+  return (draft?.status === "ready" || draft?.status === "trial_ready") && draft.channel !== "history";
 }
 
 export function draftRunEndpoint(status: GeneratedDraft["status"]): string {
