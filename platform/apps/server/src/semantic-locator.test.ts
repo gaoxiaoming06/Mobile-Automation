@@ -44,6 +44,28 @@ describe("semantic locator helpers", () => {
     );
   });
 
+  it("matches OCR text when class names use spaced or full-width hyphens", () => {
+    const candidate = findTextCandidate(
+      {
+        text: "班级四十二号 - 22\n班级四十二号－23",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1080,
+        height: 2400,
+        boxes: [
+          { text: "班级四十二号 - 22", confidence: 0.99, x: 140, y: 520, width: 320, height: 48 },
+          { text: "班级四十二号－23", confidence: 0.98, x: 140, y: 720, width: 320, height: 48 }
+        ]
+      },
+      "班级四十二号-22"
+    );
+
+    expect(candidate).toEqual(expect.objectContaining({
+      text: "班级四十二号-22",
+      centerY: 544
+    }));
+  });
+
   it("finds text near a clicked point for recording-time locator suggestions", () => {
     const candidate = findNearestTextCandidate(layout("首页", "进入课堂"), { x: 200, y: 225 });
 

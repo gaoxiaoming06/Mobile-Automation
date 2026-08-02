@@ -34,6 +34,7 @@ describe("step expectation helpers", () => {
 
   it("normalizes OCR text and evaluates text match modes", () => {
     expect(normalizeOcrText(" 首页\n  已开始 ")).toBe("首页 已开始");
+    expect(normalizeOcrText("班级四十二号 － 22")).toBe("班级四十二号-22");
     expect(textExpectationMode("equals")).toBe("equals");
     expect(textExpectationMode("unknown")).toBe("contains");
     expect(matchTextExpectation("首页 已开始", "首页", "contains")).toBe(true);

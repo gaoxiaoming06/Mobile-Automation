@@ -431,7 +431,10 @@ function withOccurrence(locator: UiElementLocator, candidate: UiElementCandidate
 }
 
 function normalizeText(value: string | undefined): string {
-  return (value ?? "").replace(/\s+/g, "").trim();
+  return (value ?? "")
+    .replace(/[‐‑‒–—―－﹣−]/g, "-")
+    .replace(/\s+/g, "")
+    .trim();
 }
 
 function containsPoint(bounds: UiElementBounds, point: { x: number; y: number }): boolean {

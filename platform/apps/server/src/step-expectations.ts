@@ -983,7 +983,11 @@ export function readOcrRegion(params: Record<string, unknown>): OcrRegion | unde
 }
 
 export function normalizeOcrText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  return value
+    .replace(/[‐‑‒–—―－﹣−]/g, "-")
+    .replace(/\s*-\s*/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeOcrRegion(x: unknown, y: unknown, width: unknown, height: unknown): OcrRegion | undefined {

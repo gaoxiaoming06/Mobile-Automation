@@ -108,6 +108,30 @@ describe("Android UI hierarchy locator", () => {
     );
   });
 
+  it("matches text locators across spaced and full-width hyphens", () => {
+    const classHierarchy = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2218]">
+    <node index="0" text="" resource-id="cn.eeo.classin:id/card" class="android.view.ViewGroup" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[54,500][1044,680]">
+      <node index="0" text="班级四十二号 － 22" resource-id="cn.eeo.classin:id/title" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[120,530][520,585]" />
+    </node>
+  </node>
+</hierarchy>`;
+
+    const candidate = findElementByLocator(classHierarchy, {
+      strategy: "android_uiautomator",
+      text: "班级四十二号-22",
+      textMatchMode: "contains",
+      tapTarget: "clickable_ancestor",
+      packageName: "cn.eeo.classin"
+    });
+
+    expect(candidate).toEqual(expect.objectContaining({
+      resourceId: "cn.eeo.classin:id/card",
+      clickable: true
+    }));
+  });
+
   it("adds occurrence to locators when identical content descriptions appear multiple times", () => {
     const repeatedHierarchy = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
