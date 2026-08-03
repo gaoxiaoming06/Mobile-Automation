@@ -25,6 +25,22 @@ import {
 import type { Observation } from "@mobile-automation/graph-core";
 
 describe("StabilityExplorer", () => {
+  it("does not mark a run stopped when it does not own the active worker", async () => {
+    const storage = new MemoryExplorerStorage();
+    storage.createRun({
+      id: "script-run",
+      caseName: "Script run",
+      deviceSerial: "device-1",
+      configJson: "{}",
+      runSnapshotJson: "{}",
+      steps: []
+    });
+    const explorer = new StabilityExplorer(storage, new ScriptedExplorerDriver(), scriptedOcr([[]]));
+
+    await expect(explorer.stop("script-run")).resolves.toBe(false);
+    expect(storage.getRun("script-run")?.status).toBe("running");
+  });
+
   it("normalizes first-version exploration bounds with safe defaults", () => {
     expect(normalizeStabilityExplorerConfig({ packageName: " com.demo " })).toEqual(
       expect.objectContaining({

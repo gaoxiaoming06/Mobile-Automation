@@ -23,13 +23,11 @@ export type {
   ScriptParameterOption,
   ScriptParameterType,
   ScriptParameterValue,
-  ScriptRiskConfirmation,
   ScriptAssertTextStep,
   ScriptReachPageStep,
   ScriptSearchPolicy,
   ScriptStep,
   ScriptStepRole,
-  ScriptStepRisk,
   ScriptTarget,
   ScriptTargetArea,
   ScriptTargetPosition

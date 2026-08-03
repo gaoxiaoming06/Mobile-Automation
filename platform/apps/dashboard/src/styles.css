@@ -222,6 +222,14 @@ button:disabled {
   overflow: hidden;
 }
 
+.retained-nav-panel:not([hidden]) {
+  display: contents;
+}
+
+.retained-nav-panel[hidden] {
+  display: none;
+}
+
 .app-monitor-execution-toggle {
   display: flex;
   align-items: center;
@@ -4748,6 +4756,64 @@ button:disabled {
   gap: 5px;
 }
 
+.script-run-mode {
+  display: grid;
+  gap: 6px;
+  padding: 8px 14px;
+}
+
+.script-run-mode > span {
+  color: #4c5b70;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.script-run-mode > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+}
+
+.script-run-mode button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 5px 7px;
+  border: 0;
+  border-right: 1px solid #cbd5e1;
+  border-radius: 0;
+  background: #ffffff;
+  color: #4c5b70;
+  font-size: 11px;
+}
+
+.script-run-mode button:last-child {
+  border-right: 0;
+}
+
+.script-run-mode button[aria-pressed="true"] {
+  background: #eaf2ff;
+  color: #1456b8;
+  font-weight: 700;
+}
+
+.script-run-mode button:disabled {
+  background: #f6f7f9;
+  color: #9aa5b4;
+  cursor: not-allowed;
+}
+
+.script-run-mode small {
+  color: #738197;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.script-run-mode .script-run-mode-warning {
+  color: #9a5a08;
+}
+
 .script-run-device {
   padding: 12px 14px 6px;
 }
@@ -4811,6 +4877,12 @@ button:disabled {
   margin: 4px 14px 0;
 }
 
+.script-stop-button {
+  border-color: #d92d20;
+  background: #ffffff;
+  color: #b42318;
+}
+
 .script-run-status {
   padding-bottom: 12px;
 }
@@ -4870,10 +4942,26 @@ button:disabled {
 }
 
 .ai-script-header {
+  display: flex;
   min-height: 74px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   padding: 14px 20px;
   border-bottom: 1px solid #d5dde8;
   background: #ffffff;
+}
+
+.ai-script-header > div {
+  min-width: 0;
+}
+
+.ai-script-header > button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
 }
 
 .ai-script-header h2,
@@ -4893,6 +4981,10 @@ button:disabled {
   grid-template-columns: minmax(360px, 0.8fr) minmax(520px, 1.2fr);
   gap: 1px;
   background: #d5dde8;
+}
+
+.ai-script-layout.manual-edit {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .ai-script-request,
@@ -5496,6 +5588,143 @@ button:disabled {
   font-size: 12px;
 }
 
+.ai-step-review > header > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.step-trial-run-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #d9e2ee;
+  background: #f7faff;
+}
+
+.step-trial-run-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.step-trial-run-copy > span,
+.step-trial-run-copy > small {
+  color: #65748a;
+  font-size: 11px;
+}
+
+.step-trial-run-copy > strong {
+  overflow: hidden;
+  color: #243044;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-status-badge,
+.step-trial-status {
+  width: fit-content;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #526176;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.run-status-badge {
+  padding: 6px 8px;
+}
+
+.step-trial-status {
+  flex: 0 0 auto;
+  padding: 4px 6px;
+}
+
+.run-status-badge[data-status="running"],
+.run-status-badge[data-status="pending"],
+.step-trial-status[data-status="running"] {
+  border-color: #a9c8f7;
+  background: #f3f7ff;
+  color: #1f63d3;
+}
+
+.run-status-badge[data-status="passed"],
+.step-trial-status[data-status="passed"] {
+  border-color: #acd9c5;
+  background: #f4fbf7;
+  color: #16794b;
+}
+
+.run-status-badge[data-status="paused"],
+.step-trial-status[data-status="paused"] {
+  border-color: #e8c98a;
+  background: #fffaf0;
+  color: #8a4b07;
+}
+
+.run-status-badge[data-status="failed"],
+.run-status-badge[data-status="timeout"],
+.run-status-badge[data-status="device_lost"],
+.step-trial-status[data-status="failed"] {
+  border-color: #efb4ae;
+  background: #fff6f5;
+  color: #b42318;
+}
+
+.step-trial-run-bar .step-run-controls {
+  justify-content: flex-end;
+  margin: 0;
+}
+
+.ai-script-result > .step-trial-run-bar {
+  border: 1px solid #d9e2ee;
+  border-radius: 6px;
+}
+
+.orchestrator-add-step,
+.orchestrator-step-tools,
+.orchestrator-step-run-actions,
+.step-run-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.orchestrator-add-step select {
+  width: 132px;
+  min-width: 0;
+  height: 32px;
+  padding: 4px 8px;
+  border: 1px solid #cfd8e6;
+  border-radius: 4px;
+  background: #fff;
+  color: #263548;
+  font-size: 12px;
+}
+
+.orchestrator-add-step button,
+.orchestrator-step-run-actions button,
+.step-run-controls button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .ai-step-review-warning,
 .ai-step-review-ready,
 .ai-step-review-static {
@@ -5516,20 +5745,104 @@ button:disabled {
   background: #f4fbf7;
 }
 
+.ai-step-review-sections {
+  max-height: 560px;
+  overflow: auto;
+}
+
+.ai-step-review-section + .ai-step-review-section {
+  border-top: 1px solid #d9e2ee;
+}
+
+.ai-step-review-section-head {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 14px;
+  background: #f7f9fc;
+  color: #334155;
+}
+
+.ai-step-review-section-head h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.ai-step-review-section-head > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-step-review-section-head button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.ai-step-review-section-head span,
+.ai-step-review-section-empty,
+.legacy-start-strategy {
+  color: #65748a;
+  font-size: 12px;
+}
+
+.ai-step-review-section-empty,
+.legacy-start-strategy {
+  margin: 0;
+  padding: 10px 14px;
+}
+
+.legacy-start-strategy {
+  border-bottom: 1px solid #eef2f7;
+  color: #334155;
+}
+
+.loop-reset-none {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-bottom: 1px solid #eef2f7;
+  color: #334155;
+  font-size: 12px;
+}
+
+.loop-reset-none input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 .ai-step-review-list {
   display: grid;
-  max-height: 480px;
   margin: 0;
   padding: 0;
-  overflow: auto;
   list-style: none;
 }
 
 .ai-step-review-list > li {
   display: grid;
+  box-sizing: border-box;
   gap: 10px;
   padding: 12px 14px;
   border-bottom: 1px solid #e7ebf1;
+}
+
+.ai-step-review-list > li[data-expanded="false"] {
+  min-height: 48px;
+  gap: 0;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.ai-step-review-list > li[data-structural="true"] {
+  background: #f7f9fc;
 }
 
 .ai-step-review-list > li:last-child {
@@ -5542,7 +5855,20 @@ button:disabled {
 
 .ai-step-review-head {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 4px;
+}
+
+.ai-step-review-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-step-review-title > label {
+  min-width: 0;
 }
 
 .ai-step-review-head label {
@@ -5560,17 +5886,99 @@ button:disabled {
   height: 16px;
 }
 
-.ai-step-review-head span,
-.ai-step-review-head small {
+.ai-step-review-head span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ai-step-review-head small {
+.orchestrator-step-context {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
   padding-left: 24px;
   color: #708096;
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orchestrator-step-tools button {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #526176;
+}
+
+.orchestrator-step-tools button:hover:not(:disabled) {
+  border-color: #cbd5e1;
+  background: #fff;
+}
+
+.orchestrator-step-tools .orchestrator-step-toggle {
+  border-color: #d7dfeb;
+  background: #fff;
+}
+
+.orchestrator-step-tools button:disabled,
+.orchestrator-step-run-actions button:disabled,
+.orchestrator-add-step button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.step-action-editor {
+  padding: 10px;
+  border: 1px solid #e1e6ee;
+  border-radius: 6px;
+  background: #fbfcfe;
+}
+
+.step-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.step-action-grid label,
+.step-locator-grid label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  color: #58687e;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.step-action-grid input,
+.step-action-grid select {
+  min-width: 0;
+  height: 32px;
+  padding: 4px 8px;
+  border: 1px solid #cfd8e6;
+  border-radius: 4px;
+  background: #fff;
+  color: #1f2937;
+  font-size: 12px;
+}
+
+.orchestrator-step-run-actions {
+  justify-content: flex-end;
+}
+
+.orchestrator-step-run-actions button:first-child {
+  border-color: #a9c8f7;
+  color: #1f63d3;
+}
+
+.step-run-controls {
+  flex-wrap: wrap;
+  margin: 8px 0;
 }
 
 .step-locator-editor {
@@ -5617,7 +6025,7 @@ button:disabled {
 
 .step-locator-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -5663,6 +6071,37 @@ button:disabled {
 }
 
 @media (max-width: 900px) {
+  .ai-step-review > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .step-trial-run-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .step-trial-run-bar .step-run-controls {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .orchestrator-add-step select {
+    flex: 1;
+    width: auto;
+  }
+
+  .step-action-grid,
+  .step-locator-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .orchestrator-step-run-actions {
+    justify-content: stretch;
+  }
+
+  .orchestrator-step-run-actions button {
+    flex: 1;
+  }
   .case-center-module {
     overflow: visible;
   }

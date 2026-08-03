@@ -1,6 +1,7 @@
-import { Play } from "lucide-react";
+import { Play, Square } from "lucide-react";
 
 export type ScriptParameterValue = string | number | boolean;
+export type ScriptRunExecutionMode = "once" | "loop_body" | "loop_all";
 
 export type ScriptParameterDefinitionView = {
   type: "string" | "number" | "boolean" | "datetime";
@@ -20,11 +21,18 @@ type ScriptRunFormProps = {
   devices: Array<{ serial: string; name?: string }>;
   deviceSerial: string;
   busy: boolean;
+  executionMode?: ScriptRunExecutionMode;
+  active?: boolean;
+  currentIteration?: number;
   disabled?: boolean;
+  loopBodyAvailable?: boolean;
+  loopBodyUnavailableReason?: string;
   buttonLabel?: string;
   onValueChange: (key: string, value: ScriptParameterValue) => void;
   onDeviceChange: (serial: string) => void;
+  onExecutionModeChange?: (mode: ScriptRunExecutionMode) => void;
   onRun: () => void;
+  onStop?: () => void;
 };
 
 export function ScriptRunForm({
@@ -33,11 +41,18 @@ export function ScriptRunForm({
   devices,
   deviceSerial,
   busy,
+  executionMode = "once",
+  active = false,
+  currentIteration,
   disabled = false,
+  loopBodyAvailable = true,
+  loopBodyUnavailableReason,
   buttonLabel = "开始执行",
   onValueChange,
   onDeviceChange,
-  onRun
+  onExecutionModeChange,
+  onRun,
+  onStop
 }: ScriptRunFormProps) {
   const entries = Object.entries(parameters);
   const primary = entries.filter(([, definition]) => definition.required || !definition.advanced);
@@ -54,6 +69,28 @@ export function ScriptRunForm({
           {devices.map((device) => <option key={device.serial} value={device.serial}>{device.name ?? device.serial}</option>)}
         </select>
       </label>
+      <div className="script-run-mode">
+        <span>执行方式</span>
+        <div role="group" aria-label="执行方式">
+          {executionModes.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={executionMode === option.value}
+              disabled={busy || active || (option.value === "loop_body" && !loopBodyAvailable)}
+              title={option.value === "loop_body" && !loopBodyAvailable ? loopBodyUnavailableReason : undefined}
+              onClick={() => onExecutionModeChange?.(option.value)}
+            >{option.label}</button>
+          ))}
+        </div>
+        {executionMode === "loop_body" && !loopBodyAvailable
+          ? <small className="script-run-mode-warning">{loopBodyUnavailableReason ?? "请先配置每轮复位步骤。"}</small>
+          : executionMode !== "once" ? <small>
+              {executionMode === "loop_body"
+                ? "前置准备只执行一次；每轮按业务、验证、复位的顺序执行。"
+                : "全部常规步骤每轮都会执行；每轮复位步骤不参与此模式。"}
+            </small> : null}
+      </div>
       <div className="script-parameter-grid">
         {primary.map(([key, definition]) => (
           <ParameterField key={key} parameterKey={key} definition={definition} value={values[key]} onChange={onValueChange} />
@@ -69,12 +106,34 @@ export function ScriptRunForm({
           </div>
         </details>
       ) : null}
-      <button className="primary-button script-run-button" type="button" onClick={onRun} disabled={busy || disabled || !deviceSerial || missingRequired}>
-        <Play size={16} />
-        <span>{busy ? "启动中" : buttonLabel}</span>
-      </button>
+      {active ? <button className="script-run-button script-stop-button" type="button" onClick={onStop} disabled={busy || !onStop}>
+        <Square size={15} />
+        <span>{busy ? "停止中" : executionMode === "once" ? "停止执行" : `停止循环${currentIteration ? ` · 第 ${currentIteration} 轮` : ""}`}</span>
+        </button> : <button className="primary-button script-run-button" type="button" onClick={onRun} disabled={busy || disabled || !deviceSerial || missingRequired || (executionMode === "loop_body" && !loopBodyAvailable)}>
+          <Play size={16} />
+          <span>{busy ? "启动中" : buttonLabel}</span>
+        </button>}
     </section>
   );
+}
+
+const executionModes: Array<{ value: ScriptRunExecutionMode; label: string }> = [
+  { value: "once", label: "单次执行" },
+  { value: "loop_body", label: "循环业务与验证" },
+  { value: "loop_all", label: "循环整个用例" }
+];
+
+export function runOptionsForExecutionMode(mode: ScriptRunExecutionMode): {
+  mode: "once" | "loop_until_stop";
+  loopScope?: "all_steps" | "exclude_preparation";
+} {
+  if (mode === "loop_body") return { mode: "loop_until_stop", loopScope: "exclude_preparation" };
+  if (mode === "loop_all") return { mode: "loop_until_stop", loopScope: "all_steps" };
+  return { mode: "once" };
+}
+
+export function currentRunIteration(stepResults: Array<{ iterationIndex: number }>): number {
+  return stepResults.reduce((current, result) => Math.max(current, result.iterationIndex), 0);
 }
 
 function ParameterField({

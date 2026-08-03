@@ -20,11 +20,12 @@ import { assessScriptFlowVerification } from "./script-flow-verification.js";
 
 export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "你是移动自动化 ScriptFlow 规划器，只生成可审查的脚本草稿，不操作设备。",
-  "规划阶段默认不读取实时设备页面；只有用户显式开启看屏时，才能使用服务端提供的受控 screenContext。start、onPage 和 expectPage 表达运行时页面约束。",
+  "规划阶段默认不读取实时设备页面；只有用户显式开启看屏时，才能使用服务端提供的受控 screenContext。onPage 和 expectPage 只表达显式步骤自身的页面约束。",
   "先判断测试类型：单一业务目标标记为 case；多个可独立成立的业务目标标记为 scenario。导航、登录态准备和结果验证不算额外业务目标。",
   "必须用顶层 purpose 标记测试主要目的：navigation、fixture、business 或 recovery。navigation 只到达状态，fixture 准备测试环境，business 验证业务行为，recovery 恢复可执行状态。",
-  "每个步骤必须显式标记 role：setup、navigation、business、assertion、cleanup 或 recovery。role 按该步骤在整个测试中的语义填写，不能仅根据动作类型猜测。",
-  "使用 entry 和 outcome 声明测试入口与结果状态：page 表示页面，session 只能是 authenticated 或 unauthenticated，登录后可用 role 表示角色。不要把准备动作展开进业务步骤。",
+  "每个步骤必须显式标记 role：setup、navigation、business、assertion、reset、cleanup 或 recovery。role 按该步骤在整个测试中的语义填写，不能仅根据动作类型猜测。",
+  "新草稿使用显式步骤表达前置准备、业务操作、结果验证和每轮复位：setup 步骤属于前置准备，business 步骤属于业务操作，assertion 步骤属于结果验证，reset 步骤属于循环业务与验证时每轮结束后回到业务起点的动作。不要使用 entry、outcome 或 start 让执行器补动作。",
+  "每轮复位不得自动推断。只有用户明确描述循环时每轮结束后的返回路径，才生成 role: reset 的步骤；只有用户明确说明业务执行后自然回到起点、无需复位时，才输出顶层 loop: { reset: \"none\" }；其他情况省略 loop 和 reset 步骤，交给用户在编排器确认。",
   "页面目录只负责页面身份。动作目标必须且只能使用 text、semantic、icon 或 control：已知屏幕原文用 text，不知道准确标签时用 semantic 描述操作意图，常见标准图标用 icon，通用表单控件用 control。",
   "页面 key、页面 id、ScriptFlow id 和类似 classin.teacher.xxx 的内部引用不能作为 tap、inputText、clearText、selectText 或 scrollUntilVisible 的动作目标。",
   "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。semantic 用于‘进入教学方案的入口’这类概念目标，不能伪装成屏幕原文。",
@@ -40,7 +41,8 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "control 当前支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content、scopeText 和 ordinal，用于预填输入框没有稳定标签的场景。",
   "执行器能力合同：semantic 仅支持 tap；selectText 和 scrollUntilVisible 必须使用 text；inputText 和 clearText 必须使用 text 或 control: textField。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
-  "用户明确操作是硬约束：点击、输入、清空、滑动、启动或重启等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。资产只可补充定位、页面约束和结果验证。",
+  "用户明确操作是硬约束：点击、输入、清空、滑动或启动等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。用户明确要求启动时生成唯一一个 role: setup 的 launchApp；没有要求启动时不要添加。",
+  "ScriptFlow 的 launchApp 表示保留应用数据，先终止应用进程再重新启动；步骤名称应写为‘重启 App’，不能把它描述成仅切回前台。",
   "用户描述打开选择器、滑动到具体选中值并确认时，必须把这组机械操作规范化为一个 selectText：target 保留字段入口，value 完整保留用户指定值，confirmText 保留确认文字。selectText 自身会点击并打开字段，由执行器动态查找选项；禁止保留前置 tap，也禁止猜测固定滑动次数。",
   "用户只表达进入、打开、前往或回到某页面时，这是目标状态而不是操作方式。只有目标是 navigationAnchors 中的状态入口，或 transitions 中存在到该目标的路径时，才生成 reachPage；不要因为‘回到’推断系统返回或重启。",
   "navigationEntries 是试运行验证并经用户确认的导航入口。目标型请求只能使用 navigationEntries、已验证 transitions 或 navigationAnchors；页面标签和页面名称不能作为入口推断依据。",
@@ -54,8 +56,7 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "账号、密码等 sensitive 参数禁止写入 parameters.default、summary 或 assumptions，必须只放入顶层 parameterValues。",
   "runFlow 会自动继承父测试中的同名参数；规划器会把复用用例和 reachPage 导航路径所需参数汇总到运行配置。",
   "常用参数直接展示；低频可选参数标记 advanced: true。枚举只有在输入目录给出合法选项时才能使用 select/options。",
-  "发布、提交、删除、支付只在用户明确要求时生成，并用 risk 标记供报告审计；所有步骤均无需运行前确认。",
-  "risk 是步骤级字段，必须与 tap、selectText 等动作字段同级，禁止写进动作对象内部。",
+  "执行器严格按照脚本中的显式命令执行，不推测前置页面，不插入返回、重启、页面恢复或结果断言。",
   "信息不足时返回 needs_clarification 和一个简短问题，不要猜测。只返回唯一 JSON 对象，不要 Markdown、代码围栏、解释文字或额外字段。"
 ].join("\n");
 
@@ -102,6 +103,7 @@ const SCRIPT_FLOW_DOCUMENT_RESPONSE_FIELDS = [
   "outcome",
   "parameters",
   "steps",
+  "loop",
   "tags"
 ];
 const SCRIPT_FLOW_FLATTENED_READY_RESPONSE_FIELDS = new Set([
@@ -182,26 +184,10 @@ export async function generateScriptFlowDraft(input: {
   try {
     parsed = parseScriptFlowAiResponse(result.content, parseInput);
   } catch (firstError) {
-    if (firstError instanceof MissingFullRegressionFieldCoverageError) {
-      return {
-        status: "needs_clarification",
-        clarification: missingFullRegressionFieldCoverageClarification(),
-        channel,
-        model: input.config.model
-      };
-    }
     if (firstError instanceof UnrecordedPageReferenceError) {
       return {
         status: "needs_clarification",
         clarification: missingPageClarification(input.prompt),
-        channel,
-        model: input.config.model
-      };
-    }
-    if (firstError instanceof UnresolvedGoalOnlyNavigationError) {
-      return {
-        status: "needs_clarification",
-        clarification: unresolvedGoalOnlyNavigationClarification(input.prompt),
         channel,
         model: input.config.model
       };
@@ -222,14 +208,6 @@ export async function generateScriptFlowDraft(input: {
         model: input.config.model
       };
     }
-    if (firstError instanceof MissingCurrentPageActionGroundingError) {
-      return {
-        status: "needs_clarification",
-        clarification: firstError.message,
-        channel,
-        model: input.config.model
-      };
-    }
     const repaired = await timedScriptFlowAiStage(input.timingContext, "repair_request", () => runAiJsonRequest(requestConfig, {
       developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
       userContent: buildScriptFlowRepairPrompt(plannerPrompt, result.content, firstError),
@@ -238,26 +216,10 @@ export async function generateScriptFlowDraft(input: {
     try {
       parsed = parseScriptFlowAiResponse(repaired.content, parseInput);
     } catch (repairError) {
-      if (repairError instanceof MissingFullRegressionFieldCoverageError) {
-        return {
-          status: "needs_clarification",
-          clarification: missingFullRegressionFieldCoverageClarification(),
-          channel,
-          model: input.config.model
-        };
-      }
       if (repairError instanceof UnrecordedPageReferenceError) {
         return {
           status: "needs_clarification",
           clarification: missingPageClarification(input.prompt),
-          channel,
-          model: input.config.model
-        };
-      }
-      if (repairError instanceof UnresolvedGoalOnlyNavigationError) {
-        return {
-          status: "needs_clarification",
-          clarification: unresolvedGoalOnlyNavigationClarification(input.prompt),
           channel,
           model: input.config.model
         };
@@ -274,14 +236,6 @@ export async function generateScriptFlowDraft(input: {
         return {
           status: "needs_clarification",
           clarification: unsupportedExecutableTargetClarification(repairError.action),
-          channel,
-          model: input.config.model
-        };
-      }
-      if (repairError instanceof MissingCurrentPageActionGroundingError) {
-        return {
-          status: "needs_clarification",
-          clarification: repairError.message,
           channel,
           model: input.config.model
         };
@@ -407,7 +361,6 @@ export function buildScriptFlowPlannerPrompt(
   existingDocument?: ScriptFlowDocument,
   screenContext?: ScreenUnderstandingContext
 ): string {
-  const explicitOperations = extractExplicitOperationContract(prompt);
   const systemTestLevel = existingDocument?.testLevel ?? classifyScriptFlowTestLevel(prompt);
   return [
     existingDocument
@@ -428,9 +381,6 @@ export function buildScriptFlowPlannerPrompt(
         name: "测试名称",
         description: "测试说明",
         app: { id: appId, platform },
-        start: { strategy: "keepCurrent | goHome | launchApp | restartApp | clearDataAndLaunch" },
-        entry: { page: "可选的目录页面", session: "authenticated | unauthenticated", role: "authenticated 时可选" },
-        outcome: { page: "可选的目录页面", session: "authenticated | unauthenticated", role: "authenticated 时可选" },
         parameters: {},
         steps: [],
         tags: ["ai-generated"]
@@ -439,7 +389,7 @@ export function buildScriptFlowPlannerPrompt(
     "可用动作：launchApp、tap、inputText、clearText、selectText、swipe、scrollUntilVisible、reachPage、waitForPage、assertPage、assertText、runFlow、repeat、when。",
     `系统判定的 testLevel：${systemTestLevel}。document.testLevel 必须保持这个值，不能由模型自行改成其它层级。`,
     "testLevel 含义：probe=临时验证单点问题，component=字段/控件能力用例，business_smoke=最小业务主链路，full_regression=全字段或全配置回归。",
-    "full_regression 不允许凭页面名称自动枚举字段；除非用户明确列出字段/配置项，或正在修改已有 full_regression 用例，否则返回 needs_clarification 让用户补充字段清单。",
+    "full_regression 不允许凭页面名称自动枚举字段。用户未列出全部字段时，先根据已有上下文生成可编辑草稿，并在 assumptions 中说明当前覆盖范围；不要仅因此返回 needs_clarification。",
     "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
     "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
@@ -461,13 +411,9 @@ export function buildScriptFlowPlannerPrompt(
     "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确点击某个入口时，不得补充“点击修改”等桥接步骤；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification。",
     "用户为选择器给出具体选中值时，把“点击字段、滑动选择该值、点击确定/完成”合并为一个 selectText，value 必须精确保留，confirmText 使用用户说出的确认文字；selectText 自身会打开字段，前面禁止再生成 tap，也禁止生成固定次数 swipe 来猜选项位置。",
     "只表达目标页面时，仅当目标属于 navigationAnchors，或能通过 navigationEntries、已验证 transitions 到达时使用 reachPage: { page: <目录页面>, policy: safe }。不要因为“回到”推断系统返回或重启，也不要根据页面名称或标签猜测导航入口。reachPage 自身会验证目标页，不要追加 assertPage。",
-    "tap 与 selectText 默认标记 risk: interaction。明确属于提交、发布、删除或支付时，risk 分别填写 submit、publish、delete 或 payment；这些标记仅用于报告审计，无需运行前确认；禁止 risk: none。",
-    explicitOperations.length
-      ? `用户明确操作契约（必须按顺序生成直接动作，不能用 reachPage 或 runFlow 代替）：${explicitOperations.map((operation) => operation.phrase).join(" -> ")}`
-      : "用户没有明确指定操作过程；可以使用已验证导航知识补全目标型请求。",
-    explicitOperations.length
-      ? "明确操作即使缺少当前页面 key、目标页面资产或自动结果判据，也必须返回 ready 并生成可试运行动作；省略无法确定的 onPage、expectPage、outcome 和断言，系统会将结果标记为待确认。只有缺少班级名、账号、输入值等实际执行参数时才能返回 needs_clarification。"
-      : "目标型请求没有已验证路径或可用结果依据时返回 needs_clarification。",
+    "不要输出 risk 字段。用户点击执行即表示授权运行当前可见脚本，系统不根据按钮文案推断业务风险。",
+    "直接理解用户的完整意图和操作顺序，不依赖服务端预先拆出的中文动作契约。用户明确描述的过程应逐步保留；只描述目标时可以使用已验证导航知识补全。",
+    "明确操作即使缺少当前页面 key、目标页面资产或自动结果判据，也应返回 ready 并生成可试运行动作；省略无法确定的 onPage、expectPage、outcome 和断言，系统会将结果标记为待确认。只有缺少班级名、账号、输入值等实际执行参数时才能返回 needs_clarification。",
     existingDocument ? "修改现有用例：" : "输入：",
     JSON.stringify({ prompt, appId, platform, ...(existingDocument ? { existingDocument } : {}), catalog }, null, 2)
   ].join("\n\n");
@@ -488,34 +434,6 @@ export function classifyScriptFlowTestLevel(prompt: string): ScriptFlowTestLevel
     return "component";
   }
   return compact.length <= 18 && /测试|验证|检查/u.test(prompt) ? "probe" : "business_smoke";
-}
-
-function assertFullRegressionFieldCoverage(
-  document: ScriptFlowDocument,
-  input: { prompt?: string; existingDocument?: ScriptFlowDocument }
-): void {
-  if (document.testLevel !== "full_regression") return;
-  if (hasExplicitFullRegressionFieldList(input.prompt)) return;
-  if (hasExistingFullRegressionCoverage(input.existingDocument)) return;
-  throw new MissingFullRegressionFieldCoverageError();
-}
-
-function hasExplicitFullRegressionFieldList(prompt: string | undefined): boolean {
-  if (!prompt) return false;
-  if (/(?:字段|表单项|配置项)(?:包括|包含|有|为|是|:|：)\s*[\p{L}\p{N}]/u.test(prompt)) return true;
-  const withoutRegressionKeywords = prompt.replace(/所有表单|全部表单|全字段|全部字段|所有配置|全部配置|全量|完整覆盖/gu, "");
-  return /[、,，;；]/u.test(withoutRegressionKeywords)
-    && /字段|表单|配置|输入|选择|开关|复选|名称|标题|时间|日期|时长|类型|选项|checkbox|picker|slider/iu.test(withoutRegressionKeywords);
-}
-
-function hasExistingFullRegressionCoverage(document: ScriptFlowDocument | undefined): boolean {
-  if (!document || document.testLevel !== "full_regression") return false;
-  return flattenSteps(document.steps).some((step) =>
-    "inputText" in step
-    || "clearText" in step
-    || "selectText" in step
-    || ("tap" in step && (step.tap.target.control === "checkbox" || step.tap.target.control === "switch"))
-  );
 }
 
 function buildScriptFlowRepairPrompt(plannerPrompt: string, invalidResponse: string, error: unknown): string {
@@ -595,8 +513,7 @@ function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Re
         target: { text: "课程", area: "content" },
         value: "${course}",
         search: { mode: "auto", direction: "down", maxSwipes: 6 }
-      },
-      risk: "interaction"
+      }
     },
     { id: "reach-page", role: "navigation", reachPage: { page: pageReference, policy: "safe" } },
     { id: "assert-page", role: "assertion", assertPage: pageReference },
@@ -635,24 +552,18 @@ export function parseScriptFlowAiResponse(
   assertKnownResponseFields(root, ["status", "summary", "assumptions", "parameterValues", "document"]);
   assertNoLegacyGeneratedFields(root.document);
   assertGeneratedClassification(root.document, input.existingDocument?.testLevel ?? (input.prompt ? classifyScriptFlowTestLevel(input.prompt) : undefined));
-  const generatedDocument = normalizeGeneratedRunFlowReferences(root.document, input.catalog);
+  const generatedDocument = normalizeGeneratedExplicitExecution(
+    normalizeGeneratedRunFlowReferences(root.document, input.catalog),
+    input.appId
+  );
   const validated = validateScriptFlowDocument(generatedDocument);
-  assertFullRegressionFieldCoverage(validated, input);
   const hydrated = validateScriptFlowDocument(hydrateGeneratedParameters(validated, input.catalog));
   const { document: extractedDocument, parameterValues } = extractEphemeralParameterValues(hydrated, root.parameterValues);
   const document = validateScriptFlowDocument(normalizeGeneratedExecutableTargets(extractedDocument, input));
   validateGeneratedReferences(document, input);
   validateGeneratedActionTargetReferences(document, input.catalog);
-  validateCurrentPageActionDoesNotInventNavigation(document, input);
-  validateCurrentPageMutationGrounding(document, input);
   validateGeneratedExecutableTargetContracts(document);
-  validateGeneratedFieldLocatorGrounding(document, input);
   validateGeneratedNavigationReachability(document, input.catalog);
-  validateGeneratedTargetGrounding(document, input);
-  validateGeneratedTargetAreaGrounding(document, input);
-  validateExactPickerSelections(document, input.prompt, parameterValues);
-  validateExplicitOperationContract(document, input.prompt, parameterValues);
-  validateGoalOnlyNavigationEvidence(document, input.prompt);
   return {
     status: "ready",
     sourceYaml: serializeScriptFlow(document),
@@ -679,6 +590,50 @@ function normalizeScriptFlowAiResponseRoot(root: Record<string, unknown>): Recor
     ...(root.parameterValues !== undefined ? { parameterValues: root.parameterValues } : {}),
     document
   };
+}
+
+function normalizeGeneratedExplicitExecution(value: unknown, appId: string): Record<string, unknown> {
+  const document = JSON.parse(JSON.stringify(recordValue(value))) as Record<string, unknown>;
+  const steps = Array.isArray(document.steps) ? document.steps : [];
+  stripLegacyRiskFields(steps);
+
+  const start = recordValue(document.start);
+  const strategy = stringValue(start.strategy);
+  if (strategy === "keepCurrent") {
+    delete document.start;
+  } else if (strategy === "launchApp") {
+    const first = recordValue(steps[0]);
+    if (!Object.hasOwn(first, "launchApp")) {
+      steps.unshift({
+        id: uniqueGeneratedStepId(steps, "launch-app"),
+        name: "重启 App",
+        role: "setup",
+        launchApp: { appId }
+      });
+    }
+    delete document.start;
+  }
+  document.steps = steps;
+  return document;
+}
+
+function stripLegacyRiskFields(steps: unknown[]): void {
+  for (const value of steps) {
+    const step = recordValue(value);
+    delete step.risk;
+    const repeat = recordValue(step.repeat);
+    const when = recordValue(step.when);
+    if (Array.isArray(repeat.steps)) stripLegacyRiskFields(repeat.steps);
+    if (Array.isArray(when.steps)) stripLegacyRiskFields(when.steps);
+  }
+}
+
+function uniqueGeneratedStepId(steps: unknown[], base: string): string {
+  const ids = new Set(steps.map((value) => stringValue(recordValue(value).id)).filter(Boolean));
+  if (!ids.has(base)) return base;
+  let suffix = 2;
+  while (ids.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
 }
 
 function pickFlattenedScriptFlowDocument(root: Record<string, unknown>): Record<string, unknown> {
@@ -843,8 +798,6 @@ function escapeRegExp(value: string): string {
 
 type ExplicitOperationKind = "launch" | "tap" | "input" | "clear" | "swipe";
 
-type GeneratedOperationKind = ExplicitOperationKind | "select";
-
 type ExplicitOperationContract = {
   kind: ExplicitOperationKind;
   phrase: string;
@@ -877,288 +830,6 @@ function explicitOperationKind(verb: string): ExplicitOperationKind {
   if (verb === "清空") return "clear";
   if (/滑/u.test(verb)) return "swipe";
   return "launch";
-}
-
-function validateExplicitOperationContract(
-  document: ScriptFlowDocument,
-  prompt?: string,
-  parameterValues: Record<string, ScriptParameterValue> = {}
-): void {
-  if (!prompt) return;
-  const contract = extractExplicitOperationContract(prompt);
-  if (!contract.length) return;
-  const generated = generatedDirectOperations(document);
-  let cursor = 0;
-  let operationIndex = 0;
-  let pendingDiscoveryLabels: string[] = [];
-  while (operationIndex < contract.length) {
-    const pickerAt = generated.findIndex((candidate, index) => index >= cursor
-      && candidate.kind === "select"
-      && pickerSequenceMatches(contract, operationIndex, candidate.step, parameterValues));
-    if (pickerAt > cursor) {
-      throw new Error("selectText 自身会打开选择字段，禁止保留重复的前置 tap 或机械滑动步骤");
-    }
-    const candidate = generated[cursor];
-    if (pickerAt === cursor && candidate?.kind === "select" && pickerSequenceMatches(
-      contract,
-      operationIndex,
-      candidate.step,
-      parameterValues
-    )) {
-      operationIndex += 3;
-      cursor += 1;
-      continue;
-    }
-    const operation = contract[operationIndex]!;
-    if (searchOnlyDiscoveryOperationCovered(operation, generated.slice(cursor), requestedFieldLabels(prompt))) {
-      pendingDiscoveryLabels = searchOnlyDiscoveryLabels(operation, requestedFieldLabels(prompt));
-      operationIndex += 1;
-      continue;
-    }
-    const foundAt = generated.findIndex((candidate, index) => index >= cursor && candidate.kind === operation.kind);
-    if (foundAt < 0) {
-      throw new Error(`用户明确操作“${operation.phrase}”没有按顺序保留；明确操作不能被 reachPage、runFlow 或已有资产替代`);
-    }
-    const matchedStep = generated[foundAt]!.step;
-    if (!explicitOperationTargetMatches(operation, matchedStep)
-      && !genericTapUsesPendingDiscoveryTarget(operation, matchedStep, pendingDiscoveryLabels)) {
-      throw new Error(`用户明确操作“${operation.phrase}”对应的动作目标与描述不一致或顺序错误`);
-    }
-    cursor = foundAt + 1;
-    pendingDiscoveryLabels = matchedSearchOnlyDiscoveryLabels(operation, matchedStep, requestedFieldLabels(prompt));
-    operationIndex += 1;
-  }
-}
-
-function generatedDirectOperations(document: ScriptFlowDocument): Array<{ kind: GeneratedOperationKind; step?: ScriptStep }> {
-  const operations: Array<{ kind: GeneratedOperationKind; step?: ScriptStep }> = [];
-  if (["launchApp", "restartApp", "clearDataAndLaunch"].includes(document.start?.strategy ?? "")) {
-    operations.push({ kind: "launch" });
-  }
-  for (const step of flattenSteps(document.steps)) {
-    if ("launchApp" in step) operations.push({ kind: "launch", step });
-    else if ("tap" in step) operations.push({ kind: "tap", step });
-    else if ("inputText" in step) operations.push({ kind: "input", step });
-    else if ("selectText" in step) operations.push({ kind: "select", step });
-    else if ("clearText" in step) operations.push({ kind: "clear", step });
-    else if ("swipe" in step || "scrollUntilVisible" in step) operations.push({ kind: "swipe", step });
-  }
-  return operations;
-}
-
-function searchOnlyDiscoveryOperationCovered(
-  operation: ExplicitOperationContract,
-  candidates: Array<{ kind: GeneratedOperationKind; step?: ScriptStep }>,
-  requestedLabels: string[]
-): boolean {
-  if (!isSearchOnlyDiscoveryOperation(operation)) return false;
-  const labels = searchOnlyDiscoveryLabels(operation, requestedLabels);
-  if (!labels.length) return false;
-  return candidates.some((candidate) => {
-    if (!candidate.step || !["tap", "input", "clear", "select"].includes(candidate.kind)) return false;
-    const action = stepTargetAction(candidate.step);
-    if (!action) return false;
-    if (action.search?.mode !== "auto" && action.search?.mode !== "scroll") return false;
-    return labels.some((label) => targetUsesRequestedFieldLabel(action.target, label));
-  });
-}
-
-function searchOnlyDiscoveryLabels(operation: ExplicitOperationContract, requestedLabels: string[]): string[] {
-  return [...requestedLabels, ...searchDiscoveryTargetLabels(operation.phrase)];
-}
-
-function matchedSearchOnlyDiscoveryLabels(
-  operation: ExplicitOperationContract,
-  step: ScriptStep | undefined,
-  requestedLabels: string[]
-): string[] {
-  if (!isSearchOnlyDiscoveryOperation(operation) || !step) return [];
-  const labels = searchOnlyDiscoveryLabels(operation, requestedLabels);
-  const target = operationTarget(step);
-  if (!target) return [];
-  return labels.some((label) => targetUsesRequestedFieldLabel(target, label)) ? labels : [];
-}
-
-function genericTapUsesPendingDiscoveryTarget(
-  operation: ExplicitOperationContract,
-  step: ScriptStep | undefined,
-  pendingDiscoveryLabels: string[]
-): boolean {
-  if (operation.kind !== "tap" || !pendingDiscoveryLabels.length || !isGenericFollowupTap(operation.phrase)) return false;
-  const target = step ? operationTarget(step) : undefined;
-  if (!target) return false;
-  return pendingDiscoveryLabels.some((label) => targetUsesRequestedFieldLabel(target, label));
-}
-
-function isGenericFollowupTap(phrase: string): boolean {
-  return /(?:进入|打开|查看|点进|进去)/u.test(phrase)
-    && !/(?:确定|完成|提交|发布|取消|返回)/u.test(phrase);
-}
-
-function isSearchOnlyDiscoveryOperation(operation: ExplicitOperationContract): boolean {
-  if (operation.kind !== "swipe") return false;
-  if (!/(?:找到|查找|定位|搜索|出现|可见)/u.test(operation.phrase)) return false;
-  return !/(?:选择|选中|调整到|设置为|设为)/u.test(operation.phrase);
-}
-
-function searchDiscoveryTargetLabels(phrase: string): string[] {
-  const labels = new Set<string>();
-  for (const match of phrase.matchAll(/(?:找到|查找|定位|搜索)\s*([^，,。；;\n]{2,40})/gu)) {
-    const label = sanitizeRequestedFieldLabel(match[1]);
-    if (label) labels.add(label);
-  }
-  return [...labels];
-}
-
-function stepTargetAction(step: ScriptStep): { target: ScriptTarget; search?: ScriptSearchPolicy } | undefined {
-  if ("tap" in step) return step.tap;
-  if ("inputText" in step) return step.inputText;
-  if ("clearText" in step) return step.clearText;
-  if ("selectText" in step) return step.selectText;
-  return undefined;
-}
-
-function validateExactPickerSelections(
-  document: ScriptFlowDocument,
-  prompt: string | undefined,
-  parameterValues: Record<string, ScriptParameterValue>
-): void {
-  if (!prompt) return;
-  const requestedValues = [...prompt.matchAll(
-    /(?:滑动|滚动)[^，,。；;\n]{0,40}?(?:选择(?!中)|选中|调整到|设置为)\s*([^，,。；;\n]+?)(?=\s*(?:，|,|。|；|;|然后|接着|之后|随后|再(?:次)?|并(?:且)?|点(?:击|按)?\s*(?:确定|完成)|$))/gu
-  )].map((match) => match[1]?.trim()).filter((value): value is string => Boolean(value));
-  if (!requestedValues.length) return;
-  const selections = flattenSteps(document.steps)
-    .filter((step): step is Extract<ScriptStep, { selectText: unknown }> => "selectText" in step)
-    .map((step) => resolvedScriptValue(step.selectText.value, parameterValues));
-  for (const requestedValue of requestedValues) {
-    const compactRequested = compactGroundingText(requestedValue);
-    if (selections.some((value) => compactGroundingText(value) === compactRequested)) continue;
-    throw new Error(`具体选中值“${requestedValue}”必须使用 selectText 精确保留，不能转换为固定次数滑动`);
-  }
-}
-
-function pickerSequenceMatches(
-  contract: ExplicitOperationContract[],
-  index: number,
-  step: ScriptStep | undefined,
-  parameterValues: Record<string, ScriptParameterValue>
-): boolean {
-  if (!step || !("selectText" in step)) return false;
-  const [open, choose, confirm] = contract.slice(index, index + 3);
-  if (open?.kind !== "tap" || choose?.kind !== "swipe" || confirm?.kind !== "tap") return false;
-  if (!explicitOperationTargetMatches(open, step)) return false;
-  const selectedValue = resolvedScriptValue(step.selectText.value, parameterValues);
-  if (!selectedValue || !compactGroundingText(choose.phrase).includes(compactGroundingText(selectedValue))) return false;
-  const confirmText = step.selectText.confirmText?.trim() || "确定";
-  return compactGroundingText(confirm.phrase).includes(compactGroundingText(confirmText))
-    || (!step.selectText.confirmText && /完成/u.test(confirm.phrase));
-}
-
-function resolvedScriptValue(
-  value: string,
-  parameterValues: Record<string, ScriptParameterValue>
-): string {
-  const parameter = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value.trim());
-  if (!parameter) return value;
-  const resolved = parameterValues[parameter[1]!];
-  return resolved === undefined ? value : String(resolved);
-}
-
-function explicitOperationTargetMatches(operation: ExplicitOperationContract, step?: ScriptStep): boolean {
-  if (!step || operation.kind === "launch" || operation.kind === "swipe") return true;
-  const target = operationTarget(step);
-  if (!target) return true;
-  const phrase = compactGroundingText(operation.phrase);
-  const operationConcept = compactOperationConcept(operation.phrase);
-  if (!operationConcept) return true;
-  if (target.text) return phrase.includes(compactGroundingText(target.text));
-  if (target.nearText && phrase.includes(compactGroundingText(target.nearText))) return true;
-  if (target.semantic) {
-    const semantic = compactOperationConcept(target.semantic);
-    return Boolean(semantic && operationConcept && (semantic.includes(operationConcept) || operationConcept.includes(semantic)));
-  }
-  if (target.icon) {
-    return iconAliases(target.icon).some((alias) => phrase.includes(compactGroundingText(alias)));
-  }
-  if (target.control) {
-    if (target.control === "checkbox") return /复选框|勾选|选中|选择框|同意/u.test(operation.phrase);
-    if (target.control === "switch") return /开关|打开|开启|关闭|关掉|启用|禁用/u.test(operation.phrase);
-    if (target.control === "textField") return /输入框|文本框|输入|填写|填入|改成|修改|设置|字段|名称/u.test(operation.phrase);
-    return false;
-  }
-  return true;
-}
-
-function operationTarget(step: ScriptStep): Record<string, string> | undefined {
-  const action = "tap" in step
-    ? step.tap
-    : "inputText" in step
-      ? step.inputText
-      : "clearText" in step
-        ? step.clearText
-        : "selectText" in step
-          ? step.selectText
-          : "scrollUntilVisible" in step
-            ? step.scrollUntilVisible
-          : undefined;
-  if (!action) return undefined;
-  return Object.fromEntries(
-    Object.entries(action.target).filter((entry): entry is [string, string] => typeof entry[1] === "string")
-  );
-}
-
-function compactOperationConcept(value: string): string {
-  return compactGroundingText(value).replace(
-    /然后|接着|之后|点击|点按|轻触|找到|查找|进入|打开|前往|跳转|返回|按钮|图标|入口|页面|一个|这个|的/gu,
-    ""
-  );
-}
-
-function iconAliases(icon: string): string[] {
-  const aliases: Record<string, string[]> = {
-    add: ["add", "加号", "新增", "添加"],
-    back: ["back", "返回", "左箭头"],
-    close: ["close", "关闭", "叉号"],
-    home: ["home", "主页", "首页"],
-    more: ["more", "更多", "省略号"],
-    search: ["search", "搜索", "放大镜"],
-    share: ["share", "分享"]
-  };
-  return aliases[icon.toLowerCase()] ?? [icon];
-}
-
-function validateGoalOnlyNavigationEvidence(document: ScriptFlowDocument, prompt?: string): void {
-  if (hasGeneratedResultOracle(document)) return;
-  if (prompt && extractExplicitOperationContract(prompt).length > 0) return;
-  const lastStep = flattenSteps(document.steps).at(-1);
-  const semantic = lastStep ? stepSemanticTarget(lastStep) : undefined;
-  const describesPageDestination = /(?:进入|打开|前往|跳转|到达|去往).{0,30}(?:页面|页)/u
-    .test(`${prompt ?? ""} ${document.name} ${document.description ?? ""}`)
-    || Boolean(semantic && /进入|打开|前往|跳转|页面|页/u.test(semantic));
-  if (document.purpose === "navigation" && describesPageDestination) {
-    throw new UnresolvedGoalOnlyNavigationError();
-  }
-}
-
-function hasGeneratedResultOracle(document: ScriptFlowDocument): boolean {
-  if (document.outcome?.page) return true;
-  const lastStep = flattenSteps(document.steps).at(-1);
-  if (!lastStep || "repeat" in lastStep || "when" in lastStep || "runFlow" in lastStep) return false;
-  return Boolean(lastStep.expectPage)
-    || "assertPage" in lastStep
-    || "assertText" in lastStep
-    || "waitForPage" in lastStep
-    || "reachPage" in lastStep;
-}
-
-function stepSemanticTarget(step: ScriptStep): string | undefined {
-  if ("tap" in step) return step.tap.target.semantic;
-  if ("inputText" in step) return step.inputText.target.semantic;
-  if ("clearText" in step) return step.clearText.target.semantic;
-  if ("selectText" in step) return step.selectText.target.semantic;
-  if ("scrollUntilVisible" in step) return step.scrollUntilVisible.target.semantic;
-  return undefined;
 }
 
 function extractEphemeralParameterValues(
@@ -1381,7 +1052,7 @@ function normalizeGeneratedExecutableTargets(
   const normalizedSteps = normalizeExecutableTargetSteps(document.steps, input);
   return {
     ...document,
-    steps: stripInferredEditBridgeTaps(normalizedSteps, input)
+    steps: normalizedSteps
   };
 }
 
@@ -1457,54 +1128,6 @@ function normalizeExecutableTargetSteps(
     }
     return step;
   });
-}
-
-function stripInferredEditBridgeTaps(
-  steps: ScriptStep[],
-  input: {
-    prompt?: string;
-    existingDocument?: ScriptFlowDocument;
-    catalog: ScriptFlowPlannerCatalog;
-    screenContext?: ScreenUnderstandingContext;
-  }
-): ScriptStep[] {
-  if (!input.prompt || hasExplicitTapOperation(input.prompt) || !hasExplicitFieldDiscovery(input.prompt)) {
-    return steps;
-  }
-  const requestedLabels = requestedFieldLabels(input.prompt);
-  if (!requestedLabels.length) return steps;
-  let seenFieldMutation = false;
-  const stripped: ScriptStep[] = [];
-  for (const step of steps) {
-    if ("repeat" in step) {
-      stripped.push({
-        ...step,
-        repeat: {
-          ...step.repeat,
-          steps: stripInferredEditBridgeTaps(step.repeat.steps, input)
-        }
-      });
-      continue;
-    }
-    if ("when" in step) {
-      stripped.push({
-        ...step,
-        when: {
-          ...step.when,
-          steps: stripInferredEditBridgeTaps(step.when.steps, input)
-        }
-      });
-      continue;
-    }
-    if (!seenFieldMutation && "tap" in step && isInferredEditBridgeTap(step.tap.target, requestedLabels)) {
-      continue;
-    }
-    if ("inputText" in step || "clearText" in step || "selectText" in step) {
-      seenFieldMutation = true;
-    }
-    stripped.push(step);
-  }
-  return stripped;
 }
 
 function normalizeNonTapSemanticTarget(
@@ -1610,52 +1233,6 @@ function validateGeneratedActionTargetReferences(
   }
 }
 
-function validateCurrentPageActionDoesNotInventNavigation(
-  document: ScriptFlowDocument,
-  input: { prompt?: string; catalog: ScriptFlowPlannerCatalog }
-): void {
-  if (!isCurrentPageActionIntent(input.prompt, input.catalog)) return;
-  if (document.start?.strategy && document.start.strategy !== "keepCurrent") {
-    throw new Error("完整当前页控件动作不能改变启动策略或补充页面导航");
-  }
-  if (document.entry?.page) {
-    throw new Error("完整当前页控件动作不能补 entry.page；请基于当前页面生成直接动作");
-  }
-  if (document.outcome?.page) {
-    throw new Error("完整当前页控件动作不能补 outcome.page；请基于当前页面生成直接动作");
-  }
-  for (const step of flattenSteps(document.steps)) {
-    if (step.onPage) {
-      throw new Error("完整当前页控件动作不能补 onPage；请基于当前页面生成直接动作");
-    }
-    if (step.expectPage) {
-      throw new Error("完整当前页控件动作不能补 expectPage；请基于当前页面生成直接动作");
-    }
-    if ("reachPage" in step) {
-      throw new Error("完整当前页控件动作不能补 reachPage；请基于当前页面生成直接动作");
-    }
-    if ("runFlow" in step) {
-      throw new Error("完整当前页控件动作不能补 runFlow；请基于当前页面生成直接动作");
-    }
-    if ("waitForPage" in step || "assertPage" in step) {
-      throw new Error("完整当前页控件动作不能补页面等待或页面断言；请基于当前页面生成直接动作");
-    }
-  }
-}
-
-function validateCurrentPageMutationGrounding(
-  document: ScriptFlowDocument,
-  input: { prompt?: string }
-): void {
-  if (!input.prompt || hasExplicitTapOperation(input.prompt)) return;
-  const requestedLabels = requestedFieldLabels(input.prompt);
-  if (!requestedLabels.length || !hasGeneratedFieldValueMutation(document)) return;
-  const inferredTap = flattenSteps(document.steps).find((step) => "tap" in step);
-  if (!inferredTap || !("tap" in inferredTap)) return;
-  const target = operationLiteralTargetText(inferredTap) ?? inferredTap.tap.target.semantic ?? inferredTap.tap.target.icon ?? inferredTap.tap.target.control ?? "未知入口";
-  throw new MissingCurrentPageActionGroundingError(requestedLabels[0]!, target);
-}
-
 function validateGeneratedExecutableTargetContracts(document: ScriptFlowDocument): void {
   for (const step of flattenSteps(document.steps)) {
     if ("selectText" in step && !isTextTarget(step.selectText.target)) {
@@ -1670,28 +1247,6 @@ function validateGeneratedExecutableTargetContracts(document: ScriptFlowDocument
     if ("clearText" in step && !isTextOrTextFieldTarget(step.clearText.target)) {
       throw new UnsupportedExecutableTargetError("clearText");
     }
-  }
-}
-
-function validateGeneratedFieldLocatorGrounding(
-  document: ScriptFlowDocument,
-  input: {
-    prompt?: string;
-    catalog: ScriptFlowPlannerCatalog;
-    screenContext?: ScreenUnderstandingContext;
-  }
-): void {
-  const requestedLabels = requestedFieldLabels(input.prompt);
-  for (const step of flattenSteps(document.steps)) {
-    const target = fieldOperationTarget(step);
-    if (!target) continue;
-    if (target.control === "textField" && target.scopeText && isKnownPageTitle(target.scopeText, input.catalog)) {
-      throw new Error(`字段定位不能只使用页面标题“${target.scopeText}”加 ordinal；请使用用户字段标签或当前屏幕受控候选`);
-    }
-    if (!requestedLabels.length || screenControlCandidateMatchesTarget(target, input.screenContext)) continue;
-    const matched = requestedLabels.some((label) => targetUsesRequestedFieldLabel(target, label));
-    if (matched) continue;
-    throw new Error(`用户描述的字段标签“${requestedLabels[0]}”没有进入动作定位；请把它写入 text、nearText 或 scopeText`);
   }
 }
 
@@ -1766,170 +1321,6 @@ function validateGeneratedNavigationReachability(
   }
 }
 
-function validateGeneratedTargetGrounding(
-  document: ScriptFlowDocument,
-  input: { prompt?: string; existingDocument?: ScriptFlowDocument; catalog: ScriptFlowPlannerCatalog }
-): void {
-  if (!input.prompt) return;
-  const normalizedPrompt = compactGroundingText(input.prompt);
-  const knownLiteralTexts = new Set(input.catalog.pages.map((page) => compactGroundingText(page.name)));
-  for (const step of flattenSteps(input.existingDocument?.steps ?? [])) {
-    const text = stepTargetText(step);
-    if (text) knownLiteralTexts.add(compactGroundingText(text));
-  }
-  for (const step of flattenSteps(document.steps)) {
-    const text = stepTargetText(step);
-    if (!text || /\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(text)) continue;
-    const normalizedText = compactGroundingText(text);
-    if (normalizedPrompt.includes(normalizedText) || knownLiteralTexts.has(normalizedText)) continue;
-    throw new Error(`动作字面目标“${text}”没有来自用户描述或已知目录的字面依据；请保留真实原文，无法确定准确标签时改用 semantic`);
-  }
-}
-
-function validateGeneratedTargetAreaGrounding(
-  document: ScriptFlowDocument,
-  input: { prompt?: string; existingDocument?: ScriptFlowDocument; catalog: ScriptFlowPlannerCatalog }
-): void {
-  if (!input.prompt) return;
-  const explicitAreas = new Set<string>();
-  if (/顶部|顶栏|上方|左上角|右上角/u.test(input.prompt)) explicitAreas.add("topBar");
-  if (/底部|底栏|下方|左下角|右下角/u.test(input.prompt)) explicitAreas.add("bottomBar");
-  if (/内容区|页面中(?:间|部)?|列表中|表单中/u.test(input.prompt)) explicitAreas.add("content");
-  const existingTargets = flattenSteps(input.existingDocument?.steps ?? [])
-    .map((step) => operationTarget(step))
-    .filter((target): target is Record<string, string> => Boolean(target));
-  const knownTargets: Array<Record<string, unknown>> = [
-    ...existingTargets,
-    ...input.catalog.navigationEntries.map((entry) => ({ ...entry.action.target }))
-  ];
-
-  for (const step of flattenSteps(document.steps)) {
-    const target = operationTarget(step);
-    const area = target?.area;
-    const positionSensitiveRisk = step.risk === "publish"
-      || step.risk === "submit"
-      || step.risk === "delete"
-      || step.risk === "payment";
-    if (!target
-      || (!target.text && !target.semantic)
-      || !area
-      || (area === "content" && !positionSensitiveRisk)
-      || explicitAreas.has(area)) continue;
-    const grounded = knownTargets.some((known) => known.area === area && sameSemanticTarget(target, known));
-    if (grounded) continue;
-    const label = target.text ?? target.semantic ?? target.icon ?? target.control ?? "动作目标";
-    throw new Error(`动作目标“${label}”的 ${area} 约束没有来自用户描述或已验证导航知识的位置依据`);
-  }
-}
-
-function sameSemanticTarget(left: Record<string, string>, right: Record<string, unknown>): boolean {
-  return ["text", "semantic", "icon", "control"].some((key) => {
-    const leftValue = left[key];
-    const rightValue = stringValue(right[key]);
-    return Boolean(leftValue && rightValue && compactGroundingText(leftValue) === compactGroundingText(rightValue));
-  });
-}
-
-function isCurrentPageActionIntent(prompt: string | undefined, catalog: ScriptFlowPlannerCatalog): boolean {
-  if (!prompt) return false;
-  if (hasExplicitPageOrNavigationContext(prompt, catalog)) return false;
-  return /点击|点按|轻触|输入|填写|键入|清空|改成|改为|修改|设置|设为|选择|选中|勾选|开启|打开|启用|关闭|关掉|禁用/u.test(prompt);
-}
-
-function hasExplicitPageOrNavigationContext(prompt: string, catalog: ScriptFlowPlannerCatalog): boolean {
-  if (/进入|前往|到达|跳转|回到|返回到|去到|先到|切到|切换到/u.test(prompt)) return true;
-  if (/打开[^，,。；;\n]{0,30}(?:页面|页|主页|首页)/u.test(prompt)) return true;
-  if (/从[^，,。；;\n]{0,40}(?:到|进入|打开|前往)/u.test(prompt)) return true;
-  const normalizedPrompt = compactGroundingText(prompt);
-  return catalog.pages.some((page) => {
-    const references = [page.name, page.key, page.id].map((value) => compactGroundingText(value)).filter(Boolean);
-    return references.some((reference) => normalizedPrompt.includes(reference));
-  });
-}
-
-function fieldOperationTarget(step: ScriptStep): ScriptTarget | undefined {
-  if ("inputText" in step) return step.inputText.target;
-  if ("clearText" in step) return step.clearText.target;
-  if ("selectText" in step) return step.selectText.target;
-  if ("tap" in step && step.tap.target.control) return step.tap.target;
-  return undefined;
-}
-
-function isKnownPageTitle(scopeText: string, catalog: ScriptFlowPlannerCatalog): boolean {
-  const normalizedScope = compactGroundingText(scopeText);
-  return catalog.pages.some((page) =>
-    [page.name, page.key, page.id].some((reference) => compactGroundingText(reference) === normalizedScope)
-  );
-}
-
-function requestedFieldLabels(prompt: string | undefined): string[] {
-  if (!prompt) return [];
-  const labels = new Set<string>();
-  for (const match of prompt.matchAll(
-    /(?:修改|设置|设定|填写|输入|清空)\s*([^，,。；;\n]{2,32}?)(?:为|成|到|:|：|$)/gu
-  )) {
-    const label = sanitizeRequestedFieldLabel(match[1]);
-    if (label) labels.add(label);
-  }
-  for (const match of prompt.matchAll(
-    /(?:把|将)?\s*(?:当前(?:页面|屏幕)的?)?\s*([^，,。；;\n]{2,32}?)(?:输入框|文本框|字段|表单项|选择器|下拉框|开关|复选框)?\s*(?:改成|改为|修改为|设置为|设为|输入|填写|填入|清空|开启|打开|关闭|关掉|启用|禁用|选中|勾选)/gu
-  )) {
-    const label = sanitizeRequestedFieldLabel(match[1]);
-    if (label) labels.add(label);
-  }
-  for (const match of prompt.matchAll(
-    /(?:选择|点击|点按|轻触|打开|关闭|开启|启用|禁用)?\s*([^，,。；;\n]{2,32}?)(?:开关|复选框)?\s*(?:开启|打开|关闭|关掉|启用|禁用|选中|勾选)(?=$|[，,。；;\n])/gu
-  )) {
-    const label = sanitizeRequestedFieldLabel(match[1]);
-    if (label) labels.add(label);
-  }
-  return [...labels];
-}
-
-function hasExplicitTapOperation(prompt: string): boolean {
-  return extractExplicitOperationContract(prompt).some((operation) => operation.kind === "tap");
-}
-
-function hasGeneratedFieldValueMutation(document: ScriptFlowDocument): boolean {
-  return flattenSteps(document.steps).some((step) =>
-    "inputText" in step
-    || "clearText" in step
-    || "selectText" in step
-  );
-}
-
-function hasExplicitFieldDiscovery(prompt: string): boolean {
-  return /滑动|滚动|查找|找到|定位|搜索|第一个条目|本页|当前页|当前页面/u.test(prompt)
-    && /课堂|标题|名称|字段|输入框|表单|开关|复选框/u.test(prompt);
-}
-
-function isInferredEditBridgeTap(target: ScriptTarget, requestedLabels: string[]): boolean {
-  const targetText = [target.text, target.semantic].find((value) => typeof value === "string" && value.trim());
-  if (!targetText) return false;
-  const normalizedTarget = compactGroundingText(targetText);
-  if (requestedLabels.some((label) => compactGroundingText(label) === normalizedTarget)) return false;
-  return /修改|编辑|设置|更改|进入|打开|点击/u.test(targetText);
-}
-
-function sanitizeRequestedFieldLabel(value: string | undefined): string | undefined {
-  const label = (value ?? "")
-    .replace(/^(?:请|把|将|当前页面|当前屏幕|当前|页面|屏幕|最上方|最上面|最下面|上方|下方|左侧|右侧|的|选择|点击|点按|轻触|打开|关闭|开启|启用|禁用)+/u, "")
-    .replace(/^(?:第[一二三四五六七八九十\d]+个)?(?:条目|字段|输入框|文本框|控件|表单项)?/u, "")
-    .replace(/(?:输入框|文本框|字段|表单项|选择器|下拉框|开关|复选框|按钮|用例)$/u, "")
-    .trim();
-  if (!label || /^[0-9]+$/.test(label)) return undefined;
-  return label;
-}
-
-function targetUsesRequestedFieldLabel(target: ScriptTarget, label: string): boolean {
-  const normalizedLabel = compactGroundingText(label);
-  return [target.text, target.nearText, target.scopeText].some((value) => {
-    if (!value) return false;
-    const normalizedTarget = compactGroundingText(value);
-    return normalizedTarget.includes(normalizedLabel) || normalizedLabel.includes(normalizedTarget);
-  });
-}
-
 function screenControlCandidateMatchesTarget(
   target: ScriptTarget,
   screenContext: ScreenUnderstandingContext | undefined
@@ -1957,16 +1348,6 @@ function screenControlCandidateMatchesTarget(
   });
 }
 
-function stepTargetText(step: ScriptStep): string | undefined {
-  if ("tap" in step) return step.tap.target.text;
-  if ("inputText" in step) return step.inputText.target.text;
-  if ("clearText" in step) return step.clearText.target.text;
-  if ("selectText" in step) return step.selectText.target.text;
-  if ("scrollUntilVisible" in step) return step.scrollUntilVisible.target.text;
-  if ("assertText" in step) return step.assertText.text;
-  return undefined;
-}
-
 function compactGroundingText(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}$\{\}_]+/gu, "");
 }
@@ -1974,15 +1355,6 @@ function compactGroundingText(value: string): string {
 function missingPageClarification(prompt: string): string {
   const request = prompt.replace(/\s+/g, " ").trim().slice(0, 80);
   return `当前还不知道如何到达“${request}”。请补充从已知状态开始的完整操作过程，或提供目标页独有的稳定文字用于验证结果。`;
-}
-
-function unresolvedGoalOnlyNavigationClarification(prompt: string): string {
-  const request = prompt.replace(/\s+/g, " ").trim().slice(0, 80);
-  return `当前没有完成“${request}”的已验证路径，也没有可确定的结果依据。请补充完整操作过程，或提供成功后应看到的稳定内容。`;
-}
-
-function missingFullRegressionFieldCoverageClarification(): string {
-  return "当前还没有完整字段覆盖来源。请列出这次要覆盖的表单字段，或先逐项验证沉淀字段能力。";
 }
 
 function actionTargetPageReferenceClarification(reference: string): string {
@@ -2018,13 +1390,6 @@ class UnreachableReachPageError extends Error {
   }
 }
 
-class UnresolvedGoalOnlyNavigationError extends Error {
-  constructor() {
-    super("目标型导航既没有已验证路径，也没有可审查的结果依据");
-    this.name = "UnresolvedGoalOnlyNavigationError";
-  }
-}
-
 class ActionTargetPageReferenceError extends Error {
   constructor(readonly reference: string) {
     super(`页面引用“${reference}”不能作为动作目标`);
@@ -2036,20 +1401,6 @@ class UnsupportedExecutableTargetError extends Error {
   constructor(readonly action: string) {
     super(`${action} 使用了当前执行器不支持的目标定位方式`);
     this.name = "UnsupportedExecutableTargetError";
-  }
-}
-
-class MissingCurrentPageActionGroundingError extends Error {
-  constructor(readonly fieldLabel: string, readonly inferredTarget: string) {
-    super(`要修改“${fieldLabel}”，但当前输入没有说明需要点击“${inferredTarget}”这个入口，当前屏幕也不能证明它就是该字段的编辑入口。请补充完整操作路径，或说明当前页面上可直接定位的字段文字。`);
-    this.name = "MissingCurrentPageActionGroundingError";
-  }
-}
-
-class MissingFullRegressionFieldCoverageError extends Error {
-  constructor() {
-    super("full_regression 缺少明确字段清单或已有完整字段覆盖来源");
-    this.name = "MissingFullRegressionFieldCoverageError";
   }
 }
 

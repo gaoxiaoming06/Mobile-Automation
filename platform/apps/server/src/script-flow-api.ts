@@ -25,6 +25,7 @@ import type {
   ScriptInteractionAssetBinding,
   StartScriptFlowRunInput
 } from "./script-flow-runner.js";
+import { selectScriptExecutionSteps } from "./script-flow-runner.js";
 import { ScriptTargetResolutionError } from "./script-target-resolver.js";
 import { assessScriptFlowVerification } from "./script-flow-verification.js";
 
@@ -207,6 +208,10 @@ export function registerScriptFlowRoutes(
     await startDraftExecution(req, res, deps, "trial");
   });
 
+  app.post("/api/script-flow-drafts/step-runs", async (req, res) => {
+    await startDraftStepExecution(req, res, deps);
+  });
+
   app.post("/api/script-flows/:id/runs", async (req, res) => {
     await startPersistedExecution(req, res, deps, "normal");
   });
@@ -232,6 +237,7 @@ const DRAFT_RUN_FIELDS = [
   "planDigest",
   "parameters",
   "mode",
+  "loopScope",
   "repeatCount",
   "stepIntervalMs",
   "stopOnFailure",
@@ -244,6 +250,65 @@ const DRAFT_RUN_FIELDS = [
 const PERSISTED_RUN_FIELDS = DRAFT_RUN_FIELDS.filter(
   (field) => field !== "sourceYaml" && field !== "prompt",
 ).concat("expectedVersion");
+
+const DRAFT_STEP_RUN_FIELDS = [
+  "sourceYaml",
+  "deviceSerial",
+  "parameters",
+  "startStepId",
+  "endStepId",
+  "pauseAfterEachStep",
+  "androidAppMonitor"
+];
+
+async function startDraftStepExecution(
+  req: express.Request,
+  res: express.Response,
+  deps: ScriptFlowRouteDeps
+): Promise<void> {
+  try {
+    const body = strictBody(req.body, DRAFT_STEP_RUN_FIELDS);
+    const root = temporaryFlow(requiredSourceYaml(body.sourceYaml));
+    const document = parseScriptFlow(root.sourceYaml);
+    const parameters = readParameters(body.parameters);
+    const compiled = compileSnapshot(deps.storage, root, document, parameters);
+    const startStepId = requiredString(body.startStepId, "startStepId");
+    const endStepId = optionalString(body.endStepId);
+    const stepSelection = { startStepId, ...(endStepId ? { endStepId } : {}) };
+    try {
+      selectScriptExecutionSteps(compiled.plan, stepSelection);
+    } catch (error) {
+      throw new ScriptFlowApiError(400, error instanceof Error ? error.message : String(error));
+    }
+    const pauseAfterEachStep = optionalBoolean(body.pauseAfterEachStep, "pauseAfterEachStep");
+    const run = await deps.runner.start({
+      flowId: root.id,
+      scriptVersion: 1,
+      planDigest: compiled.planDigest,
+      dependencies: compiled.dependencies,
+      navigationSegments: compiled.navigationSegments,
+      navigationRootPages: compiled.navigationRootPages,
+      interactionAssets: compiled.interactionAssets,
+      sourceYaml: root.sourceYaml,
+      executionPurpose: "step_trial",
+      flow: document,
+      deviceSerial: requiredString(body.deviceSerial, "deviceSerial"),
+      parameters,
+      androidAppMonitor: readAndroidAppMonitorConfig(body.androidAppMonitor),
+      resolveFlow: compiled.resolveFlow,
+      stepSelection,
+      startStrategy: "keep_current",
+      mode: "once",
+      stopOnFailure: true,
+      recordVideo: false,
+      keepVideoOnSuccess: false,
+      pauseAfterEachStep: pauseAfterEachStep.pauseAfterEachStep ?? false
+    });
+    res.status(202).json({ run });
+  } catch (error) {
+    sendScriptFlowError(res, error);
+  }
+}
 
 async function startDraftExecution(
   req: express.Request,
@@ -572,8 +637,13 @@ function runOptions(body: Record<string, unknown>): Partial<StartScriptFlowRunIn
   if (mode !== undefined && mode !== "once" && mode !== "repeat_n" && mode !== "loop_until_stop") {
     throw new ScriptFlowApiError(400, "Invalid run mode");
   }
+  const loopScope = body.loopScope;
+  if (loopScope !== undefined && loopScope !== "all_steps" && loopScope !== "exclude_preparation") {
+    throw new ScriptFlowApiError(400, "Invalid loop scope");
+  }
   return {
     ...(mode ? { mode } : {}),
+    ...(loopScope ? { loopScope } : {}),
     ...optionalPositiveInteger(body.repeatCount, "repeatCount"),
     ...optionalNonNegativeNumber(body.stepIntervalMs, "stepIntervalMs"),
     ...optionalBoolean(body.stopOnFailure, "stopOnFailure"),
@@ -585,9 +655,6 @@ function runOptions(body: Record<string, unknown>): Partial<StartScriptFlowRunIn
 
 function trialRunOptions(body: Record<string, unknown>): Partial<StartScriptFlowRunInput> {
   const options = runOptions(body);
-  if (options.mode === "loop_until_stop") {
-    throw new ScriptFlowApiError(400, "Trial runs do not support loop_until_stop");
-  }
   return {
     ...options,
     recordVideo: false,

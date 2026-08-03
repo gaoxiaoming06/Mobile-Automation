@@ -12,6 +12,7 @@ export function normalizeRunConfig(config: Partial<RunConfig> & { deviceSerial: 
   return {
     deviceSerial: config.deviceSerial,
     mode,
+    loopScope: config.loopScope ?? "all_steps",
     repeatCount,
     stepIntervalMs: Math.max(0, Math.floor(config.stepIntervalMs ?? 400)),
     stopOnFailure: config.stopOnFailure ?? true,
@@ -74,6 +75,7 @@ export type RunStepExecutionResult = Pick<StepResult, "status">;
 export type RunStateMachineOptions = {
   config: RunConfig;
   steps: ActionStep[];
+  beforeLoopSteps?: ActionStep[];
   controller: RunExecutionController;
   executeStep: (input: RunStepExecutionInput) => Promise<RunStepExecutionResult>;
   beforeIteration?: (iterationIndex: number) => Promise<void>;
@@ -213,6 +215,7 @@ export class RunStateMachine {
   async run(): Promise<RunStateMachineResult> {
     const { config, controller, executeStep } = this.options;
     const steps = enabledSteps(this.options.steps);
+    const beforeLoopSteps = enabledSteps(this.options.beforeLoopSteps ?? []);
     if (steps.length === 0) {
       throw new Error("No enabled steps to execute");
     }
@@ -229,6 +232,26 @@ export class RunStateMachine {
     let completedIterationCount = 0;
 
     try {
+      for (let stepIndex = 0; stepIndex < beforeLoopSteps.length; stepIndex += 1) {
+        await controller.waitUntilRunnable();
+        const result = await executeStep({
+          iterationIndex: 1,
+          step: beforeLoopSteps[stepIndex],
+          signal: controller.signal
+        });
+        executedStepCount += 1;
+        if (result.status !== "passed" && result.status !== "skipped") {
+          failed = true;
+          if (config.stopOnFailure) {
+            return { status: "failed", failed, stopped, executedStepCount, completedIterationCount };
+          }
+        }
+        await yieldToEventLoop();
+        if (config.pauseAfterEachStep && (stepIndex < beforeLoopSteps.length - 1 || steps.length > 0)) {
+          controller.pause();
+        }
+      }
+
       const maxIterations = maxIterationsFor(config);
       for (let iterationIndex = 1; iterationIndex <= maxIterations; iterationIndex += 1) {
         await this.options.beforeIteration?.(iterationIndex);

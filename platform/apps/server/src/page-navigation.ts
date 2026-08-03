@@ -66,22 +66,7 @@ export function derivePageNavigationSegments(input: {
 }
 
 function isSafeNavigationAction(step: ScriptStep): boolean {
-  if (!("tap" in step || "swipe" in step || "scrollUntilVisible" in step)) {
-    return false;
-  }
-  if (step.risk && step.risk !== "interaction") {
-    return false;
-  }
-  return !/支付|付款|购买|删除|注销|移除|发布|提交|确认创建|pay|delete|publish|submit/i.test(stepSemanticText(step));
-}
-
-function stepSemanticText(step: ScriptStep): string {
-  const target = "tap" in step
-    ? step.tap.target
-    : "selectText" in step
-      ? step.selectText.target
-      : undefined;
-  return [step.name, target && "text" in target ? target.text : undefined].filter(Boolean).join(" ");
+  return "tap" in step || "swipe" in step || "scrollUntilVisible" in step;
 }
 
 function normalizedPageReference(value: string | undefined): string | undefined {

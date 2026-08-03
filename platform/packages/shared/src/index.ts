@@ -172,6 +172,8 @@ export type RuntimeFlow = {
 
 export type RunMode = "once" | "repeat_n" | "loop_until_stop";
 
+export type RunLoopScope = "all_steps" | "exclude_preparation";
+
 export type FlowStartStrategy = "keep_current" | "go_home" | "launch_app" | "restart_app" | "clear_data_and_launch";
 
 export type FlowStartSetupScope = "before_run" | "before_each_iteration";
@@ -202,7 +204,7 @@ export type ScriptFlowVerificationAssessment = {
   unresolvedOutcome: boolean;
 };
 
-export type ScriptFlowExecutionPurpose = "trial" | "normal";
+export type ScriptFlowExecutionPurpose = "trial" | "step_trial" | "normal";
 
 export type FlowVerificationStatus = "provisional" | "verified" | "invalidated";
 
@@ -574,6 +576,7 @@ export type RunConfig = {
   deviceSerial: string;
   runKind?: "case" | "script_flow" | "stability_exploration";
   mode: RunMode;
+  loopScope?: RunLoopScope;
   repeatCount: number;
   stepIntervalMs: number;
   stopOnFailure: boolean;

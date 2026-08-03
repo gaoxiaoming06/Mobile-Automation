@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { ScriptFlowCompileError, compileScriptFlow, parseScriptFlow } from "./index.js";
 
 describe("compileScriptFlow", () => {
+  it("compiles reset steps as a distinct execution phase", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: 循环打开笔记
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open-note
+    role: business
+    tap: { target: { text: 笔记 } }
+  - id: return-home
+    role: reset
+    tap: { target: { text: 主页 } }
+`);
+
+    const plan = compileScriptFlow(flow);
+
+    expect(plan.steps).toEqual([
+      expect.objectContaining({ id: "open-note", phase: "business" }),
+      expect.objectContaining({ id: "return-home", role: "reset", phase: "reset" })
+    ]);
+  });
+
   it("keeps purpose, test level, and semantic roles in the execution plan", () => {
     const flow = parseScriptFlow(`
 version: 1
@@ -27,7 +49,7 @@ steps:
     });
   });
 
-  it("adds the declared entry page as a preparation step outside the test body", () => {
+  it("does not turn declared entry and outcome metadata into hidden execution steps", () => {
     const flow = parseScriptFlow(`
 version: 1
 kind: case
@@ -52,23 +74,11 @@ steps:
       outcome: { page: "classin.teacher.classes", session: "authenticated", role: "teacher" }
     });
     expect(plan.steps).toEqual([
-      expect.objectContaining({
-        id: "__prepare.entry-page",
-        phase: "preparation",
-        action: "reachPage",
-        input: { pageId: "classin.teacher.login", policy: "safe" }
-      }),
-      expect.objectContaining({ id: "input-account", phase: "test", action: "inputText" }),
-      expect.objectContaining({
-        id: "__verify.outcome-page",
-        phase: "test",
-        action: "assertPage",
-        input: { pageId: "classin.teacher.classes" }
-      })
+      expect.objectContaining({ id: "input-account", phase: "business", action: "inputText" })
     ]);
   });
 
-  it("turns a declared outcome page into a final executable assertion", () => {
+  it("requires result verification to be an explicit script step", () => {
     const flow = parseScriptFlow(`
 version: 1
 name: open settings
@@ -81,12 +91,8 @@ steps:
 
     const plan = compileScriptFlow(flow);
 
-    expect(plan.steps.at(-1)).toMatchObject({
-      id: "__verify.outcome-page",
-      action: "assertPage",
-      input: { pageId: "classin.settings" },
-      source: { flowName: "open settings", stepId: "__verify.outcome-page" }
-    });
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0]).toMatchObject({ id: "open-settings", action: "tap", phase: "business" });
   });
 
   it("resolves runtime parameters and defaults into a linear execution plan", () => {
@@ -134,7 +140,7 @@ steps:
     });
   });
 
-  it("compiles reachPage as one goal-directed and non-risky execution step", () => {
+  it("compiles reachPage as one explicit goal-directed execution step", () => {
     const flow = parseScriptFlow(`
 version: 1
 name: reach home
@@ -151,11 +157,10 @@ steps:
       expect.objectContaining({
         id: "reach-home",
         action: "reachPage",
-        input: { pageId: "classin.home", policy: "safe" },
-        risk: "none"
+        input: { pageId: "classin.home", policy: "safe" }
       })
     ]);
-    expect(plan.riskConfirmations).toEqual([]);
+    expect(plan).not.toHaveProperty("riskConfirmations");
   });
 
   it("preserves semantic targets in the execution plan", () => {
@@ -179,7 +184,7 @@ steps:
     });
   });
 
-  it("compiles a stable-text result assertion as a non-risky step", () => {
+  it("compiles a stable-text result assertion in the verification phase", () => {
     const flow = parseScriptFlow(`
 version: 1
 name: verify unrecorded page
@@ -194,9 +199,9 @@ steps:
     expect(compileScriptFlow(flow).steps[0]).toMatchObject({
       id: "verify-result",
       action: "assertText",
+      phase: "verification",
       input: { text: "教学方案列表", match: "exact" },
-      timeoutMs: 6000,
-      risk: "none"
+      timeoutMs: 6000
     });
   });
 
@@ -268,7 +273,7 @@ steps:
     });
   });
 
-  it("keeps a child flow outcome assertion when runFlow is expanded", () => {
+  it("does not turn a child flow outcome into an implicit assertion", () => {
     const child = parseScriptFlow(`
 version: 1
 name: open class detail
@@ -291,12 +296,12 @@ steps:
       resolveFlow: (id) => id === "open-class-detail" ? child : undefined
     });
 
-    expect(plan.steps.at(-1)).toMatchObject({
-      id: "open-class.__verify.outcome-page",
-      action: "assertPage",
-      input: { pageId: "classin.class.detail" },
-      source: { flowName: "open class detail", stepId: "__verify.outcome-page" }
-    });
+    expect(plan.steps).toEqual([expect.objectContaining({
+      id: "open-class.tap-class",
+      action: "tap",
+      source: { flowName: "open class detail", stepId: "tap-class" }
+    })]);
+    expect(plan).not.toHaveProperty("outcome");
   });
 
   it("inherits same-named parent parameters when runFlow omits explicit bindings", () => {
@@ -409,7 +414,7 @@ steps:
     expect(() => compileScriptFlow(flow, { parameters: { count: "two" } })).toThrow(/parameter count must be number/i);
   });
 
-  it("classifies risky actions without requiring run-time confirmation", () => {
+  it("does not classify actions from their target text", () => {
     const flow = parseScriptFlow(`
 version: 1
 name: risky
@@ -425,11 +430,11 @@ steps:
 
     const plan = compileScriptFlow(flow);
 
-    expect(plan.steps.map((step) => step.risk)).toEqual(["publish", "delete", "interaction"]);
-    expect(plan.riskConfirmations).toEqual([]);
+    expect(plan.steps.every((step) => !("risk" in step))).toBe(true);
+    expect(plan).not.toHaveProperty("riskConfirmations");
   });
 
-  it("preserves explicit risk metadata without requiring confirmation", () => {
+  it("discards legacy risk metadata", () => {
     const flow = parseScriptFlow(`
 version: 1
 name: publish once
@@ -444,7 +449,7 @@ steps:
 
     const plan = compileScriptFlow(flow);
 
-    expect(plan.steps[0].risk).toBe("publish");
-    expect(plan.riskConfirmations).toEqual([]);
+    expect(plan.steps[0]).not.toHaveProperty("risk");
+    expect(plan).not.toHaveProperty("riskConfirmations");
   });
 });

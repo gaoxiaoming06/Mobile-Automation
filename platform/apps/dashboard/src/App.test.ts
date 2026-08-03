@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   App,
   DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
+  RetainedNavPanel,
   actionStrategyForWorkspace,
   aiModelSettingsRequestBody,
   androidAppMonitorDefaultEnabled,
@@ -28,6 +29,20 @@ describe("App shell", () => {
     expect(previewWorkspaceKey("assetRecording")).toBe("assetRecording");
     expect(previewWorkspaceKey("scriptFlows")).toBe("inactive");
     expect(workspaceStyleForNav("assetRecording", 480, 620)).toEqual(expect.objectContaining({ "--asset-recording-preview-width": "620px" }));
+  });
+
+  it("keeps a visited workbench panel mounted while another tab is active", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(
+        RetainedNavPanel,
+        { active: false, panelId: "aiScriptFlows" },
+        React.createElement("input", { defaultValue: "临时草稿" })
+      )
+    );
+
+    expect(markup).toContain('data-retained-nav-panel="aiScriptFlows"');
+    expect(markup).toContain("hidden");
+    expect(markup).toContain('value="临时草稿"');
   });
 
   it("blocks preview interaction while page identification is running", () => {

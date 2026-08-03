@@ -221,6 +221,40 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("does not issue another device action after the run is stopped", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const controller = new AbortController();
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        layout("页面中部"),
+        layout("页面顶部"),
+        layout("页面顶部")
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        controller.abort();
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-stop-${attempt}`)
+    });
+    const input = {
+      runId: "run-1",
+      stepResultId: "step-result-stop",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: tapOnTextStep("不存在的目标", 0, 0, {
+        searchMode: "auto",
+        searchDirection: "down",
+        resetToTop: true,
+        maxSwipes: 4,
+        intervalMs: 1
+      }),
+      signal: controller.signal
+    };
+
+    await expect(resolver.resolveIfNeeded(input)).rejects.toMatchObject({ name: "RunnerStoppedError" });
+    expect(actions).toHaveLength(1);
+  });
+
   it("treats the same OCR content with shifted boxes as a scroll boundary", async () => {
     const actions: DeviceActionRequest[] = [];
     const top = layout("页面顶部");

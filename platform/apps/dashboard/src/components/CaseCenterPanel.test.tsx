@@ -2,7 +2,14 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { LearningSession, ScriptFlow } from "@mobile-automation/shared";
-import { CaseCenterPanel, buildCaseRunRequest, caseRunEndpoint, caseTrialCompletionMessage } from "./CaseCenterPanel.js";
+import {
+  CaseCenterPanel,
+  buildCaseRunRequest,
+  caseRunEndpoint,
+  caseTrialCompletionMessage,
+  runOptionsForExecutionMode,
+  selectedCaseIdAfterExternalSelection
+} from "./CaseCenterPanel.js";
 
 describe("CaseCenterPanel", () => {
   it("shows reusable use cases and readable execution logic without exposing scripts", () => {
@@ -14,6 +21,7 @@ describe("CaseCenterPanel", () => {
         setMessage={vi.fn()}
         onOpenRun={vi.fn()}
         onModifyCase={vi.fn()}
+        onAiModifyCase={vi.fn()}
         onCreateCase={vi.fn()}
       />
     );
@@ -25,6 +33,7 @@ describe("CaseCenterPanel", () => {
     expect(markup).toContain("执行逻辑");
     expect(markup).toContain("确认已进入新建课堂页");
     expect(markup).toContain("修改测试");
+    expect(markup).toContain("AI 调整");
     expect(markup).toContain("AI 创建测试");
     expect(markup).toContain("沉淀可复用的用例与场景");
     expect(markup).toContain("运行配置");
@@ -54,6 +63,23 @@ describe("CaseCenterPanel", () => {
   it("uses trial execution until the exact use case version is verified", () => {
     expect(caseRunEndpoint("flow-1", "needs_trial")).toBe("/api/script-flows/flow-1/trial-runs");
     expect(caseRunEndpoint("flow-1", "verified")).toBe("/api/script-flows/flow-1/runs");
+  });
+
+  it("maps the two continuous UI modes to their backend loop scopes", () => {
+    expect(runOptionsForExecutionMode("once")).toEqual({ mode: "once" });
+    expect(runOptionsForExecutionMode("loop_body")).toEqual({
+      mode: "loop_until_stop",
+      loopScope: "exclude_preparation"
+    });
+    expect(runOptionsForExecutionMode("loop_all")).toEqual({
+      mode: "loop_until_stop",
+      loopScope: "all_steps"
+    });
+  });
+
+  it("selects a newly saved case when a retained case center becomes visible again", () => {
+    expect(selectedCaseIdAfterExternalSelection("old-flow", "new-flow")).toBe("new-flow");
+    expect(selectedCaseIdAfterExternalSelection("old-flow", undefined)).toBe("old-flow");
   });
 
   it("requires business outcome confirmation before calling a persisted trial verified", () => {

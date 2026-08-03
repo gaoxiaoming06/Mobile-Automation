@@ -11,8 +11,10 @@ import {
   nowIso,
   type ActionStep,
   type AndroidAppMonitorConfig,
+  type FlowStartSetupScope,
   type FlowStartStrategy,
   type InteractionAsset,
+  type RunLoopScope,
   type RunMode,
   type ScriptFlowExecutionPurpose,
   type ScriptFlowVerificationAssessment,
@@ -31,12 +33,14 @@ export type ScriptFlowBackendStartInput = {
   steps?: ActionStep[];
   persistedSteps?: ActionStep[];
   mode?: RunMode;
+  loopScope?: RunLoopScope;
   repeatCount?: number;
   stepIntervalMs?: number;
   stopOnFailure?: boolean;
   recordVideo?: boolean;
   keepVideoOnSuccess?: boolean;
   pauseAfterEachStep?: boolean;
+  startSetupScope?: FlowStartSetupScope;
   startStrategy?: FlowStartStrategy;
   startAppPackageName?: string;
   androidAppMonitor?: AndroidAppMonitorConfig;
@@ -69,13 +73,21 @@ export type StartScriptFlowRunInput = {
   parameters?: Record<string, ScriptParameterValue>;
   resolveFlow?: CompileScriptFlowOptions["resolveFlow"];
   mode?: RunMode;
+  loopScope?: RunLoopScope;
   repeatCount?: number;
   stepIntervalMs?: number;
   stopOnFailure?: boolean;
   recordVideo?: boolean;
   keepVideoOnSuccess?: boolean;
   pauseAfterEachStep?: boolean;
+  stepSelection?: ScriptExecutionStepSelection;
+  startStrategy?: FlowStartStrategy;
   androidAppMonitor?: AndroidAppMonitorConfig;
+};
+
+export type ScriptExecutionStepSelection = {
+  startStepId: string;
+  endStepId?: string;
 };
 
 export type ScriptFlowRunnerDeps = {
@@ -96,15 +108,22 @@ export class ScriptFlowRunner {
   }
 
   async start(input: StartScriptFlowRunInput): Promise<TestRun> {
-    const plan = compileScriptFlow(input.flow, {
+    const compiledPlan = compileScriptFlow(input.flow, {
       parameters: input.parameters ?? {},
       resolveFlow: input.resolveFlow
     });
-    const persistedPlan = compileScriptFlow(input.flow, {
+    validateBusinessLoopContract(input, compiledPlan);
+    const compiledPersistedPlan = compileScriptFlow(input.flow, {
       parameters: input.parameters ?? {},
       resolveFlow: input.resolveFlow,
       redactSensitiveParameters: true
     });
+    const plan = input.stepSelection
+      ? selectScriptExecutionSteps(compiledPlan, input.stepSelection)
+      : compiledPlan;
+    const persistedPlan = input.stepSelection
+      ? selectScriptExecutionSteps(compiledPersistedPlan, input.stepSelection)
+      : compiledPersistedPlan;
     this.validatePlan(plan, input.interactionAssets);
     const device = await this.deps.driver.getDeviceInfo(input.deviceSerial);
     if (!platformCanRun(input.flow.app.platform, device.platform)) {
@@ -127,18 +146,12 @@ export class ScriptFlowRunner {
     const interactionAssetsByStep = interactionAssetMap(input.interactionAssets ?? []);
     const navigationEdges = this.buildNavigationEdges(input.navigationSegments ?? [], stepContext, createdAt, false);
     const persistedNavigationEdges = this.buildNavigationEdges(input.navigationSegments ?? [], persistedStepContext, createdAt, true);
-    const navigationRootPageIds = this.resolveNavigationRootPageIds(
-      input.navigationRootPages ?? [],
-      input.flow.app.id,
-      input.flow.app.platform
-    );
     const steps = plan.steps.map((step) => this.toActionStep(
       step,
       stepContext,
       createdAt,
       navigationEdges,
-      interactionAssetsByStep.get(step.id),
-      navigationRootPageIds
+      interactionAssetsByStep.get(step.id)
     ));
     const persistedCandidates = persistedPlan.steps.map((step, index) =>
       this.toActionStep(
@@ -146,8 +159,7 @@ export class ScriptFlowRunner {
         persistedStepContext,
         steps[index]?.createdAt ?? createdAt,
         persistedNavigationEdges,
-        interactionAssetsByStep.get(step.id),
-        navigationRootPageIds
+        interactionAssetsByStep.get(step.id)
       )
     );
     const persistedSteps = maskPlanDifferences(steps, persistedCandidates);
@@ -157,14 +169,18 @@ export class ScriptFlowRunner {
       steps,
       persistedSteps,
       mode: input.mode,
+      loopScope: input.loopScope,
       repeatCount: input.repeatCount,
       stepIntervalMs: input.stepIntervalMs ?? 0,
       stopOnFailure: input.stopOnFailure,
       recordVideo: input.recordVideo,
       keepVideoOnSuccess: input.keepVideoOnSuccess,
       pauseAfterEachStep: input.pauseAfterEachStep,
+      startSetupScope: input.mode === "loop_until_stop" && input.loopScope === "all_steps"
+        ? "before_each_iteration"
+        : "before_run",
       androidAppMonitor: input.androidAppMonitor,
-      startStrategy: startStrategy(input.flow),
+      startStrategy: input.startStrategy ?? executionStartStrategy(input.flow, plan),
       startAppPackageName: input.flow.app.id,
       sourceSnapshot: {
         kind: "script_flow",
@@ -201,8 +217,7 @@ export class ScriptFlowRunner {
     },
     createdAt: string,
     navigationEdges: PageNavigationEdge[] = [],
-    interactionAsset?: InteractionAsset,
-    navigationRootPageIds: string[] = []
+    interactionAsset?: InteractionAsset
   ): ActionStep {
     const resolved = this.resolveAction(
       step,
@@ -239,9 +254,7 @@ export class ScriptFlowRunner {
       params: {
         ...resolved.params,
         ...(step.action === "reachPage" ? {
-          navigationEdges,
-          recoveryStopPageIds: navigationRootPageIds,
-          ...(step.phase === "preparation" ? { allowBackRecovery: true } : {})
+          navigationEdges
         } : {}),
         ...metadata
       },
@@ -266,7 +279,13 @@ export class ScriptFlowRunner {
     strategy?: string;
   } {
     if (step.action === "launchApp") {
-      return { type: "launch_app", params: { packageName: stringInput(step.input, "appId") || appId } };
+      return {
+        type: "launch_app",
+        params: {
+          packageName: stringInput(step.input, "appId") || appId,
+          restartBeforeLaunch: true
+        }
+      };
     }
     if (step.action === "swipe") {
       return swipeAction(step.input);
@@ -393,7 +412,7 @@ export class ScriptFlowRunner {
       } catch {
         continue;
       }
-      if (!plan.steps.length || plan.steps.some((step) => step.risk !== "none" && step.risk !== "interaction")) continue;
+      if (!plan.steps.length) continue;
       const fromPage = this.deps.pageCatalog.resolvePage(segment.fromPage, context.appId, context.platform);
       const toPage = this.deps.pageCatalog.resolvePage(segment.toPage, context.appId, context.platform);
       if (!fromPage || !toPage) continue;
@@ -432,17 +451,56 @@ export class ScriptFlowRunner {
     return result;
   }
 
-  private resolveNavigationRootPageIds(
-    pageReferences: string[],
-    appId: string,
-    platform: PageAssetPlatform
-  ): string[] {
-    if (!this.deps.pageCatalog) return [];
-    return [...new Set(pageReferences.flatMap((reference) => {
-      const page = this.deps.pageCatalog?.resolvePage(reference, appId, platform);
-      return page ? [page.id] : [];
-    }))];
+}
+
+function validateBusinessLoopContract(input: StartScriptFlowRunInput, plan: ScriptExecutionPlan): void {
+  if (input.mode !== "loop_until_stop" || input.loopScope !== "exclude_preparation") return;
+  const resetStepCount = plan.steps.filter((step) => step.phase === "reset").length;
+  if (resetStepCount > 0 && input.flow.loop?.reset === "none") {
+    throw new Error("每轮复位步骤与“无需复位”声明不能同时存在");
   }
+  if (resetStepCount === 0 && input.flow.loop?.reset !== "none") {
+    throw new Error("循环业务与验证前，请配置每轮复位步骤，或明确声明业务执行后无需复位");
+  }
+}
+
+export function selectScriptExecutionSteps(
+  plan: ScriptExecutionPlan,
+  selection: ScriptExecutionStepSelection
+): ScriptExecutionPlan {
+  const belongsToRootFlow = (step: ScriptExecutionPlanStep, stepId: string) =>
+    step.source.flowName === plan.flowName && step.source.stepId === stepId;
+  const startIndex = plan.steps.findIndex((step) => belongsToRootFlow(step, selection.startStepId));
+  if (startIndex < 0) {
+    throw new Error(`Source step not found in execution plan: ${selection.startStepId}`);
+  }
+
+  let endIndex = plan.steps.length - 1;
+  if (selection.endStepId) {
+    endIndex = plan.steps.findIndex(
+      (step, index) => index >= startIndex && belongsToRootFlow(step, selection.endStepId!)
+    );
+    if (endIndex < 0) {
+      const earlierEndIndex = plan.steps.findIndex((step) => belongsToRootFlow(step, selection.endStepId!));
+      if (earlierEndIndex >= 0 && earlierEndIndex < startIndex) {
+        throw new Error(`End source step precedes start source step: ${selection.endStepId}`);
+      }
+      throw new Error(`Source step not found in execution plan: ${selection.endStepId}`);
+    }
+  }
+  if (endIndex < startIndex) {
+    throw new Error(`End source step precedes start source step: ${selection.endStepId}`);
+  }
+
+  const steps = plan.steps.slice(startIndex, endIndex + 1).map((step, index) => ({
+    ...step,
+    order: index + 1
+  }));
+  if (steps.length === 0) throw new Error("Selected execution step range is empty");
+  return {
+    ...plan,
+    steps
+  };
 }
 
 function maskPlanDifferences<T>(runtime: T, redacted: T): T {
@@ -600,11 +658,16 @@ function startStrategy(flow: ScriptFlowDocument): FlowStartStrategy {
   const values: Record<typeof strategy, FlowStartStrategy> = {
     keepCurrent: "keep_current",
     goHome: "go_home",
-    launchApp: "launch_app",
+    launchApp: "restart_app",
     restartApp: "restart_app",
     clearDataAndLaunch: "clear_data_and_launch"
   };
   return values[strategy];
+}
+
+function executionStartStrategy(flow: ScriptFlowDocument, plan: ScriptExecutionPlan): FlowStartStrategy {
+  if (flow.start?.strategy === "launchApp" && plan.steps[0]?.action === "launchApp") return "keep_current";
+  return startStrategy(flow);
 }
 
 function defaultStepTitle(step: ScriptExecutionPlanStep): string {

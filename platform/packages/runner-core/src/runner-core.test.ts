@@ -246,6 +246,43 @@ describe("runner-core", () => {
     expect(result.status).toBe("stopped");
     expect(executed).toEqual(["1:2", "2:2", "3:2"]);
   });
+
+  it("runs before-loop steps once while looping the remaining steps", async () => {
+    const controller = new RunExecutionController();
+    const executed: string[] = [];
+    const preparation: ActionStep = {
+      id: "prepare",
+      order: 1,
+      type: "launch_app",
+      enabled: true,
+      params: { packageName: "demo.app" },
+      createdAt: "2026-06-04T00:00:00.000Z"
+    };
+    const business: ActionStep = {
+      id: "business",
+      order: 2,
+      type: "back",
+      enabled: true,
+      params: {},
+      createdAt: "2026-06-04T00:00:00.000Z"
+    };
+    const machine = new RunStateMachine({
+      controller,
+      config: normalizeRunConfig({ deviceSerial: "serial", mode: "loop_until_stop", stepIntervalMs: 0 }),
+      beforeLoopSteps: [preparation],
+      steps: [business],
+      executeStep: async ({ iterationIndex, step }) => {
+        executed.push(`${iterationIndex}:${step.id}`);
+        if (executed.length === 4) controller.stop();
+        return { status: "passed" };
+      }
+    });
+
+    const result = await machine.run();
+
+    expect(result.status).toBe("stopped");
+    expect(executed).toEqual(["1:prepare", "1:business", "2:business", "3:business"]);
+  });
 });
 
 async function eventually(predicate: () => boolean): Promise<void> {

@@ -28,7 +28,12 @@ import {
 import { PreviewPanel } from "./components/PreviewPanel";
 import { PageAssetsPanel } from "./components/PageAssetsPanel";
 import { CaseCenterPanel } from "./components/CaseCenterPanel";
-import { AiScriptFlowsPanel, type CaseRevision } from "./components/AiScriptFlowsPanel";
+import {
+  AiScriptFlowsPanel,
+  draftFromSavedFlow,
+  type CaseRevision,
+  type GeneratedDraft
+} from "./components/AiScriptFlowsPanel";
 import type { RuntimeInterceptorRule } from "./components/RuntimeInterceptorPanel";
 import { RunResultsPanel } from "./components/RunResultsPanel";
 import { ToolStatusBar } from "./components/ToolStatusBar";
@@ -60,6 +65,25 @@ type ResizeStart = {
 };
 
 type NavItemId = AppNavItemId;
+const retainedWorkbenchNavItems = new Set<NavItemId>(["pageAssets", "scriptFlows", "aiScriptFlows", "runs"]);
+
+export function RetainedNavPanel({
+  active,
+  panelId,
+  children
+}: {
+  active: boolean;
+  panelId: NavItemId;
+  children?: ReactNode;
+}) {
+  return <div
+    className="retained-nav-panel"
+    data-retained-nav-panel={panelId}
+    hidden={!active}
+    aria-hidden={!active}
+  >{children}</div>;
+}
+
 type AssetRecordingAction =
   | DeviceActionRequest
   | {
@@ -553,7 +577,10 @@ export function App() {
   const [navCollapsed, setNavCollapsed] = useState(true);
   const [activeNavItem, setActiveNavItem] = useState<NavItemId>("devices");
   const [pendingCaseRevision, setPendingCaseRevision] = useState<CaseRevision>();
+  const [pendingCaseDraft, setPendingCaseDraft] = useState<GeneratedDraft>();
   const [pendingCaseSelection, setPendingCaseSelection] = useState("");
+  const [newCaseWorkspaceVersion, setNewCaseWorkspaceVersion] = useState(0);
+  const [retainedNavItems, setRetainedNavItems] = useState<Set<NavItemId>>(() => new Set(["devices"]));
   const [assetRecordingPreviewWidth, setAssetRecordingPreviewWidth] = useState(560);
   const [runtimeInterceptorRules, setRuntimeInterceptorRules] = useState<RuntimeInterceptorRule[]>([]);
   const [assetRecordingGraphVersionId, setAssetRecordingGraphVersionId] = useState("");
@@ -702,6 +729,16 @@ export function App() {
   useEffect(() => {
     refreshRuntimeInterceptorRules().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!retainedWorkbenchNavItems.has(activeNavItem)) return;
+    setRetainedNavItems((current) => {
+      if (current.has(activeNavItem)) return current;
+      const next = new Set(current);
+      next.add(activeNavItem);
+      return next;
+    });
+  }, [activeNavItem]);
 
   useEffect(() => {
     if (activeNavItem !== "settings" || aiModelSettingsLoadedRef.current) {
@@ -946,7 +983,13 @@ export function App() {
   }
 
   function openAiScriptFlows() {
+    setActiveNavItem("aiScriptFlows");
+  }
+
+  function openNewAiScriptFlow() {
     setPendingCaseRevision(undefined);
+    setPendingCaseDraft(undefined);
+    setNewCaseWorkspaceVersion((version) => version + 1);
     setActiveNavItem("aiScriptFlows");
   }
 
@@ -1484,59 +1527,80 @@ export function App() {
           />
         )}
 
-        {activeNavItem === "pageAssets" && (
-          <PageAssetsPanel
-            onOpenAssetRecording={openAssetRecording}
-            setMessage={setMessage}
-          />
+        {(activeNavItem === "pageAssets" || retainedNavItems.has("pageAssets")) && (
+          <RetainedNavPanel active={activeNavItem === "pageAssets"} panelId="pageAssets">
+            <PageAssetsPanel
+              onOpenAssetRecording={openAssetRecording}
+              setMessage={setMessage}
+            />
+          </RetainedNavPanel>
         )}
 
-        {activeNavItem === "scriptFlows" && (
-          <CaseCenterPanel
-            devices={selectableDevices}
-            selectedSerial={selectedSerial}
-            initialSelectedFlowId={pendingCaseSelection || undefined}
-            setMessage={setMessage}
-            onCreateCase={openAiScriptFlows}
-            onModifyCase={(flow) => {
-              setPendingCaseRevision({ flowId: flow.id, version: flow.version, name: flow.name });
-              setActiveNavItem("aiScriptFlows");
-            }}
-            androidAppMonitorForApp={(appId) => keepCurrentAndroidAppMonitorForPackage(
-              "script_flow",
-              appId,
-              androidAppMonitorExecutionOverrides.script_flow
-            )}
-            onOpenRun={(runId) => {
-              setCurrentRunId(runId);
-              openRuns({ keepCurrentRun: true });
-            }}
-          />
+        {(activeNavItem === "scriptFlows" || retainedNavItems.has("scriptFlows")) && (
+          <RetainedNavPanel active={activeNavItem === "scriptFlows"} panelId="scriptFlows">
+            <CaseCenterPanel
+              devices={selectableDevices}
+              selectedSerial={selectedSerial}
+              initialSelectedFlowId={pendingCaseSelection || undefined}
+              setMessage={setMessage}
+              onCreateCase={openNewAiScriptFlow}
+              onModifyCase={(flow, verification) => {
+                const draft = draftFromSavedFlow(flow, verification);
+                if (!draft) {
+                  setMessage("当前测试脚本无法解析，不能打开脚本编排");
+                  return;
+                }
+                setPendingCaseRevision({ flowId: flow.id, version: flow.version, name: flow.name });
+                setPendingCaseDraft(draft);
+                setActiveNavItem("aiScriptFlows");
+              }}
+              onAiModifyCase={(flow) => {
+                setPendingCaseRevision({ flowId: flow.id, version: flow.version, name: flow.name });
+                setPendingCaseDraft(undefined);
+                setActiveNavItem("aiScriptFlows");
+              }}
+              androidAppMonitorForApp={(appId) => keepCurrentAndroidAppMonitorForPackage(
+                "script_flow",
+                appId,
+                androidAppMonitorExecutionOverrides.script_flow
+              )}
+              onOpenRun={(runId) => {
+                setCurrentRunId(runId);
+                openRuns({ keepCurrentRun: true });
+              }}
+            />
+          </RetainedNavPanel>
         )}
 
-        {activeNavItem === "aiScriptFlows" && (
-          <AiScriptFlowsPanel
-            key={pendingCaseRevision ? `${pendingCaseRevision.flowId}:${pendingCaseRevision.version}` : "new-case"}
-            defaultAppId={DEFAULT_SCRIPT_APP_ID}
-            devices={selectableDevices}
-            selectedSerial={selectedSerial}
-            setMessage={setMessage}
-            revision={pendingCaseRevision}
-            androidAppMonitorForApp={(appId) => keepCurrentAndroidAppMonitorForPackage(
-              "script_flow",
-              appId,
-              androidAppMonitorExecutionOverrides.script_flow
-            )}
-            onSaved={(flow) => {
-              setPendingCaseSelection(flow.id);
-              setPendingCaseRevision(undefined);
-              openScriptFlows();
-            }}
-            onOpenRun={(runId) => {
-              setCurrentRunId(runId);
-              openRuns({ keepCurrentRun: true });
-            }}
-          />
+        {(activeNavItem === "aiScriptFlows" || retainedNavItems.has("aiScriptFlows")) && (
+          <RetainedNavPanel active={activeNavItem === "aiScriptFlows"} panelId="aiScriptFlows">
+            <AiScriptFlowsPanel
+              key={pendingCaseRevision ? `${pendingCaseRevision.flowId}:${pendingCaseRevision.version}:${pendingCaseDraft ? "manual" : "ai"}` : `new-case:${newCaseWorkspaceVersion}`}
+              defaultAppId={DEFAULT_SCRIPT_APP_ID}
+              devices={selectableDevices}
+              selectedSerial={selectedSerial}
+              activeRunForDevice={activeRunForSelectedDevice}
+              setMessage={setMessage}
+              onStartNewTest={openNewAiScriptFlow}
+              revision={pendingCaseRevision}
+              initialDraft={pendingCaseDraft}
+              androidAppMonitorForApp={(appId) => keepCurrentAndroidAppMonitorForPackage(
+                "script_flow",
+                appId,
+                androidAppMonitorExecutionOverrides.script_flow
+              )}
+              onSaved={(flow) => {
+                setPendingCaseSelection(flow.id);
+                setPendingCaseRevision(undefined);
+                setPendingCaseDraft(undefined);
+                openScriptFlows();
+              }}
+              onOpenRun={(runId) => {
+                setCurrentRunId(runId);
+                openRuns({ keepCurrentRun: true });
+              }}
+            />
+          </RetainedNavPanel>
         )}
 
         {activeNavItem === "stability" && (
@@ -1588,7 +1652,11 @@ export function App() {
           />
         )}
 
-        {activeNavItem === "runs" && <section className="module-page execution-module">{runResultsPanel}</section>}
+        {(activeNavItem === "runs" || retainedNavItems.has("runs")) && (
+          <RetainedNavPanel active={activeNavItem === "runs"} panelId="runs">
+            <section className="module-page execution-module">{runResultsPanel}</section>
+          </RetainedNavPanel>
+        )}
 
         {activeNavItem === "settings" && (
           <SettingsView

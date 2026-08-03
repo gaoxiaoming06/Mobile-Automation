@@ -650,7 +650,7 @@ POST /api/trial-runs/:runId/resume
 - [x] 从通过页面断言的试运行步骤生成 NavigationEntry 候选，接受后写入独立导航目录。
 - [x] AI 规划和运行时导航索引同时读取已启用 NavigationEntry，不再根据页面名称猜测底栏入口。
 - [x] 相同 stableKey 重复接受时合并证据并递增版本，不重复创建导航条目。
-- [ ] 含未确认页面、危险动作或低置信交互候选的片段不进入导航索引。
+- [ ] 含未确认页面、未通过结果验证或低置信交互候选的片段不进入导航索引；不根据按钮文案推断业务风险。
 - [ ] 运行 `pnpm vitest run platform/apps/server/src/trial-flow-materializer.test.ts platform/apps/server/src/page-navigation.test.ts platform/apps/server/src/storage.test.ts`。
 
 ### 任务 11：实现试运行与沉淀建议 UI

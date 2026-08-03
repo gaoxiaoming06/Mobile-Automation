@@ -98,7 +98,7 @@ describe("AutomationRunner regression flow", () => {
     }));
   });
 
-  it("uses bounded back recovery during preparation and stops as soon as the target page is recognized", async () => {
+  it("fails without device actions when the current page is unknown", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
@@ -134,11 +134,11 @@ describe("AutomationRunner regression flow", () => {
     });
     const run = await waitForRun(runner, storage, started.id);
 
-    expect(run.status).toBe("passed");
-    expect(driver.actions).toEqual([{ type: "back" }]);
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(identifyCount).toBe(1);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
-      status: "recovered_to_target",
-      recoveryActions: 1
+      status: "current_page_unknown"
     }));
   });
 
@@ -165,12 +165,11 @@ describe("AutomationRunner regression flow", () => {
     expect(driver.actions).toEqual([]);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
       status: "no_reliable_path",
-      currentPageId: "page-class-detail",
-      recoveryActions: 0
+      currentPageId: "page-class-detail"
     }));
   });
 
-  it("backs to a page that can reach the target and then executes the indexed route", async () => {
+  it("does not backtrack to search for a page that can reach the target", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
@@ -228,19 +227,17 @@ describe("AutomationRunner regression flow", () => {
     });
     const run = await waitForRun(runner, storage, started.id);
 
-    expect(run.status).toBe("passed");
-    expect(driver.actions).toEqual([
-      { type: "back" },
-      { type: "tap", x: 320, y: 720 }
-    ]);
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(identifyCount).toBe(1);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
-      status: "reached",
-      recoveryActions: 1,
-      route: [expect.objectContaining({ segmentId: "home-growth" })]
+      status: "no_reliable_path",
+      currentPageId: "page-class-detail",
+      route: []
     }));
   });
 
-  it("allows a preparation step to back directly to its declared entry page", async () => {
+  it("ignores legacy back-recovery flags on preparation steps", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
@@ -280,15 +277,16 @@ describe("AutomationRunner regression flow", () => {
     });
     const run = await waitForRun(runner, storage, started.id);
 
-    expect(run.status).toBe("passed");
-    expect(driver.actions).toEqual([{ type: "back" }]);
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([]);
+    expect(identifyCount).toBe(1);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
-      status: "recovered_to_target",
-      recoveryActions: 1
+      status: "no_reliable_path",
+      currentPageId: "page-class-detail"
     }));
   });
 
-  it("stops preparation recovery at another declared navigation root", async () => {
+  it("reports no reliable path without interpreting navigation roots", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
@@ -310,13 +308,12 @@ describe("AutomationRunner regression flow", () => {
     expect(run.status).toBe("failed");
     expect(driver.actions).toEqual([]);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
-      status: "recovery_stopped_at_anchor",
-      currentPageId: "page-login",
-      recoveryActions: 0
+      status: "no_reliable_path",
+      currentPageId: "page-login"
     }));
   });
 
-  it("stops back recovery immediately after leaving the target app", async () => {
+  it("does not press back to discover a page when page identity is unknown", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
@@ -348,11 +345,11 @@ describe("AutomationRunner regression flow", () => {
     const run = await waitForRun(runner, storage, started.id);
 
     expect(run.status).toBe("failed");
-    expect(driver.actions).toEqual([{ type: "back" }]);
+    expect(driver.actions).toEqual([]);
+    expect(identifyCount).toBe(1);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
-      status: "recovery_left_app",
-      currentStatus: "outside_app",
-      recoveryActions: 1
+      status: "current_page_unknown",
+      currentStatus: "unknown"
     }));
   });
 
@@ -930,6 +927,198 @@ describe("AutomationRunner regression flow", () => {
 
     expect(run?.status).toBe("stopped");
     expect(driver.actions.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("does not mark a run stopped when it does not own the active worker", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    const runner = new AutomationRunner(storage, driver);
+    storage.createRun({
+      id: "stability-run",
+      caseName: "Stability run",
+      deviceSerial: driver.device.serial,
+      configJson: "{}",
+      runSnapshotJson: "{}",
+      steps: []
+    });
+
+    await expect(runner.stop("stability-run")).resolves.toBe(false);
+    expect(storage.getRun("stability-run")?.status).toBe("running");
+  });
+
+  it("does not execute per-iteration reset steps during a single run", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const business = {
+      ...driver.createTapStep(20, 20),
+      id: "business",
+      params: { executionPhase: "business" }
+    };
+    const reset = {
+      ...driver.createTapStep(30, 30),
+      id: "reset",
+      order: 2,
+      params: { executionPhase: "reset" }
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Single Run",
+      steps: [business, reset],
+      mode: "once",
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 20, y: 20 }]);
+  });
+
+  it("executes a per-iteration reset step when it is selected for a step trial", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const reset = {
+      ...driver.createTapStep(30, 30),
+      id: "reset",
+      params: { executionPhase: "reset" }
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Reset Step Trial",
+      steps: [reset],
+      mode: "once",
+      stepIntervalMs: 0,
+      recordVideo: false,
+      sourceSnapshot: {
+        kind: "script_flow",
+        flowId: "flow-reset-trial",
+        version: 1,
+        planDigest: "digest-reset-trial",
+        executionPurpose: "step_trial",
+        dependencies: [],
+        parsed: {}
+      }
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 30, y: 30 }]);
+  });
+
+  it("does not execute per-iteration reset steps when looping the whole case", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const business = {
+      ...driver.createTapStep(20, 20),
+      id: "business",
+      params: { executionPhase: "business" }
+    };
+    const reset = {
+      ...driver.createTapStep(30, 30),
+      id: "reset",
+      order: 2,
+      params: { executionPhase: "reset" }
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Whole Case Loop",
+      steps: [business, reset],
+      mode: "loop_until_stop",
+      loopScope: "all_steps",
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+
+    await waitForMatchingActionCount(driver, (action) => action.type === "tap" && action.x === 20, 3);
+    await runner.stop(started.id);
+
+    expect(driver.actions.filter((action) => action.type === "tap" && action.x === 30)).toHaveLength(0);
+  });
+
+  it("runs preparation once when looping only business and verification steps", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const preparation = {
+      ...driver.createTapStep(10, 10),
+      id: "prepare",
+      params: { executionPhase: "preparation" }
+    };
+    const business = {
+      ...driver.createTapStep(20, 20),
+      id: "business",
+      order: 3,
+      params: { executionPhase: "business" }
+    };
+    const reset = {
+      ...driver.createTapStep(30, 30),
+      id: "reset",
+      order: 2,
+      params: { executionPhase: "reset" }
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Loop Business Only",
+      steps: [preparation, reset, business],
+      mode: "loop_until_stop",
+      loopScope: "exclude_preparation",
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+
+    await waitForMatchingActionCount(driver, (action) => action.type === "tap" && action.x === 20, 3);
+    await runner.stop(started.id);
+
+    expect(driver.actions.filter((action) => action.type === "tap" && action.x === 10)).toHaveLength(1);
+    expect(driver.actions.filter((action) => action.type === "tap" && action.x === 20).length).toBeGreaterThanOrEqual(3);
+    expect(driver.actions.slice(0, 5)).toEqual([
+      { type: "tap", x: 10, y: 10 },
+      { type: "tap", x: 20, y: 20 },
+      { type: "tap", x: 30, y: 30 },
+      { type: "tap", x: 20, y: 20 },
+      { type: "tap", x: 30, y: 30 }
+    ]);
+  });
+
+  it("force-stops the app before a script launch step marked for restart", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const launchStep: ActionStep = {
+      id: "launch",
+      order: 1,
+      type: "launch_app",
+      enabled: true,
+      params: { packageName: "demo.app", restartBeforeLaunch: true },
+      createdAt: nowIso()
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      steps: [launchStep],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startStrategy: "keep_current"
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "close_app", packageName: "demo.app" },
+      { type: "launch_app", packageName: "demo.app" }
+    ]);
   });
 
   it("rejects starting another run on a busy device", async () => {
@@ -2332,6 +2521,18 @@ async function waitForActionCount(driver: MockDriver, count: number): Promise<vo
     await delay(10);
   }
   throw new Error(`Expected at least ${count} actions, got ${driver.actions.length}`);
+}
+
+async function waitForMatchingActionCount(
+  driver: MockDriver,
+  matches: (action: (typeof driver.actions)[number]) => boolean,
+  count: number
+): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (driver.actions.filter(matches).length >= count) return;
+    await delay(10);
+  }
+  throw new Error(`Expected at least ${count} matching actions`);
 }
 
 function delay(ms: number): Promise<void> {

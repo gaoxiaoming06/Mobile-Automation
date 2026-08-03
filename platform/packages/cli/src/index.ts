@@ -117,8 +117,7 @@ export function formatResponse(command: CliCommand, payload: unknown, serverUrl:
     const preview = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
     const plan = readObject(preview, "plan");
     const steps = Array.isArray(plan.steps) ? plan.steps.length : 0;
-    const risks = Array.isArray(plan.riskConfirmations) ? plan.riskConfirmations.length : 0;
-    return [`planDigest=${String(preview.planDigest ?? "")}`, `steps=${steps}`, `confirmations=${risks}`].join("\n");
+    return [`planDigest=${String(preview.planDigest ?? "")}`, `steps=${steps}`].join("\n");
   }
   if (command === "run-flow") return `Started ${String(run.id)} (${String(run.status)})`;
   if (command === "status") return [`Run ${String(run.id)}`, `status=${String(run.status)}`, `flow=${String(readObject(run.sourceSnapshot).flowName ?? run.caseName ?? "-")}`, `device=${String(run.deviceSerial)}`].join("\n");

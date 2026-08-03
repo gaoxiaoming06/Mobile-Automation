@@ -27,14 +27,17 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("assertText");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("ocrText");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("pageElement");
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("risk，值只能是 none");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("risk");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("单一业务目标标记为 case");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("多个可独立成立的业务目标标记为 scenario");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("purpose");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("navigation、fixture、business 或 recovery");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("每个步骤必须显式标记 role");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("reset");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("每轮复位");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不得自动推断");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("场景编排命中完全匹配的启用用例时自动使用 runFlow");
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("无需运行前确认");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("严格按照脚本中的显式命令执行");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("点击左上角返回按钮");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon: back");
@@ -54,6 +57,30 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
 });
 
 describe("ScriptFlow AI planner", () => {
+  it("keeps startup explicit once and discards legacy risk metadata", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.purpose = "business";
+    response.document.start = { strategy: "launchApp" };
+    response.document.steps = [
+      { id: "launch-app", role: "setup", launchApp: { appId: "cn.eeo.classin" } },
+      { id: "tap-growth", role: "business", risk: "publish", tap: { target: { text: "成长" } } }
+    ];
+
+    const result = parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "启动app，点击成长"
+    });
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+    expect(result.document.start).toBeUndefined();
+    expect(result.document.steps.filter((step) => "launchApp" in step)).toHaveLength(1);
+    expect(result.document.steps[1]).not.toHaveProperty("risk");
+  });
+
   it("requires AI drafts to classify the flow purpose and every step role explicitly", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const missingPurpose = readyResponse();
@@ -264,7 +291,7 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it("repairs current-page control intents that invent navigation context", async () => {
+  it("keeps AI-selected navigation context editable instead of repairing it from prompt heuristics", async () => {
     const badResponse = readyResponse();
     badResponse.summary = "打开录制ClassIn教室开关";
     badResponse.document.purpose = "business";
@@ -318,23 +345,25 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(callCount).toBe(2);
+    expect(callCount).toBe(1);
     expect(result.status).toBe("trial_ready");
     if (result.status === "needs_clarification") throw new Error(result.clarification);
-    expect(result.document.entry).toBeUndefined();
-    expect(result.document.outcome).toBeUndefined();
-    expect(result.document.steps).toHaveLength(1);
-    expect(result.document.steps[0]).toMatchObject({
-      tap: {
-        target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true }
-      }
+    expect(result.document).toMatchObject({
+      entry: { page: "classin.lesson.create" },
+      outcome: { page: "classin.lesson.create" },
+      steps: [
+        { reachPage: { page: "classin.lesson.create" } },
+        {
+          onPage: "classin.lesson.create",
+          tap: {
+            target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true }
+          }
+        }
+      ]
     });
-    expect(result.document.steps[0]).not.toHaveProperty("onPage");
-    expect(result.document.steps[0]).not.toHaveProperty("reachPage");
-    expect(result.document.steps[0]).not.toHaveProperty("runFlow");
   });
 
-  it("rejects text field locators scoped only by page title instead of the requested field label", () => {
+  it("keeps a structurally valid text field locator even when prompt heuristics cannot ground it", () => {
     const response = readyResponse();
     response.summary = "修改课堂标题";
     response.document.purpose = "business";
@@ -354,12 +383,17 @@ describe("ScriptFlow AI planner", () => {
       }
     }];
 
-    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
       appId: "cn.eeo.classin",
       platform: "android",
       catalog: buildScriptFlowPlannerCatalog(planningPageCatalog(), [], "cn.eeo.classin", "android"),
       prompt: "把课堂标题改成11111"
-    })).toThrow(/课堂标题.*定位|字段标签/);
+    })).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [{ inputText: { target: { control: "textField", scopeText: "新建课堂", ordinal: 1 } } }]
+      }
+    });
   });
 
   it("normalizes reusable form field searches to auto when the prompt does not pin the visible viewport", () => {
@@ -399,7 +433,7 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it("asks for clarification instead of turning an edit verb into a hidden bridge tap", async () => {
+  it("keeps an AI-inferred edit bridge as an editable trial step", async () => {
     const response = readyResponse();
     response.summary = "修改课堂标题";
     response.document.purpose = "business";
@@ -450,15 +484,17 @@ describe("ScriptFlow AI planner", () => {
 
     expect(aiCalls).toBe(1);
     expect(result).toMatchObject({
-      status: "needs_clarification",
-      clarification: expect.stringContaining("课堂标题")
+      status: "trial_ready",
+      document: {
+        steps: [
+          { tap: { target: { text: "修改" } } },
+          { inputText: { target: { text: "课堂标题" }, value: "${lessonTitle}" } }
+        ]
+      }
     });
-    if (result.status === "needs_clarification") {
-      expect(result.clarification).toContain("点击");
-    }
   });
 
-  it("keeps an explicit scroll-to-field mutation without asking for a hidden edit entry", async () => {
+  it("does not delete AI steps based on a local interpretation of the prompt", async () => {
     const response = readyResponse();
     response.summary = "修改课堂标题";
     response.document.purpose = "business";
@@ -510,19 +546,29 @@ describe("ScriptFlow AI planner", () => {
     expect(aiCalls).toBe(1);
     expect(result.status).toBe("trial_ready");
     if (result.status === "needs_clarification") throw new Error(result.clarification);
-    expect(result.document.steps).toEqual([expect.objectContaining({
-      id: "fill-lesson-title",
-      inputText: expect.objectContaining({
-        target: { text: "课堂标题", area: "content" },
-        value: "${lessonTitle}",
-        search: expect.objectContaining({ mode: "auto" })
+    expect(result.document.steps).toEqual([
+      expect.objectContaining({ id: "open-classroom-info-editor", tap: expect.any(Object) }),
+      expect.objectContaining({
+        id: "fill-lesson-title",
+        inputText: expect.objectContaining({
+          target: { text: "课堂标题", area: "content" },
+          value: "${lessonTitle}",
+          search: expect.objectContaining({ mode: "auto" })
+        })
       })
-    })]);
+    ]);
     expect(result.parameterValues).toEqual({ lessonTitle: "111" });
   });
 
-  it("asks for field coverage before accepting full form regression drafts without explicit fields", async () => {
+  it("keeps an incomplete full form regression draft editable instead of blocking generation", async () => {
     const response = fullRegressionLessonResponse();
+    for (const step of response.document.steps) {
+      if (!("inputText" in step) || !step.inputText.target.semantic) continue;
+      step.inputText.target = {
+        text: step.inputText.target.semantic.replace(/输入框$/u, ""),
+        area: "content"
+      };
+    }
     let aiCalls = 0;
 
     const result = await generateScriptFlowDraft({
@@ -540,9 +586,120 @@ describe("ScriptFlow AI planner", () => {
 
     expect(aiCalls).toBe(1);
     expect(result).toMatchObject({
-      status: "needs_clarification",
-      clarification: expect.stringContaining("字段")
+      status: "trial_ready",
+      document: { testLevel: "full_regression" }
     });
+  });
+
+  it("accepts an executable AI draft when local prompt heuristics disagree with its semantics", async () => {
+    const response = readyResponse();
+    response.document.name = "打开补交入口";
+    response.document.purpose = "business";
+    response.document.steps = [
+      {
+        id: "open-class-detail",
+        role: "navigation",
+        risk: "interaction",
+        tap: { target: { text: "三年级二班" }, search: { mode: "auto" } }
+      },
+      {
+        id: "open-resubmission",
+        role: "business",
+        risk: "interaction",
+        tap: { target: { text: "补交作业入口" }, search: { mode: "auto" } }
+      }
+    ];
+    let aiCalls = 0;
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "进入班级详情 三年级二班，然后点击去补交",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: emptyPageCatalog(),
+      flows: [],
+      fetchImpl: async () => {
+        aiCalls += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 });
+      }
+    });
+
+    expect(aiCalls).toBe(1);
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      document: {
+        steps: [
+          { tap: { target: { text: "三年级二班" } } },
+          { tap: { target: { text: "补交作业入口" } } }
+        ]
+      }
+    });
+  });
+
+  it("accepts an explicit generated action without interpreting its business text", () => {
+    const response = readyResponse();
+    response.document.name = "检查发布结果";
+    response.document.purpose = "business";
+    response.document.steps = [
+      {
+        id: "publish",
+        role: "business",
+        risk: "interaction",
+        tap: { target: { text: "发布" }, search: { mode: "visibleOnly" } }
+      },
+      {
+        id: "verify-published",
+        role: "assertion",
+        assertText: { text: "发布成功", match: "contains" }
+      }
+    ];
+
+    const result = parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog: buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android"),
+      prompt: "确认当前页面显示发布成功"
+    });
+    expect(result.status).toBe("ready");
+    if (result.status === "ready") {
+      expect(result.document.steps[0]).toMatchObject({ tap: { target: { text: "发布" } } });
+      expect(result.document.steps[0]).not.toHaveProperty("risk");
+    }
+  });
+
+  it("accepts a publish action when natural language explicitly authorizes it", () => {
+    const response = readyResponse();
+    response.document.name = "发布课堂";
+    response.document.purpose = "business";
+    response.document.steps = [{
+      id: "publish",
+      role: "business",
+      risk: "publish",
+      tap: { target: { text: "发布" }, search: { mode: "visibleOnly" } }
+    }];
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog: buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android"),
+      prompt: "我要把课堂发布出去"
+    })).toMatchObject({
+      status: "ready",
+      document: { steps: [{ tap: { target: { text: "发布" } } }] }
+    });
+  });
+
+  it("does not apply a business-risk keyword gate to legacy start strategies", () => {
+    const response = readyResponse();
+    response.document.name = "检查登录页面";
+    response.document.start = { strategy: "clearDataAndLaunch" };
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog: buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android"),
+      prompt: "确认当前登录页面显示正常"
+    })).toMatchObject({ status: "ready", document: { start: { strategy: "clearDataAndLaunch" } } });
   });
 
   it("accepts full form regression drafts when the prompt explicitly lists covered fields", async () => {
@@ -635,7 +792,7 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it("rejects replacing explicit user clicks with a reachPage shortcut", () => {
+  it("keeps an AI-selected reachPage shortcut as an editable draft", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
     response.document.name = "打开添加好友";
@@ -645,12 +802,15 @@ describe("ScriptFlow AI planner", () => {
       reachPage: { page: "classin.home", policy: "safe" }
     }];
 
-    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
       appId: "cn.eeo.classin",
       platform: "android",
       catalog,
       prompt: "在主页点击右上角加号，然后点击添加好友"
-    })).toThrow(/明确操作.*点击右上角加号.*不能被 reachPage、runFlow 或已有资产替代/);
+    })).toMatchObject({
+      status: "ready",
+      document: { steps: [{ reachPage: { page: "classin.home" } }] }
+    });
   });
 
   it("preserves explicit operations while allowing reachPage for a vague segment", () => {
@@ -679,6 +839,48 @@ describe("ScriptFlow AI planner", () => {
     })).toMatchObject({
       status: "ready",
       document: { steps: [{ reachPage: { page: "classin.home" } }, { tap: expect.any(Object) }] }
+    });
+  });
+
+  it("matches an explicit click after a grounded navigation click inferred from the preceding target", () => {
+    const catalog = buildScriptFlowPlannerCatalog(emptyPageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.name = "进入班级详情后打开去补交";
+    response.document.purpose = "business";
+    response.document.steps = [
+      {
+        id: "open-class-detail",
+        role: "navigation",
+        risk: "interaction",
+        tap: { target: { text: "三年级二班" }, search: { mode: "auto" } }
+      },
+      {
+        id: "open-resubmission",
+        role: "business",
+        risk: "interaction",
+        tap: { target: { text: "去补交" }, search: { mode: "auto" } }
+      },
+      {
+        id: "verify-resubmission",
+        role: "assertion",
+        assertText: { text: "去补交", match: "contains" }
+      }
+    ];
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "进入班级详情 三年级二班，然后点击去补交，打开的页面中显示去补交文字"
+    })).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [
+          { tap: { target: { text: "三年级二班" } } },
+          { tap: { target: { text: "去补交" } } },
+          { assertText: { text: "去补交" } }
+        ]
+      }
     });
   });
 
@@ -850,7 +1052,7 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it.each(["topBar", "content"] as const)("rejects an ungrounded %s constraint for a publish target", (area) => {
+  it.each(["topBar", "content"] as const)("accepts an AI-selected %s constraint for an authorized publish target", (area) => {
     const prompt = "点击发布";
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
@@ -868,15 +1070,18 @@ describe("ScriptFlow AI planner", () => {
       }
     }];
 
-    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
       appId: "cn.eeo.classin",
       platform: "android",
       catalog,
       prompt
-    })).toThrow(new RegExp(`发布.*${area}.*没有.*位置依据`));
+    })).toMatchObject({
+      status: "ready",
+      document: { steps: [{ tap: { target: { text: "发布", area } } }] }
+    });
   });
 
-  it("rejects guessed swipes when the user supplied an exact picker value", () => {
+  it("keeps an executable picker sequence even when a local rule would prefer selectText", () => {
     const prompt = "点击课堂时长，在弹出的时间选择中滑动选择10小时40分钟，点确定";
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
@@ -901,15 +1106,15 @@ describe("ScriptFlow AI planner", () => {
       }
     ];
 
-    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
       appId: "cn.eeo.classin",
       platform: "android",
       catalog,
       prompt
-    })).toThrow(/10小时40分钟.*selectText/);
+    })).toMatchObject({ status: "ready", document: { steps: [{ tap: expect.any(Object) }, { swipe: expect.any(Object) }, { tap: expect.any(Object) }] } });
   });
 
-  it("rejects a redundant field tap before a compound picker selection", () => {
+  it("keeps an executable compound picker draft without local sequence rewriting", () => {
     const prompt = "点击课堂时长，在弹出的时间选择中滑动选择10小时40分钟，点确定";
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
@@ -938,12 +1143,12 @@ describe("ScriptFlow AI planner", () => {
       }
     ];
 
-    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
       appId: "cn.eeo.classin",
       platform: "android",
       catalog,
       prompt
-    })).toThrow(/selectText.*前置.*tap/);
+    })).toMatchObject({ status: "ready", document: { steps: [{ tap: expect.any(Object) }, { selectText: expect.any(Object) }] } });
   });
 
   it("still allows clarification when an explicit operation is missing a real parameter", () => {
@@ -1025,17 +1230,20 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it("rejects explicit click targets generated in the wrong order", () => {
+  it("keeps an executable click order chosen by AI for user review", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
     response.document.steps = [response.document.steps[1]!, response.document.steps[0]!];
 
-    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
       appId: "cn.eeo.classin",
       platform: "android",
       catalog,
       prompt: "在主页点击右上角加号，然后点击添加好友"
-    })).toThrow(/明确操作.*点击右上角加号.*目标.*顺序/);
+    })).toMatchObject({
+      status: "ready",
+      document: { steps: [{ tap: { target: { text: "添加好友" } } }, { tap: { target: { icon: "add" } } }] }
+    });
   });
 
   it("accepts a target-only request as reachPage without asking how to navigate", () => {
@@ -1062,8 +1270,10 @@ describe("ScriptFlow AI planner", () => {
     expect(prompt).toContain("不要因为“回到”推断系统返回");
     expect(prompt).toContain("tap、inputText、clearText 和 selectText 使用同一 search 合同");
     expect(prompt).toContain('"kind": "case | scenario"');
-    expect(prompt).toContain('"entry"');
-    expect(prompt).toContain('"outcome"');
+    expect(prompt).not.toContain('"entry":');
+    expect(prompt).not.toContain('"outcome":');
+    expect(prompt).toContain("直接理解用户的完整意图和操作顺序");
+    expect(prompt).not.toContain("用户明确操作契约");
   });
 
   it("rejects a bare reachPage for an unindexed bottom-tab page", () => {
@@ -1500,7 +1710,7 @@ describe("ScriptFlow AI planner", () => {
 	    expect(result.status === "trial_ready" || result.status === "ready" ? result.document.steps[0] : {}).not.toHaveProperty("runFlow");
 	  });
 
-	  it("repairs literal target text invented by the model instead of executing it", async () => {
+	  it("keeps AI-selected literal target text for trial instead of repairing it with prompt regex", async () => {
     const catalog = pageCatalog();
     const requestBodies: string[] = [];
     const invented = readyResponse();
@@ -1530,12 +1740,9 @@ describe("ScriptFlow AI planner", () => {
     });
 
     expect(result).toMatchObject({ status: "trial_ready", document: { steps: [expect.anything(), expect.objectContaining({
-      tap: expect.objectContaining({ target: expect.objectContaining({ text: "添加好友" }) })
+      tap: expect.objectContaining({ target: expect.objectContaining({ text: "创建添加好友" }) })
     })] } });
-    expect(requestBodies).toHaveLength(2);
-    const repairPrompt = JSON.parse(requestBodies[1]) as { messages: Array<{ content: string }> };
-    expect(repairPrompt.messages[1]?.content).toContain("没有来自用户描述或已知目录的字面依据");
-    expect(repairPrompt.messages[1]?.content).toContain("semantic");
+    expect(requestBodies).toHaveLength(1);
   });
 
   it("asks for result evidence when the generated target page is not recorded", async () => {

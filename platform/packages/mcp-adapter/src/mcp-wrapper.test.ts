@@ -29,7 +29,7 @@ describe("mobile automation MCP tools", () => {
       fetch: fakeFetch(requests, {
         "POST /api/script-flow-drafts/generate": { draft: { status: "needs_clarification", clarification: "要打开哪个班级？" } },
         "GET /api/script-flows/flow-1": { flow: { id: "flow-1", version: 2 } },
-        "POST /api/script-flows/flow-1/preview": { planDigest: "a".repeat(64), plan: { steps: [], riskConfirmations: [] }, dependencies: [] },
+        "POST /api/script-flows/flow-1/preview": { planDigest: "a".repeat(64), plan: { steps: [] }, dependencies: [] },
         "POST /api/script-flows/flow-1/runs": { run: { id: "run-1", status: "running", sourceSnapshot: { kind: "script_flow" }, stepResults: [], artifacts: [] } }
       })
     });

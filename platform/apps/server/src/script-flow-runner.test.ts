@@ -1,12 +1,193 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
+import { compileScriptFlow, type ScriptFlowDocument } from "@mobile-automation/script-flow";
 import type { DeviceInfo, InteractionAsset, TestRun } from "@mobile-automation/shared";
 import type { PageAssetCatalog, PageAssetSummary } from "./page-asset-catalog.js";
 import type { PageStateService } from "./page-state-service.js";
-import { ScriptFlowRunner, pageStateExpectationVerifier, type ScriptFlowRunBackend } from "./script-flow-runner.js";
+import {
+  ScriptFlowRunner,
+  pageStateExpectationVerifier,
+  selectScriptExecutionSteps,
+  type ScriptFlowRunBackend
+} from "./script-flow-runner.js";
 import { ScriptTargetResolver } from "./script-target-resolver.js";
 
 describe("ScriptFlowRunner", () => {
+  it("selects one source step without entry preparation or outcome assertions", () => {
+    const flow: ScriptFlowDocument = {
+      ...document([
+        { id: "open-form", tap: { target: { text: "创建课堂" } } },
+        { id: "fill-name", inputText: { target: { text: "课堂名称" }, value: "自动化课堂" } },
+        { id: "assert-created", assertText: { text: "创建成功" } }
+      ]),
+      entry: { page: "classin.home" },
+      outcome: { page: "classin.classroom.detail" }
+    };
+
+    const selected = selectScriptExecutionSteps(compileScriptFlow(flow), {
+      startStepId: "fill-name",
+      endStepId: "fill-name"
+    });
+
+    expect(selected.steps.map((step) => step.source.stepId)).toEqual(["fill-name"]);
+    expect(selected.steps.map((step) => step.order)).toEqual([1]);
+  });
+
+  it("selects remaining executable steps from a source step", () => {
+    const plan = compileScriptFlow(document([
+      { id: "open-form", tap: { target: { text: "创建课堂" } } },
+      { id: "fill-name", inputText: { target: { text: "课堂名称" }, value: "自动化课堂" } },
+      { id: "assert-created", assertText: { text: "创建成功" } }
+    ]));
+
+    const selected = selectScriptExecutionSteps(plan, { startStepId: "fill-name" });
+
+    expect(selected.steps.map((step) => step.source.stepId)).toEqual(["fill-name", "assert-created"]);
+    expect(() => selectScriptExecutionSteps(plan, { startStepId: "missing" })).toThrow(/source step not found/i);
+  });
+
+  it("selects only the first expanded occurrence for a repeated child step trial", () => {
+    const plan = compileScriptFlow(document([{
+      id: "repeat-fields",
+      repeat: {
+        times: 2,
+        steps: [
+          { id: "fill-name", inputText: { target: { text: "课堂名称" }, value: "自动化课堂" } },
+          { id: "tap-next", tap: { target: { text: "下一步" } } }
+        ]
+      }
+    }]));
+
+    const selected = selectScriptExecutionSteps(plan, {
+      startStepId: "fill-name",
+      endStepId: "fill-name"
+    });
+
+    expect(selected.steps.map((step) => step.id)).toEqual(["repeat-fields[1].fill-name"]);
+  });
+
+  it("rejects a partial range whose end step precedes its start step", () => {
+    const plan = compileScriptFlow(document([
+      { id: "open-form", tap: { target: { text: "创建课堂" } } },
+      { id: "fill-name", inputText: { target: { text: "课堂名称" }, value: "自动化课堂" } }
+    ]));
+
+    expect(() => selectScriptExecutionSteps(plan, {
+      startStepId: "fill-name",
+      endStepId: "open-form"
+    })).toThrow(/end source step precedes start source step/i);
+  });
+
+  it("starts a partial step trial from the current device state", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+    const flow: ScriptFlowDocument = {
+      ...document([
+        { id: "open-form", tap: { target: { text: "创建课堂" } } },
+        { id: "fill-name", inputText: { target: { text: "课堂名称" }, value: "自动化课堂" } },
+        { id: "assert-created", assertText: { text: "创建成功" } }
+      ]),
+      start: { strategy: "restartApp" },
+      entry: { page: "classin.home" },
+      outcome: { page: "classin.classroom.detail" }
+    };
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-step-trial",
+      flow,
+      deviceSerial: "device-1",
+      executionPurpose: "step_trial",
+      stepSelection: { startStepId: "fill-name", endStepId: "fill-name" },
+      startStrategy: "keep_current",
+      pauseAfterEachStep: true
+    });
+
+    expect(backend.input?.steps?.map((step) => step.id)).toEqual(["fill-name"]);
+    expect(backend.input?.persistedSteps?.map((step) => step.id)).toEqual(["fill-name"]);
+    expect(backend.input?.startStrategy).toBe("keep_current");
+    expect(backend.input?.pauseAfterEachStep).toBe(true);
+    expect(backend.input?.sourceSnapshot?.executionPurpose).toBe("step_trial");
+  });
+
+  it("prefers an explicit launch step over a duplicate legacy launch strategy", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+    const flow: ScriptFlowDocument = {
+      ...document([
+        { id: "launch-app", role: "setup", launchApp: { appId: "cn.eeo.classin" } },
+        { id: "open-growth", role: "business", tap: { target: { text: "成长" } } }
+      ]),
+      start: { strategy: "launchApp" }
+    };
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-explicit-launch",
+      flow,
+      deviceSerial: "device-1"
+    });
+
+    expect(backend.input?.startStrategy).toBe("keep_current");
+    expect(backend.input?.steps?.map((step) => step.type)).toEqual(["launch_app", "tap_on_text"]);
+    expect(backend.input?.steps?.[0]?.params).toMatchObject({ restartBeforeLaunch: true });
+  });
+
+  it("passes the selected loop scope to the execution backend", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-loop-business",
+      flow: document([
+        { id: "prepare", role: "setup", launchApp: { appId: "cn.eeo.classin" } },
+        { id: "business", role: "business", tap: { target: { text: "成长" } } },
+        { id: "reset", role: "reset", tap: { target: { text: "主页" } } }
+      ]),
+      deviceSerial: "device-1",
+      mode: "loop_until_stop",
+      loopScope: "exclude_preparation"
+    });
+
+    expect(backend.input?.mode).toBe("loop_until_stop");
+    expect(backend.input?.loopScope).toBe("exclude_preparation");
+  });
+
+  it("rejects a business loop without reset steps or an explicit no-reset contract", async () => {
+    const runner = runnerWith(new CapturingBackend());
+
+    await expect(runner.start({
+      ...previewBinding,
+      flowId: "flow-open-note",
+      flow: document([
+        { id: "business", role: "business", tap: { target: { text: "笔记" } } }
+      ]),
+      deviceSerial: "device-1",
+      mode: "loop_until_stop",
+      loopScope: "exclude_preparation"
+    })).rejects.toThrow(/每轮复位/);
+  });
+
+  it("allows a naturally closed business loop when no reset is explicitly declared", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+    const flow = {
+      ...document([{ id: "refresh", role: "business", tap: { target: { text: "刷新" } } }]),
+      loop: { reset: "none" as const }
+    };
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-refresh",
+      flow,
+      deviceSerial: "device-1",
+      mode: "loop_until_stop",
+      loopScope: "exclude_preparation"
+    });
+
+    expect(backend.input?.loopScope).toBe("exclude_preparation");
+  });
+
   it("includes observed OCR text when an expected page does not match", async () => {
     const pageState: PageStateService = {
       identifyCurrentPage: async () => ({ status: "unknown", candidates: [], reason: "page_not_matched" }),
@@ -206,7 +387,7 @@ describe("ScriptFlowRunner", () => {
     }));
   });
 
-  it("marks a compiled entry-page preparation step for bounded back recovery", async () => {
+  it("does not compile entry metadata into a hidden preparation step", async () => {
     const backend = new CapturingBackend();
     const runner = new ScriptFlowRunner({
       backend,
@@ -228,14 +409,10 @@ describe("ScriptFlowRunner", () => {
       recordVideo: false
     });
 
-    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
-      id: "__prepare.entry-page",
-      type: "reach_page",
-      params: expect.objectContaining({
-        allowBackRecovery: true,
-        recoveryStopPageIds: ["page-home", "page-login"]
-      })
-    }));
+    expect(backend.input?.steps).toEqual([expect.objectContaining({ id: "verify-home", type: "wait" })]);
+    expect(backend.input?.steps).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "reach_page" })
+    ]));
   });
 
   it("compiles a frozen multi-action navigation segment without reading use case source dependencies", async () => {

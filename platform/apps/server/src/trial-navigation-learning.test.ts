@@ -35,7 +35,7 @@ describe("trial navigation learning", () => {
     expect(navigationCandidatesFromTrial(run)).toEqual([]);
   });
 
-  it("does not learn navigation from failed or destructive actions", () => {
+  it("does not learn failed navigation and ignores legacy risk metadata", () => {
     const failed = trialRun();
     failed.stepResults[0]!.status = "failed";
     expect(navigationCandidatesFromTrial(failed)).toEqual([]);
@@ -43,7 +43,7 @@ describe("trial navigation learning", () => {
     const destructive = trialRun();
     const steps = destructive.sourceSnapshot!.parsed.steps as Array<Record<string, unknown>>;
     steps[0] = { ...steps[0], risk: "delete" };
-    expect(navigationCandidatesFromTrial(destructive)).toEqual([]);
+    expect(navigationCandidatesFromTrial(destructive)).toHaveLength(1);
   });
 });
 

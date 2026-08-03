@@ -77,12 +77,56 @@ type SemanticStepResolverDeps = {
 export class SemanticStepResolver {
   constructor(private readonly deps: SemanticStepResolverDeps) {}
 
+  private async performAction(
+    input: { serial: string; signal?: AbortSignal },
+    action: DeviceActionRequest
+  ): Promise<DeviceActionResult | void> {
+    throwIfResolutionStopped(input.signal);
+    const result = await this.deps.performAction(input.serial, action);
+    throwIfResolutionStopped(input.signal);
+    return result;
+  }
+
+  private async performSemanticAction(
+    input: { serial: string; signal?: AbortSignal },
+    action: SemanticDeviceActionRequest
+  ): Promise<DeviceActionResult | void> {
+    throwIfResolutionStopped(input.signal);
+    const result = await this.deps.performSemanticAction?.(input.serial, action);
+    throwIfResolutionStopped(input.signal);
+    return result;
+  }
+
+  private async wait(input: { serial: string; signal?: AbortSignal }, ms: number): Promise<void> {
+    const signal = input.signal;
+    throwIfResolutionStopped(signal);
+    if (!signal) {
+      await sleep(ms);
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(runnerStoppedError());
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) {
+        onAbort();
+      }
+    });
+  }
+
   async resolveIfNeeded(input: {
     runId: string;
     stepResultId: string;
     step: ActionStep;
     serial: string;
     deviceSize?: { width: number; height: number };
+    signal?: AbortSignal;
   }): Promise<SemanticResolutionOutcome | undefined> {
     if (input.step.type === "tap_on_text") {
       return this.resolveTapOnText(input);
@@ -263,7 +307,7 @@ export class SemanticStepResolver {
           x: scaleCoordinate(relocated.centerX, layout.width, input.deviceSize?.width),
           y: scaleCoordinate(relocated.centerY, layout.height, input.deviceSize?.height)
         } satisfies DeviceActionRequest;
-        const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+        const actionResult = normalizeActionResult(await this.performAction(input, action));
         return {
           supported: true,
           resolved: true,
@@ -296,8 +340,8 @@ export class SemanticStepResolver {
         const intervalMs = positiveNumberParam(input.step.params.revealIntervalMs, 250);
         const direction = scrollDirectionParam(input.step.params.revealDirection) ?? "up";
         for (let swipes = 1; swipes <= maxSwipes; swipes += 1) {
-          await this.deps.performAction(input.serial, scrollSwipeAction(direction, input.deviceSize));
-          await sleep(intervalMs);
+          await this.performAction(input, scrollSwipeAction(direction, input.deviceSize));
+          await this.wait(input, intervalMs);
           const revealedOutcome = await tryRelocateByOcr(swipes + 1, "ocr_text_after_reveal", {
             direction,
             swipes,
@@ -312,7 +356,7 @@ export class SemanticStepResolver {
     const templateResolution = await this.resolveVisualTemplateRegion(input, region, semanticArea);
     if (templateResolution?.selected?.point) {
       const action = { type: "tap", x: templateResolution.selected.point.x, y: templateResolution.selected.point.y } satisfies DeviceActionRequest;
-      const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+      const actionResult = normalizeActionResult(await this.performAction(input, action));
       return {
         supported: true,
         resolved: true,
@@ -341,7 +385,7 @@ export class SemanticStepResolver {
     });
     if (visualResolution.selected?.point) {
       const action = { type: "tap", x: visualResolution.selected.point.x, y: visualResolution.selected.point.y } satisfies DeviceActionRequest;
-      const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+      const actionResult = normalizeActionResult(await this.performAction(input, action));
       return {
         supported: true,
         resolved: true,
@@ -477,7 +521,7 @@ export class SemanticStepResolver {
       input.deviceSize
     );
     const action = { type: "tap", x: point.x, y: point.y } satisfies DeviceActionRequest;
-    const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+    const actionResult = normalizeActionResult(await this.performAction(input, action));
     return {
       supported: true,
       resolved: true,
@@ -638,7 +682,7 @@ export class SemanticStepResolver {
 
     const point = currentVisual.selected.point;
     const action = { type: "tap", x: point.x, y: point.y } satisfies DeviceActionRequest;
-    const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+    const actionResult = normalizeActionResult(await this.performAction(input, action));
     return {
       supported: true,
       resolved: true,
@@ -730,7 +774,7 @@ export class SemanticStepResolver {
     }
 
     const action = { type: "tap", x: currentVisual.selected.point.x, y: currentVisual.selected.point.y } satisfies DeviceActionRequest;
-    const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+    const actionResult = normalizeActionResult(await this.performAction(input, action));
     return {
       supported: true,
       resolved: true,
@@ -866,8 +910,8 @@ export class SemanticStepResolver {
       };
     }
 
-    const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
-    await sleep(positiveNumberParam(input.step.params.checkboxVerifyDelayMs, 250));
+    const actionResult = normalizeActionResult(await this.performAction(input, action));
+    await this.wait(input, positiveNumberParam(input.step.params.checkboxVerifyDelayMs, 250));
     const after = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, 2);
     artifacts.push(after.artifact);
     const afterTemplate = beforeTemplate && checkboxRegion
@@ -1027,8 +1071,8 @@ export class SemanticStepResolver {
       x: scaleCoordinate(opener.centerX, openerLayout.width, input.deviceSize.width),
       y: scaleCoordinate(opener.centerY, openerLayout.height, input.deviceSize.height)
     } satisfies DeviceActionRequest;
-    let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, openerAction));
-    await sleep(nonNegativeNumberParam(input.step.params.overlayOpenDelayMs, 350));
+    let actionResult = normalizeActionResult(await this.performAction(input, openerAction));
+    await this.wait(input, nonNegativeNumberParam(input.step.params.overlayOpenDelayMs, 350));
 
     const optionScreenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, 2);
     artifacts.push(optionScreenshot.artifact);
@@ -1082,9 +1126,9 @@ export class SemanticStepResolver {
       optionState = shouldTapOption ? "checked" : "already_checked";
     }
     if (shouldTapOption) {
-      actionResult = normalizeActionResult(await this.deps.performAction(input.serial, optionAction)) ?? actionResult;
+      actionResult = normalizeActionResult(await this.performAction(input, optionAction)) ?? actionResult;
     }
-    await sleep(nonNegativeNumberParam(input.step.params.optionSelectDelayMs, 200));
+    await this.wait(input, nonNegativeNumberParam(input.step.params.optionSelectDelayMs, 200));
 
     let confirmCandidate: TextLocatorCandidate | undefined;
     let confirmAction: DeviceActionRequest | undefined;
@@ -1118,7 +1162,7 @@ export class SemanticStepResolver {
         x: scaleCoordinate(confirmCandidate.centerX, confirmLayout.width, input.deviceSize.width),
         y: scaleCoordinate(confirmCandidate.centerY, confirmLayout.height, input.deviceSize.height)
       } satisfies DeviceActionRequest;
-      actionResult = normalizeActionResult(await this.deps.performAction(input.serial, confirmAction)) ?? actionResult;
+      actionResult = normalizeActionResult(await this.performAction(input, confirmAction)) ?? actionResult;
     }
     return {
       supported: true,
@@ -1221,10 +1265,10 @@ export class SemanticStepResolver {
       if (candidate || !revealSettings || revealSwipes >= revealSettings.maxSwipes) {
         break;
       }
-      await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+      await this.performAction(input, scrollSwipeAction("up", input.deviceSize));
       revealSwipes += 1;
       if (revealSettings.intervalMs > 0) {
-        await sleep(revealSettings.intervalMs);
+        await this.wait(input, revealSettings.intervalMs);
       }
     }
     if (!candidate) {
@@ -1250,7 +1294,7 @@ export class SemanticStepResolver {
       x: scaleCoordinate(candidate.centerX, layout!.width, input.deviceSize?.width),
       y: scaleCoordinate(candidate.centerY, layout!.height, input.deviceSize?.height)
     } satisfies DeviceActionRequest;
-    const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+    const actionResult = normalizeActionResult(await this.performAction(input, action));
     return {
       supported: true,
       resolved: true,
@@ -1373,10 +1417,10 @@ export class SemanticStepResolver {
     if (!anchor && locator.revealStrategy === "search_content") {
       let previousSignature = ocrLayoutViewportSignature(current.layout);
       for (let index = 0; index < locator.restoreMaxSwipes && !anchor; index += 1) {
-        await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+        await this.performAction(input, scrollSwipeAction("up", input.deviceSize));
         restoreSwipes += 1;
         if (locator.revealIntervalMs > 0) {
-          await sleep(locator.revealIntervalMs);
+          await this.wait(input, locator.revealIntervalMs);
         }
         current = await captureLayout();
         anchor = findAnchor(current.layout);
@@ -1388,10 +1432,10 @@ export class SemanticStepResolver {
       }
       previousSignature = ocrLayoutViewportSignature(current.layout);
       for (let index = 0; index < locator.searchMaxSwipes && !anchor; index += 1) {
-        await this.deps.performAction(input.serial, scrollSwipeAction("down", input.deviceSize));
+        await this.performAction(input, scrollSwipeAction("down", input.deviceSize));
         searchSwipes += 1;
         if (locator.revealIntervalMs > 0) {
-          await sleep(locator.revealIntervalMs);
+          await this.wait(input, locator.revealIntervalMs);
         }
         current = await captureLayout();
         anchor = findAnchor(current.layout);
@@ -1493,8 +1537,8 @@ export class SemanticStepResolver {
       };
     }
 
-    const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
-    await sleep(nonNegativeNumberParam(input.step.params.toggleVerifyDelayMs, 250));
+    const actionResult = normalizeActionResult(await this.performAction(input, action));
+    await this.wait(input, nonNegativeNumberParam(input.step.params.toggleVerifyDelayMs, 250));
     captureAttempt += 1;
     const after = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, captureAttempt);
     artifacts.push(after.artifact);
@@ -1639,10 +1683,10 @@ export class SemanticStepResolver {
     if (!opener && revealSettings?.strategy === "bounded_search") {
       if (revealSettings.resetToTop && revealSettings.direction !== "up") {
         for (let swipe = 0; swipe < revealSettings.maxSwipes; swipe += 1) {
-          await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+          await this.performAction(input, scrollSwipeAction("up", input.deviceSize));
           resetSwipes += 1;
           if (revealSettings.intervalMs > 0) {
-            await sleep(revealSettings.intervalMs);
+            await this.wait(input, revealSettings.intervalMs);
           }
           const located = await locateOpener();
           if (located.found) break;
@@ -1657,10 +1701,10 @@ export class SemanticStepResolver {
         reachedBoundary = false;
         const direction = revealSettings.direction === "up" ? "up" : "down";
         for (let swipe = 0; swipe < revealSettings.maxSwipes; swipe += 1) {
-          await this.deps.performAction(input.serial, scrollSwipeAction(direction, input.deviceSize));
+          await this.performAction(input, scrollSwipeAction(direction, input.deviceSize));
           scanSwipes += 1;
           if (revealSettings.intervalMs > 0) {
-            await sleep(revealSettings.intervalMs);
+            await this.wait(input, revealSettings.intervalMs);
           }
           const located = await locateOpener();
           if (located.found) break;
@@ -1676,10 +1720,10 @@ export class SemanticStepResolver {
       }
     } else {
       while (!opener && revealSettings && revealSwipes < revealSettings.maxSwipes) {
-        await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+        await this.performAction(input, scrollSwipeAction("up", input.deviceSize));
         revealSwipes += 1;
         if (revealSettings.intervalMs > 0) {
-          await sleep(revealSettings.intervalMs);
+          await this.wait(input, revealSettings.intervalMs);
         }
         await locateOpener();
       }
@@ -1792,7 +1836,7 @@ export class SemanticStepResolver {
       };
     }
     const action = { type: "tap", x: center.x, y: center.y } satisfies DeviceActionRequest;
-    const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+    const actionResult = normalizeActionResult(await this.performAction(input, action));
     return {
       supported: true,
       resolved: true,
@@ -1868,8 +1912,8 @@ export class SemanticStepResolver {
     }
 
     const artifacts: ArtifactRef[] = [];
-    let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "tap", x: opener.x, y: opener.y }));
-    await sleep(positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
+    let actionResult = normalizeActionResult(await this.performAction(input, { type: "tap", x: opener.x, y: opener.y }));
+    await this.wait(input, positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
 
     const mode = tapTextMatchMode(input.step.params.mode);
     const maxSwipes = Math.max(0, Math.floor(nonNegativeNumberParam(input.step.params.pickerMaxSwipes, 3)));
@@ -1897,9 +1941,9 @@ export class SemanticStepResolver {
       if (swipes >= maxSwipes) {
         break;
       }
-      await this.deps.performAction(input.serial, scrollSwipeAction(direction, input.deviceSize));
+      await this.performAction(input, scrollSwipeAction(direction, input.deviceSize));
       swipes += 1;
-      await sleep(intervalMs);
+      await this.wait(input, intervalMs);
     }
 
     if (!selectedCandidate || !selectedLayout) {
@@ -1927,8 +1971,8 @@ export class SemanticStepResolver {
       x: scaleCoordinate(selectedCandidate.centerX, selectedLayout.width, input.deviceSize?.width),
       y: scaleCoordinate(selectedCandidate.centerY, selectedLayout.height, input.deviceSize?.height)
     } satisfies DeviceActionRequest;
-    actionResult = normalizeActionResult(await this.deps.performAction(input.serial, selectAction)) ?? actionResult;
-    await sleep(positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
+    actionResult = normalizeActionResult(await this.performAction(input, selectAction)) ?? actionResult;
+    await this.wait(input, positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
 
     const confirmText = textParam(input.step.params.confirmText).trim() || "确定";
     let confirmCandidate: TextLocatorCandidate | undefined;
@@ -1950,7 +1994,7 @@ export class SemanticStepResolver {
           x: scaleCoordinate(confirmCandidate.centerX, confirmLayout.width, input.deviceSize?.width),
           y: scaleCoordinate(confirmCandidate.centerY, confirmLayout.height, input.deviceSize?.height)
         } satisfies DeviceActionRequest;
-        actionResult = normalizeActionResult(await this.deps.performAction(input.serial, confirmAction)) ?? actionResult;
+        actionResult = normalizeActionResult(await this.performAction(input, confirmAction)) ?? actionResult;
       }
     }
 
@@ -1995,8 +2039,8 @@ export class SemanticStepResolver {
     selectedValue: string
   ): Promise<SemanticResolutionOutcome> {
     const artifacts: ArtifactRef[] = [];
-    let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "tap", x: opener.x, y: opener.y }));
-    await sleep(positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
+    let actionResult = normalizeActionResult(await this.performAction(input, { type: "tap", x: opener.x, y: opener.y }));
+    await this.wait(input, positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
     const maxSwipes = Math.max(1, Math.floor(positiveNumberParam(input.step.params.pickerMaxSwipes, 16)));
     const intervalMs = nonNegativeNumberParam(input.step.params.pickerScrollIntervalMs, 250);
     const maxReadAttempts = Math.max(1, Math.floor(positiveNumberParam(input.step.params.pickerReadAttempts, 2)));
@@ -2021,7 +2065,7 @@ export class SemanticStepResolver {
         }
         pickerReadRetries += 1;
         if (intervalMs > 0) {
-          await sleep(intervalMs);
+          await this.wait(input, intervalMs);
         }
       }
       if (!layout) {
@@ -2048,13 +2092,13 @@ export class SemanticStepResolver {
         : targetNumber !== undefined && currentNumber !== undefined && targetNumber < currentNumber
           ? "decrease"
           : "increase";
-      actionResult = normalizeActionResult(await this.deps.performAction(
-        input.serial,
+      actionResult = normalizeActionResult(await this.performAction(
+        input,
         pickerColumnSwipeAction(50, direction, input.deviceSize)
       )) ?? actionResult;
       swipes += 1;
       if (intervalMs > 0) {
-        await sleep(intervalMs);
+        await this.wait(input, intervalMs);
       }
     }
     if (!selectedCandidate) {
@@ -2103,8 +2147,8 @@ export class SemanticStepResolver {
       x: scaleCoordinate(confirmCandidate.centerX, confirmLayout.width, input.deviceSize?.width),
       y: scaleCoordinate(confirmCandidate.centerY, confirmLayout.height, input.deviceSize?.height)
     } satisfies DeviceActionRequest;
-    actionResult = normalizeActionResult(await this.deps.performAction(input.serial, confirmAction)) ?? actionResult;
-    await sleep(positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
+    actionResult = normalizeActionResult(await this.performAction(input, confirmAction)) ?? actionResult;
+    await this.wait(input, positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
     return {
       supported: true,
       resolved: true,
@@ -2164,8 +2208,8 @@ export class SemanticStepResolver {
     }
 
     const artifacts: ArtifactRef[] = [];
-    let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "tap", x: opener.x, y: opener.y }));
-    await sleep(positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
+    let actionResult = normalizeActionResult(await this.performAction(input, { type: "tap", x: opener.x, y: opener.y }));
+    await this.wait(input, positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
     let attempt = 0;
     const captureLayout = async (): Promise<OcrLayoutResult> => {
       attempt += 1;
@@ -2202,7 +2246,7 @@ export class SemanticStepResolver {
         x: scaleCoordinate(shortcut.centerX, layout.width, input.deviceSize?.width),
         y: scaleCoordinate(shortcut.centerY, layout.height, input.deviceSize?.height)
       } satisfies DeviceActionRequest;
-      actionResult = normalizeActionResult(await this.deps.performAction(input.serial, shortcutAction)) ?? actionResult;
+      actionResult = normalizeActionResult(await this.performAction(input, shortcutAction)) ?? actionResult;
       return {
         supported: true,
         resolved: true,
@@ -2257,13 +2301,13 @@ export class SemanticStepResolver {
         const direction = column === "date"
           ? String(target) > String(current.value) ? "increase" : "decrease"
           : Number(target) > Number(current.value) ? "increase" : "decrease";
-        actionResult = normalizeActionResult(await this.deps.performAction(
-          input.serial,
+        actionResult = normalizeActionResult(await this.performAction(
+          input,
           pickerColumnSwipeAction(centerXPercent, direction, input.deviceSize)
         )) ?? actionResult;
         totalSwipes += 1;
         if (intervalMs > 0) {
-          await sleep(intervalMs);
+          await this.wait(input, intervalMs);
         }
       }
       return false;
@@ -2321,8 +2365,8 @@ export class SemanticStepResolver {
       x: scaleCoordinate(confirmCandidate.centerX, confirmLayout.width, input.deviceSize?.width),
       y: scaleCoordinate(confirmCandidate.centerY, confirmLayout.height, input.deviceSize?.height)
     } satisfies DeviceActionRequest;
-    actionResult = normalizeActionResult(await this.deps.performAction(input.serial, confirmAction)) ?? actionResult;
-    await sleep(positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
+    actionResult = normalizeActionResult(await this.performAction(input, confirmAction)) ?? actionResult;
+    await this.wait(input, positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
     return {
       supported: true,
       resolved: true,
@@ -2379,8 +2423,8 @@ export class SemanticStepResolver {
     }
 
     const artifacts: ArtifactRef[] = [];
-    let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "tap", x: opener.x, y: opener.y }));
-    await sleep(positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
+    let actionResult = normalizeActionResult(await this.performAction(input, { type: "tap", x: opener.x, y: opener.y }));
+    await this.wait(input, positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
     const maxSwipes = Math.max(1, Math.floor(positiveNumberParam(input.step.params.pickerMaxSwipes, 16)));
     const intervalMs = nonNegativeNumberParam(input.step.params.pickerScrollIntervalMs, 250);
     let attempt = 0;
@@ -2436,9 +2480,9 @@ export class SemanticStepResolver {
             x: scaleCoordinate(visibleTarget.candidate.centerX, layout.width, input.deviceSize?.width),
             y: scaleCoordinate(visibleTarget.candidate.centerY, layout.height, input.deviceSize?.height)
           } satisfies DeviceActionRequest;
-          actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action)) ?? actionResult;
+          actionResult = normalizeActionResult(await this.performAction(input, action)) ?? actionResult;
           if (intervalMs > 0) {
-            await sleep(intervalMs);
+            await this.wait(input, intervalMs);
           }
           continue;
         }
@@ -2450,10 +2494,10 @@ export class SemanticStepResolver {
           rowSpacing: pickerColumnRowSpacing(candidates, layout.height),
           rows: pickerColumnMovementRows(candidates, current.value, target)
         });
-        actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action)) ?? actionResult;
+        actionResult = normalizeActionResult(await this.performAction(input, action)) ?? actionResult;
         totalSwipes += 1;
         if (intervalMs > 0) {
-          await sleep(intervalMs);
+          await this.wait(input, intervalMs);
         }
       }
       return false;
@@ -2515,8 +2559,8 @@ export class SemanticStepResolver {
       x: scaleCoordinate(confirmCandidate.centerX, confirmLayout.width, input.deviceSize?.width),
       y: scaleCoordinate(confirmCandidate.centerY, confirmLayout.height, input.deviceSize?.height)
     } satisfies DeviceActionRequest;
-    actionResult = normalizeActionResult(await this.deps.performAction(input.serial, confirmAction)) ?? actionResult;
-    await sleep(positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
+    actionResult = normalizeActionResult(await this.performAction(input, confirmAction)) ?? actionResult;
+    await this.wait(input, positiveNumberParam(input.step.params.pickerConfirmDelayMs, 200));
 
     let verifiedSelectedValue: string | undefined;
     if (input.step.params.verifySelectedValue === true) {
@@ -2633,7 +2677,7 @@ export class SemanticStepResolver {
         return { signature };
       }
       const action = { type: "tap", x: center.x, y: center.y } satisfies DeviceActionRequest;
-      const actionResult = normalizeActionResult(await this.deps.performAction(input.serial, action));
+      const actionResult = normalizeActionResult(await this.performAction(input, action));
       return {
         signature,
         outcome: {
@@ -2680,8 +2724,8 @@ export class SemanticStepResolver {
       let reachedBottom = false;
       let previousSignature = directProbe.signature;
       for (resetSwipes = 1; resetSwipes <= maxSwipes; resetSwipes += 1) {
-        await this.deps.performAction(input.serial, reverseGridSearchSwipeAction(region, scrollProfile, input.deviceSize));
-        await sleep(intervalMs);
+        await this.performAction(input, reverseGridSearchSwipeAction(region, scrollProfile, input.deviceSize));
+        await this.wait(input, intervalMs);
         attempt += 1;
         const resetProbe = await tryFindAndTap(attempt, "ocr_text_in_grid_after_scroll", {
           strategy,
@@ -2702,8 +2746,8 @@ export class SemanticStepResolver {
         previousSignature = resetProbe.signature ?? previousSignature;
       }
       for (scanSwipes = 1; scanSwipes <= maxSwipes; scanSwipes += 1) {
-        await this.deps.performAction(input.serial, gridSearchSwipeAction(region, scrollProfile, input.deviceSize));
-        await sleep(intervalMs);
+        await this.performAction(input, gridSearchSwipeAction(region, scrollProfile, input.deviceSize));
+        await this.wait(input, intervalMs);
         attempt += 1;
         const scrolledProbe = await tryFindAndTap(attempt, "ocr_text_in_grid_after_scroll", {
           strategy,
@@ -2754,8 +2798,8 @@ export class SemanticStepResolver {
     let swipes = 0;
     let reachedBoundary = false;
     for (swipes = 1; swipes <= maxSwipes; swipes += 1) {
-      await this.deps.performAction(input.serial, gridSearchSwipeAction(region, scrollProfile, input.deviceSize));
-      await sleep(intervalMs);
+      await this.performAction(input, gridSearchSwipeAction(region, scrollProfile, input.deviceSize));
+      await this.wait(input, intervalMs);
       const scrolledProbe = await tryFindAndTap(swipes + 1, "ocr_text_in_grid_after_scroll", {
         strategy,
         phase: "scan",
@@ -2910,7 +2954,7 @@ export class SemanticStepResolver {
       } satisfies DeviceActionRequest;
       const hierarchyTap = await this.resolveTextTapClickableContainer(input, candidate, mode, ocrAction);
       const action = hierarchyTap?.action ?? ocrAction;
-      const actionResult = (await this.deps.performAction(input.serial, action)) ?? undefined;
+      const actionResult = (await this.performAction(input, action)) ?? undefined;
       return {
         supported: true,
         resolved: true,
@@ -2959,7 +3003,7 @@ export class SemanticStepResolver {
         if (elapsed >= timeoutMs) {
           break;
         }
-        await sleep(Math.min(intervalMs, timeoutMs - elapsed));
+        await this.wait(input, Math.min(intervalMs, timeoutMs - elapsed));
       }
     } else {
       let current = await inspectViewport();
@@ -2973,9 +3017,9 @@ export class SemanticStepResolver {
 
       if (resetToTop) {
         for (let swipe = 0; swipe < maxSwipes; swipe += 1) {
-          await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+          await this.performAction(input, scrollSwipeAction("up", input.deviceSize));
           resetSwipes += 1;
-          await sleep(intervalMs);
+          await this.wait(input, intervalMs);
           current = await inspectViewport();
           if (current.candidate) {
             return tapCandidate(current.candidate, current.layout);
@@ -2994,9 +3038,9 @@ export class SemanticStepResolver {
       const direction = searchDirection === "up" ? "up" : "down";
       reachedBoundary = false;
       for (let swipe = 0; swipe < maxSwipes; swipe += 1) {
-        await this.deps.performAction(input.serial, scrollSwipeAction(direction, input.deviceSize));
+        await this.performAction(input, scrollSwipeAction(direction, input.deviceSize));
         scanSwipes += 1;
-        await sleep(intervalMs);
+        await this.wait(input, intervalMs);
         current = await inspectViewport();
         if (current.candidate) {
           return tapCandidate(current.candidate, current.layout);
@@ -3158,8 +3202,8 @@ export class SemanticStepResolver {
             }
           };
           const actionResult = this.deps.performSemanticAction
-            ? normalizeActionResult(await this.deps.performSemanticAction(input.serial, semanticAction))
-            : normalizeActionResult(await this.deps.performAction(input.serial, {
+            ? normalizeActionResult(await this.performSemanticAction(input, semanticAction))
+            : normalizeActionResult(await this.performAction(input, {
               type: "tap",
               x: latestCandidate.bounds.centerX,
               y: latestCandidate.bounds.centerY
@@ -3190,7 +3234,7 @@ export class SemanticStepResolver {
       if (elapsed >= timeoutMs) {
         break;
       }
-      await sleep(Math.min(intervalMs, timeoutMs - elapsed));
+      await this.wait(input, Math.min(intervalMs, timeoutMs - elapsed));
     }
 
     return {
@@ -3258,13 +3302,13 @@ export class SemanticStepResolver {
           }
         };
       }
-      let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "tap", x: focus.point.x, y: focus.point.y }));
+      let actionResult = normalizeActionResult(await this.performAction(input, { type: "tap", x: focus.point.x, y: focus.point.y }));
       const focusDelayMs = nonNegativeNumberParam(input.step.params.focusDelayMs, 120);
       if (focusDelayMs > 0) {
-        await sleep(focusDelayMs);
+        await this.wait(input, focusDelayMs);
       }
       if (input.step.params.clearFirst !== false) {
-        actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "clear_text" })) ?? actionResult;
+        actionResult = normalizeActionResult(await this.performAction(input, { type: "clear_text" })) ?? actionResult;
       }
       if (clearOnly) {
         return {
@@ -3286,7 +3330,7 @@ export class SemanticStepResolver {
           }
         };
       }
-      actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "input_text", text })) ?? actionResult;
+      actionResult = normalizeActionResult(await this.performAction(input, { type: "input_text", text })) ?? actionResult;
       const verification = await this.verifyInputText(input, text, {
         attempt: 1,
         semanticArea: readSemanticArea(input.step.params.semanticArea) ?? semanticAreaForPercentRegion(region),
@@ -3394,18 +3438,18 @@ export class SemanticStepResolver {
     };
     let actionResult: DeviceActionResult | undefined;
     if (this.deps.performSemanticAction) {
-      actionResult = normalizeActionResult(await this.deps.performSemanticAction(input.serial, semanticAction));
+      actionResult = normalizeActionResult(await this.performSemanticAction(input, semanticAction));
     } else {
-      actionResult = normalizeActionResult(await this.deps.performAction(input.serial, focusAction));
+      actionResult = normalizeActionResult(await this.performAction(input, focusAction));
       const focusDelayMs = nonNegativeNumberParam(input.step.params.focusDelayMs, 120);
       if (focusDelayMs > 0) {
-        await sleep(focusDelayMs);
+        await this.wait(input, focusDelayMs);
       }
       if (input.step.params.clearFirst !== false) {
-        actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "clear_text" })) ?? actionResult;
+        actionResult = normalizeActionResult(await this.performAction(input, { type: "clear_text" })) ?? actionResult;
       }
       if (!clearOnly) {
-        actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "input_text", text })) ?? actionResult;
+        actionResult = normalizeActionResult(await this.performAction(input, { type: "input_text", text })) ?? actionResult;
       }
     }
     if (clearOnly) {
@@ -3520,10 +3564,10 @@ export class SemanticStepResolver {
     if (!focus.point && revealSettings) {
       if (revealSettings.strategy === "bounded_search" && revealSettings.resetToTop && revealSettings.direction !== "up") {
         for (let swipe = 0; swipe < revealSettings.maxSwipes; swipe += 1) {
-          await this.deps.performAction(input.serial, scrollSwipeAction("up", input.deviceSize));
+          await this.performAction(input, scrollSwipeAction("up", input.deviceSize));
           resetSwipes += 1;
           if (revealSettings.intervalMs > 0) {
-            await sleep(revealSettings.intervalMs);
+            await this.wait(input, revealSettings.intervalMs);
           }
           await inspectAfterSwipe();
           if (focus.point) {
@@ -3539,10 +3583,10 @@ export class SemanticStepResolver {
         reachedBoundary = false;
         const direction = revealSettings.strategy === "scroll_to_top" || revealSettings.direction === "up" ? "up" : "down";
         for (let swipe = 0; swipe < revealSettings.maxSwipes; swipe += 1) {
-          await this.deps.performAction(input.serial, scrollSwipeAction(direction, input.deviceSize));
+          await this.performAction(input, scrollSwipeAction(direction, input.deviceSize));
           scanSwipes += 1;
           if (revealSettings.intervalMs > 0) {
-            await sleep(revealSettings.intervalMs);
+            await this.wait(input, revealSettings.intervalMs);
           }
           await inspectAfterSwipe();
           if (focus.point) {
@@ -3596,13 +3640,13 @@ export class SemanticStepResolver {
       };
     }
 
-    let actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "tap", x: focus.point.x, y: focus.point.y }));
+    let actionResult = normalizeActionResult(await this.performAction(input, { type: "tap", x: focus.point.x, y: focus.point.y }));
     const focusDelayMs = nonNegativeNumberParam(input.step.params.focusDelayMs, 120);
     if (focusDelayMs > 0) {
-      await sleep(focusDelayMs);
+      await this.wait(input, focusDelayMs);
     }
     if (input.step.params.clearFirst !== false) {
-      actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "clear_text" })) ?? actionResult;
+      actionResult = normalizeActionResult(await this.performAction(input, { type: "clear_text" })) ?? actionResult;
     }
     if (clearOnly) {
       return {
@@ -3629,7 +3673,7 @@ export class SemanticStepResolver {
         }
       };
     }
-    actionResult = normalizeActionResult(await this.deps.performAction(input.serial, { type: "input_text", text })) ?? actionResult;
+    actionResult = normalizeActionResult(await this.performAction(input, { type: "input_text", text })) ?? actionResult;
 
     const verification = await this.verifyInputText(input, text, {
       attempt: 1,
@@ -3763,7 +3807,7 @@ export class SemanticStepResolver {
     } satisfies DeviceActionRequest;
     let retryActionResult: DeviceActionResult | undefined;
     try {
-      retryActionResult = normalizeActionResult(await this.deps.performAction(input.serial, retryAction)) ?? options.previousActionResult;
+      retryActionResult = normalizeActionResult(await this.performAction(input, retryAction)) ?? options.previousActionResult;
     } catch {
       return undefined;
     }
@@ -3854,7 +3898,7 @@ export class SemanticStepResolver {
     }
     const delayMs = nonNegativeNumberParam(input.step.params.inputVerificationDelayMs, 350);
     if (delayMs > 0) {
-      await sleep(delayMs);
+      await this.wait(input, delayMs);
     }
     const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, options.attempt);
     const mode = tapTextMatchMode(input.step.params.inputVerificationMode ?? "contains");
@@ -4048,12 +4092,12 @@ export class SemanticStepResolver {
         fallbackSwipe: swipe
       };
       if (this.deps.performSemanticAction) {
-        await this.deps.performSemanticAction(input.serial, semanticAction);
+        await this.performSemanticAction(input, semanticAction);
       } else {
-        await this.deps.performAction(input.serial, swipe);
+        await this.performAction(input, swipe);
       }
       swipes += 1;
-      await sleep(intervalMs);
+      await this.wait(input, intervalMs);
     }
 
     const locator = readElementLocator(input.step.params);
@@ -4204,7 +4248,7 @@ export class SemanticStepResolver {
       if (elapsed >= timeoutMs) {
         break;
       }
-      await sleep(Math.min(intervalMs, timeoutMs - elapsed));
+      await this.wait(input, Math.min(intervalMs, timeoutMs - elapsed));
     }
 
     return {
@@ -7239,6 +7283,18 @@ function normalizeActionResult(result: DeviceActionResult | void): DeviceActionR
 
 function errorToString(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function runnerStoppedError(): Error {
+  const error = new Error("Run stopped by user");
+  error.name = "RunnerStoppedError";
+  return error;
+}
+
+function throwIfResolutionStopped(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw runnerStoppedError();
+  }
 }
 
 function sleep(ms: number): Promise<void> {

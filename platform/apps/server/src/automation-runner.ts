@@ -17,6 +17,7 @@ import {
   type MetricSample,
   type FlowStartStrategy,
   type RunConfig,
+  type RunLoopScope,
   type RunMode,
   type StepExpectation,
   type StepExpectationResult,
@@ -73,6 +74,7 @@ type StartRunInput = {
   steps?: ActionStep[];
   persistedSteps?: ActionStep[];
   mode?: RunMode;
+  loopScope?: RunLoopScope;
   repeatCount?: number;
   stepIntervalMs?: number;
   stopOnFailure?: boolean;
@@ -172,6 +174,7 @@ export class AutomationRunner {
     const config = normalizeRunConfig({
       deviceSerial: input.deviceSerial,
       mode: input.mode,
+      loopScope: input.loopScope,
       repeatCount: input.repeatCount ?? 1,
       stepIntervalMs: input.stepIntervalMs ?? 400,
       stopOnFailure: input.stopOnFailure ?? true,
@@ -183,17 +186,27 @@ export class AutomationRunner {
       startSetupScope: input.startSetupScope ?? "before_run",
       androidAppMonitor: input.androidAppMonitor
     });
+    const isStepTrial = input.sourceSnapshot?.executionPurpose === "step_trial";
+    const executionCase = {
+      ...testCase,
+      steps: scheduledStepsForRun(testCase.steps, config, isStepTrial)
+    };
+    const persistedExecutionSteps = scheduledStepsForRun(
+      persistedSteps(input.persistedSteps, testCase.steps),
+      config,
+      isStepTrial
+    );
     const runId = createId("run");
     this.executionLease.acquire(input.deviceSerial, runId, "script_flow");
     let run: TestRun;
     try {
       run = this.storage.createRun({
         id: runId,
-        caseName: testCase.name,
+        caseName: executionCase.name,
         deviceSerial: input.deviceSerial,
         configJson: JSON.stringify(config),
-        runSnapshotJson: JSON.stringify(persistedCase(testCase, input.persistedSteps)),
-        steps: persistedSteps(input.persistedSteps, testCase.steps)
+        runSnapshotJson: JSON.stringify({ ...executionCase, steps: persistedExecutionSteps }),
+        steps: persistedExecutionSteps
       });
     } catch (error) {
       this.executionLease.release(input.deviceSerial, runId);
@@ -201,7 +214,7 @@ export class AutomationRunner {
     }
 
     const controller = new RunExecutionController();
-    const promise = this.execute(run.id, testCase, config, controller).finally(() => {
+    const promise = this.execute(run.id, executionCase, config, controller).finally(() => {
       this.activeRuns.delete(run.id);
       this.executionLease.release(input.deviceSerial, run.id);
     });
@@ -233,23 +246,6 @@ export class AutomationRunner {
   async stop(runId: string): Promise<boolean> {
     const activeRun = this.activeRuns.get(runId);
     if (!activeRun) {
-      const run = this.storage.getRun(runId);
-      if (run?.status === "running" || run?.status === "paused") {
-        this.storage.updateRunStatus(runId, "stopped");
-        this.addDeviceEvent({
-          id: createId("event"),
-          runId,
-          deviceSerial: run.deviceSerial,
-          type: "runner_error",
-          severity: "warning",
-          occurredAt: nowIso(),
-          summary: "Run marked stopped",
-          detail: "The run was marked as stopped because no active worker owns it.",
-          artifactIds: []
-        });
-        await this.artifactService.generateReport(runId);
-        return true;
-      }
       return false;
     }
 
@@ -417,9 +413,11 @@ export class AutomationRunner {
         await this.applyStartStrategy(runId, config);
       }
       await this.collectMetric(runId, config.deviceSerial);
+      const loopSteps = stepsForLoopScope(testCase.steps, config);
       const stateMachine = new RunStateMachine({
         config,
-        steps: testCase.steps,
+        steps: loopSteps.steps,
+        beforeLoopSteps: loopSteps.beforeLoopSteps,
         controller,
         beforeIteration: async () => {
           if (config.startSetupScope === "before_each_iteration") {
@@ -590,7 +588,8 @@ export class AutomationRunner {
             stepResultId: result.id,
             step,
             serial: config.deviceSerial,
-            deviceSize
+            deviceSize,
+            signal
           });
           if (semanticOutcome) {
             result.metadata = {
@@ -608,7 +607,12 @@ export class AutomationRunner {
               return result;
             }
           } else {
-            const actionResult = await this.driver.performAction(config.deviceSerial, stepToAction(step, deviceSize));
+            const action = stepToAction(step, deviceSize);
+            if (step.type === "launch_app" && step.params.restartBeforeLaunch === true && action.type === "launch_app") {
+              await this.driver.performAction(config.deviceSerial, { type: "close_app", packageName: action.packageName });
+              await sleepInterruptibly(500, signal);
+            }
+            const actionResult = await this.driver.performAction(config.deviceSerial, action);
             result.metadata = mergeActionBackendMetadata(result.metadata, actionResult);
           }
         }
@@ -739,115 +743,44 @@ export class AutomationRunner {
       };
     }
     const navigationEdges = readPageNavigationEdges(input.step.params.navigationEdges);
-    const allowBackRecovery = input.step.params.allowBackRecovery === true;
-    const recoveryStopPageIds = navigationStringSet(input.step.params.recoveryStopPageIds);
-    const routeSourcePageIds = new Set(
-      navigationEdges
-        .map((edge) => edge.fromPageId)
-        .filter((pageId, index, values) => values.indexOf(pageId) === index)
-        .filter((pageId) => Boolean(findPageNavigationPath(navigationEdges, pageId, targetPageId)))
-    );
-    const maxRecoveryBacks = navigationInteger(input.step.params.maxRecoveryBacks, 6, 0, 12);
-    const recoveryDelayMs = navigationInteger(input.step.params.recoveryDelayMs, 250, 0, 2_000);
-    let current = await pageState.identifyCurrentPage({ serial: input.serial, appId, platform });
+    const current = await pageState.identifyCurrentPage({ serial: input.serial, appId, platform });
     const initialStatus = current.status;
-    let recoveryActions = 0;
-    let path = current.status === "matched" && current.page
-      ? findPageNavigationPath(navigationEdges, current.page.id, targetPageId)
-      : undefined;
-
-    while (true) {
-      if (current.status === "matched" && current.page?.id === targetPageId) {
-        return {
-          passed: true,
-          artifacts: [],
-          metadata: {
-            ...baseMetadata,
-            status: recoveryActions ? "recovered_to_target" : "already_on_target",
-            currentPageId: current.page.id,
-            recoveryActions,
-            initialStatus
-          }
-        };
-      }
-      if (path) break;
-      if (current.status === "outside_app") {
-        return {
-          passed: false,
-          message: `页面恢复已离开目标 App，已停止继续返回；无法安全到达目标页面“${targetPageName}”。`,
-          artifacts: [],
-          metadata: {
-            ...baseMetadata,
-            status: "recovery_left_app",
-            currentStatus: current.status,
-            recoveryActions,
-            initialStatus
-          }
-        };
-      }
-      if (current.status === "matched" && current.page) {
-        if (recoveryStopPageIds.has(current.page.id)) {
-          return {
-            passed: false,
-            message: `已到达导航状态入口“${current.page.name}”，但当前索引没有到目标页面“${targetPageName}”的可靠路径，已停止返回。`,
-            artifacts: [],
-            metadata: {
-              ...baseMetadata,
-              status: "recovery_stopped_at_anchor",
-              currentStatus: current.status,
-              currentPageId: current.page.id,
-              recoveryActions,
-              initialStatus
-            }
-          };
-        }
-        if (!allowBackRecovery && routeSourcePageIds.size === 0) {
-          return {
-            passed: false,
-            message: `当前已识别为“${current.page.name}”，但导航索引中没有到目标页面“${targetPageName}”的可靠路径，未执行返回操作。`,
-            artifacts: [],
-            metadata: {
-              ...baseMetadata,
-              status: "no_reliable_path",
-              currentStatus: current.status,
-              currentPageId: current.page.id,
-              recoveryActions,
-              initialStatus
-            }
-          };
-        }
-      }
-      if (recoveryActions >= maxRecoveryBacks) {
-        const currentPageName = current.status === "matched" && current.page ? `“${current.page.name}”` : "未识别页面";
-        return {
-          passed: false,
-          message: `有限恢复后仍没有从${currentPageName}到目标页面“${targetPageName}”的可靠路径。`,
-          artifacts: [],
-          metadata: {
-            ...baseMetadata,
-            status: "recovery_exhausted",
-            currentStatus: current.status,
-            ...(current.status === "matched" && current.page ? { currentPageId: current.page.id } : {}),
-            recoveryActions,
-            initialStatus
-          }
-        };
-      }
-      throwIfStopped(input.signal);
-      await this.driver.performAction(input.serial, { type: "back" });
-      recoveryActions += 1;
-      if (recoveryDelayMs) await sleepInterruptibly(recoveryDelayMs, input.signal);
-      current = await pageState.identifyCurrentPage({ serial: input.serial, appId, platform });
-      path = current.status === "matched" && current.page
-        ? findPageNavigationPath(navigationEdges, current.page.id, targetPageId)
-        : undefined;
+    if (current.status === "matched" && current.page?.id === targetPageId) {
+      return {
+        passed: true,
+        artifacts: [],
+        metadata: { ...baseMetadata, status: "already_on_target", currentPageId: current.page.id, initialStatus }
+      };
+    }
+    if (current.status === "outside_app") {
+      return {
+        passed: false,
+        message: `当前设备不在目标 App 内，脚本未声明恢复动作，无法到达目标页面“${targetPageName}”。`,
+        artifacts: [],
+        metadata: { ...baseMetadata, status: "outside_app", currentStatus: current.status, initialStatus }
+      };
     }
     if (current.status !== "matched" || !current.page) {
       return {
         passed: false,
         message: `未能稳定识别当前设备页面，无法规划到目标页面“${targetPageName}”。`,
         artifacts: [],
-        metadata: { ...baseMetadata, status: "current_page_unknown", currentStatus: current.status, recoveryActions, initialStatus }
+        metadata: { ...baseMetadata, status: "current_page_unknown", currentStatus: current.status, initialStatus }
+      };
+    }
+    const path = findPageNavigationPath(navigationEdges, current.page.id, targetPageId);
+    if (!path) {
+      return {
+        passed: false,
+        message: `当前已识别为“${current.page.name}”，但脚本可用的导航索引中没有到目标页面“${targetPageName}”的可靠路径，未执行任何恢复操作。`,
+        artifacts: [],
+        metadata: {
+          ...baseMetadata,
+          status: "no_reliable_path",
+          currentStatus: current.status,
+          currentPageId: current.page.id,
+          initialStatus
+        }
       };
     }
     const artifacts: ArtifactRef[] = [];
@@ -862,7 +795,8 @@ export class AutomationRunner {
           stepResultId: input.stepResultId,
           step: action,
           serial: input.serial,
-          deviceSize: input.deviceSize
+          deviceSize: input.deviceSize,
+          signal: input.signal
         });
         let actionBackend: DeviceActionResult | undefined;
         if (semanticOutcome) {
@@ -916,7 +850,7 @@ export class AutomationRunner {
     return {
       passed: true,
       artifacts,
-      metadata: { ...baseMetadata, status: "reached", currentPageId: current.page.id, route, recoveryActions, initialStatus }
+      metadata: { ...baseMetadata, status: "reached", currentPageId: current.page.id, route, initialStatus }
     };
   }
 
@@ -1153,11 +1087,31 @@ function runtimeFailureMessage(eventType: DeviceEvent["type"] | undefined): stri
   }
 }
 
-function persistedCase(
-  testCase: RuntimeFlow & { sourceSnapshot?: TestRun["sourceSnapshot"] },
-  steps: ActionStep[] | undefined
-): RuntimeFlow & { sourceSnapshot?: TestRun["sourceSnapshot"] } {
-  return steps ? { ...testCase, steps: persistedSteps(steps, testCase.steps) } : testCase;
+function stepsForLoopScope(
+  steps: ActionStep[],
+  config: RunConfig
+): { beforeLoopSteps: ActionStep[]; steps: ActionStep[] } {
+  if (config.mode !== "loop_until_stop" || config.loopScope !== "exclude_preparation") {
+    return { beforeLoopSteps: [], steps };
+  }
+  return {
+    beforeLoopSteps: steps.filter((step) => step.params.executionPhase === "preparation"),
+    steps: steps.filter((step) => step.params.executionPhase !== "preparation")
+  };
+}
+
+function scheduledStepsForRun(steps: ActionStep[], config: RunConfig, isStepTrial = false): ActionStep[] {
+  if (isStepTrial) return steps.map((step, index) => ({ ...step, order: index + 1 }));
+  const resetSteps = steps.filter((step) => step.params.executionPhase === "reset");
+  const regularSteps = steps.filter((step) => step.params.executionPhase !== "reset");
+  const scheduled = config.mode === "loop_until_stop" && config.loopScope === "exclude_preparation"
+    ? [
+        ...regularSteps.filter((step) => step.params.executionPhase === "preparation"),
+        ...regularSteps.filter((step) => step.params.executionPhase !== "preparation"),
+        ...resetSteps
+      ]
+    : regularSteps;
+  return scheduled.map((step, index) => ({ ...step, order: index + 1 }));
 }
 
 function persistedSteps(steps: ActionStep[] | undefined, fallback: ActionStep[]): ActionStep[] {
@@ -1174,15 +1128,6 @@ function navigationString(value: unknown): string {
 
 function navigationPlatform(value: unknown): PageAssetPlatform | undefined {
   return value === "android" || value === "ios" || value === "harmony" || value === "flutter" ? value : undefined;
-}
-
-function navigationInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
-}
-
-function navigationStringSet(value: unknown): Set<string> {
-  if (!Array.isArray(value)) return new Set();
-  return new Set(value.map(navigationString).filter(Boolean));
 }
 
 function scriptStepResultMetadata(params: Record<string, unknown>): Record<string, unknown> | undefined {

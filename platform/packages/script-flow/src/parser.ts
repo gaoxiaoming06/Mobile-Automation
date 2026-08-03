@@ -14,7 +14,6 @@ import type {
   ScriptSearchPolicy,
   ScriptStep,
   ScriptStepRole,
-  ScriptStepRisk,
   ScriptTarget
 } from "./types.js";
 
@@ -30,7 +29,7 @@ export class ScriptFlowValidationError extends Error {
   }
 }
 
-const rootFields = new Set(["version", "kind", "purpose", "testLevel", "name", "description", "app", "start", "entry", "outcome", "parameters", "steps", "tags"]);
+const rootFields = new Set(["version", "kind", "purpose", "testLevel", "name", "description", "app", "start", "entry", "outcome", "loop", "parameters", "steps", "tags"]);
 const stepBaseFields = new Set(["id", "name", "role", "onPage", "expectPage", "timeoutMs", "risk", "with"]);
 const actionFields = [
   "launchApp",
@@ -79,12 +78,12 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
   const start = readStart(root.start, issues);
   const entry = readFlowState(root.entry, "entry", issues);
   const outcome = readFlowState(root.outcome, "outcome", issues);
+  const loop = readLoop(root.loop, issues);
   const parameters = readParameters(root.parameters, issues);
   const steps = readSteps(root.steps, "steps", issues, purpose);
   const tags = readStringArray(root.tags, "tags", issues, []);
 
   validateUniqueStepIds(steps, issues);
-  validatePurposeSemantics(purpose, steps, issues);
   validateParameterReferences({ root, parameters, steps, issues });
 
   if (issues.length > 0) {
@@ -102,10 +101,22 @@ export function validateScriptFlowDocument(value: unknown): ScriptFlowDocument {
     ...(start ? { start } : {}),
     ...(entry ? { entry } : {}),
     ...(outcome ? { outcome } : {}),
+    ...(loop ? { loop } : {}),
     parameters,
     steps,
     tags
   };
+}
+
+function readLoop(value: unknown, issues: ScriptFlowValidationIssue[]): ScriptFlowDocument["loop"] {
+  if (value === undefined) return undefined;
+  const loop = recordAt(value, "loop", issues);
+  rejectUnknownFields(loop, new Set(["reset"]), "loop", issues);
+  if (loop.reset !== "none") {
+    issues.push({ path: "loop.reset", message: "Loop reset must be none when the business flow is naturally closed" });
+    return undefined;
+  }
+  return { reset: "none" };
 }
 
 function readTestLevel(value: unknown, issues: ScriptFlowValidationIssue[]): ScriptFlowTestLevel {
@@ -302,7 +313,6 @@ function readStep(
   const onPage = optionalString(step.onPage, `${path}.onPage`, issues);
   const expectPage = optionalString(step.expectPage, `${path}.expectPage`, issues);
   const timeoutMs = optionalPositiveNumber(step.timeoutMs, `${path}.timeoutMs`, issues);
-  const risk = readRisk(step.risk, `${path}.risk`, issues);
   const actions = actionFields.filter((field) => step[field] !== undefined);
   if (actions.length !== 1) {
     issues.push({ path, message: "Each step must contain exactly one action" });
@@ -310,20 +320,13 @@ function readStep(
   const action = actions[0] ?? "assertPage";
   const role = readStepRole(step.role, `${path}.role`, issues)
     ?? inferStepRole(purpose, action, Boolean(expectPage));
-  if ((action === "tap" || action === "selectText") && step.risk === "none") {
-    issues.push({ path: `${path}.risk`, message: `${action} steps cannot declare risk none` });
-  }
-  if (risk && (action === "runFlow" || action === "repeat" || action === "when")) {
-    issues.push({ path: `${path}.risk`, message: "Risk can only be declared on executable steps" });
-  }
   const base = {
     id,
     ...(name ? { name } : {}),
     role,
     ...(onPage ? { onPage } : {}),
     ...(expectPage ? { expectPage } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-    ...(risk ? { risk } : {})
+    ...(timeoutMs !== undefined ? { timeoutMs } : {})
   };
 
   switch (action) {
@@ -364,8 +367,8 @@ function readStep(
 
 function readStepRole(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): ScriptStepRole | undefined {
   if (value === undefined) return undefined;
-  if (value === "setup" || value === "navigation" || value === "business" || value === "assertion" || value === "cleanup" || value === "recovery") return value;
-  issues.push({ path, message: "Step role must be setup, navigation, business, assertion, cleanup, or recovery" });
+  if (value === "setup" || value === "navigation" || value === "business" || value === "assertion" || value === "cleanup" || value === "recovery" || value === "reset") return value;
+  issues.push({ path, message: "Step role must be setup, navigation, business, assertion, cleanup, recovery, or reset" });
   return undefined;
 }
 
@@ -381,39 +384,6 @@ function inferStepRole(
   if (action === "launchApp") return "setup";
   if (action === "reachPage" || (action === "tap" && hasExpectedPage)) return "navigation";
   return "business";
-}
-
-function validatePurposeSemantics(
-  purpose: ScriptFlowPurpose,
-  steps: ScriptStep[],
-  issues: ScriptFlowValidationIssue[]
-): void {
-  const flattened = flattenScriptSteps(steps);
-  if (purpose === "navigation" && flattened.some((step) =>
-    step.role === "business"
-    || step.risk === "submit"
-    || step.risk === "publish"
-    || step.risk === "delete"
-    || step.risk === "payment"
-    || "inputText" in step
-    || "clearText" in step
-    || "selectText" in step
-  )) {
-    issues.push({ path: "purpose", message: "Navigation flows cannot contain business side effects" });
-  }
-  if (purpose === "recovery" && flattened.some((step) =>
-    step.risk === "submit" || step.risk === "publish" || step.risk === "delete" || step.risk === "payment"
-  )) {
-    issues.push({ path: "purpose", message: "Recovery flows cannot contain business side effects" });
-  }
-}
-
-function flattenScriptSteps(steps: ScriptStep[]): ScriptStep[] {
-  return steps.flatMap((step) => [
-    step,
-    ...("repeat" in step ? flattenScriptSteps(step.repeat.steps) : []),
-    ...("when" in step ? flattenScriptSteps(step.when.steps) : [])
-  ]);
 }
 
 function readAssertText(
@@ -432,17 +402,6 @@ function readAssertText(
     text,
     ...(match === "contains" || match === "exact" ? { match } : {})
   };
-}
-
-function readRisk(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Exclude<ScriptStepRisk, "none"> | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === "interaction" || value === "submit" || value === "publish" || value === "delete" || value === "payment") {
-    return value;
-  }
-  issues.push({ path, message: "Risk must be interaction, submit, publish, delete, or payment" });
-  return undefined;
 }
 
 function readLaunchApp(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { appId?: string } {

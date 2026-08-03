@@ -6,8 +6,7 @@ import type {
   ScriptFlowDocument,
   ScriptParameterDefinition,
   ScriptParameterValue,
-  ScriptStep,
-  ScriptStepRisk
+  ScriptStep
 } from "./types.js";
 
 export class ScriptFlowCompileError extends Error {
@@ -40,36 +39,8 @@ export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScri
     redactSensitiveParameters,
     stack: [flow.name],
     prefix: ""
-  }).map((step) => ({ ...step, phase: "test" as const }));
-  const firstStep = bodySteps[0];
-  const entryPage = flow.entry?.page;
-  const entryAlreadyExplicit = firstStep?.action === "reachPage" && firstStep.input.pageId === entryPage;
-  const preparationSteps: Omit<ScriptExecutionPlanStep, "order">[] = entryPage && !entryAlreadyExplicit ? [{
-    id: "__prepare.entry-page",
-    phase: "preparation",
-    role: "setup",
-    name: `准备进入 ${entryPage}`,
-    action: "reachPage",
-    input: { pageId: entryPage, policy: "safe" },
-    risk: "none",
-    source: { flowName: flow.name, stepId: "__prepare.entry-page" }
-  }] : [];
-  const outcomePage = flow.outcome?.page
-    ? interpolateString(flow.outcome.page, redactSensitiveParameters ? redactParameters(flow.parameters, parameters) : parameters)
-    : undefined;
-  const outcomeSteps: Omit<ScriptExecutionPlanStep, "order">[] = outcomePage && !stepVerifiesPage(bodySteps.at(-1), outcomePage)
-    ? [{
-        id: "__verify.outcome-page",
-        phase: "test",
-        role: "assertion",
-        name: `确认到达 ${outcomePage}`,
-        action: "assertPage",
-        input: { pageId: outcomePage },
-        risk: "none",
-        source: { flowName: flow.name, stepId: "__verify.outcome-page" }
-      }]
-    : [];
-  const steps = [...preparationSteps, ...bodySteps, ...outcomeSteps].map((step, index) => ({ ...step, order: index + 1 }));
+  }).map((step) => ({ ...step, phase: executionPhase(step) }));
+  const steps = bodySteps.map((step, index) => ({ ...step, order: index + 1 }));
   return {
     flowName: flow.name,
     kind: flow.kind,
@@ -79,20 +50,19 @@ export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScri
     ...(flow.start ? { start: flow.start } : {}),
     ...(flow.entry ? { entry: flow.entry } : {}),
     ...(flow.outcome ? { outcome: flow.outcome } : {}),
+    ...(flow.loop ? { loop: flow.loop } : {}),
     parameters,
-    steps,
-    riskConfirmations: []
+    steps
   };
 }
 
-function stepVerifiesPage(
-  step: CompiledBodyStep | Omit<ScriptExecutionPlanStep, "order"> | undefined,
-  pageId: string
-): boolean {
-  if (!step) return false;
-  if (step.expectPage === pageId) return true;
-  return (step.action === "assertPage" || step.action === "waitForPage" || step.action === "reachPage")
-    && step.input.pageId === pageId;
+function executionPhase(step: CompiledBodyStep): ScriptExecutionPlanStep["phase"] {
+  if (step.role === "reset") return "reset";
+  if (step.role === "setup" || step.role === "recovery" || step.action === "launchApp") return "preparation";
+  if (step.role === "assertion" || step.role === "cleanup" || step.action === "assertPage" || step.action === "assertText" || step.action === "waitForPage") {
+    return "verification";
+  }
+  return "business";
 }
 
 function expandSteps(steps: ScriptStep[], context: ExpansionContext): CompiledBodyStep[] {
@@ -169,7 +139,7 @@ function expandChildFlow(
   const renderedParameters = context.redactSensitiveParameters
     ? redactParameters(child.parameters, resolveParameters(child.parameters, renderedBindings))
     : parameters;
-  const childSteps = expandSteps(child.steps, {
+  return expandSteps(child.steps, {
     flow: child,
     parameters,
     renderedParameters,
@@ -178,19 +148,6 @@ function expandChildFlow(
     stack: [...context.stack, step.runFlow],
     prefix: expandedId
   });
-  const outcomePage = child.outcome?.page
-    ? interpolateString(child.outcome.page, renderedParameters)
-    : undefined;
-  if (!outcomePage || stepVerifiesPage(childSteps.at(-1), outcomePage)) return childSteps;
-  return [...childSteps, {
-    id: joinId(expandedId, "__verify.outcome-page"),
-    name: `确认到达 ${outcomePage}`,
-    role: "assertion",
-    action: "assertPage",
-    input: { pageId: outcomePage },
-    risk: "none",
-    source: { flowName: child.name, stepId: "__verify.outcome-page" }
-  }];
 }
 
 function interpolateBindingValue(value: unknown, parameters: Record<string, ScriptParameterValue>): unknown {
@@ -208,7 +165,6 @@ function compileExecutableStep(
   const { action, input } = executableAction(step, context.renderedParameters);
   const onPage = step.onPage ? interpolateString(step.onPage, context.renderedParameters) : undefined;
   const expectPage = step.expectPage ? interpolateString(step.expectPage, context.renderedParameters) : undefined;
-  const risk = step.risk ?? inferRisk(action, input);
   return {
     id,
     ...(step.name ? { name: interpolateString(step.name, context.renderedParameters) } : {}),
@@ -218,7 +174,6 @@ function compileExecutableStep(
     ...(onPage ? { onPage } : {}),
     ...(expectPage ? { expectPage } : {}),
     ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
-    risk,
     source: {
       flowName: context.flow.name,
       stepId: step.id
@@ -370,26 +325,6 @@ function exactParameterValue(value: string, parameters: Record<string, ScriptPar
     throw new ScriptFlowCompileError(`Missing parameter value: ${match[1]}`);
   }
   return result;
-}
-
-function inferRisk(action: ScriptExecutableAction, input: Record<string, unknown>): ScriptStepRisk {
-  if (!(action === "tap" || action === "selectText")) {
-    return "none";
-  }
-  const text = JSON.stringify(input);
-  if (/支付|付款|购买|pay/i.test(text)) {
-    return "payment";
-  }
-  if (/删除|注销|移除|delete/i.test(text)) {
-    return "delete";
-  }
-  if (/发布|publish/i.test(text)) {
-    return "publish";
-  }
-  if (/提交|确认创建|submit/i.test(text)) {
-    return "submit";
-  }
-  return "interaction";
 }
 
 function valueMatchesType(value: ScriptParameterValue, type: ScriptParameterDefinition["type"]): boolean {

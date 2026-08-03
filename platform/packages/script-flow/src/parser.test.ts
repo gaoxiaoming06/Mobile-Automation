@@ -42,6 +42,21 @@ steps:
 `;
 
 describe("parseScriptFlow", () => {
+  it("parses an explicit no-reset loop contract", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: 同页刷新
+app: { id: cn.eeo.classin, platform: android }
+loop: { reset: none }
+steps:
+  - id: refresh
+    role: business
+    tap: { target: { text: 刷新 } }
+`);
+
+    expect(flow.loop).toEqual({ reset: "none" });
+  });
+
   it("parses flow purpose and semantic step roles as first-class fields", () => {
     const flow = parseScriptFlow(`
 version: 1
@@ -75,18 +90,22 @@ steps:
     });
   });
 
-  it("rejects navigation flows that contain business side effects", () => {
-    expect(() => parseScriptFlow(`
+  it("treats purpose as metadata instead of blocking explicit steps", () => {
+    const flow = parseScriptFlow(`
 version: 1
 purpose: navigation
-name: 错误导航
+name: 混合流程
 app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: publish
     role: business
     risk: publish
     tap: { target: { text: 发布 } }
-`)).toThrow(/navigation.*business side effects/i);
+`);
+
+    expect(flow.purpose).toBe("navigation");
+    expect(flow.steps[0]).toMatchObject({ id: "publish", role: "business", tap: { target: { text: "发布" } } });
+    expect(flow.steps[0]).not.toHaveProperty("risk");
   });
 
   it("parses test kind, entry state, and expected outcome as first-class semantics", () => {
@@ -548,28 +567,28 @@ steps:
 `)).toThrow(/textField.*scopeText.*ordinal.*area content/i);
   });
 
-  it("rejects risk none for click-like interactions", () => {
-    expect(() => parseScriptFlow(`
+  it("accepts and discards legacy risk metadata", () => {
+    const none = parseScriptFlow(`
 version: 1
-name: unsafe opt out
+name: legacy risk none
 app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: order
     risk: none
     tap: { target: { text: 立即下单 } }
-`)).toThrow(/tap.*risk none/i);
-  });
-
-  it("rejects unknown risk declarations", () => {
-    expect(() => parseScriptFlow(`
+`);
+    const unknown = parseScriptFlow(`
 version: 1
-name: invalid risk
+name: legacy unknown risk
 app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: target
     risk: dangerous
     tap: { target: { text: 主页 } }
-`)).toThrow(/risk must be interaction, submit, publish, delete, or payment/i);
+`);
+
+    expect(none.steps[0]).not.toHaveProperty("risk");
+    expect(unknown.steps[0]).not.toHaveProperty("risk");
   });
 
   it("rejects defaults for sensitive parameters", () => {

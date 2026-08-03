@@ -6,7 +6,11 @@ export type ScriptFlowPurpose = "navigation" | "fixture" | "business" | "recover
 
 export type ScriptFlowTestLevel = "probe" | "component" | "business_smoke" | "full_regression";
 
-export type ScriptStepRole = "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery";
+export type ScriptStepRole = "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery" | "reset";
+
+export type ScriptFlowLoop = {
+  reset: "none";
+};
 
 export type ScriptSessionState = "authenticated" | "unauthenticated";
 
@@ -67,8 +71,6 @@ export type ScriptSearchPolicy = {
   container?: "content";
 };
 
-export type ScriptStepRisk = "none" | "interaction" | "submit" | "publish" | "delete" | "payment";
-
 export type ScriptStepBase = {
   id: string;
   name?: string;
@@ -76,7 +78,8 @@ export type ScriptStepBase = {
   onPage?: string;
   expectPage?: string;
   timeoutMs?: number;
-  risk?: Exclude<ScriptStepRisk, "none">;
+  /** @deprecated Accepted only when reading legacy ScriptFlow v1 documents. */
+  risk?: string;
 };
 
 export type ScriptLaunchAppStep = ScriptStepBase & {
@@ -205,6 +208,7 @@ export type ScriptFlowDocument = {
   };
   entry?: ScriptFlowState;
   outcome?: ScriptFlowState;
+  loop?: ScriptFlowLoop;
   parameters: Record<string, ScriptParameterDefinition>;
   steps: ScriptStep[];
   tags: string[];
@@ -226,7 +230,7 @@ export type ScriptExecutableAction =
 export type ScriptExecutionPlanStep = {
   id: string;
   order: number;
-  phase: "preparation" | "test";
+  phase: "preparation" | "business" | "verification" | "reset";
   role: ScriptStepRole;
   name?: string;
   action: ScriptExecutableAction;
@@ -234,17 +238,10 @@ export type ScriptExecutionPlanStep = {
   onPage?: string;
   expectPage?: string;
   timeoutMs?: number;
-  risk: ScriptStepRisk;
   source: {
     flowName: string;
     stepId: string;
   };
-};
-
-export type ScriptRiskConfirmation = {
-  stepId: string;
-  risk: Exclude<ScriptStepRisk, "none">;
-  stepName?: string;
 };
 
 export type ScriptExecutionPlan = {
@@ -256,9 +253,9 @@ export type ScriptExecutionPlan = {
   start?: ScriptFlowDocument["start"];
   entry?: ScriptFlowState;
   outcome?: ScriptFlowState;
+  loop?: ScriptFlowLoop;
   parameters: Record<string, ScriptParameterValue>;
   steps: ScriptExecutionPlanStep[];
-  riskConfirmations: ScriptRiskConfirmation[];
 };
 
 export type CompileScriptFlowOptions = {

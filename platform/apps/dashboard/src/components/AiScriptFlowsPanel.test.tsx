@@ -1,12 +1,17 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import type { TestRun } from "@mobile-automation/shared";
 import {
   AiScriptFlowsPanel,
   buildAiGenerateRequestBody,
+  buildStepRunRequestBody,
+  draftRunOptions,
   draftRunEndpoint,
   draftSaveDestination,
   ExecutionFailureNotice,
+  StepTrialRunBar,
+  stepTrialStatusForStep,
   stepReviewItems,
   TrialOutcomeReview,
   updateDraftStepLocator
@@ -16,6 +21,17 @@ describe("AiScriptFlowsPanel", () => {
   it("uses separate execution endpoints for verified and trial-ready drafts", () => {
     expect(draftRunEndpoint("ready")).toBe("/api/script-flow-drafts/runs");
     expect(draftRunEndpoint("trial_ready")).toBe("/api/script-flow-drafts/trial-runs");
+  });
+
+  it("keeps the selected loop mode for both verified and temporary drafts", () => {
+    expect(draftRunOptions("loop_body")).toEqual({
+      mode: "loop_until_stop",
+      loopScope: "exclude_preparation"
+    });
+    expect(draftRunOptions("loop_all")).toEqual({
+      mode: "loop_until_stop",
+      loopScope: "all_steps"
+    });
   });
 
   it("shows recent temporary tests and keeps navigation flows out of the case center", () => {
@@ -131,7 +147,7 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).not.toContain("保存到用例中心");
   });
 
-  it("renders generated steps as a review checklist with only safe locator edits", () => {
+  it("renders generated steps collapsed and confirmed by default", () => {
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel
       defaultAppId="cn.eeo.classin"
       devices={[{ serial: "device-1", name: "YAL-AL10" }]}
@@ -150,15 +166,24 @@ describe("AiScriptFlowsPanel", () => {
           name: "修改课堂标题",
           app: { id: "cn.eeo.classin", platform: "android" },
           parameters: {},
-          steps: [{
-            id: "fill-lesson-title",
-            role: "business",
-            inputText: {
-              target: { text: "课堂标题", area: "bottomBar", nearText: "班级", scopeText: "课堂信息", ordinal: 1 },
-              value: "111",
-              search: { mode: "visibleOnly", direction: "down", maxSwipes: 6 }
+          steps: [
+            {
+              id: "fill-lesson-title",
+              role: "business",
+              inputText: {
+                target: { text: "课堂标题", area: "bottomBar", nearText: "班级", scopeText: "课堂信息", ordinal: 1 },
+                value: "111",
+                search: { mode: "visibleOnly", direction: "down", maxSwipes: 6 }
+              }
+            },
+            {
+              id: "toggle-recording",
+              tap: {
+                target: { control: "switch", area: "content", nearText: "录制现场", checked: false },
+                search: { mode: "auto", container: "content" }
+              }
             }
-          }],
+          ],
           tags: []
         },
         summary: "修改课堂标题",
@@ -168,34 +193,249 @@ describe("AiScriptFlowsPanel", () => {
       } as never}
     />);
 
-    expect(markup).toContain("步骤审查");
-    expect(markup).toContain("0/1 已确认");
+    expect(markup).toContain("脚本编排");
+    expect(markup).toContain("前置准备");
+    expect(markup).toContain("业务步骤");
+    expect(markup).toContain("结果验证");
+    expect(markup).toContain("无前置准备，执行时依赖当前设备状态");
+    expect(markup).toContain("未设置结果验证，执行完成后需要人工确认");
+    expect(markup).toContain("2/2 已确认");
     expect(markup).toContain("确认步骤 1：输入文本");
-    expect(markup).toContain("这一步会操作");
-    expect(markup).toContain("屏幕上的文字");
-    expect(markup).toContain('value="课堂标题"');
-    expect(markup).toContain("查找方式");
-    expect(markup).toContain("只在当前屏幕查找");
-    expect(markup).toContain("页面区域");
-    expect(markup).toContain("底部栏");
-    expect(markup).not.toContain("操作目标");
-    expect(markup).not.toContain("滚动方向");
-    expect(markup).not.toContain("最多滑动次数");
-    expect(markup).not.toContain("最多滑动 6 次");
-    expect(markup).not.toContain("高级定位设置");
-    expect(markup).not.toContain("旁边有这些文字");
-    expect(markup).not.toContain("限定在这个区域或行内");
-    expect(markup).not.toContain("第几个匹配项");
-    expect(markup).not.toContain('<option value="icon">');
-    expect(markup).not.toContain("search.mode");
-    expect(markup).not.toContain("nearText");
-    expect(markup).not.toContain("scopeText");
-    expect(markup).not.toContain("ordinal");
-    expect(markup).not.toContain("checked");
-    expect(markup).not.toContain(">visibleOnly<");
-    expect(markup).not.toContain(">bottomBar<");
-    expect(markup).not.toContain("文字 text");
-    expect(markup).toContain("确认所有步骤后才能执行或保存");
+    expect(markup).toContain("展开步骤 1");
+    expect(markup).toContain("所有步骤已确认，可以执行或保存");
+    expect(markup).toContain("添加步骤");
+    expect(markup).not.toContain("步骤名称");
+    expect(markup).not.toContain("这一步会操作");
+    expect(markup).not.toContain("上移步骤 1");
+    expect(markup).not.toContain("试跑第 1 步");
+    expect(markup).not.toContain("确认所有步骤后才能执行或保存");
+  });
+
+  it("does not show a duplicate legacy launch strategy beside an explicit launch step", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialDraft={{
+        status: "ready",
+        sourceYaml: "version: 1\nname: 启动并进入成长",
+        document: {
+          version: 1,
+          kind: "case",
+          purpose: "business",
+          testLevel: "business_smoke",
+          name: "启动并进入成长",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          start: { strategy: "launchApp" },
+          parameters: {},
+          steps: [
+            { id: "launch-app", role: "setup", launchApp: { appId: "cn.eeo.classin" } },
+            { id: "open-growth", role: "business", tap: { target: { text: "成长" } } }
+          ],
+          tags: []
+        },
+        summary: "启动并进入成长",
+        assumptions: [],
+        channel: "codex",
+        model: "planner"
+      } as never}
+    />);
+
+    expect(markup).toContain("前置准备");
+    expect(markup).toContain("确认步骤 1：重启 App");
+    expect(markup).not.toContain("启动策略：启动 App");
+  });
+
+  it("builds isolated and remaining-step trial request bodies", () => {
+    const common = {
+      sourceYaml: "version: 1\nname: 创建课堂",
+      deviceSerial: "device-1",
+      parameters: { classroomName: "自动化课堂" },
+      stepId: "fill-classroom-name"
+    };
+
+    expect(buildStepRunRequestBody({ ...common, mode: "single" })).toEqual({
+      sourceYaml: common.sourceYaml,
+      deviceSerial: "device-1",
+      parameters: { classroomName: "自动化课堂" },
+      startStepId: "fill-classroom-name",
+      endStepId: "fill-classroom-name",
+      pauseAfterEachStep: false
+    });
+    expect(buildStepRunRequestBody({ ...common, mode: "from_here" })).toEqual({
+      sourceYaml: common.sourceYaml,
+      deviceSerial: "device-1",
+      parameters: { classroomName: "自动化课堂" },
+      startStepId: "fill-classroom-name",
+      pauseAfterEachStep: true
+    });
+  });
+
+  it("shows completed and paused statuses beside the affected trial steps", () => {
+    const run = stepTrialRun({
+      status: "paused",
+      stepResults: [{ stepId: "launch-app", status: "passed" }]
+    });
+
+    expect(stepTrialStatusForStep(run, "launch-app")).toBe("passed");
+    expect(stepTrialStatusForStep(run, "tap-growth-tab")).toBe("paused");
+    expect(stepTrialStatusForStep(run, "tap-notes-entry")).toBeUndefined();
+  });
+
+  it("renders the active step trial and its controls at the orchestrator", () => {
+    const markup = renderToStaticMarkup(<StepTrialRunBar
+      run={stepTrialRun({
+        status: "paused",
+        stepResults: [{ stepId: "launch-app", status: "passed" }]
+      })}
+      busy={false}
+      onControl={vi.fn()}
+      onOpenResult={vi.fn()}
+    />);
+
+    expect(markup).toContain("启动后进入成长并点击笔记");
+    expect(markup).toContain("1/3 个步骤");
+    expect(markup).toContain("已暂停");
+    expect(markup).toContain("执行下一步");
+    expect(markup).toContain("连续执行");
+    expect(markup).toContain("停止");
+  });
+
+  it("restores an active device step trial when the editor is reopened", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1" }]}
+      selectedSerial="device-1"
+      activeRunForDevice={stepTrialRun({
+        status: "paused",
+        stepResults: [{ stepId: "launch-app", status: "passed" }]
+      })}
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialDraft={{
+        status: "trial_ready",
+        sourceYaml: "version: 1\nname: 启动后进入成长并点击笔记",
+        document: {
+          version: 1,
+          kind: "case",
+          name: "启动后进入成长并点击笔记",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [
+            { id: "launch-app", launchApp: { appId: "cn.eeo.classin" } },
+            { id: "tap-growth-tab", tap: { target: { text: "成长" } } },
+            { id: "tap-notes-entry", tap: { target: { text: "笔记" } } }
+          ],
+          tags: []
+        },
+        summary: "启动后进入成长并点击笔记",
+        assumptions: [],
+        channel: "history",
+        model: "snapshot"
+      } as never}
+    />);
+
+    expect(markup).toContain("当前试跑");
+    expect(markup).toContain("启动后进入成长并点击笔记");
+    expect(markup).toContain("已暂停");
+    expect(markup).toContain("run-status-badge");
+    expect(markup).not.toContain("step-trial-status");
+  });
+
+  it("shows and controls the active step trial before a draft is loaded", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1" }]}
+      selectedSerial="device-1"
+      activeRunForDevice={stepTrialRun({
+        status: "paused",
+        stepResults: [{ stepId: "launch-app", status: "passed" }]
+      })}
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+    />);
+
+    expect(markup).toContain("当前试跑");
+    expect(markup).toContain("启动后进入成长并点击笔记");
+    expect(markup).toContain("执行下一步");
+    expect(markup).toContain("停止");
+  });
+
+  it("collapses structural and nested steps together by default", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialDraft={{
+        status: "trial_ready",
+        sourceYaml: "version: 1\nname: 重复填写",
+        document: {
+          version: 1,
+          kind: "case",
+          name: "重复填写",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [{
+            id: "repeat-fields",
+            repeat: {
+              times: 2,
+              steps: [{ id: "tap-field", tap: { target: { text: "课堂名称" } } }]
+            }
+          }],
+          tags: []
+        },
+        summary: "重复填写",
+        assumptions: [],
+        channel: "codex",
+        model: "planner"
+      } as never}
+    />);
+
+    expect(markup).toContain("2/2 已确认");
+    expect(markup).toContain('aria-label="展开步骤 1"');
+    expect(markup).toContain('aria-label="展开步骤 2"');
+    expect(markup).not.toContain("结构步骤由内部步骤组成");
+    expect(markup).not.toContain('aria-label="试跑第 1 步"');
+  });
+
+  it("keeps the orchestrator available for an empty draft", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialDraft={{
+        status: "trial_ready",
+        sourceYaml: "version: 1\nname: 新测试",
+        document: {
+          version: 1,
+          kind: "case",
+          name: "新测试",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [],
+          tags: []
+        },
+        summary: "新测试",
+        assumptions: [],
+        channel: "codex",
+        model: "planner"
+      } as never}
+    />);
+
+    expect(markup).toContain("脚本编排");
+    expect(markup).toContain("添加步骤");
+    expect(markup).toContain("请至少添加一个步骤");
     expect(markup).toContain("disabled");
   });
 
@@ -290,7 +530,7 @@ describe("AiScriptFlowsPanel", () => {
       } as never}
     />);
 
-    expect(markup).not.toContain("步骤审查");
+    expect(markup).toContain("脚本编排");
     expect(markup).not.toContain("确认所有步骤后才能执行或保存");
     expect(markup).toContain("课堂标题");
     expect(markup).toContain('value="历史课堂标题"');
@@ -453,7 +693,7 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("用例");
     expect(markup).toContain(">执行<");
     expect(markup).toContain("保存到用例中心");
-    expect(markup).toContain("执行逻辑");
+    expect(markup).not.toContain("执行逻辑");
     expect(markup).toContain("启动 ClassIn");
     expect(markup).toContain("启动 App 并等待主页");
     expect(markup).not.toContain("version: 1");
@@ -498,12 +738,37 @@ describe("AiScriptFlowsPanel", () => {
 
     expect(markup).toContain(">执行<");
     expect(markup).toContain("保存到用例中心");
+    expect(markup).toContain("循环业务与验证");
+    expect(markup).toContain("循环整个用例");
+    expect(markup).toContain("每轮复位");
+    expect(markup).toContain("业务执行后已回到起点，无需复位");
+    expect(markup).toContain("请先配置每轮复位步骤");
     expect(markup).not.toContain("试运行");
     expect(markup).not.toContain("保存草稿");
     expect(markup).not.toContain("沉淀所选资产");
   });
 
   it("uses natural language to revise an existing use case", () => {
+    const onStartNewTest = vi.fn();
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[]}
+      selectedSerial=""
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      onStartNewTest={onStartNewTest}
+      revision={{ flowId: "flow-login", version: 3, name: "教师登录" }}
+    />);
+
+    expect(markup).toContain("AI 调整测试");
+    expect(markup).toContain("教师登录");
+    expect(markup).toContain("描述你想怎样修改这个测试");
+    expect(markup).toContain("新建测试");
+    expect(markup).not.toContain("App ID");
+  });
+
+  it("opens a saved use case directly in the script orchestrator for manual editing", () => {
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel
       defaultAppId="cn.eeo.classin"
       devices={[]}
@@ -512,12 +777,32 @@ describe("AiScriptFlowsPanel", () => {
       onSaved={vi.fn()}
       onOpenRun={vi.fn()}
       revision={{ flowId: "flow-login", version: 3, name: "教师登录" }}
+      initialDraft={{
+        status: "ready",
+        sourceYaml: "version: 1\nname: 教师登录",
+        document: {
+          version: 1,
+          kind: "case",
+          name: "教师登录",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [{ id: "tap-login", name: "点击登录", tap: { target: { text: "登录" } } }],
+          tags: []
+        },
+        summary: "教师登录",
+        assumptions: [],
+        channel: "manual",
+        model: "saved-flow"
+      }}
     />);
 
-    expect(markup).toContain("修改测试");
-    expect(markup).toContain("教师登录");
-    expect(markup).toContain("描述你想怎样修改这个测试");
-    expect(markup).not.toContain("App ID");
+    expect(markup).toContain("编辑测试");
+    expect(markup).toContain("脚本编排");
+    expect(markup).toContain("点击登录");
+    expect(markup).toContain("保存修改");
+    expect(markup).not.toContain("描述你想怎样修改这个测试");
+    expect(markup).not.toContain("生成修改方案");
+    expect(markup).not.toContain("等待修改说明");
   });
 
   it("prefills ephemeral parameter values returned with an AI draft", () => {
@@ -555,3 +840,58 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain('value="demo-secret"');
   });
 });
+
+function stepTrialRun(input: {
+  status: TestRun["status"];
+  stepResults: Array<{ stepId: string; status: TestRun["stepResults"][number]["status"] }>;
+}): TestRun {
+  const stepIds = ["launch-app", "tap-growth-tab", "tap-notes-entry"];
+  return {
+    id: "run-step-trial",
+    caseName: "启动后进入成长并点击笔记",
+    deviceSerial: "device-1",
+    status: input.status,
+    config: {
+      deviceSerial: "device-1",
+      mode: "once",
+      repeatCount: 1,
+      stepIntervalMs: 0,
+      stopOnFailure: true,
+      recordVideo: false,
+      keepVideoOnSuccess: false,
+      pauseAfterEachStep: true
+    },
+    steps: stepIds.map((id, index) => ({
+      id,
+      order: index + 1,
+      type: index === 0 ? "launch_app" : "tap_on_text",
+      enabled: true,
+      params: { scriptStepId: id },
+      createdAt: "2026-08-03T00:00:00.000Z"
+    })),
+    stepResults: input.stepResults.map((result, index) => ({
+      id: `result-${index + 1}`,
+      runId: "run-step-trial",
+      iterationIndex: 1,
+      stepId: result.stepId,
+      stepOrder: stepIds.indexOf(result.stepId) + 1,
+      type: result.stepId === "launch-app" ? "launch_app" : "tap_on_text",
+      status: result.status,
+      startedAt: "2026-08-03T00:00:00.000Z",
+      artifacts: []
+    })),
+    metrics: [],
+    events: [],
+    artifacts: [],
+    sourceSnapshot: {
+      kind: "script_flow",
+      flowId: "temporary:test",
+      version: 1,
+      planDigest: "digest",
+      executionPurpose: "step_trial",
+      dependencies: [],
+      parsed: {}
+    },
+    startedAt: "2026-08-03T00:00:00.000Z"
+  };
+}

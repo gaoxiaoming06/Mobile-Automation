@@ -37,7 +37,7 @@ describe("ScriptFlow CLI", () => {
     expect(formatResponse("flows", { flows: [{ id: "flow-1", version: 3, status: "active", platform: "android", name: "打开主页" }] }, "http://server")).toBe(
       "flow-1\tv3\tactive\tandroid\t打开主页"
     );
-    expect(formatResponse("preview-flow", { planDigest: "a".repeat(64), plan: { steps: [], riskConfirmations: [] } }, "http://server")).toContain(`planDigest=${"a".repeat(64)}`);
+    expect(formatResponse("preview-flow", { planDigest: "a".repeat(64), plan: { steps: [] } }, "http://server")).toContain(`planDigest=${"a".repeat(64)}`);
     expect(formatResponse("run-flow", { run: { id: "run-1", status: "running" } }, "http://server")).toBe("Started run-1 (running)");
     expect(formatResponse("report", { run: { id: "run-1", reportHtmlPath: "runs/run-1/report.html" } }, "http://server")).toBe(
       "http://server/api/reports/run-1/html"

@@ -11,10 +11,18 @@ import type {
 } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api.js";
 import { TrialOutcomeReview } from "./AiScriptFlowsPanel.js";
-import { ScriptRunForm, type ScriptParameterValue } from "./ScriptRunForm.js";
+import {
+  ScriptRunForm,
+  currentRunIteration,
+  runOptionsForExecutionMode,
+  type ScriptParameterValue,
+  type ScriptRunExecutionMode
+} from "./ScriptRunForm.js";
+export { runOptionsForExecutionMode } from "./ScriptRunForm.js";
 import {
   caseStepViews,
   defaultCaseParameterValues,
+  loopBodyAvailability,
   readCaseDocument,
   testKindLabel,
   testPurposeLabel,
@@ -28,7 +36,8 @@ type CaseCenterPanelProps = {
   initialSelectedFlowId?: string;
   setMessage: (message: string) => void;
   onOpenRun: (runId: string) => void;
-  onModifyCase: (flow: ScriptFlow) => void;
+  onModifyCase: (flow: ScriptFlow, verification?: ScriptFlowVerificationAssessment) => void;
+  onAiModifyCase: (flow: ScriptFlow) => void;
   onCreateCase: () => void;
   androidAppMonitorForApp?: (appId: string) => AndroidAppMonitorConfig | undefined;
 };
@@ -38,6 +47,10 @@ type CaseLearningSummary = {
   verification?: FlowVerification;
 };
 
+export function selectedCaseIdAfterExternalSelection(currentId: string, selectedId: string | undefined): string {
+  return selectedId || currentId;
+}
+
 export function CaseCenterPanel({
   devices,
   selectedSerial,
@@ -46,6 +59,7 @@ export function CaseCenterPanel({
   setMessage,
   onOpenRun,
   onModifyCase,
+  onAiModifyCase,
   onCreateCase,
   androidAppMonitorForApp
 }: CaseCenterPanelProps) {
@@ -60,6 +74,7 @@ export function CaseCenterPanel({
   const [learning, setLearning] = useState<CaseLearningSummary>();
   const [verification, setVerification] = useState<ScriptFlowVerificationAssessment>();
   const [busy, setBusy] = useState(false);
+  const [executionMode, setExecutionMode] = useState<ScriptRunExecutionMode>("once");
 
   useEffect(() => {
     if (!initialFlows) void refreshFlows();
@@ -68,6 +83,10 @@ export function CaseCenterPanel({
   useEffect(() => {
     if (selectedSerial) setDeviceSerial(selectedSerial);
   }, [selectedSerial]);
+
+  useEffect(() => {
+    setSelectedId((current) => selectedCaseIdAfterExternalSelection(current, initialSelectedFlowId));
+  }, [initialSelectedFlowId]);
 
   useEffect(() => {
     if (!selected) return;
@@ -115,6 +134,7 @@ export function CaseCenterPanel({
     setLastRun(undefined);
     setLearning(undefined);
     setVerification(undefined);
+    setExecutionMode("once");
   }
 
   async function loadVerification(flow: ScriptFlow) {
@@ -148,6 +168,10 @@ export function CaseCenterPanel({
 
   async function runSelected() {
     if (!selected) return;
+    if (executionMode === "loop_body" && !loopAvailability.available) {
+      setMessage(loopAvailability.reason ?? "请先配置每轮复位步骤。");
+      return;
+    }
     try {
       setBusy(true);
       const preview = await apiFetchJson<{ plan: CasePlanView; planDigest: string; verification: ScriptFlowVerificationAssessment }>(`/api/script-flows/${encodeURIComponent(selected.id)}/preview`, {
@@ -168,11 +192,28 @@ export function CaseCenterPanel({
           deviceSerial,
           parameters: parameterValues,
           recordVideo: false,
+          ...runOptionsForExecutionMode(executionMode),
           ...(androidAppMonitor ? { androidAppMonitor } : {})
         }))
       });
       setLastRun(response.run);
       setMessage(`已启动${testKindLabel(document?.kind)}：${response.run.id}`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stopCurrentRun() {
+    if (!lastRun) return;
+    try {
+      setBusy(true);
+      const response = await apiFetchJson<{ run?: TestRun }>(`/api/runs/${encodeURIComponent(lastRun.id)}/stop`, {
+        method: "POST"
+      });
+      if (response.run) setLastRun(response.run);
+      setMessage("已停止当前执行");
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -207,11 +248,13 @@ export function CaseCenterPanel({
   }
 
   const steps = caseStepViews(document, plan);
+  const loopAvailability = loopBodyAvailability(document);
+  const runActive = Boolean(lastRun && ["pending", "running", "paused"].includes(lastRun.status));
 
   return (
     <section className="module-page case-center-module">
       <header className="case-center-header">
-        <div><h2>用例中心</h2><p>沉淀可复用的用例与场景，通过 AI 完成创建和修改。</p></div>
+        <div><h2>用例中心</h2><p>沉淀可复用的用例与场景，支持手工编排与 AI 辅助。</p></div>
         <div className="case-center-toolbar">
           <button className="icon-button" type="button" title="刷新测试" onClick={() => void refreshFlows()} disabled={busy}><RefreshCw size={16} /></button>
           <button className="primary-button" type="button" onClick={onCreateCase}><Sparkles size={16} /><span>AI 创建测试</span></button>
@@ -231,7 +274,8 @@ export function CaseCenterPanel({
             <header className="case-detail-header">
               <div><h3>{selected.name}</h3><p>{selected.description || "暂无测试说明"}</p></div>
               <div className="case-detail-actions">
-                <button type="button" onClick={() => onModifyCase(selected)}><Pencil size={16} /><span>修改测试</span></button>
+                <button type="button" onClick={() => onModifyCase(selected, verification)}><Pencil size={16} /><span>修改测试</span></button>
+                <button type="button" onClick={() => onAiModifyCase(selected)}><Sparkles size={16} /><span>AI 调整</span></button>
                 <button className="icon-button danger" type="button" title="删除测试" onClick={() => void removeSelected()} disabled={busy}><Trash2 size={16} /></button>
               </div>
             </header>
@@ -260,16 +304,23 @@ export function CaseCenterPanel({
             devices={devices}
             deviceSerial={deviceSerial}
             busy={busy}
+            executionMode={executionMode}
+            active={runActive}
+            currentIteration={lastRun ? currentRunIteration(lastRun.stepResults) : undefined}
             disabled={!selected || selected.status === "archived" || verification?.status === "blocked"}
+            loopBodyAvailable={loopAvailability.available}
+            loopBodyUnavailableReason={loopAvailability.reason}
             onValueChange={(key, value) => {
               setParameterValues((current) => ({ ...current, [key]: value }));
               setPlan(undefined);
             }}
             onDeviceChange={setDeviceSerial}
+            onExecutionModeChange={setExecutionMode}
             onRun={() => void runSelected()}
+            onStop={() => void stopCurrentRun()}
             buttonLabel={verification?.status === "blocked" ? "暂不可执行" : "开始执行"}
           />
-          {lastRun ? <section className="script-run-status"><header><h3>执行状态</h3><strong data-status={lastRun.status}>{lastRun.status}</strong></header><p>{lastRun.stepResults.length}/{lastRun.steps.length} 个步骤</p><button type="button" onClick={() => onOpenRun(lastRun.id)}>查看执行结果</button></section> : null}
+          {lastRun ? <section className="script-run-status"><header><h3>执行状态</h3><strong data-status={lastRun.status}>{lastRun.status}</strong></header><p>{lastRun.config.mode === "loop_until_stop" ? `第 ${currentRunIteration(lastRun.stepResults) || 1} 轮 · 累计执行 ${lastRun.stepResults.length} 个步骤` : `${lastRun.stepResults.length}/${lastRun.steps.length} 个步骤`}</p><button type="button" onClick={() => onOpenRun(lastRun.id)}>查看执行结果</button></section> : null}
           {learning ? <TrialOutcomeReview
             session={learning.session}
             busy={busy}

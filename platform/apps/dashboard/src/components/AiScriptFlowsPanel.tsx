@@ -1,6 +1,21 @@
-import { FileSearch, History, Save, Sparkles } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  FileSearch,
+  History,
+  Play,
+  Plus,
+  RotateCcw,
+  Save,
+  Sparkles,
+  Square,
+  StepForward,
+  Trash2
+} from "lucide-react";
 import { useEffect, useState } from "react";
-import { serializeScriptFlow, type ScriptFlowDocument } from "@mobile-automation/script-flow";
 import { publicExecutionFailureFromRun } from "@mobile-automation/shared";
 import type {
   AndroidAppMonitorConfig,
@@ -13,10 +28,18 @@ import type {
   TestRun
 } from "@mobile-automation/shared";
 import { apiFetchJson } from "../api.js";
-import { ScriptRunForm, type ScriptParameterValue } from "./ScriptRunForm.js";
+import {
+  ScriptRunForm,
+  currentRunIteration,
+  runOptionsForExecutionMode,
+  type ScriptParameterValue,
+  type ScriptRunExecutionMode
+} from "./ScriptRunForm.js";
 import {
   caseStepViews,
+  caseActionLabel,
   defaultCaseParameterValues,
+  loopBodyAvailability,
   readCaseDocument,
   testKindLabel,
   testLevelLabel,
@@ -25,6 +48,17 @@ import {
   type CasePlanView,
   type CaseSourceStep
 } from "./case-view.js";
+import {
+  addDraftStep,
+  duplicateDraftStep,
+  moveDraftStep,
+  removeDraftStep,
+  setDraftLoopResetMode,
+  updateDraftStep,
+  updateDraftStepLocator as updateOrchestratorStepLocator,
+  type DraftStepPatch,
+  type EditableStepAction
+} from "./script-flow-orchestrator.js";
 
 export type GeneratedDraft = {
   status: "ready" | "trial_ready";
@@ -38,6 +72,25 @@ export type GeneratedDraft = {
   channel: string;
   model: string;
 };
+
+export function draftFromSavedFlow(
+  flow: ScriptFlow,
+  verification?: ScriptFlowVerificationAssessment
+): GeneratedDraft | undefined {
+  const document = readCaseDocument(flow.parsed);
+  if (!document) return undefined;
+  return {
+    status: verification?.status === "verified" ? "ready" : "trial_ready",
+    sourceYaml: flow.sourceYaml,
+    document,
+    summary: flow.description || flow.name,
+    assumptions: [],
+    ...(verification ? { verification } : {}),
+    sourceFlow: { id: flow.id, version: flow.version, name: flow.name },
+    channel: "manual",
+    model: "saved-flow"
+  };
+}
 
 type ClarificationDraft = {
   status: "needs_clarification";
@@ -80,7 +133,11 @@ export type StepReviewItem = {
   name: string;
   action: string;
   context?: string;
-  risk: string;
+  phase: "preparation" | "business" | "verification" | "reset";
+  source: CaseSourceStep;
+  structural: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
   locator?: StepLocatorView;
 };
 
@@ -115,6 +172,27 @@ const SEARCH_MODE_OPTIONS: LocatorOption[] = [
   { value: "scroll", label: "滚动查找" }
 ];
 
+const EDITABLE_ACTIONS: EditableStepAction[] = [
+  "launchApp",
+  "tap",
+  "inputText",
+  "clearText",
+  "selectText",
+  "swipe",
+  "scrollUntilVisible",
+  "reachPage",
+  "waitForPage",
+  "assertPage",
+  "assertText"
+];
+
+const SECTION_ROLE_OPTIONS: LocatorOption[] = [
+  { value: "setup", label: "前置准备" },
+  { value: "business", label: "业务步骤" },
+  { value: "assertion", label: "结果验证" },
+  { value: "reset", label: "每轮复位" }
+];
+
 export type CaseRevision = {
   flowId: string;
   version: number;
@@ -134,9 +212,11 @@ type AiScriptFlowsPanelProps = {
   setMessage: (message: string) => void;
   onSaved: (flow: ScriptFlow) => void;
   onOpenRun: (runId: string) => void;
+  onStartNewTest?: () => void;
   revision?: CaseRevision;
   initialDraft?: AiDraft;
   initialHistory?: TemporaryTest[];
+  activeRunForDevice?: TestRun;
   androidAppMonitorForApp?: (appId: string) => AndroidAppMonitorConfig | undefined;
 };
 
@@ -147,11 +227,14 @@ export function AiScriptFlowsPanel({
   setMessage,
   onSaved,
   onOpenRun,
+  onStartNewTest,
   revision,
   initialDraft,
   initialHistory = [],
+  activeRunForDevice,
   androidAppMonitorForApp
 }: AiScriptFlowsPanelProps) {
+  const manualEditing = Boolean(revision && initialDraft);
   const [prompt, setPrompt] = useState("");
   const [appId, setAppId] = useState(defaultAppId);
   const [platform, setPlatform] = useState<ScriptFlow["platform"]>("android");
@@ -163,17 +246,26 @@ export function AiScriptFlowsPanel({
   const [parameterValues, setParameterValues] = useState<Record<string, ScriptParameterValue>>(() => draftParameterValues(generatedDraft));
   const [deviceSerial, setDeviceSerial] = useState(selectedSerial);
   const [plan, setPlan] = useState<CasePlanView>();
-  const [lastRun, setLastRun] = useState<TestRun>();
+  const [lastRun, setLastRun] = useState<TestRun | undefined>(() => activeStepTrialRun(activeRunForDevice));
   const [learning, setLearning] = useState<LearningSummaryResponse>();
-  const [busyAction, setBusyAction] = useState<"generate" | "save" | "run" | "review" | "select">();
+  const [busyAction, setBusyAction] = useState<"generate" | "save" | "run" | "review" | "select" | "stepRun" | "runControl">();
   const [useCurrentScreen, setUseCurrentScreen] = useState(false);
-  const [confirmedStepKeys, setConfirmedStepKeys] = useState<Set<string>>(() => new Set());
+  const [executionMode, setExecutionMode] = useState<ScriptRunExecutionMode>("once");
+  const [newStepAction, setNewStepAction] = useState<EditableStepAction>("tap");
+  const [stepRunContext, setStepRunContext] = useState<{ stepId: string; mode: "single" | "from_here" }>();
+  const [confirmedStepKeys, setConfirmedStepKeys] = useState<Set<string>>(() => confirmedKeysForDraft(initialDraft));
+  const [expandedStepKeys, setExpandedStepKeys] = useState<Set<string>>(() => new Set());
   const [stepReviewRequired, setStepReviewRequired] = useState(() => draftRequiresStepReview(initialDraft));
   const lastRunFailure = lastRun ? publicExecutionFailureFromRun(lastRun) : undefined;
 
   useEffect(() => {
     if (selectedSerial) setDeviceSerial(selectedSerial);
   }, [selectedSerial]);
+
+  useEffect(() => {
+    const activeStepRun = activeStepTrialRun(activeRunForDevice);
+    if (activeStepRun) setLastRun(activeStepRun);
+  }, [activeRunForDevice]);
 
   useEffect(() => {
     if (revision || !appId.trim()) return;
@@ -188,6 +280,10 @@ export function AiScriptFlowsPanel({
           setLastRun(run);
           const failure = publicExecutionFailureFromRun(run);
           if (failure) setMessage(failure.message);
+          if (!["pending", "running", "paused"].includes(run.status) && run.sourceSnapshot?.executionPurpose === "step_trial") {
+            if (run.status === "passed") setMessage("步骤试跑通过，可以确认或继续调整当前脚本");
+            return;
+          }
           if (["pending", "running", "paused"].includes(run.status) || run.sourceSnapshot?.executionPurpose !== "trial") return;
           const summary = await loadLearningSummary(run.id);
           setLearning(summary);
@@ -212,11 +308,14 @@ export function AiScriptFlowsPanel({
       setDraft(undefined);
       setParameterValues({});
       setLastRun(undefined);
+      setStepRunContext(undefined);
       setLearning(undefined);
       setPlan(undefined);
       setSelectedHistoryId(undefined);
       setConfirmedStepKeys(new Set());
+      setExpandedStepKeys(new Set());
       setStepReviewRequired(false);
+      setExecutionMode("once");
       const body = buildAiGenerateRequestBody({
         prompt: prompt.trim(),
         appId: appId.trim(),
@@ -234,7 +333,8 @@ export function AiScriptFlowsPanel({
         ? await reconcileDraftVerification(response.draft)
         : response.draft;
       setDraft(nextDraft);
-      setConfirmedStepKeys(new Set());
+      setConfirmedStepKeys(confirmedKeysForDraft(nextDraft));
+      setExpandedStepKeys(new Set());
       if (nextDraft.status === "ready" || nextDraft.status === "trial_ready") {
         setStepReviewRequired(true);
         setParameterValues(draftParameterValues(nextDraft));
@@ -288,6 +388,10 @@ export function AiScriptFlowsPanel({
       setMessage("请先确认所有执行步骤，再保存或执行测试。");
       return;
     }
+    if (executionMode === "loop_body" && !loopBodyReady) {
+      setMessage(loopBodyUnavailableReason ?? "请先配置每轮复位步骤。");
+      return;
+    }
     await executeDraft(generatedDraft, parameterValues, prompt.trim() || generatedDraft.document.description || generatedDraft.document.name);
   }
 
@@ -315,6 +419,7 @@ export function AiScriptFlowsPanel({
           deviceSerial,
           parameters: values,
           recordVideo: false,
+          ...draftRunOptions(executionMode),
           ...(androidAppMonitor ? { androidAppMonitor } : {})
         })
       });
@@ -355,11 +460,14 @@ export function AiScriptFlowsPanel({
       setDraft(nextDraft);
       setParameterValues(values);
       setLastRun(undefined);
+      setStepRunContext(undefined);
       setLearning(undefined);
       setPlan(undefined);
       setSelectedHistoryId(item.id);
-      setConfirmedStepKeys(new Set());
+      setConfirmedStepKeys(confirmedKeysForDraft(nextDraft));
+      setExpandedStepKeys(new Set());
       setStepReviewRequired(false);
+      setExecutionMode("once");
       setMessage(`已加载最近测试：${item.name}`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -399,16 +507,44 @@ export function AiScriptFlowsPanel({
 
   const steps = caseStepViews(generatedDraft?.document);
   const reviewSteps = stepReviewItems(generatedDraft?.document);
+  const loopReset = loopBodyAvailability(generatedDraft?.document);
+  const unconfirmedResetStep = reviewSteps.find((step) => step.phase === "reset" && !confirmedStepKeys.has(step.key));
+  const loopBodyReady = loopReset.available && !unconfirmedResetStep;
+  const loopBodyUnavailableReason = unconfirmedResetStep
+    ? "请先确认所有每轮复位步骤。"
+    : loopReset.reason;
   const confirmedStepCount = reviewSteps.filter((step) => confirmedStepKeys.has(step.key)).length;
-  const showStepReview = Boolean(stepReviewRequired && reviewSteps.length > 0);
-  const reviewBlocked = Boolean(generatedDraft && showStepReview && confirmedStepCount < reviewSteps.length);
+  const showStepOrchestrator = Boolean(generatedDraft);
+  const reviewBlocked = Boolean(generatedDraft && (
+    reviewSteps.length === 0 || (stepReviewRequired && confirmedStepCount < reviewSteps.length)
+  ));
   const busy = busyAction !== undefined;
+  const isStepTrial = lastRun?.sourceSnapshot?.executionPurpose === "step_trial";
+  const stepTrialRun = isStepTrial ? lastRun : undefined;
+  const trialStatusesEnabled = Boolean(
+    stepTrialRun?.sourceSnapshot?.sourceYaml
+    && stepTrialRun.sourceSnapshot.sourceYaml === generatedDraft?.sourceYaml
+  );
+  const stepTrialActive = Boolean(isStepTrial && lastRun && ["pending", "running", "paused"].includes(lastRun.status));
+  const continuousRunActive = Boolean(!isStepTrial && lastRun && ["pending", "running", "paused"].includes(lastRun.status));
+  const retryStepId = lastRun ? failedScriptStepId(lastRun) : undefined;
+  const retryStep = reviewSteps.find((step) => step.id === retryStepId)
+    ?? (stepRunContext ? reviewSteps.find((step) => step.id === stepRunContext.stepId) : undefined);
 
   function toggleStepConfirmed(stepKey: string, confirmed: boolean) {
     setConfirmedStepKeys((current) => {
       const next = new Set(current);
       if (confirmed) next.add(stepKey);
       else next.delete(stepKey);
+      return next;
+    });
+  }
+
+  function toggleStepExpanded(stepKey: string) {
+    setExpandedStepKeys((current) => {
+      const next = new Set(current);
+      if (next.has(stepKey)) next.delete(stepKey);
+      else next.add(stepKey);
       return next;
     });
   }
@@ -430,16 +566,176 @@ export function AiScriptFlowsPanel({
     }
   }
 
+  function updateStep(stepKey: string, patch: DraftStepPatch) {
+    if (!generatedDraft) return;
+    try {
+      setDraft(updateDraftStep(generatedDraft, stepKey, patch));
+      markStepEdited(stepKey);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  function addStep() {
+    if (!generatedDraft) return;
+    try {
+      const added = addDraftStep(generatedDraft, undefined, newStepAction);
+      applyStructuralDraftChange(added.draft);
+      setMessage(`已添加${caseActionLabel(newStepAction)}步骤`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  function addResetStep() {
+    if (!generatedDraft) return;
+    try {
+      const added = addDraftStep(generatedDraft, undefined, newStepAction, "reset");
+      applyStructuralDraftChange(added.draft);
+      setMessage(`已添加每轮复位步骤：${caseActionLabel(newStepAction)}`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  function setNoResetNeeded(checked: boolean) {
+    if (!generatedDraft) return;
+    try {
+      const updated = setDraftLoopResetMode(generatedDraft, checked ? "none" : "unconfigured");
+      setDraft(updated);
+      setPlan(undefined);
+      setStepReviewRequired(true);
+      setMessage(checked ? "已声明业务执行后会自然回到下一轮起点" : "已取消无需复位声明");
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  function duplicateStep(stepKey: string) {
+    if (!generatedDraft) return;
+    try {
+      applyStructuralDraftChange(duplicateDraftStep(generatedDraft, stepKey).draft);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  function moveStep(stepKey: string, direction: "up" | "down") {
+    if (!generatedDraft) return;
+    try {
+      applyStructuralDraftChange(moveDraftStep(generatedDraft, stepKey, direction));
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  function deleteStep(stepKey: string) {
+    if (!generatedDraft) return;
+    try {
+      applyStructuralDraftChange(removeDraftStep(generatedDraft, stepKey));
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  function markStepEdited(stepKey: string) {
+    setPlan(undefined);
+    setStepReviewRequired(true);
+    setConfirmedStepKeys((current) => {
+      const next = new Set(current);
+      next.delete(stepKey);
+      return next;
+    });
+  }
+
+  function applyStructuralDraftChange(next: GeneratedDraft) {
+    setDraft(next);
+    setPlan(undefined);
+    setStepReviewRequired(true);
+    setConfirmedStepKeys(new Set());
+    setExpandedStepKeys(new Set());
+  }
+
+  async function runDraftStep(step: StepReviewItem, mode: "single" | "from_here") {
+    if (!generatedDraft || step.structural) return;
+    if (!deviceSerial) {
+      setMessage("请先选择执行设备");
+      return;
+    }
+    try {
+      setBusyAction("stepRun");
+      const androidAppMonitor = androidAppMonitorForApp?.(generatedDraft.document.app.id);
+      const response = await apiFetchJson<{ run: TestRun }>("/api/script-flow-drafts/step-runs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildStepRunRequestBody({
+          sourceYaml: generatedDraft.sourceYaml,
+          deviceSerial,
+          parameters: parameterValues,
+          stepId: step.id,
+          mode,
+          androidAppMonitor
+        }))
+      });
+      setLastRun(response.run);
+      setLearning(undefined);
+      setStepRunContext({ stepId: step.id, mode });
+      setMessage(mode === "single" ? `正在试跑步骤 ${step.order}` : `已从步骤 ${step.order} 开始，完成每步后会暂停`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setBusyAction(undefined);
+    }
+  }
+
+  async function controlStepRun(action: "step" | "resume" | "stop") {
+    if (!lastRun) return;
+    try {
+      setBusyAction("runControl");
+      const response = await apiFetchJson<{ run?: TestRun }>(`/api/runs/${encodeURIComponent(lastRun.id)}/${action}`, {
+        method: "POST"
+      });
+      if (response.run) setLastRun(response.run);
+      setMessage(action === "step" ? "正在执行下一步" : action === "resume" ? "已继续执行剩余步骤" : "已停止步骤试跑");
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setBusyAction(undefined);
+    }
+  }
+
+  async function stopCurrentRun() {
+    if (!lastRun) return;
+    try {
+      setBusyAction("runControl");
+      const response = await apiFetchJson<{ run?: TestRun }>(`/api/runs/${encodeURIComponent(lastRun.id)}/stop`, {
+        method: "POST"
+      });
+      if (response.run) setLastRun(response.run);
+      setMessage("已停止当前执行");
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setBusyAction(undefined);
+    }
+  }
+
   return (
     <section className="module-page ai-script-module">
       <header className="ai-script-header">
         <div>
-          <h2>{revision ? "修改测试" : "AI 生成测试"}</h2>
-          <p>{revision ? `正在修改“${revision.name}”，描述需要调整的业务逻辑。` : "只需描述业务目标，AI 会生成可执行或保存的用例/场景。"}</p>
+          <h2>{manualEditing ? "编辑测试" : revision ? "AI 调整测试" : "AI 生成测试"}</h2>
+          <p>{manualEditing ? `正在编辑“${revision!.name}”，展开步骤后可直接修改。` : revision ? `正在调整“${revision.name}”，描述需要变更的业务逻辑。` : "只需描述业务目标，AI 会生成可执行或保存的用例/场景。"}</p>
         </div>
+        {onStartNewTest && (revision || draft || prompt.trim()) ? <button
+          type="button"
+          onClick={onStartNewTest}
+          disabled={busy || continuousRunActive || stepTrialActive}
+          title={continuousRunActive || stepTrialActive ? "请先停止当前执行" : "新建测试"}
+        ><Plus size={16} /><span>新建测试</span></button> : null}
       </header>
-      <div className="ai-script-layout">
-        <section className="ai-script-request">
+      <div className={`ai-script-layout${manualEditing ? " manual-edit" : ""}`}>
+        {!manualEditing ? <section className="ai-script-request">
           {revision ? <div className="ai-revision-context"><span>当前测试</span><strong>{revision.name}</strong><small>v{revision.version}</small></div> : (
             <div className="form-grid two-columns">
               <label>App ID<input value={appId} onChange={(event) => setAppId(event.target.value)} /></label>
@@ -491,24 +787,47 @@ export function AiScriptFlowsPanel({
               </div>
             </article>)}</div> : <p className="temporary-test-empty">执行过的临时测试会保留在这里。</p>}
           </section> : null}
-        </section>
+        </section> : null}
         <section className="ai-script-result" aria-live="polite">
+          {stepTrialRun && !generatedDraft ? <StepTrialRunBar
+            run={stepTrialRun}
+            busy={busyAction === "runControl"}
+            onControl={(action) => void controlStepRun(action)}
+            onOpenResult={() => onOpenRun(stepTrialRun.id)}
+          /> : null}
           {!draft ? <div className="empty"><strong>{revision ? "等待修改说明" : "等待生成"}</strong><span>规划时不会读取或改变当前设备页面。</span></div> : null}
           {draft?.status === "needs_clarification" ? <div className="ai-script-clarification"><strong>需要补充信息</strong><p>{draft.clarification}</p></div> : null}
           {generatedDraft ? <>
             <header><div><span className={`test-kind-badge ${generatedDraft.document.kind}`}>{testKindLabel(generatedDraft.document.kind)}</span><span className={`test-purpose-badge ${generatedDraft.document.purpose ?? "business"}`}>{testPurposeLabel(generatedDraft.document.purpose)}</span><span className={`test-level-badge ${generatedDraft.document.testLevel ?? "business_smoke"}`}>{testLevelLabel(generatedDraft.document.testLevel)}</span><h3>{generatedDraft.document.name}</h3><p>{generatedDraft.summary}</p></div><span>{steps.length} 个步骤</span></header>
             {generatedDraft.assumptions.length ? <div className="ai-script-assumptions"><strong>生成假设</strong>{generatedDraft.assumptions.map((item) => <p key={item}>{item}</p>)}</div> : null}
-            <section className="ai-case-logic">
-              <header><h3>执行逻辑</h3><span>{steps.length} 个步骤</span></header>
-              <ol className="case-step-list">
-                {steps.map((step) => <li key={step.id}><span>{step.order}</span><div><strong>{step.name}</strong><small>{step.context ?? step.id}</small></div></li>)}
-              </ol>
-            </section>
-            {showStepReview ? <StepReviewPanel
+            {showStepOrchestrator ? <StepReviewPanel
               steps={reviewSteps}
+              startStrategy={generatedDraft.document.start?.strategy}
+              loopResetMode={loopReset.mode}
               confirmedStepKeys={confirmedStepKeys}
+              expandedStepKeys={expandedStepKeys}
+              confirmationRequired={stepReviewRequired}
+              deviceAvailable={Boolean(deviceSerial)}
+              busy={busy || stepTrialActive}
+              trialRun={stepTrialRun}
+              trialStatusesEnabled={trialStatusesEnabled}
+              runControlBusy={busyAction === "runControl"}
+              newStepAction={newStepAction}
               onConfirm={toggleStepConfirmed}
+              onToggleExpanded={toggleStepExpanded}
+              onStepChange={updateStep}
               onLocatorChange={updateStepLocator}
+              onNewStepActionChange={setNewStepAction}
+              onAddStep={addStep}
+              onAddResetStep={addResetStep}
+              onNoResetNeededChange={setNoResetNeeded}
+              onDuplicateStep={duplicateStep}
+              onMoveStep={moveStep}
+              onDeleteStep={deleteStep}
+              onRunStep={(step, mode) => void runDraftStep(step, mode)}
+              onControlRun={(action) => void controlStepRun(action)}
+              onOpenRun={onOpenRun}
+              onRetryStep={retryStep ? () => void runDraftStep(retryStep, "single") : undefined}
             /> : null}
             {caseCenterEligible(generatedDraft.document) ? <div className="ai-case-actions">
               <button type="button" onClick={() => void saveDraft()} disabled={busy || reviewBlocked}><Save size={16} /><span>{revision ? "保存修改" : generatedDraft.sourceFlow ? "更新用例中心" : "保存到用例中心"}</span></button>
@@ -518,17 +837,30 @@ export function AiScriptFlowsPanel({
               values={parameterValues}
               devices={devices}
               deviceSerial={deviceSerial}
-              busy={busyAction === "run"}
+              busy={busyAction === "run" || busyAction === "runControl"}
+              executionMode={executionMode}
+              active={continuousRunActive}
+              currentIteration={lastRun ? currentRunIteration(lastRun.stepResults) : undefined}
               disabled={reviewBlocked}
+              loopBodyAvailable={loopBodyReady}
+              loopBodyUnavailableReason={loopBodyUnavailableReason}
               onValueChange={(key, value) => {
                 setParameterValues((current) => ({ ...current, [key]: value }));
                 setPlan(undefined);
               }}
               onDeviceChange={setDeviceSerial}
+              onExecutionModeChange={setExecutionMode}
               onRun={() => void runDraft()}
+              onStop={() => void stopCurrentRun()}
               buttonLabel="执行"
             />
-            {lastRun ? <section className="script-run-status"><header><h3>执行状态</h3><strong data-status={lastRun.status}>{lastRun.status}</strong></header><p>{lastRun.stepResults.length}/{lastRun.steps.length} 个步骤</p>{lastRunFailure ? <ExecutionFailureNotice failure={lastRunFailure} onOpenReport={() => onOpenRun(lastRun.id)} /> : <button type="button" onClick={() => onOpenRun(lastRun.id)}>查看执行结果</button>}</section> : null}
+            {lastRun && !isStepTrial ? <section className="script-run-status">
+              <header><h3>执行状态</h3><strong data-status={lastRun.status}>{runStatusLabel(lastRun.status)}</strong></header>
+              {lastRun.config.mode === "loop_until_stop"
+                ? <p>第 {currentRunIteration(lastRun.stepResults) || 1} 轮 · 累计执行 {lastRun.stepResults.length} 个步骤</p>
+                : <p>{lastRun.stepResults.length}/{lastRun.steps.length} 个步骤</p>}
+              {lastRunFailure ? <ExecutionFailureNotice failure={lastRunFailure} onOpenReport={() => onOpenRun(lastRun.id)} /> : <button type="button" onClick={() => onOpenRun(lastRun.id)}>查看执行结果</button>}
+            </section> : null}
             {learning ? <TrialOutcomeReview
               session={learning.session}
               busy={busyAction === "review"}
@@ -541,41 +873,284 @@ export function AiScriptFlowsPanel({
   );
 }
 
+export function StepTrialRunBar({
+  run,
+  busy,
+  onControl,
+  onOpenResult,
+  onRetry
+}: {
+  run: TestRun;
+  busy: boolean;
+  onControl: (action: "step" | "resume" | "stop") => void;
+  onOpenResult: () => void;
+  onRetry?: () => void;
+}) {
+  const active = ["pending", "running", "paused"].includes(run.status);
+  return <section className="step-trial-run-bar" aria-label="当前步骤试跑">
+    <div className="step-trial-run-copy">
+      <span>当前试跑</span>
+      <strong>{run.caseName}</strong>
+      <small>{run.stepResults.length}/{run.steps.length} 个步骤</small>
+    </div>
+    <strong className="run-status-badge" data-status={run.status}>{runStatusLabel(run.status)}</strong>
+    <div className="step-run-controls">
+      {run.status === "paused" ? <>
+        <button type="button" onClick={() => onControl("step")} disabled={busy}><StepForward size={15} /><span>执行下一步</span></button>
+        <button type="button" onClick={() => onControl("resume")} disabled={busy}><Play size={15} /><span>连续执行</span></button>
+      </> : null}
+      {active ? <button type="button" onClick={() => onControl("stop")} disabled={busy}><Square size={15} /><span>停止</span></button> : null}
+      {run.status === "failed" && onRetry ? <button type="button" onClick={onRetry} disabled={busy}><RotateCcw size={15} /><span>重试失败步骤</span></button> : null}
+      <button type="button" onClick={onOpenResult} disabled={busy}><FileSearch size={15} /><span>查看结果</span></button>
+    </div>
+  </section>;
+}
+
 function StepReviewPanel({
   steps,
+  startStrategy,
+  loopResetMode,
   confirmedStepKeys,
+  expandedStepKeys,
+  confirmationRequired,
+  deviceAvailable,
+  busy,
+  trialRun,
+  trialStatusesEnabled,
+  runControlBusy,
+  newStepAction,
   onConfirm,
-  onLocatorChange
+  onToggleExpanded,
+  onStepChange,
+  onLocatorChange,
+  onNewStepActionChange,
+  onAddStep,
+  onAddResetStep,
+  onNoResetNeededChange,
+  onDuplicateStep,
+  onMoveStep,
+  onDeleteStep,
+  onRunStep,
+  onControlRun,
+  onOpenRun,
+  onRetryStep
 }: {
   steps: StepReviewItem[];
+  startStrategy?: NonNullable<CaseDocumentView["start"]>["strategy"];
+  loopResetMode: "steps" | "none" | "unconfigured";
   confirmedStepKeys: Set<string>;
+  expandedStepKeys: Set<string>;
+  confirmationRequired: boolean;
+  deviceAvailable: boolean;
+  busy: boolean;
+  trialRun?: TestRun;
+  trialStatusesEnabled: boolean;
+  runControlBusy: boolean;
+  newStepAction: EditableStepAction;
   onConfirm: (stepKey: string, confirmed: boolean) => void;
+  onToggleExpanded: (stepKey: string) => void;
+  onStepChange: (stepKey: string, patch: DraftStepPatch) => void;
   onLocatorChange: (stepKey: string, patch: StepLocatorPatch) => void;
+  onNewStepActionChange: (action: EditableStepAction) => void;
+  onAddStep: () => void;
+  onAddResetStep: () => void;
+  onNoResetNeededChange: (checked: boolean) => void;
+  onDuplicateStep: (stepKey: string) => void;
+  onMoveStep: (stepKey: string, direction: "up" | "down") => void;
+  onDeleteStep: (stepKey: string) => void;
+  onRunStep: (step: StepReviewItem, mode: "single" | "from_here") => void;
+  onControlRun: (action: "step" | "resume" | "stop") => void;
+  onOpenRun: (runId: string) => void;
+  onRetryStep?: () => void;
 }) {
   const confirmedCount = steps.filter((step) => confirmedStepKeys.has(step.key)).length;
-  const blocked = steps.length > 0 && confirmedCount < steps.length;
+  const empty = steps.length === 0;
+  const blocked = confirmationRequired && steps.length > 0 && confirmedCount < steps.length;
+  const sections = stepReviewSections(steps);
+  const displayedStartStrategy = startStrategy === "launchApp" && steps.some((step) => step.phase === "preparation" && step.action === "launchApp")
+    ? undefined
+    : startStrategy;
   return <section className="ai-step-review">
-    <header><h3>步骤审查</h3><span>{confirmedCount}/{steps.length} 已确认</span></header>
-    {blocked ? <p className="ai-step-review-warning">确认所有步骤后才能执行或保存。</p> : <p className="ai-step-review-ready">所有步骤已确认，可以执行或保存。</p>}
-    <ol className="ai-step-review-list">
-      {steps.map((step) => <li key={step.key} data-confirmed={confirmedStepKeys.has(step.key)}>
-        <div className="ai-step-review-head">
-          <label>
-            <input
-              type="checkbox"
-              checked={confirmedStepKeys.has(step.key)}
-              onChange={(event) => onConfirm(step.key, event.target.checked)}
-            />
-            <span>确认步骤 {step.order}：{step.name}</span>
-          </label>
-          <small>{step.context ?? step.id}</small>
-        </div>
-        {step.locator ? <StepLocatorEditor stepKey={step.key} locator={step.locator} onChange={onLocatorChange} /> : (
-          <p className="ai-step-review-static">此步骤没有元素定位参数。</p>
-        )}
-      </li>)}
-    </ol>
+    <header>
+      <div><h3>脚本编排</h3><span>{confirmationRequired ? `${confirmedCount}/${steps.length} 已确认` : "已有执行记录"}</span></div>
+      <div className="orchestrator-add-step">
+        <select aria-label="新增步骤动作" value={newStepAction} onChange={(event) => onNewStepActionChange(event.target.value as EditableStepAction)} disabled={busy}>
+          {EDITABLE_ACTIONS.map((action) => <option key={action} value={action}>{caseActionLabel(action)}</option>)}
+        </select>
+        <button type="button" onClick={onAddStep} disabled={busy}><Plus size={15} /><span>添加步骤</span></button>
+      </div>
+    </header>
+    {trialRun ? <StepTrialRunBar
+      run={trialRun}
+      busy={runControlBusy}
+      onControl={onControlRun}
+      onOpenResult={() => onOpenRun(trialRun.id)}
+      onRetry={onRetryStep}
+    /> : null}
+    {empty ? <p className="ai-step-review-warning">请至少添加一个步骤，才能执行或保存。</p> : blocked ? <p className="ai-step-review-warning">确认所有步骤后才能执行或保存。</p> : confirmationRequired
+      ? <p className="ai-step-review-ready">所有步骤已确认，可以执行或保存。</p>
+      : <p className="ai-step-review-ready">当前脚本已有执行记录；编辑后需要重新确认。</p>}
+    <div className="ai-step-review-sections">
+      {sections.map((section) => <section className="ai-step-review-section" key={section.id} aria-labelledby={`step-section-${section.id}`}>
+        <header className="ai-step-review-section-head">
+          <h4 id={`step-section-${section.id}`}>{section.title}</h4>
+          <div>
+            <span>{section.steps.length} 项</span>
+            {section.id === "reset" ? <button type="button" onClick={onAddResetStep} disabled={busy}><Plus size={14} /><span>添加复位步骤</span></button> : null}
+          </div>
+        </header>
+        {section.id === "preparation" && displayedStartStrategy ? <p className="legacy-start-strategy">启动策略：{startStrategyLabel(displayedStartStrategy)}</p> : null}
+        {section.id === "reset" ? <label className="loop-reset-none">
+          <input
+            type="checkbox"
+            checked={loopResetMode === "none"}
+            disabled={busy || section.steps.length > 0}
+            onChange={(event) => onNoResetNeededChange(event.target.checked)}
+          />
+          <span>业务执行后已回到起点，无需复位</span>
+        </label> : null}
+        {section.steps.length ? <ol className="ai-step-review-list">
+          {section.steps.map((step) => {
+        const expanded = expandedStepKeys.has(step.key);
+        const trialStatus = trialRun && trialStatusesEnabled ? stepTrialStatusForStep(trialRun, step.id) : undefined;
+        return <li
+          key={step.key}
+          data-confirmed={confirmedStepKeys.has(step.key)}
+          data-expanded={expanded}
+          data-structural={step.structural}
+          style={{ marginLeft: `${Math.min(3, Math.max(0, step.path.length - 1)) * 16}px` }}
+        >
+          <div className="ai-step-review-head">
+            <div className="ai-step-review-title">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={confirmedStepKeys.has(step.key)}
+                  onChange={(event) => onConfirm(step.key, event.target.checked)}
+                />
+                <span>确认步骤 {step.order}：{step.name}</span>
+              </label>
+              {trialStatus ? <span className="step-trial-status" data-status={trialStatus}>{stepTrialStatusLabel(trialStatus)}</span> : null}
+            </div>
+            <div className="orchestrator-step-tools">
+              {expanded ? <>
+                <button type="button" title="上移" aria-label={`上移步骤 ${step.order}`} onClick={() => onMoveStep(step.key, "up")} disabled={busy || !step.canMoveUp}><ArrowUp size={14} /></button>
+                <button type="button" title="下移" aria-label={`下移步骤 ${step.order}`} onClick={() => onMoveStep(step.key, "down")} disabled={busy || !step.canMoveDown}><ArrowDown size={14} /></button>
+                <button type="button" title="复制" aria-label={`复制步骤 ${step.order}`} onClick={() => onDuplicateStep(step.key)} disabled={busy}><Copy size={14} /></button>
+                <button type="button" title="删除" aria-label={`删除步骤 ${step.order}`} onClick={() => onDeleteStep(step.key)} disabled={busy}><Trash2 size={14} /></button>
+              </> : null}
+              <button
+                type="button"
+                className="orchestrator-step-toggle"
+                title={expanded ? "收起" : "展开"}
+                aria-label={`${expanded ? "收起" : "展开"}步骤 ${step.order}`}
+                aria-expanded={expanded}
+                onClick={() => onToggleExpanded(step.key)}
+              >
+                {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+              </button>
+            </div>
+          </div>
+          {expanded ? <>
+            <small className="orchestrator-step-context">{step.context ?? step.id}</small>
+            <StepActionEditor step={step} onChange={onStepChange} />
+            {step.locator ? <StepLocatorEditor stepKey={step.key} locator={step.locator} onChange={onLocatorChange} /> : step.structural
+              ? <p className="ai-step-review-static">结构步骤由内部步骤组成，请在下方逐步调整。</p>
+              : <p className="ai-step-review-static">此动作不需要元素定位参数。</p>}
+            <div className="orchestrator-step-run-actions">
+              <button type="button" aria-label={`试跑第 ${step.order} 步`} onClick={() => onRunStep(step, "single")} disabled={busy || !deviceAvailable || step.structural}><Play size={14} /><span>试跑此步</span></button>
+              <button type="button" aria-label={`从第 ${step.order} 步开始试跑`} onClick={() => onRunStep(step, "from_here")} disabled={busy || !deviceAvailable || step.structural}><StepForward size={14} /><span>从此处试跑</span></button>
+            </div>
+          </> : null}
+        </li>;
+          })}
+        </ol> : section.id === "preparation" && displayedStartStrategy
+          ? null
+          : section.id === "reset" && loopResetMode === "none"
+            ? <p className="ai-step-review-section-empty">已明确无需复位，可以循环业务与验证。</p>
+            : <p className="ai-step-review-section-empty">{section.emptyText}</p>}
+      </section>)}
+    </div>
   </section>;
+}
+
+function stepReviewSections(steps: StepReviewItem[]) {
+  const definitions = [
+    { id: "preparation" as const, title: "前置准备", emptyText: "无前置准备，执行时依赖当前设备状态" },
+    { id: "business" as const, title: "业务步骤", emptyText: "请至少添加一个业务步骤" },
+    { id: "verification" as const, title: "结果验证", emptyText: "未设置结果验证，执行完成后需要人工确认" },
+    { id: "reset" as const, title: "每轮复位", emptyText: "请先配置每轮复位步骤，或明确业务执行后已回到循环起点。" }
+  ];
+  return definitions.map((definition) => ({
+    ...definition,
+    steps: steps.filter((step) => step.phase === definition.id)
+  }));
+}
+
+function startStrategyLabel(strategy: NonNullable<CaseDocumentView["start"]>["strategy"]): string {
+  const labels: Record<NonNullable<CaseDocumentView["start"]>["strategy"], string> = {
+    keepCurrent: "保持当前设备状态",
+    goHome: "返回系统桌面",
+    launchApp: "重启 App",
+    restartApp: "重启 App",
+    clearDataAndLaunch: "清除应用数据并启动 App"
+  };
+  return labels[strategy];
+}
+
+function StepActionEditor({
+  step,
+  onChange
+}: {
+  step: StepReviewItem;
+  onChange: (stepKey: string, patch: DraftStepPatch) => void;
+}) {
+  const role = roleForReviewPhase(step.phase);
+  return <div className="step-action-editor">
+    <div className="step-action-grid">
+      <label>步骤名称<input value={typeof step.source.name === "string" ? step.source.name : ""} placeholder={step.name} onChange={(event) => onChange(step.key, { name: event.target.value })} /></label>
+      {step.structural ? <label>动作类型<input value={caseActionLabel(step.action)} disabled /></label> : <label>动作类型<select value={step.action} onChange={(event) => onChange(step.key, { action: event.target.value as EditableStepAction })}>
+        {EDITABLE_ACTIONS.map((action) => <option key={action} value={action}>{caseActionLabel(action)}</option>)}
+      </select></label>}
+      <label>所属部分<select value={role} onChange={(event) => onChange(step.key, { role: event.target.value })}>
+        {SECTION_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select></label>
+      <StepActionFields step={step} onChange={onChange} />
+    </div>
+  </div>;
+}
+
+function StepActionFields({
+  step,
+  onChange
+}: {
+  step: StepReviewItem;
+  onChange: (stepKey: string, patch: DraftStepPatch) => void;
+}) {
+  const action = step.action;
+  const value = stepActionValue(step.source, action);
+  if (action === "inputText" || action === "selectText") {
+    return <label>{action === "inputText" ? "输入内容" : "选择内容"}<input value={value} onChange={(event) => onChange(step.key, { value: event.target.value })} /></label>;
+  }
+  if (action === "assertText") {
+    return <>
+      <label>预期文字<input value={value} onChange={(event) => onChange(step.key, { value: event.target.value })} /></label>
+      <label>匹配方式<select value={stepActionMatch(step.source)} onChange={(event) => onChange(step.key, { match: event.target.value })}><option value="contains">包含文本</option><option value="exact">整屏文本完全一致</option></select></label>
+    </>;
+  }
+  if (action === "reachPage" || action === "waitForPage" || action === "assertPage") {
+    return <label>页面标识<input value={stepActionPage(step.source, action)} onChange={(event) => onChange(step.key, { page: event.target.value })} /></label>;
+  }
+  if (action === "swipe") {
+    return <>
+      <label>滑动方向<select value={stepActionDirection(step.source, action)} onChange={(event) => onChange(step.key, { direction: event.target.value })}><option value="up">向上</option><option value="down">向下</option><option value="left">向左</option><option value="right">向右</option></select></label>
+      <label>滑动距离<input type="number" min="0.1" max="1" step="0.1" value={stepActionDistance(step.source)} onChange={(event) => onChange(step.key, { distance: event.target.value })} /></label>
+    </>;
+  }
+  if (action === "scrollUntilVisible") {
+    return <label>滚动方向<select value={stepActionDirection(step.source, action)} onChange={(event) => onChange(step.key, { direction: event.target.value })}><option value="down">向下</option><option value="up">向上</option></select></label>;
+  }
+  return null;
 }
 
 function StepLocatorEditor({
@@ -595,13 +1170,29 @@ function StepLocatorEditor({
       <small>{locatorSearchSummary(locator)}</small>
     </div>
     <div className="step-locator-grid">
-      {locator.targetKind !== "control" ? <label>{targetValueLabel}<input value={locator.targetValue} onChange={(event) => onChange(stepKey, { targetValue: event.target.value })} /></label> : null}
-      <label>页面区域<select value={locator.area ?? ""} onChange={(event) => onChange(stepKey, { area: event.target.value })}>
+      <label>定位方式<select value={locator.targetKind} onChange={(event) => onChange(stepKey, { targetKind: event.target.value as TargetKind })}>
+        {(Object.keys(TARGET_KIND_LABELS) as TargetKind[]).map((kind) => <option key={kind} value={kind}>{TARGET_KIND_LABELS[kind]}</option>)}
+      </select></label>
+      {locator.targetKind === "control" ? <label>控件类型<select value={locator.targetValue} onChange={(event) => onChange(stepKey, { targetValue: event.target.value })}>
+        {CONTROL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select></label> : <label>{targetValueLabel}<input value={locator.targetValue} onChange={(event) => onChange(stepKey, { targetValue: event.target.value })} /></label>}
+      <label>页面区域<select value={locator.targetKind === "control" ? "content" : locator.area ?? ""} onChange={(event) => onChange(stepKey, { area: event.target.value })} disabled={locator.targetKind === "control"}>
         {AREA_OPTIONS.map((option) => <option key={option.value || "auto"} value={option.value}>{option.label}</option>)}
       </select></label>
       {locator.usesSearchPolicy ? <label>查找方式<select value={locator.searchMode ?? ""} onChange={(event) => onChange(stepKey, { searchMode: event.target.value })}>
         {SEARCH_MODE_OPTIONS.map((option) => <option key={option.value || "default"} value={option.value}>{option.label}</option>)}
       </select></label> : null}
+      <label>相邻文字<input value={locator.nearText ?? ""} onChange={(event) => onChange(stepKey, { nearText: event.target.value })} /></label>
+      <label>限定文字<input value={locator.scopeText ?? ""} onChange={(event) => onChange(stepKey, { scopeText: event.target.value })} /></label>
+      <label>匹配序号<input type="number" min="1" value={locator.ordinal ?? ""} onChange={(event) => onChange(stepKey, { ordinal: event.target.value })} /></label>
+      {locator.targetKind === "control" && locator.targetValue === "switch" ? <label>选中状态<select value={locator.checked ?? "false"} onChange={(event) => onChange(stepKey, { checked: event.target.value })}><option value="true">已选中</option><option value="false">未选中</option></select></label> : null}
+      {locator.targetKind === "icon" ? <label>相对位置<select value={locator.position ?? ""} onChange={(event) => onChange(stepKey, { position: event.target.value })}><option value="">自动</option><option value="leading">前侧</option><option value="trailing">后侧</option></select></label> : null}
+      {locator.usesSearchPolicy ? <>
+        <label>滚动方向<select value={locator.direction ?? ""} onChange={(event) => onChange(stepKey, { direction: event.target.value })}><option value="">自动</option><option value="down">向下</option><option value="up">向上</option><option value="both">双向</option></select></label>
+        <label>最多滑动次数<input type="number" min="1" value={locator.maxSwipes ?? ""} onChange={(event) => onChange(stepKey, { maxSwipes: event.target.value })} /></label>
+        <label>滚动起点<select value={locator.resetToTop ?? ""} onChange={(event) => onChange(stepKey, { resetToTop: event.target.value })}><option value="">自动</option><option value="true">先回到顶部</option><option value="false">保持当前位置</option></select></label>
+        <label>查找容器<select value={locator.container ?? ""} onChange={(event) => onChange(stepKey, { container: event.target.value })}><option value="">默认</option><option value="content">页面内容</option></select></label>
+      </> : <label>最多滑动次数<input type="number" min="1" value={locator.maxSwipes ?? ""} onChange={(event) => onChange(stepKey, { maxSwipes: event.target.value })} /></label>}
     </div>
   </div>;
 }
@@ -639,6 +1230,48 @@ function optionLabel(options: LocatorOption[], value: string | undefined): strin
   return options.find((option) => option.value === (value ?? ""))?.label ?? (value?.trim() || "默认");
 }
 
+function roleForReviewPhase(phase: StepReviewItem["phase"]): "setup" | "business" | "assertion" | "reset" {
+  if (phase === "preparation") return "setup";
+  if (phase === "verification") return "assertion";
+  if (phase === "reset") return "reset";
+  return "business";
+}
+
+function stepActionValue(step: CaseSourceStep, action: string): string {
+  const record = action === "inputText"
+    ? recordValue(step.inputText)
+    : action === "selectText"
+      ? recordValue(step.selectText)
+      : action === "assertText"
+        ? recordValue(step.assertText)
+        : undefined;
+  const value = action === "assertText" ? record?.text : record?.value;
+  return typeof value === "string" ? value : value === undefined ? "" : String(value);
+}
+
+function stepActionPage(step: CaseSourceStep, action: string): string {
+  if (action === "reachPage") {
+    const value = recordValue(step.reachPage)?.page;
+    return typeof value === "string" ? value : "";
+  }
+  const value = action === "waitForPage" ? step.waitForPage : step.assertPage;
+  return typeof value === "string" ? value : "";
+}
+
+function stepActionDirection(step: CaseSourceStep, action: string): string {
+  const record = action === "swipe" ? recordValue(step.swipe) : recordValue(step.scrollUntilVisible);
+  return typeof record?.direction === "string" ? record.direction : action === "swipe" ? "up" : "down";
+}
+
+function stepActionDistance(step: CaseSourceStep): string {
+  const value = recordValue(step.swipe)?.distance;
+  return typeof value === "number" ? String(value) : "";
+}
+
+function stepActionMatch(step: CaseSourceStep): string {
+  return recordValue(step.assertText)?.match === "exact" ? "exact" : "contains";
+}
+
 export function ExecutionFailureNotice({
   failure,
   onOpenReport
@@ -653,12 +1286,65 @@ export function caseCenterEligible(document: Pick<CaseDocumentView, "purpose" | 
   return document?.purpose !== "navigation" && document?.testLevel !== "probe";
 }
 
+type StepTrialStatus = "running" | "passed" | "paused" | "failed" | "stopped";
+
+function activeStepTrialRun(run: TestRun | undefined): TestRun | undefined {
+  return run?.sourceSnapshot?.executionPurpose === "step_trial" ? run : undefined;
+}
+
+export function stepTrialStatusForStep(run: TestRun, scriptStepId: string): StepTrialStatus | undefined {
+  const plannedSteps = run.steps.filter((step) => actionScriptStepId(step) === scriptStepId);
+  if (!plannedSteps.length) return undefined;
+
+  const plannedActionIds = new Set(plannedSteps.map((step) => step.id));
+  const results = run.stepResults.filter((result) => plannedActionIds.has(result.stepId));
+  if (results.some((result) => result.status === "failed" || result.status === "timeout")) return "failed";
+  if (results.some((result) => result.status === "running" || result.status === "pending")) return "running";
+
+  const completedActionIds = new Set(run.stepResults
+    .filter((result) => ["passed", "failed", "skipped", "timeout"].includes(result.status))
+    .map((result) => result.stepId));
+  const allPassed = plannedSteps.every((step) => run.stepResults.some((result) => (
+    result.stepId === step.id && (result.status === "passed" || result.status === "skipped")
+  )));
+  if (allPassed) return "passed";
+
+  const currentAction = run.steps.find((step) => !completedActionIds.has(step.id));
+  if (!currentAction || actionScriptStepId(currentAction) !== scriptStepId) return undefined;
+  if (run.status === "paused") return "paused";
+  if (run.status === "pending" || run.status === "running") return "running";
+  if (run.status === "stopped") return "stopped";
+  if (run.status === "failed" || run.status === "timeout" || run.status === "device_lost") return "failed";
+  return undefined;
+}
+
+function failedScriptStepId(run: TestRun): string | undefined {
+  const failed = run.stepResults.find((result) => result.status === "failed" || result.status === "timeout");
+  const action = failed ? run.steps.find((step) => step.id === failed.stepId) : undefined;
+  return action ? actionScriptStepId(action) : undefined;
+}
+
+function actionScriptStepId(step: TestRun["steps"][number]): string | undefined {
+  const scriptStepId = step.params.scriptStepId;
+  return typeof scriptStepId === "string" ? scriptStepId : step.id;
+}
+
+function stepTrialStatusLabel(status: StepTrialStatus): string {
+  if (status === "running") return "执行中";
+  if (status === "passed") return "已通过";
+  if (status === "paused") return "已暂停";
+  if (status === "failed") return "失败";
+  return "已停止";
+}
+
 function runStatusLabel(status: TestRun["status"]): string {
   if (status === "passed") return "已通过";
   if (status === "failed") return "失败";
   if (status === "running" || status === "pending") return "执行中";
+  if (status === "paused") return "已暂停";
   if (status === "stopped") return "已停止";
-  return status;
+  if (status === "timeout") return "超时";
+  return "设备已断开";
 }
 
 async function refreshHistory(appId: string, platform: string): Promise<TemporaryTest[]> {
@@ -717,6 +1403,11 @@ function draftParameterValues(draft: GeneratedDraft | undefined): Record<string,
   };
 }
 
+function confirmedKeysForDraft(draft: AiDraft | undefined): Set<string> {
+  if (draft?.status !== "ready" && draft?.status !== "trial_ready") return new Set();
+  return new Set(stepReviewItems(draft.document).map((step) => step.key));
+}
+
 function draftRequiresStepReview(draft: AiDraft | undefined): boolean {
   return (draft?.status === "ready" || draft?.status === "trial_ready") && draft.channel !== "history";
 }
@@ -725,12 +1416,17 @@ export function draftRunEndpoint(status: GeneratedDraft["status"]): string {
   return status === "trial_ready" ? "/api/script-flow-drafts/trial-runs" : "/api/script-flow-drafts/runs";
 }
 
+export function draftRunOptions(executionMode: ScriptRunExecutionMode): ReturnType<typeof runOptionsForExecutionMode> {
+  return runOptionsForExecutionMode(executionMode);
+}
+
 export function stepReviewItems(document: CaseDocumentView | undefined): StepReviewItem[] {
   if (!document) return [];
   const views = caseStepViews(document);
   return flattenStepEntries(document.steps).map((entry, index) => {
     const view = views[index];
     const action = sourceActionName(entry.step);
+    const siblings = stepSiblingsAtPath(document.steps, entry.path);
     return {
       key: reviewStepKey(entry.path, entry.step),
       path: entry.path,
@@ -739,10 +1435,33 @@ export function stepReviewItems(document: CaseDocumentView | undefined): StepRev
       name: view?.name ?? action,
       action,
       context: view?.context,
-      risk: view?.risk ?? "none",
+      phase: reviewPhase(entry.step, action),
+      source: entry.step,
+      structural: !EDITABLE_ACTIONS.includes(action as EditableStepAction),
+      canMoveUp: entry.path.at(-1)! > 0,
+      canMoveDown: entry.path.at(-1)! < siblings.length - 1,
       locator: locatorView(entry.step)
     };
   });
+}
+
+function reviewPhase(step: CaseSourceStep, action: string): StepReviewItem["phase"] {
+  if (step.role === "reset") return "reset";
+  if (step.role === "setup" || step.role === "recovery" || action === "launchApp") return "preparation";
+  if (step.role === "assertion" || step.role === "cleanup" || action === "assertPage" || action === "assertText" || action === "waitForPage") {
+    return "verification";
+  }
+  return "business";
+}
+
+function stepSiblingsAtPath(steps: CaseSourceStep[], path: number[]): CaseSourceStep[] {
+  let siblings = steps;
+  for (const index of path.slice(0, -1)) {
+    const parent = siblings[index];
+    if (!parent) return [];
+    siblings = nestedSteps(parent) ?? [];
+  }
+  return siblings;
 }
 
 export function updateDraftStepLocator(
@@ -750,19 +1469,7 @@ export function updateDraftStepLocator(
   stepKey: string,
   patch: StepLocatorPatch
 ): GeneratedDraft {
-  const document = cloneCaseDocument(draft.document);
-  const step = stepByReviewKey(document.steps, stepKey);
-  if (!step) throw new Error("没有找到要编辑的步骤");
-  const targetAction = targetActionRecord(step);
-  if (!targetAction) throw new Error("当前步骤没有可编辑的元素定位");
-  applyLocatorPatch(targetAction, patch);
-  const { verification: _verification, ...rest } = draft;
-  return {
-    ...rest,
-    status: "trial_ready",
-    document,
-    sourceYaml: serializeScriptFlow(document as unknown as ScriptFlowDocument)
-  };
+  return updateOrchestratorStepLocator(draft, stepKey, patch);
 }
 
 function flattenStepEntries(
@@ -786,23 +1493,6 @@ function nestedSteps(step: CaseSourceStep): CaseSourceStep[] | undefined {
 
 function reviewStepKey(path: number[], step: CaseSourceStep): string {
   return `${path.join(".")}:${step.id}`;
-}
-
-function stepByReviewKey(steps: CaseSourceStep[], key: string): CaseSourceStep | undefined {
-  const path = key.split(":")[0]?.split(".").map((item) => Number(item));
-  if (!path?.length || path.some((item) => !Number.isInteger(item) || item < 0)) return undefined;
-  let currentSteps = steps;
-  let current: CaseSourceStep | undefined;
-  for (const index of path) {
-    current = currentSteps[index];
-    if (!current) return undefined;
-    currentSteps = nestedSteps(current) ?? [];
-  }
-  return current;
-}
-
-function cloneCaseDocument(document: CaseDocumentView): CaseDocumentView {
-  return JSON.parse(JSON.stringify(document)) as CaseDocumentView;
 }
 
 function sourceActionName(step: CaseSourceStep): string {
@@ -861,74 +1551,6 @@ function optionalStringField<K extends keyof StepLocatorView>(
   return typeof value === "string" && value ? { [key]: value } as Partial<Pick<StepLocatorView, K>> : {};
 }
 
-function applyLocatorPatch(
-  targetAction: { actionName: string; action: Record<string, unknown>; target: Record<string, unknown> },
-  patch: StepLocatorPatch
-): void {
-  applyPrimaryTargetPatch(targetAction.target, patch);
-  setOptionalString(targetAction.target, "area", patch.area);
-  setOptionalString(targetAction.target, "position", patch.position);
-  setOptionalString(targetAction.target, "nearText", patch.nearText);
-  setOptionalString(targetAction.target, "scopeText", patch.scopeText);
-  setOptionalNumber(targetAction.target, "ordinal", patch.ordinal);
-  setOptionalBoolean(targetAction.target, "checked", patch.checked);
-
-  if (targetAction.actionName === "scrollUntilVisible") {
-    setOptionalString(targetAction.action, "direction", patch.direction);
-    setOptionalNumber(targetAction.action, "maxSwipes", patch.maxSwipes);
-    return;
-  }
-
-  const search = { ...recordValue(targetAction.action.search) };
-  setOptionalString(search, "mode", patch.searchMode);
-  setOptionalString(search, "direction", patch.direction);
-  setOptionalNumber(search, "maxSwipes", patch.maxSwipes);
-  setOptionalBoolean(search, "resetToTop", patch.resetToTop);
-  setOptionalString(search, "container", patch.container);
-  if (Object.keys(search).length) targetAction.action.search = search;
-  else delete targetAction.action.search;
-}
-
-function applyPrimaryTargetPatch(target: Record<string, unknown>, patch: StepLocatorPatch): void {
-  const current = primaryTargetValue(target);
-  const kind = patch.targetKind ?? current.kind;
-  const value = patch.targetValue ?? (patch.targetKind && patch.targetKind !== current.kind ? defaultTargetValue(kind, current.value) : current.value);
-  if (patch.targetKind === undefined && patch.targetValue === undefined) return;
-  delete target.text;
-  delete target.semantic;
-  delete target.icon;
-  delete target.control;
-  if (value.trim()) target[kind] = value.trim();
-}
-
-function defaultTargetValue(kind: TargetKind, currentValue: string): string {
-  if (kind === "control") return "textField";
-  return currentValue;
-}
-
-function setOptionalString(target: Record<string, unknown>, key: string, value: string | undefined): void {
-  if (value === undefined) return;
-  if (value.trim()) target[key] = value.trim();
-  else delete target[key];
-}
-
-function setOptionalNumber(target: Record<string, unknown>, key: string, value: string | undefined): void {
-  if (value === undefined) return;
-  if (!value.trim()) {
-    delete target[key];
-    return;
-  }
-  const numeric = Number(value);
-  if (Number.isInteger(numeric) && numeric > 0) target[key] = numeric;
-}
-
-function setOptionalBoolean(target: Record<string, unknown>, key: string, value: string | undefined): void {
-  if (value === undefined) return;
-  if (value === "true") target[key] = true;
-  else if (value === "false") target[key] = false;
-  else delete target[key];
-}
-
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
@@ -957,6 +1579,25 @@ export function buildAiGenerateRequestBody(input: {
         platform: input.platform,
         ...screenAssist
       };
+}
+
+export function buildStepRunRequestBody(input: {
+  sourceYaml: string;
+  deviceSerial: string;
+  parameters: Record<string, ScriptParameterValue>;
+  stepId: string;
+  mode: "single" | "from_here";
+  androidAppMonitor?: AndroidAppMonitorConfig;
+}): Record<string, unknown> {
+  return {
+    sourceYaml: input.sourceYaml,
+    deviceSerial: input.deviceSerial,
+    parameters: input.parameters,
+    startStepId: input.stepId,
+    ...(input.mode === "single" ? { endStepId: input.stepId } : {}),
+    pauseAfterEachStep: input.mode === "from_here",
+    ...(input.androidAppMonitor ? { androidAppMonitor: input.androidAppMonitor } : {})
+  };
 }
 
 async function reconcileDraftVerification(draft: GeneratedDraft): Promise<GeneratedDraft> {

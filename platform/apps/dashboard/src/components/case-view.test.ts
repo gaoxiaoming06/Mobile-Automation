@@ -1,7 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { caseStepViews, type CaseDocumentView } from "./case-view.js";
+import { caseStepViews, loopBodyAvailability, type CaseDocumentView } from "./case-view.js";
 
 describe("caseStepViews", () => {
+  it("requires reset steps or an explicit no-reset contract for business looping", () => {
+    const base: CaseDocumentView = {
+      version: 1,
+      kind: "case",
+      name: "打开笔记",
+      app: { id: "cn.eeo.classin", platform: "android" },
+      parameters: {},
+      steps: [{ id: "open-note", role: "business", tap: { target: { text: "笔记" } } }],
+      tags: []
+    };
+
+    expect(loopBodyAvailability(base)).toEqual(expect.objectContaining({ available: false }));
+    expect(loopBodyAvailability({
+      ...base,
+      steps: [...base.steps, { id: "return-home", role: "reset", tap: { target: { text: "主页" } } }]
+    })).toEqual(expect.objectContaining({ available: true, mode: "steps" }));
+    expect(loopBodyAvailability({ ...base, loop: { reset: "none" } })).toEqual(expect.objectContaining({ available: true, mode: "none" }));
+  });
+
   it("presents stable-text result assertions as readable test logic", () => {
     const document: CaseDocumentView = {
       version: 1,

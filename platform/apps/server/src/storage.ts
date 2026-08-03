@@ -2943,7 +2943,6 @@ function navigationEntryToSegment(entry: NavigationEntry, platform: ScriptFlow["
     name: entry.name,
     onPage: entry.from.key,
     expectPage: entry.toPage,
-    risk: "interaction",
     tap: {
       target: entry.action.target as ScriptTarget,
       ...(entry.action.search ? { search: entry.action.search } : {})
@@ -3200,7 +3199,7 @@ function scriptFlowSourceSnapshot(runSnapshot: Record<string, unknown>): Pick<Te
       flowId: snapshot.flowId,
       version: snapshot.version,
       planDigest: snapshot.planDigest,
-      ...(snapshot.executionPurpose === "trial" || snapshot.executionPurpose === "normal"
+      ...(snapshot.executionPurpose === "trial" || snapshot.executionPurpose === "step_trial" || snapshot.executionPurpose === "normal"
         ? { executionPurpose: snapshot.executionPurpose }
         : {}),
       ...(typeof snapshot.sourceHash === "string" ? { sourceHash: snapshot.sourceHash } : {}),

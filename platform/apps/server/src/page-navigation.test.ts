@@ -67,7 +67,7 @@ describe("derivePageNavigationSegments", () => {
     ]);
   });
 
-  it("does not index navigation sequences that contain a risky action", () => {
+  it("indexes explicitly scripted navigation without interpreting business text", () => {
     const flow = navigationFlow([
       {
         id: "open-settings",
@@ -85,7 +85,11 @@ describe("derivePageNavigationSegments", () => {
       flowId: "flow-delete-account",
       flowVersion: 1,
       document: flow
-    })).toEqual([]);
+    })).toEqual([expect.objectContaining({
+      fromPage: "classin.home",
+      toPage: "classin.goodbye",
+      stepIds: ["open-settings", "delete-account"]
+    })]);
   });
 
   it("does not infer risk from ordinary target text", () => {

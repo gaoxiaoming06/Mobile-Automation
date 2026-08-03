@@ -188,12 +188,6 @@ export class StabilityExplorer {
   async stop(runId: string): Promise<boolean> {
     const active = this.activeRuns.get(runId);
     if (!active) {
-      const run = this.storage.getRun(runId);
-      if (run?.status === "running") {
-        this.storage.updateRunStatus(runId, "stopped");
-        await this.artifactService.generateReport(runId);
-        return true;
-      }
       return false;
     }
     active.controller.abort();

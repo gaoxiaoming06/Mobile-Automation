@@ -177,6 +177,73 @@ steps:
     });
   });
 
+  it("starts an isolated step trial without recording a temporary full test", async () => {
+    const context = await apiContext(servers);
+
+    const started = await post(context.baseUrl, "/api/script-flow-drafts/step-runs", {
+      sourceYaml,
+      deviceSerial: "device-1",
+      parameters: { friendName: "张三" },
+      startStepId: "open-add-friend",
+      endStepId: "open-add-friend",
+      pauseAfterEachStep: true
+    });
+
+    expect(started.status).toBe(202);
+    expect(context.runner.inputs).toEqual([
+      expect.objectContaining({
+        flowId: expect.stringMatching(/^temporary:/),
+        sourceYaml,
+        deviceSerial: "device-1",
+        parameters: { friendName: "张三" },
+        executionPurpose: "step_trial",
+        stepSelection: {
+          startStepId: "open-add-friend",
+          endStepId: "open-add-friend"
+        },
+        startStrategy: "keep_current",
+        mode: "once",
+        stopOnFailure: true,
+        pauseAfterEachStep: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false
+      })
+    ]);
+    expect((await get(context.baseUrl, "/api/temporary-tests?appId=cn.eeo.classin&platform=android")).body).toEqual({ tests: [] });
+  });
+
+  it("strictly validates isolated step trial requests", async () => {
+    const context = await apiContext(servers);
+
+    const missingStep = await post(context.baseUrl, "/api/script-flow-drafts/step-runs", {
+      sourceYaml,
+      deviceSerial: "device-1",
+      parameters: { friendName: "张三" }
+    });
+    expect(missingStep).toEqual({ status: 400, body: { error: "startStepId is required" } });
+
+    const unknownField = await post(context.baseUrl, "/api/script-flow-drafts/step-runs", {
+      sourceYaml,
+      deviceSerial: "device-1",
+      parameters: { friendName: "张三" },
+      startStepId: "open-add-friend",
+      coordinate: { x: 10, y: 20 }
+    });
+    expect(unknownField).toEqual({ status: 400, body: { error: "Unknown request field: coordinate" } });
+
+    const unknownStep = await post(context.baseUrl, "/api/script-flow-drafts/step-runs", {
+      sourceYaml,
+      deviceSerial: "device-1",
+      parameters: { friendName: "张三" },
+      startStepId: "missing-step"
+    });
+    expect(unknownStep).toEqual({
+      status: 400,
+      body: { error: "Source step not found in execution plan: missing-step" }
+    });
+    expect(context.runner.inputs).toEqual([]);
+  });
+
   it("keeps navigation-only flows out of the case center", async () => {
     const context = await apiContext(servers);
     const response = await post(context.baseUrl, "/api/script-flows", {
@@ -281,13 +348,19 @@ steps:
       sourceYaml,
       planDigest,
       deviceSerial: "device-1",
-      parameters: { friendName: "张三" }
+      parameters: { friendName: "张三" },
+      mode: "loop_until_stop",
+      loopScope: "exclude_preparation"
     });
     expect(direct.status).toBe(202);
-    expect(context.runner.inputs[1]).toEqual(expect.objectContaining({ executionPurpose: "normal" }));
+    expect(context.runner.inputs[1]).toEqual(expect.objectContaining({
+      executionPurpose: "normal",
+      mode: "loop_until_stop",
+      loopScope: "exclude_preparation"
+    }));
   });
 
-  it("rejects an infinite loop trial run", async () => {
+  it("allows a temporary trial run to use an explicit loop mode", async () => {
     const context = await apiContext(servers);
     const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", { sourceYaml, parameters: { friendName: "张三" } });
 
@@ -296,14 +369,19 @@ steps:
       planDigest: (preview.body as { planDigest: string }).planDigest,
       deviceSerial: "device-1",
       parameters: { friendName: "张三" },
-      mode: "loop_until_stop"
+      mode: "loop_until_stop",
+      loopScope: "exclude_preparation"
     });
 
-    expect(started).toEqual({
-      status: 400,
-      body: { error: "Trial runs do not support loop_until_stop" }
-    });
-    expect(context.runner.inputs).toEqual([]);
+    expect(started.status).toBe(202);
+    expect(context.runner.inputs).toEqual([
+      expect.objectContaining({
+        executionPurpose: "trial",
+        mode: "loop_until_stop",
+        loopScope: "exclude_preparation",
+        recordVideo: false
+      })
+    ]);
   });
 
   it("freezes the derived navigation index without copying active use case sources into dependencies", async () => {
@@ -333,7 +411,7 @@ steps:
     expect(route.status).toBe("active");
   });
 
-  it("loads the navigation index for an entry page added by the compiler", async () => {
+  it("loads the navigation index without compiling entry metadata into a step", async () => {
     const context = await apiContext(servers);
     context.storage.markSourceVerified(navigationSource("从详情到主页"));
     await post(context.baseUrl, "/api/script-flows", {
@@ -350,8 +428,7 @@ steps:
     expect(preview.body).toEqual(expect.objectContaining({
       plan: expect.objectContaining({
         steps: [
-          expect.objectContaining({ id: "__prepare.entry-page", phase: "preparation", action: "reachPage" }),
-          expect.objectContaining({ id: "verify-home", phase: "test", action: "assertPage" })
+          expect.objectContaining({ id: "verify-home", phase: "verification", action: "assertPage" })
         ]
       }),
       navigationIndex: expect.objectContaining({ segmentCount: 1 })

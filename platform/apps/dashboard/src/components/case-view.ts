@@ -8,8 +8,10 @@ export type CaseDocumentView = {
   name: string;
   description?: string;
   app: { id: string; platform: string };
+  start?: { strategy: "keepCurrent" | "goHome" | "launchApp" | "restartApp" | "clearDataAndLaunch" };
   entry?: { page?: string; session?: "authenticated" | "unauthenticated"; role?: string };
   outcome?: { page?: string; session?: "authenticated" | "unauthenticated"; role?: string };
+  loop?: { reset: "none" };
   parameters: Record<string, ScriptParameterDefinitionView>;
   steps: CaseSourceStep[];
   tags: string[];
@@ -18,10 +20,9 @@ export type CaseDocumentView = {
 export type CaseSourceStep = Record<string, unknown> & {
   id: string;
   name?: string;
-  role?: "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery";
+  role?: "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery" | "reset";
   onPage?: string;
   expectPage?: string;
-  risk?: string;
 };
 
 export type CasePlanView = {
@@ -33,11 +34,9 @@ export type CasePlanView = {
     input?: Record<string, unknown>;
     onPage?: string;
     expectPage?: string;
-    risk: string;
-    phase?: "preparation" | "test";
-    role?: "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery";
+    phase?: "preparation" | "business" | "verification" | "reset";
+    role?: "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery" | "reset";
   }>;
-  riskConfirmations: Array<{ stepId: string; risk: string; stepName?: string }>;
 };
 
 export type CaseStepView = {
@@ -46,9 +45,39 @@ export type CaseStepView = {
   name: string;
   action: string;
   context?: string;
-  risk: string;
-  phase?: "preparation" | "test";
+  phase?: "preparation" | "business" | "verification" | "reset";
 };
+
+export type LoopBodyAvailability = {
+  available: boolean;
+  mode: "steps" | "none" | "unconfigured";
+  resetStepCount: number;
+  reason?: string;
+};
+
+export function loopBodyAvailability(document: CaseDocumentView | undefined): LoopBodyAvailability {
+  const resetStepCount = flattenSourceSteps(document?.steps ?? []).filter((step) => step.role === "reset").length;
+  if (resetStepCount > 0 && document?.loop?.reset === "none") {
+    return {
+      available: false,
+      mode: "unconfigured",
+      resetStepCount,
+      reason: "每轮复位步骤与“无需复位”不能同时配置。"
+    };
+  }
+  if (resetStepCount > 0) {
+    return { available: true, mode: "steps", resetStepCount };
+  }
+  if (document?.loop?.reset === "none") {
+    return { available: true, mode: "none", resetStepCount: 0 };
+  }
+  return {
+    available: false,
+    mode: "unconfigured",
+    resetStepCount: 0,
+    reason: "请先配置每轮复位步骤，或明确业务执行后已回到循环起点。"
+  };
+}
 
 export function readCaseDocument(value: Record<string, unknown> | undefined): CaseDocumentView | undefined {
   if (!value || !value.app || typeof value.app !== "object" || !Array.isArray(value.steps)) return undefined;
@@ -86,7 +115,6 @@ export function caseStepViews(document: CaseDocumentView | undefined, plan?: Cas
       name: step.name ?? caseActionLabel(step.action),
       action: step.action,
       context: planStepContext(step),
-      risk: step.risk,
       ...(step.phase ? { phase: step.phase } : {})
     }));
   }
@@ -97,15 +125,14 @@ export function caseStepViews(document: CaseDocumentView | undefined, plan?: Cas
       order: index + 1,
       name: step.name ?? caseActionLabel(action),
       action,
-      context: sourceStepContext(step),
-      risk: sourceRisk(step, action)
+      context: sourceStepContext(step)
     };
   });
 }
 
 export function caseActionLabel(action: string): string {
   const labels: Record<string, string> = {
-    launchApp: "启动 App",
+    launchApp: "重启 App",
     tap: "点击目标",
     inputText: "输入文本",
     clearText: "清空输入",
@@ -135,11 +162,6 @@ function flattenSourceSteps(steps: CaseSourceStep[]): CaseSourceStep[] {
 function sourceAction(step: CaseSourceStep): string {
   const actions = ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"];
   return actions.find((action) => action in step) ?? "unknown";
-}
-
-function sourceRisk(step: CaseSourceStep, action: string): string {
-  if (typeof step.risk === "string") return step.risk;
-  return action === "tap" || action === "selectText" ? "interaction" : "none";
 }
 
 function pageContext(onPage: string | undefined, expectPage: string | undefined): string | undefined {

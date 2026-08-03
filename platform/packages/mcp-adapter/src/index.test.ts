@@ -38,7 +38,7 @@ describe("ScriptFlow MCP REST adapter", () => {
       fetch: fakeFetch(requests, {
         "POST /api/script-flow-drafts/generate": { draft: { status: "ready", sourceYaml: "version: 1" } },
         "GET /api/script-flows/flow-1": { flow: { id: "flow-1", version: 3 } },
-        "POST /api/script-flows/flow-1/preview": { planDigest: "a".repeat(64), plan: { steps: [], riskConfirmations: [] }, dependencies: [] },
+        "POST /api/script-flows/flow-1/preview": { planDigest: "a".repeat(64), plan: { steps: [] }, dependencies: [] },
         "POST /api/script-flows/flow-1/runs": {
           run: {
             id: "run-1",
