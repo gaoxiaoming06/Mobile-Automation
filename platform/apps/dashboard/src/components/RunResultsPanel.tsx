@@ -120,7 +120,23 @@ export function RunResultsPanel({
                   打开 HTML 报告
                 </a>
               )}
-              {executionFailure && <div className="execution-failure-notice"><strong>执行未完成</strong><p>{executionFailure.message}</p><small>技术细节和现场证据请查看 HTML 报告。</small></div>}
+              {executionFailure && (
+                <div className="execution-failure-notice">
+                  <strong>执行未完成</strong>
+                  <p>{executionFailure.message}</p>
+                  {!!executionFailure.details?.length && (
+                    <dl className="execution-failure-details">
+                      {executionFailure.details.map((detail) => (
+                        <div key={detail.label}>
+                          <dt>{detail.label}</dt>
+                          <dd>{detail.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                  <small>现场截图和完整定位记录请查看 HTML 报告。</small>
+                </div>
+              )}
               {renderAndroidAppMonitorSummary(androidAppMonitorDisplaySummaryFromRun(currentRun))}
               {currentRun.artifacts
                 .filter((artifact) => artifact.type === "video" && !artifact.deletedAt)

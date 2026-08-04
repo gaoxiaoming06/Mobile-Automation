@@ -36,7 +36,7 @@ describe("caseStepViews", () => {
     };
 
     expect(caseStepViews(document)).toEqual([expect.objectContaining({
-      name: "确认出现指定内容",
+      name: "确认出现“教学方案列表”",
       action: "assertText",
       context: "教学方案列表"
     })]);
@@ -91,11 +91,33 @@ describe("caseStepViews", () => {
       tags: []
     };
 
-    expect(caseStepViews(document).map((step) => [step.action, step.context])).toEqual([
-      ["tap", "录制ClassIn教室 开关：开启"],
-      ["inputText", "课堂标题 = ${classTitle}"],
-      ["clearText", "课堂标题"],
-      ["selectText", "课堂时长 → 11小时20分钟"]
+    expect(caseStepViews(document).map((step) => [step.name, step.action, step.context])).toEqual([
+      ["打开“录制ClassIn教室”开关", "tap", "录制ClassIn教室 开关：开启"],
+      ["在“课堂标题”中输入“${classTitle}”", "inputText", "课堂标题 = ${classTitle}"],
+      ["清空“课堂标题”", "clearText", "课堂标题"],
+      ["将“课堂时长”选择为“11小时20分钟”", "selectText", "课堂时长 → 11小时20分钟"]
+    ]);
+  });
+
+  it("summarizes text and positioned icon taps while preserving custom names", () => {
+    const document: CaseDocumentView = {
+      version: 1,
+      kind: "case",
+      name: "发布课堂",
+      app: { id: "cn.eeo.classin", platform: "android" },
+      parameters: {},
+      steps: [
+        { id: "open-info", name: "点击目标", tap: { target: { text: "课堂信息" } } },
+        { id: "go-back", tap: { target: { icon: "back", area: "topBar", position: "leading" } } },
+        { id: "publish", name: "提交课堂发布", tap: { target: { text: "发布" } } }
+      ],
+      tags: []
+    };
+
+    expect(caseStepViews(document).map((step) => step.name)).toEqual([
+      "点击“课堂信息”",
+      "点击左上角返回图标",
+      "提交课堂发布"
     ]);
   });
 });

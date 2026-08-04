@@ -60,6 +60,35 @@ describe("ObservationService", () => {
     ]);
   });
 
+  it("starts Android UI hierarchy collection before screenshot capture completes", async () => {
+    const driver = new ScreenshotBlockingDriver();
+    const service = new ObservationService(driver, new FakeOcrService());
+
+    const collecting = service.collect("device-1");
+    await driver.screenshotStarted.promise;
+    await Promise.resolve();
+    const hierarchyStartedWhileScreenshotBlocked = driver.hierarchyStarted;
+    driver.releaseScreenshot.resolve();
+    await collecting;
+
+    expect(hierarchyStartedWhileScreenshotBlocked).toBe(true);
+  });
+
+  it("starts OCR without waiting for Android UI hierarchy collection to finish", async () => {
+    const driver = new UiTreeBlockingDriver();
+    const ocr = new RecordingOcrService();
+    const service = new ObservationService(driver, ocr);
+
+    const collecting = service.collect("device-1");
+    await driver.hierarchyStarted.promise;
+    await Promise.resolve();
+    const ocrStartedWhileHierarchyBlocked = ocr.started;
+    driver.releaseHierarchy.resolve();
+    await collecting;
+
+    expect(ocrStartedWhileHierarchyBlocked).toBe(true);
+  });
+
   it("can skip expensive OCR collection", async () => {
     const service = new ObservationService(new FakeDriver(), new ThrowingOcrService());
 
@@ -225,6 +254,38 @@ class FailingUiTreeDriver extends FakeDriver {
   }
 }
 
+class ScreenshotBlockingDriver extends FakeDriver {
+  readonly screenshotStarted = deferred<void>();
+  readonly releaseScreenshot = deferred<void>();
+  hierarchyStarted = false;
+
+  override async screenshot(): Promise<Buffer> {
+    this.screenshotStarted.resolve();
+    await this.releaseScreenshot.promise;
+    return pngHeaderWithSize(1080, 2400);
+  }
+
+  override async dumpUiHierarchy(): Promise<string> {
+    this.hierarchyStarted = true;
+    return hierarchy;
+  }
+}
+
+class UiTreeBlockingDriver extends FakeDriver {
+  readonly hierarchyStarted = deferred<void>();
+  readonly releaseHierarchy = deferred<void>();
+
+  override async screenshot(): Promise<Buffer> {
+    return pngHeaderWithSize(1080, 2400);
+  }
+
+  override async dumpUiHierarchy(): Promise<string> {
+    this.hierarchyStarted.resolve();
+    await this.releaseHierarchy.promise;
+    return hierarchy;
+  }
+}
+
 function pngHeaderWithSize(width: number, height: number): Buffer {
   const buffer = Buffer.alloc(24);
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer, 0);
@@ -265,8 +326,25 @@ class FakeOcrService implements OcrService {
   }
 }
 
+class RecordingOcrService extends FakeOcrService {
+  started = false;
+
+  override async locateText(input: OcrInput): Promise<OcrLayoutResult> {
+    this.started = true;
+    return super.locateText(input);
+  }
+}
+
 class ThrowingOcrService implements OcrService {
   async recognize(_input: OcrInput): Promise<OcrResult> {
     throw new Error("OCR should not be called");
   }
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }

@@ -11,7 +11,7 @@ import {
   type StepExpectation,
   type StepExpectationResult
 } from "@mobile-automation/shared";
-import type { OcrService } from "./ocr.js";
+import type { OcrLayoutResult, OcrResult, OcrService } from "./ocr.js";
 import { parseAndroidUiHierarchy } from "./ui-hierarchy-locator.js";
 
 export type ScreenshotCapture = {
@@ -335,10 +335,10 @@ export class StepExpectationEvaluator {
     try {
       const lang = typeof expectation.params.lang === "string" ? expectation.params.lang : undefined;
       const image = region ? await cropPngRegion(screenshot.png, region) : screenshot.png;
-      const ocrResult = await this.deps.ocr.recognize({ image, lang, mode });
+      const ocrResult = await recognizeForTextExpectation(this.deps.ocr, { image, lang, mode });
       const actualText = normalizeOcrText(ocrResult.text);
       const expectedText = normalizeOcrText(expected);
-      const matched = matchTextExpectation(actualText, expectedText, mode);
+      const matched = matchOcrResultExpectation(ocrResult, actualText, expectedText, mode);
       return this.createExpectationResult(expectation, {
         status: matched ? "passed" : "failed",
         expected: textExpectedDescription(mode, expected, region),
@@ -803,6 +803,29 @@ export function matchTextExpectation(actual: string, expected: string, mode: Tex
     return !actual.includes(expected);
   }
   return actual.includes(expected);
+}
+
+async function recognizeForTextExpectation(
+  ocr: OcrService,
+  input: Parameters<OcrService["recognize"]>[0]
+): Promise<OcrResult | OcrLayoutResult> {
+  if (input.mode === "equals" && ocr.locateText) {
+    return ocr.locateText(input);
+  }
+  return ocr.recognize(input);
+}
+
+function matchOcrResultExpectation(
+  result: OcrResult | OcrLayoutResult,
+  actualText: string,
+  expectedText: string,
+  mode: TextExpectationMode
+): boolean {
+  if (mode !== "equals" || !("boxes" in result)) {
+    return matchTextExpectation(actualText, expectedText, mode);
+  }
+  return result.boxes.some((box) => normalizeOcrText(box.text) === expectedText)
+    || matchTextExpectation(actualText, expectedText, mode);
 }
 
 export function textExpectedDescription(mode: TextExpectationMode, expected: string, region?: OcrRegion): string {

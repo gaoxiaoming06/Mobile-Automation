@@ -147,6 +147,65 @@ describe("RunResultsPanel", () => {
     expect(markup).not.toContain("OCR locator failed");
     expect(markup).not.toContain("internal-step-id");
   });
+
+  it("shows structured target lookup diagnostics", () => {
+    const currentRun = run({
+      id: "run-text-not-found",
+      caseName: "选择联席教师",
+      status: "failed",
+      startedMinute: 2,
+      steps: [{
+        id: "tap-confirm",
+        order: 1,
+        type: "tap_on_text",
+        enabled: true,
+        title: "确认联席教师",
+        params: { text: "确认" },
+        createdAt: "2026-07-23T08:02:00.000Z"
+      }],
+      stepResults: [{
+        id: "result-1",
+        runId: "run-text-not-found",
+        iterationIndex: 0,
+        stepId: "tap-confirm",
+        stepOrder: 1,
+        type: "tap_on_text",
+        status: "failed",
+        startedAt: "2026-07-23T08:02:00.000Z",
+        errorCode: "SEMANTIC_TARGET_NOT_FOUND",
+        artifacts: [],
+        metadata: {
+          semantic: {
+            type: "text",
+            expected: ["确认"],
+            actual: "选择联席教师 海外55 确定 1/6",
+            reason: "target_not_found",
+            attempts: 3,
+            candidateCount: 14,
+            search: { mode: "visibleOnly" }
+          }
+        }
+      }]
+    });
+
+    const markup = renderToStaticMarkup(React.createElement(RunResultsPanel, {
+      currentRun,
+      runs: [currentRun],
+      runsLimit: 30,
+      selectedSerial: "device-1",
+      setCurrentRunId: () => undefined,
+      stopCurrentRun: async () => undefined,
+      pauseCurrentRun: async () => undefined,
+      resumeCurrentRun: async () => undefined,
+      stepCurrentRun: async () => undefined,
+      loadMoreRuns: () => undefined
+    }));
+
+    expect(markup).toContain("步骤“确认联席教师”需要点击文字“确认”");
+    expect(markup).toContain("预期目标");
+    expect(markup).toContain("OCR 识别到 14 个文字候选");
+    expect(markup).toContain("现场识别到“确定”");
+  });
 });
 
 function run(input: {
@@ -156,6 +215,7 @@ function run(input: {
   startedMinute: number;
   events?: TestRun["events"];
   artifacts?: TestRun["artifacts"];
+  steps?: TestRun["steps"];
   stepResults?: TestRun["stepResults"];
 }): TestRun {
   return {
@@ -173,7 +233,7 @@ function run(input: {
       keepVideoOnSuccess: false,
       runKind: "script_flow"
     },
-    steps: [],
+    steps: input.steps ?? [],
     stepResults: input.stepResults ?? [],
     metrics: [],
     events: input.events ?? [],

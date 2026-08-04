@@ -28,6 +28,72 @@ describe("publicExecutionFailureFromRun", () => {
     });
   });
 
+  it("explains the expected text, OCR result, attempts, and nearest visible text", () => {
+    const failure = publicExecutionFailureFromRun(failedRun({
+      stepId: "tap-confirm",
+      errorCode: "SEMANTIC_TARGET_NOT_FOUND",
+      metadata: {
+        semantic: {
+          type: "text",
+          expected: ["确认"],
+          actual: "选择联席教师 搜索 海外55 确定 1/6",
+          reason: "target_not_found",
+          attempts: 3,
+          candidateCount: 14,
+          search: { mode: "visibleOnly", scanSwipes: 0 }
+        }
+      }
+    }, [{
+      id: "tap-confirm",
+      order: 7,
+      type: "tap_on_text",
+      enabled: true,
+      title: "确认联席教师",
+      params: { text: "确认" },
+      createdAt: "2026-07-31T00:00:00.000Z"
+    }]));
+
+    expect(failure).toEqual({
+      kind: "target_not_found",
+      message: "步骤“确认联席教师”需要点击文字“确认”，但在当前屏幕连续查找 3 次仍未找到。",
+      details: [
+        { label: "预期目标", value: "文字“确认”" },
+        { label: "实际结果", value: "OCR 识别到 14 个文字候选，但没有匹配到“确认”。" },
+        { label: "相近文字", value: "现场识别到“确定”，目标文字可能填写有误。" }
+      ],
+      nextAction: "supplement_process"
+    });
+  });
+
+  it("replaces a compiler action title with a readable failed-step name", () => {
+    const failure = publicExecutionFailureFromRun(failedRun({
+      stepId: "tap-confirm",
+      stepOrder: 7,
+      errorCode: "SEMANTIC_TARGET_NOT_FOUND",
+      metadata: {
+        semantic: {
+          type: "text",
+          expected: ["确认"],
+          actual: "确定 1/6",
+          reason: "target_not_found",
+          attempts: 2,
+          candidateCount: 2,
+          search: { mode: "visibleOnly" }
+        }
+      }
+    }, [{
+      id: "tap-confirm",
+      order: 7,
+      type: "tap_on_text",
+      enabled: true,
+      title: "tap",
+      params: { text: "确认" },
+      createdAt: "2026-07-31T00:00:00.000Z"
+    }]));
+
+    expect(failure?.message).toBe("步骤“点击确认”需要点击文字“确认”，但在当前屏幕连续查找 2 次仍未找到。");
+  });
+
   it("distinguishes leaving the target app from an unrecognized page", () => {
     expect(publicExecutionFailureFromRun(failedRun({
       errorCode: "PAGE_NAVIGATION_FAILED",
@@ -49,7 +115,10 @@ describe("publicExecutionFailureFromRun", () => {
   });
 });
 
-function failedRun(step: Partial<TestRun["stepResults"][number]>): TestRun {
+function failedRun(
+  step: Partial<TestRun["stepResults"][number]>,
+  steps: TestRun["steps"] = []
+): TestRun {
   return {
     id: "run-failed",
     caseName: "失败用例",
@@ -64,7 +133,7 @@ function failedRun(step: Partial<TestRun["stepResults"][number]>): TestRun {
       recordVideo: false,
       keepVideoOnSuccess: false
     },
-    steps: [],
+    steps,
     stepResults: [{
       id: "result-1",
       runId: "run-failed",

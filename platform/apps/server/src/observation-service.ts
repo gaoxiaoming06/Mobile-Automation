@@ -31,14 +31,22 @@ export class ObservationService {
     const includeOcr = options.includeOcr ?? true;
     const capturedAt = new Date().toISOString();
     const device = await this.driver.getDeviceInfo(serial);
-    const [foreground, screenshot]: [ForegroundAppSnapshot, Buffer | undefined] = await Promise.all([
-      this.driver.getForegroundApp ? this.driver.getForegroundApp(serial).catch(() => ({})) : Promise.resolve({}),
-      includeScreenshot ? Promise.resolve(options.screenshotOverride ?? this.driver.screenshot(serial)) : Promise.resolve(undefined)
-    ]);
-
-    const { rawUiHierarchy, uiElements, uiTreeSize, uiHierarchyError } = includeUiTree && device.platform === "android" ? await this.collectUiTree(serial) : emptyUiTree();
+    const foregroundPromise: Promise<ForegroundAppSnapshot> = this.driver.getForegroundApp
+      ? this.driver.getForegroundApp(serial).catch(() => ({}))
+      : Promise.resolve({});
+    const screenshotPromise = includeScreenshot
+      ? Promise.resolve(options.screenshotOverride ?? this.driver.screenshot(serial))
+      : Promise.resolve(undefined);
+    const uiTreePromise = includeUiTree && device.platform === "android"
+      ? this.collectUiTree(serial)
+      : Promise.resolve(emptyUiTree());
+    const screenshot = await screenshotPromise;
+    const ocrPromise = includeOcr && screenshot
+      ? this.collectOcrTexts(screenshot, options.lang)
+      : Promise.resolve([]);
+    const [foreground, uiTree, ocrTexts] = await Promise.all([foregroundPromise, uiTreePromise, ocrPromise]);
+    const { rawUiHierarchy, uiElements, uiTreeSize, uiHierarchyError } = uiTree;
     const screenshotSize = screenshot ? pngDimensions(screenshot) : undefined;
-    const ocrTexts = includeOcr && screenshot ? await this.collectOcrTexts(screenshot, options.lang) : [];
     const derivedSize = screenshotSize ?? device.resolution ?? uiTreeSize;
 
     return {

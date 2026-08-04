@@ -253,6 +253,127 @@ describe("renderReportHtml", () => {
     expect(html).toContain("step.png");
   });
 
+  it("keeps the screenshot gallery focused on primary step screenshots and folds diagnostic captures", () => {
+    const locatorGrowth = screenshotArtifact("artifact-locator-growth", "step-result-1", "locator-open-growth-tab-attempt-1.png");
+    const afterGrowth = screenshotArtifact("artifact-after-growth", "step-result-1", "iter-1-step-1-after.png");
+    const locatorSearch = screenshotArtifact("artifact-locator-search", "step-result-2", "locator-open-global-search-attempt-1.png");
+    const afterSearch = screenshotArtifact("artifact-after-search", "step-result-2", "iter-1-step-2-after.png");
+    const titleAssertion = screenshotArtifact("artifact-assert-title", "step-result-3", "iter-1-step-3-after.png");
+    const inputAssertion = screenshotArtifact("artifact-assert-input", "step-result-4", "iter-1-step-4-after.png");
+    const run: TestRun = {
+      id: "run-screenshots",
+      caseName: "从成长页进入全网搜索",
+      deviceSerial: "device-1",
+      status: "passed",
+      config: {
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 0,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false
+      },
+      steps: [],
+      stepResults: [
+        {
+          id: "step-result-1",
+          runId: "run-screenshots",
+          iterationIndex: 1,
+          stepId: "open-growth-tab",
+          stepOrder: 1,
+          type: "tap_on_text",
+          status: "passed",
+          startedAt: "2026-06-04T00:00:05.000Z",
+          durationMs: 120,
+          afterScreenshotId: afterGrowth.id,
+          artifacts: [locatorGrowth, afterGrowth]
+        },
+        {
+          id: "step-result-2",
+          runId: "run-screenshots",
+          iterationIndex: 1,
+          stepId: "open-global-search",
+          stepOrder: 2,
+          type: "tap_on_image",
+          status: "passed",
+          startedAt: "2026-06-04T00:00:07.000Z",
+          durationMs: 120,
+          afterScreenshotId: afterSearch.id,
+          artifacts: [locatorSearch, afterSearch]
+        },
+        {
+          id: "step-result-3",
+          runId: "run-screenshots",
+          iterationIndex: 1,
+          stepId: "verify-search-title",
+          stepOrder: 3,
+          type: "wait",
+          status: "passed",
+          startedAt: "2026-06-04T00:00:09.000Z",
+          durationMs: 120,
+          afterScreenshotId: titleAssertion.id,
+          artifacts: [titleAssertion],
+          metadata: { executionPhase: "verification" },
+          expectationResults: [{
+            id: "expectation-result-title",
+            expectationId: "expectation-title",
+            type: "text",
+            status: "passed",
+            blocking: true,
+            expected: 'OCR text equals "搜索".',
+            actual: "搜索",
+            evidenceArtifactIds: [titleAssertion.id],
+            checkedAt: "2026-06-04T00:00:09.000Z"
+          }]
+        },
+        {
+          id: "step-result-4",
+          runId: "run-screenshots",
+          iterationIndex: 1,
+          stepId: "verify-search-input",
+          stepOrder: 4,
+          type: "wait",
+          status: "passed",
+          startedAt: "2026-06-04T00:00:11.000Z",
+          durationMs: 120,
+          afterScreenshotId: inputAssertion.id,
+          artifacts: [inputAssertion],
+          metadata: { executionPhase: "verification" },
+          expectationResults: [{
+            id: "expectation-result-input",
+            expectationId: "expectation-input",
+            type: "text",
+            status: "passed",
+            blocking: true,
+            expected: 'OCR text contains "请输入搜索内容".',
+            actual: "请输入搜索内容",
+            evidenceArtifactIds: [inputAssertion.id],
+            checkedAt: "2026-06-04T00:00:11.000Z"
+          }]
+        }
+      ],
+      metrics: [],
+      events: [],
+      artifacts: [locatorGrowth, afterGrowth, locatorSearch, afterSearch, titleAssertion, inputAssertion],
+      startedAt: "2026-06-04T00:00:00.000Z",
+      endedAt: "2026-06-04T00:00:12.000Z"
+    };
+
+    const html = renderReportHtml(run);
+    const primaryGallery = sectionBetween(html, "<h2>步骤截图</h2>", '<details class="diagnostic-screenshots">');
+
+    expect(primaryGallery).toContain("iter-1-step-1-after.png");
+    expect(primaryGallery).toContain("iter-1-step-2-after.png");
+    expect(primaryGallery).not.toContain("locator-open-growth-tab-attempt-1.png");
+    expect(primaryGallery).not.toContain("locator-open-global-search-attempt-1.png");
+    expect(primaryGallery).not.toContain("iter-1-step-3-after.png");
+    expect(primaryGallery).not.toContain("iter-1-step-4-after.png");
+    expect(html).toContain("<summary>定位与断言证据");
+    expect(html).toContain("locator-open-growth-tab-attempt-1.png");
+    expect(html).toContain("iter-1-step-3-after.png");
+  });
+
   it("renders metric summary and trend chart when samples exist", () => {
     const run: TestRun = {
       id: "run-2",
@@ -527,3 +648,24 @@ describe("renderReportHtml", () => {
 
 
 });
+
+function screenshotArtifact(id: string, stepResultId: string, name: string) {
+  return {
+    id,
+    runId: "run-screenshots",
+    stepResultId,
+    type: "screenshot" as const,
+    name,
+    path: `runs/run-screenshots/screenshots/${name}`,
+    url: `/artifacts/runs/run-screenshots/screenshots/${name}`,
+    createdAt: "2026-06-04T00:00:05.000Z"
+  };
+}
+
+function sectionBetween(source: string, start: string, end: string): string {
+  const startIndex = source.indexOf(start);
+  expect(startIndex).toBeGreaterThanOrEqual(0);
+  const endIndex = source.indexOf(end, startIndex);
+  expect(endIndex).toBeGreaterThan(startIndex);
+  return source.slice(startIndex, endIndex);
+}

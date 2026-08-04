@@ -6,6 +6,7 @@ import {
   CircleHelp,
   Copy,
   FileSearch,
+  FileUp,
   History,
   Link2,
   Play,
@@ -30,7 +31,7 @@ import type {
   TemporaryTest,
   TestRun
 } from "@mobile-automation/shared";
-import { apiFetchJson } from "../api.js";
+import { ApiError, apiFetchJson } from "../api.js";
 import {
   ScriptRunForm,
   currentRunIteration,
@@ -97,6 +98,23 @@ export function draftFromSavedFlow(
   };
 }
 
+export function draftFromImportedScript(sourceYaml: string, documentValue: Record<string, unknown>): GeneratedDraft {
+  const document = readCaseDocument(documentValue);
+  if (!document) {
+    throw new Error("脚本文档缺少 app 或 steps，无法进入编排界面");
+  }
+  return {
+    status: "trial_ready",
+    sourceYaml,
+    document,
+    parameterValues: defaultCaseParameterValues(document),
+    summary: `已导入脚本：${document.name}`,
+    assumptions: [],
+    channel: "manual-import",
+    model: "scriptflow-yaml"
+  };
+}
+
 type ClarificationDraft = {
   status: "needs_clarification";
   clarification: string;
@@ -105,6 +123,7 @@ type ClarificationDraft = {
 };
 
 type AiDraft = GeneratedDraft | ClarificationDraft;
+type CreationMode = "generate" | "import";
 
 type LearningSummaryResponse = {
   session: LearningSession;
@@ -241,6 +260,8 @@ export function AiScriptFlowsPanel({
 }: AiScriptFlowsPanelProps) {
   const manualEditing = Boolean(revision && initialDraft);
   const [prompt, setPrompt] = useState("");
+  const [importSource, setImportSource] = useState("");
+  const [creationMode, setCreationMode] = useState<CreationMode>("generate");
   const [appId, setAppId] = useState(defaultAppId);
   const [platform, setPlatform] = useState<ScriptFlow["platform"]>("android");
   const [draft, setDraft] = useState<AiDraft | undefined>(initialDraft);
@@ -253,7 +274,7 @@ export function AiScriptFlowsPanel({
   const [plan, setPlan] = useState<CasePlanView>();
   const [lastRun, setLastRun] = useState<TestRun | undefined>(() => activeStepTrialRun(activeRunForDevice));
   const [learning, setLearning] = useState<LearningSummaryResponse>();
-  const [busyAction, setBusyAction] = useState<"generate" | "save" | "run" | "review" | "select" | "stepRun" | "runControl">();
+  const [busyAction, setBusyAction] = useState<"generate" | "import" | "save" | "run" | "review" | "select" | "stepRun" | "runControl">();
   const [useCurrentScreen, setUseCurrentScreen] = useState(false);
   const [executionMode, setExecutionMode] = useState<ScriptRunExecutionMode>("once");
   const [newStepAction, setNewStepAction] = useState<EditableStepAction>("tap");
@@ -366,6 +387,45 @@ export function AiScriptFlowsPanel({
       }
     } catch (error) {
       setMessage(errorMessage(error));
+    } finally {
+      setBusyAction(undefined);
+    }
+  }
+
+  async function importScript() {
+    const sourceYaml = importSource.trim();
+    if (!sourceYaml || revision) return;
+    try {
+      setBusyAction("import");
+      setDraft(undefined);
+      setParameterValues({});
+      setLastRun(undefined);
+      setStepRunContext(undefined);
+      setLearning(undefined);
+      setPlan(undefined);
+      setSelectedHistoryId(undefined);
+      setConfirmedStepKeys(new Set());
+      setExpandedStepKeys(new Set());
+      setStepReviewRequired(false);
+      setExecutionMode("once");
+      const response = await apiFetchJson<{ document: Record<string, unknown> }>("/api/script-flows/validate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceYaml })
+      });
+      const imported = draftFromImportedScript(sourceYaml, response.document);
+      const nextDraft = await reconcileDraftVerification(imported);
+      setPrompt(imported.document.description ?? imported.document.name);
+      setAppId(imported.document.app.id);
+      setPlatform(imported.document.app.platform as ScriptFlow["platform"]);
+      setDraft(nextDraft);
+      setParameterValues(draftParameterValues(nextDraft));
+      setConfirmedStepKeys(confirmedKeysForDraft(nextDraft));
+      setExpandedStepKeys(new Set());
+      setStepReviewRequired(true);
+      setMessage(`已导入脚本：${imported.document.name}`);
+    } catch (error) {
+      setMessage(scriptImportErrorMessage(error));
     } finally {
       setBusyAction(undefined);
     }
@@ -547,6 +607,7 @@ export function AiScriptFlowsPanel({
   );
   const stepTrialActive = Boolean(isStepTrial && lastRun && ["pending", "running", "paused"].includes(lastRun.status));
   const continuousRunActive = Boolean(!isStepTrial && lastRun && ["pending", "running", "paused"].includes(lastRun.status));
+  const showNewTestAction = Boolean(onStartNewTest && (revision || draft || prompt.trim()));
   const retryStepId = lastRun ? failedScriptStepId(lastRun) : undefined;
   const retryStep = reviewSteps.find((step) => retryStepId === step.id || retryStepId?.startsWith(`${step.id}.`))
     ?? (stepRunContext ? reviewSteps.find((step) => step.id === stepRunContext.stepId) : undefined);
@@ -796,7 +857,8 @@ export function AiScriptFlowsPanel({
           <h2>{manualEditing ? "编辑测试" : revision ? "AI 调整测试" : "AI 生成测试"}</h2>
           <p>{manualEditing ? `正在编辑“${revision!.name}”，展开步骤后可直接修改。` : revision ? `正在调整“${revision.name}”，描述需要变更的业务逻辑。` : "只需描述业务目标，AI 会生成可执行或保存的用例/场景。"}</p>
         </div>
-        {onStartNewTest && (revision || draft || prompt.trim()) ? <button
+        {showNewTestAction ? <button
+          className="workspace-action-button secondary ai-script-new-test-button"
           type="button"
           onClick={onStartNewTest}
           disabled={busy || continuousRunActive || stepTrialActive}
@@ -805,35 +867,83 @@ export function AiScriptFlowsPanel({
       </header>
       <div className={`ai-script-layout${manualEditing ? " manual-edit" : ""}`}>
         {!manualEditing ? <section className="ai-script-request">
-          {revision ? <div className="ai-revision-context"><span>当前测试</span><strong>{revision.name}</strong><small>v{revision.version}</small></div> : (
-            <div className="form-grid two-columns">
-              <label>App ID<input value={appId} onChange={(event) => setAppId(event.target.value)} /></label>
-              <label>平台<select value={platform} onChange={(event) => setPlatform(event.target.value as ScriptFlow["platform"])}>
-                <option value="android">Android</option><option value="ios">iOS</option><option value="harmony">鸿蒙</option><option value="flutter">Flutter</option>
-              </select></label>
-            </div>
-          )}
-          <label className="ai-script-prompt">
-            <span>{revision ? "描述你想怎样修改这个测试" : "测试目标或操作过程"}</span>
-            <textarea
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder={revision ? "例如：登录成功后增加主页校验，失败时保留截图" : "例如：启动 App，进入班级四十二号，打开新建课堂，填写课堂名称但不要发布"}
-            />
-          </label>
-          <label className="screen-assist-toggle">
-            <input
-              type="checkbox"
-              checked={useCurrentScreen}
-              disabled={!deviceSerial || busy}
-              onChange={(event) => setUseCurrentScreen(event.target.checked)}
-            />
-            <span>结合当前屏幕生成</span>
-            <small>{deviceSerial ? "默认优先使用资产库" : "请选择设备后可用"}</small>
-          </label>
-          <button className="primary-button ai-script-generate" type="button" onClick={() => void generate()} disabled={busy || !prompt.trim() || (!revision && !appId.trim())}>
-            <Sparkles size={17} /><span>{busyAction === "generate" ? "生成中" : revision ? "生成修改方案" : "生成测试"}</span>
-          </button>
+          {revision ? <>
+            <div className="ai-revision-context"><span>当前测试</span><strong>{revision.name}</strong><small>v{revision.version}</small></div>
+            <label className="ai-script-prompt">
+              <span>描述你想怎样修改这个测试</span>
+              <textarea
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                placeholder="例如：登录成功后增加主页校验，失败时保留截图"
+              />
+            </label>
+            <label className="screen-assist-toggle">
+              <input
+                type="checkbox"
+                checked={useCurrentScreen}
+                disabled={!deviceSerial || busy}
+                onChange={(event) => setUseCurrentScreen(event.target.checked)}
+              />
+              <span>结合当前屏幕生成</span>
+              <small>{deviceSerial ? "默认优先使用资产库" : "请选择设备后可用"}</small>
+            </label>
+            <button className="primary-button ai-script-generate" type="button" onClick={() => void generate()} disabled={busy || !prompt.trim()}>
+              <Sparkles size={17} /><span>{busyAction === "generate" ? "生成中" : "生成修改方案"}</span>
+            </button>
+          </> : <section className="script-creation-panel">
+            <header>
+              <strong>创建测试</strong>
+              <div className="creation-mode-tabs" role="tablist" aria-label="创建测试来源">
+                <button type="button" role="tab" aria-selected={creationMode === "generate"} aria-pressed={creationMode === "generate"} onClick={() => setCreationMode("generate")}>
+                  <Sparkles size={14} /><span>AI 生成</span>
+                </button>
+                <button type="button" role="tab" aria-selected={creationMode === "import"} aria-pressed={creationMode === "import"} onClick={() => setCreationMode("import")}>
+                  <FileUp size={14} /><span>导入 YAML</span>
+                </button>
+              </div>
+            </header>
+            {creationMode === "generate" ? <>
+              <div className="form-grid two-columns">
+                <label>App ID<input value={appId} onChange={(event) => setAppId(event.target.value)} /></label>
+                <label>平台<select value={platform} onChange={(event) => setPlatform(event.target.value as ScriptFlow["platform"])}>
+                  <option value="android">Android</option><option value="ios">iOS</option><option value="harmony">鸿蒙</option><option value="flutter">Flutter</option>
+                </select></label>
+              </div>
+              <label className="ai-script-prompt">
+                <span>测试目标或操作过程</span>
+                <textarea
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  placeholder="例如：启动 App，进入班级四十二号，打开新建课堂，填写课堂名称但不要发布"
+                />
+              </label>
+              <label className="screen-assist-toggle">
+                <input
+                  type="checkbox"
+                  checked={useCurrentScreen}
+                  disabled={!deviceSerial || busy}
+                  onChange={(event) => setUseCurrentScreen(event.target.checked)}
+                />
+                <span>结合当前屏幕生成</span>
+                <small>{deviceSerial ? "默认优先使用资产库" : "请选择设备后可用"}</small>
+              </label>
+              <button className="primary-button ai-script-generate" type="button" onClick={() => void generate()} disabled={busy || !prompt.trim() || !appId.trim()}>
+                <Sparkles size={17} /><span>{busyAction === "generate" ? "生成中" : "生成测试"}</span>
+              </button>
+            </> : <section className="script-import-panel">
+              <label>
+                <span>ScriptFlow YAML</span>
+                <textarea
+                  value={importSource}
+                  onChange={(event) => setImportSource(event.target.value)}
+                  placeholder="粘贴 ScriptFlow v1 YAML"
+                />
+              </label>
+              <button className="primary-button" type="button" onClick={() => void importScript()} disabled={busy || !importSource.trim()}>
+                <FileUp size={15} /><span>{busyAction === "import" ? "导入中" : "导入脚本"}</span>
+              </button>
+            </section>}
+          </section>}
           {!revision ? <section className="temporary-test-history">
             <header><div><History size={16} /><strong>最近测试</strong></div><span>{history.length} 条</span></header>
             {history.length ? <div className="temporary-test-list">{history.map((item) => <article key={item.id} data-selected={selectedHistoryId === item.id}>
@@ -868,7 +978,7 @@ export function AiScriptFlowsPanel({
           {draft?.status === "needs_clarification" ? <div className="ai-script-clarification"><strong>需要补充信息</strong><p>{draft.clarification}</p></div> : null}
           {generatedDraft ? <>
             <header>
-              <div><span className={`test-kind-badge ${generatedDraft.document.kind}`}>{testKindLabel(generatedDraft.document.kind)}</span><span className={`test-purpose-badge ${generatedDraft.document.purpose ?? "business"}`}>{testPurposeLabel(generatedDraft.document.purpose)}</span><span className={`test-level-badge ${generatedDraft.document.testLevel ?? "business_smoke"}`}>{testLevelLabel(generatedDraft.document.testLevel)}</span><h3>{generatedDraft.document.name}</h3></div>
+              <div className="script-workspace-title"><strong>脚本编排</strong><div><span className={`test-kind-badge ${generatedDraft.document.kind}`}>{testKindLabel(generatedDraft.document.kind)}</span><span className={`test-purpose-badge ${generatedDraft.document.purpose ?? "business"}`}>{testPurposeLabel(generatedDraft.document.purpose)}</span><span className={`test-level-badge ${generatedDraft.document.testLevel ?? "business_smoke"}`}>{testLevelLabel(generatedDraft.document.testLevel)}</span></div><h3>{generatedDraft.document.name}</h3></div>
               <div className="ai-script-result-meta">
                 <span>{steps.length} 个步骤</span>
                 {generatedDraft.assumptions.length ? <AssumptionsHelp assumptions={generatedDraft.assumptions} /> : null}
@@ -916,7 +1026,7 @@ export function AiScriptFlowsPanel({
               onClose={() => setScriptItemPickerOpen(false)}
             /> : null}
             {caseCenterEligible(generatedDraft.document) ? <div className="ai-case-actions">
-              <button type="button" onClick={() => void saveDraft()} disabled={busy || reviewBlocked}><Save size={16} /><span>{revision ? "保存修改" : generatedDraft.sourceFlow ? "更新用例中心" : "保存到用例中心"}</span></button>
+              <button className="workspace-action-button secondary" type="button" onClick={() => void saveDraft()} disabled={busy || reviewBlocked}><Save size={16} /><span>{revision ? "保存修改" : generatedDraft.sourceFlow ? "更新用例中心" : "保存到用例中心"}</span></button>
             </div> : <p className="navigation-flow-note">{generatedDraft.document.testLevel === "probe" ? "临时验证默认只保留在最近测试，不进入用例中心。" : "导航流程执行成功后会作为系统内部导航能力复用。"}</p>}
             <ScriptRunForm
               parameters={generatedDraft.document.parameters}
@@ -1258,7 +1368,7 @@ function StepReviewPanel({
     <header>
       <div><h3>脚本编排</h3><span>{confirmationRequired ? `${confirmedCount}/${steps.length} 已确认` : "已有执行记录"}</span></div>
       <div className="orchestrator-add-step">
-        <button type="button" onClick={onOpenItemPicker} disabled={busy}><Plus size={15} /><span>添加</span></button>
+        <button className="workspace-action-button secondary" type="button" onClick={onOpenItemPicker} disabled={busy}><Plus size={15} /><span>添加</span></button>
       </div>
     </header>
     {trialRun ? <StepTrialRunBar
@@ -1567,7 +1677,23 @@ export function ExecutionFailureNotice({
   failure: PublicExecutionFailure;
   onOpenReport: () => void;
 }) {
-  return <div className="execution-failure-notice"><strong>执行未完成</strong><p>{failure.message}</p><button type="button" onClick={onOpenReport}>查看执行结果</button></div>;
+  return (
+    <div className="execution-failure-notice">
+      <strong>执行未完成</strong>
+      <p>{failure.message}</p>
+      {!!failure.details?.length && (
+        <dl className="execution-failure-details">
+          {failure.details.map((detail) => (
+            <div key={detail.label}>
+              <dt>{detail.label}</dt>
+              <dd>{detail.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      <button type="button" onClick={onOpenReport}>查看执行结果</button>
+    </div>
+  );
 }
 
 export function caseCenterEligible(document: Pick<CaseDocumentView, "purpose" | "testLevel"> | undefined): boolean {
@@ -1909,6 +2035,32 @@ async function loadLearningSummary(runId: string): Promise<LearningSummaryRespon
   return apiFetchJson<LearningSummaryResponse>(`/api/trial-runs/${encodeURIComponent(runId)}/learning-summary`);
 }
 
+export function scriptImportErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    const issues = scriptImportIssues(error.payload);
+    if (issues.length) {
+      return `脚本校验失败：${issues.map((issue) => [issue.path, issue.message].filter(Boolean).join(" ")).join("；")}`;
+    }
+  }
+  return errorMessage(error);
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function scriptImportIssues(payload: unknown): Array<{ path?: string; message: string }> {
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as { issues?: unknown }).issues)) {
+    return [];
+  }
+  return (payload as { issues: unknown[] }).issues.flatMap((issue) => {
+    if (!issue || typeof issue !== "object") return [];
+    const record = issue as { path?: unknown; message?: unknown };
+    const message = typeof record.message === "string" ? record.message : "";
+    if (!message) return [];
+    return [{
+      ...(typeof record.path === "string" && record.path ? { path: record.path } : {}),
+      message
+    }];
+  });
 }

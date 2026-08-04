@@ -257,7 +257,7 @@ export function CaseCenterPanel({
         <div><h2>用例中心</h2><p>沉淀可复用的用例与场景，支持手工编排与 AI 辅助。</p></div>
         <div className="case-center-toolbar">
           <button className="icon-button" type="button" title="刷新测试" onClick={() => void refreshFlows()} disabled={busy}><RefreshCw size={16} /></button>
-          <button className="primary-button" type="button" onClick={onCreateCase}><Sparkles size={16} /><span>AI 创建测试</span></button>
+          <button className="workspace-action-button primary" type="button" onClick={onCreateCase}><Sparkles size={16} /><span>AI 创建测试</span></button>
         </div>
       </header>
       <div className="case-center-layout">
@@ -274,8 +274,8 @@ export function CaseCenterPanel({
             <header className="case-detail-header">
               <div><h3>{selected.name}</h3><p>{selected.description || "暂无测试说明"}</p></div>
               <div className="case-detail-actions">
-                <button type="button" onClick={() => onModifyCase(selected, verification)}><Pencil size={16} /><span>修改测试</span></button>
-                <button type="button" onClick={() => onAiModifyCase(selected)}><Sparkles size={16} /><span>AI 调整</span></button>
+                <button className="workspace-action-button secondary" type="button" onClick={() => onModifyCase(selected, verification)}><Pencil size={16} /><span>修改测试</span></button>
+                <button className="workspace-action-button secondary" type="button" onClick={() => onAiModifyCase(selected)}><Sparkles size={16} /><span>AI 调整</span></button>
                 <button className="icon-button danger" type="button" title="删除测试" onClick={() => void removeSelected()} disabled={busy}><Trash2 size={16} /></button>
               </div>
             </header>

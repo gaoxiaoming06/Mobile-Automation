@@ -123,7 +123,7 @@ export function caseStepViews(document: CaseDocumentView | undefined, plan?: Cas
     return {
       id: step.id,
       order: index + 1,
-      name: step.name ?? caseActionLabel(action),
+      name: sourceStepDisplayName(step, action),
       action,
       context: sourceStepContext(step)
     };
@@ -209,6 +209,119 @@ function sourceStepContext(step: CaseSourceStep): string | undefined {
   return pageContext(step.onPage, step.expectPage);
 }
 
+function sourceStepDisplayName(step: CaseSourceStep, action: string): string {
+  const explicitName = stringValue(step.name);
+  if (explicitName && !isGenericStepName(explicitName, action)) return explicitName;
+  return sourceActionSummary(step, action) ?? explicitName ?? caseActionLabel(action);
+}
+
+function sourceActionSummary(step: CaseSourceStep, action: string): string | undefined {
+  if (action === "tap") {
+    const tap = actionTargetRecord(step.tap);
+    return tap ? tapSummary(tap.target) : undefined;
+  }
+  if (action === "inputText") {
+    const input = actionTargetRecord(step.inputText);
+    if (!input) return undefined;
+    const label = descriptiveTargetLabel(input.target);
+    const value = stringValue(input.action.value);
+    if (label && value) return `在“${label}”中输入“${value}”`;
+    if (value) return `输入“${value}”`;
+    return label ? `在“${label}”中输入文本` : undefined;
+  }
+  if (action === "clearText") {
+    const clear = actionTargetRecord(step.clearText);
+    const label = clear ? descriptiveTargetLabel(clear.target) : undefined;
+    return label ? `清空“${label}”` : undefined;
+  }
+  if (action === "selectText") {
+    const select = actionTargetRecord(step.selectText);
+    if (!select) return undefined;
+    const label = descriptiveTargetLabel(select.target);
+    const value = stringValue(select.action.value);
+    if (label && value) return `将“${label}”选择为“${value}”`;
+    if (value) return `选择“${value}”`;
+    return label ? `选择“${label}”` : undefined;
+  }
+  if (action === "scrollUntilVisible") {
+    const scroll = actionTargetRecord(step.scrollUntilVisible);
+    if (!scroll) return undefined;
+    const label = descriptiveTargetLabel(scroll.target);
+    const direction = directionLabel(stringValue(scroll.action.direction));
+    return label ? `${direction}滚动查找“${label}”` : `${direction}滚动查找内容`;
+  }
+  if (action === "swipe") {
+    const swipe = recordValue(step.swipe);
+    return `${directionLabel(stringValue(swipe?.direction))}滑动页面`;
+  }
+  if (action === "reachPage") {
+    const page = stringValue(recordValue(step.reachPage)?.page);
+    return page ? `到达页面“${page}”` : undefined;
+  }
+  if (action === "waitForPage") {
+    const page = stringValue(step.waitForPage);
+    return page ? `等待进入页面“${page}”` : undefined;
+  }
+  if (action === "assertPage") {
+    const page = stringValue(step.assertPage);
+    return page ? `确认已进入页面“${page}”` : undefined;
+  }
+  if (action === "assertText") {
+    const text = stringValue(recordValue(step.assertText)?.text);
+    return text ? `确认出现“${text}”` : undefined;
+  }
+  return undefined;
+}
+
+function tapSummary(target: Record<string, unknown>): string | undefined {
+  const control = stringValue(target.control);
+  const label = descriptiveTargetLabel(target);
+  const checked = typeof target.checked === "boolean" ? target.checked : undefined;
+  if (control === "switch") {
+    const subject = label ? `“${label}”开关` : "开关";
+    return checked === true ? `打开${subject}` : checked === false ? `关闭${subject}` : `点击${subject}`;
+  }
+  if (control === "checkbox") {
+    const subject = label ? `“${label}”` : "复选框";
+    return checked === true ? `勾选${subject}` : checked === false ? `取消勾选${subject}` : `点击${subject}`;
+  }
+  const icon = stringValue(target.icon);
+  if (icon) return `点击${targetPositionLabel(target)}${iconLabel(icon)}`;
+  const visual = stringValue(recordValue(target.visual)?.query);
+  if (visual) return `点击视觉目标“${visual}”`;
+  return label ? `点击“${label}”` : control ? `点击${control}` : undefined;
+}
+
+function descriptiveTargetLabel(target: Record<string, unknown>): string | undefined {
+  return stringValue(target.text)
+    ?? stringValue(target.nearText)
+    ?? stringValue(target.scopeText)
+    ?? stringValue(target.semantic);
+}
+
+function targetPositionLabel(target: Record<string, unknown>): string {
+  const area = stringValue(target.area);
+  const position = stringValue(target.position);
+  if (area === "topBar" && position === "leading") return "左上角";
+  if (area === "topBar" && position === "trailing") return "右上角";
+  if (area === "bottomBar" && position === "leading") return "左下角";
+  if (area === "bottomBar" && position === "trailing") return "右下角";
+  if (area === "topBar") return "顶部";
+  if (area === "bottomBar") return "底部";
+  return "";
+}
+
+function directionLabel(direction: string | undefined): string {
+  if (direction === "up") return "向上";
+  if (direction === "left") return "向左";
+  if (direction === "right") return "向右";
+  return "向下";
+}
+
+function isGenericStepName(name: string, action: string): boolean {
+  return name === action || GENERIC_STEP_NAMES.has(name) || name === caseActionLabel(action);
+}
+
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
@@ -261,3 +374,17 @@ function iconLabel(icon: string | undefined): string | undefined {
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
+
+const GENERIC_STEP_NAMES = new Set([
+  "点击目标",
+  "输入文本",
+  "清空输入",
+  "选择选项",
+  "滑动页面",
+  "查找内容",
+  "到达页面",
+  "等待页面",
+  "确认页面",
+  "确认文字",
+  "确认出现指定内容"
+]);

@@ -8,7 +8,8 @@ import {
   buildScriptFlowPlannerPrompt,
   classifyScriptFlowTestLevel,
   generateScriptFlowDraft,
-  parseScriptFlowAiResponse
+  parseScriptFlowAiResponse,
+  scriptFlowPlannerEffort
 } from "./script-flow-ai-planner.js";
 
 it("only instructs AI to use supported ScriptFlow target modes", () => {
@@ -125,6 +126,23 @@ describe("ScriptFlow AI planner", () => {
     expect(classifyScriptFlowTestLevel("创建课堂，设置时长10小时40分钟，然后发布")).toBe("business_smoke");
     expect(classifyScriptFlowTestLevel("创建课堂页面所有表单都填一遍")).toBe("full_regression");
     expect(classifyScriptFlowTestLevel("临时验证一下发布按钮能不能找到")).toBe("probe");
+  });
+
+  it("uses low effort for explicit new flows and grounded current-screen requests", () => {
+    expect(scriptFlowPlannerEffort({ prompt: "点击成长，然后点击笔记" })).toBe("low");
+    expect(scriptFlowPlannerEffort({
+      prompt: "就在当前页面，把最上面的课堂名字改成自动化课堂",
+      screenContext: lessonCreateScreenContext()
+    })).toBe("low");
+  });
+
+  it("keeps medium effort for revisions, full regression, and vague goals", () => {
+    expect(scriptFlowPlannerEffort({
+      prompt: "把登录后的验证改成检查主页标题",
+      existingDocument: readyResponse().document as ScriptFlowDocument
+    })).toBe("medium");
+    expect(scriptFlowPlannerEffort({ prompt: "把创建课堂页面所有表单都覆盖一遍" })).toBe("medium");
+    expect(scriptFlowPlannerEffort({ prompt: "进入课堂报告页" })).toBe("medium");
   });
 
   it("requires the AI response to keep the system-classified test level", async () => {

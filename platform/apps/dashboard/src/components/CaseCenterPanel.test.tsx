@@ -35,6 +35,8 @@ describe("CaseCenterPanel", () => {
     expect(markup).toContain("修改测试");
     expect(markup).toContain("AI 调整");
     expect(markup).toContain("AI 创建测试");
+    expect(markup).toContain('class="workspace-action-button primary"');
+    expect(markup.match(/class="workspace-action-button secondary"/g)).toHaveLength(2);
     expect(markup).toContain("沉淀可复用的用例与场景");
     expect(markup).toContain("运行配置");
     expect(markup).toContain("开始执行");

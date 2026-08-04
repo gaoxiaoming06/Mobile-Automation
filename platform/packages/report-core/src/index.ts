@@ -11,7 +11,9 @@ import {
 
 export function renderReportHtml(run: TestRun): string {
   const statusClass = run.status === "passed" ? "passed" : "failed";
-  const screenshotArtifacts = run.artifacts.filter((artifact) => artifact.type === "screenshot");
+  const screenshotArtifacts = uniqueArtifacts(run.artifacts.filter((artifact) => artifact.type === "screenshot" && !artifact.deletedAt));
+  const screenshotArtifactById = new Map(screenshotArtifacts.map((artifact) => [artifact.id, artifact]));
+  const screenshotPresentation = screenshotPresentationForRun(run, screenshotArtifacts, screenshotArtifactById);
   const videoArtifacts = run.artifacts.filter((artifact) => artifact.type === "video" && !artifact.deletedAt);
   const primaryVideo = videoArtifacts[0];
   const logArtifacts = run.artifacts.filter((artifact) => artifact.type === "log");
@@ -63,11 +65,15 @@ export function renderReportHtml(run: TestRun): string {
     .video-evidence video { width: 100%; max-height: 600px; display: block; background: #0d1624; border-radius: 6px; }
     .video-caption { margin-top: 10px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: #64748b; font-size: 12px; }
     .video-jump { border: 1px solid #cbd8e7; background: #fff; color: #2563eb; border-radius: 6px; padding: 5px 8px; cursor: pointer; font-weight: 650; }
-    .video-jump:hover { background: #eff6ff; }
-    .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }
-    .thumb { background: #fff; border: 1px solid #dce4ef; border-radius: 8px; padding: 8px; box-shadow: 0 10px 28px rgba(20, 34, 52, 0.04); }
-    .thumb img { width: 100%; display: block; border-radius: 6px; background: #111827; }
-    .chart-card { background: #fff; border: 1px solid #dce4ef; border-radius: 8px; padding: 14px; margin-top: 12px; box-shadow: 0 10px 28px rgba(20, 34, 52, 0.04); }
+	    .video-jump:hover { background: #eff6ff; }
+	    .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }
+	    .thumb { background: #fff; border: 1px solid #dce4ef; border-radius: 8px; padding: 8px; box-shadow: 0 10px 28px rgba(20, 34, 52, 0.04); }
+	    .thumb img { width: 100%; display: block; border-radius: 6px; background: #111827; }
+	    .diagnostic-screenshots { margin-top: 14px; border: 1px solid #dce4ef; border-radius: 8px; background: #fff; box-shadow: 0 10px 28px rgba(20, 34, 52, 0.04); }
+	    .diagnostic-screenshots summary { cursor: pointer; padding: 11px 13px; color: #475569; font-size: 13px; font-weight: 720; }
+	    .diagnostic-screenshots[open] summary { border-bottom: 1px solid #e8eef6; }
+	    .diagnostic-screenshots .thumbs { margin: 0; padding: 12px; }
+	    .chart-card { background: #fff; border: 1px solid #dce4ef; border-radius: 8px; padding: 14px; margin-top: 12px; box-shadow: 0 10px 28px rgba(20, 34, 52, 0.04); }
     .chart-card svg { width: 100%; height: auto; display: block; }
     .chart-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; color: #607087; font-size: 12px; }
     .legend-dot { width: 10px; height: 10px; display: inline-block; border-radius: 999px; margin-right: 5px; }
@@ -141,10 +147,10 @@ export function renderReportHtml(run: TestRun): string {
         <tr><th>#</th><th>动作</th><th>状态</th><th>预期验证</th><th>耗时</th><th>错误</th><th>截图</th><th>视频时间点</th></tr>
       </thead>
       <tbody>
-        ${run.stepResults
-          .map((step) => {
-            const screenshot = step.artifacts.find((artifact) => artifact.type === "screenshot");
-            const videoOffset = primaryVideo ? videoOffsetSeconds(primaryVideo.createdAt, step.startedAt) : undefined;
+	        ${run.stepResults
+	          .map((step) => {
+	            const screenshot = stepScreenshotForTable(step, screenshotArtifactById);
+	            const videoOffset = primaryVideo ? videoOffsetSeconds(primaryVideo.createdAt, step.startedAt) : undefined;
             return `<tr>
               <td>${step.stepOrder}</td>
               <td>${renderStepActionCell(step)}</td>
@@ -206,14 +212,10 @@ export function renderReportHtml(run: TestRun): string {
       ${keyArtifacts.map(renderArtifact).join("") || '<div class="muted">无关键附件</div>'}
     </div>
 
-    <h2>步骤截图</h2>
-    <div class="thumbs">
-      ${screenshotArtifacts
-        .slice(0, 80)
-        .map((artifact) => `<div class="thumb"><img src="${escapeAttr(artifact.url)}" alt="${escapeAttr(artifact.name)}" /><div>${escapeHtml(artifact.name)}</div></div>`)
-        .join("") || '<div class="muted">无截图</div>'}
-    </div>
-  </main>
+	    <h2>步骤截图</h2>
+	    ${renderScreenshotThumbs(screenshotPresentation.primary, "无主步骤截图")}
+	    ${renderDiagnosticScreenshots(screenshotPresentation.diagnostic)}
+	  </main>
   <script>
     document.querySelectorAll("[data-video-time]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -406,6 +408,104 @@ function renderVideoEvidence(artifact: ArtifactRef): string {
 
 function renderArtifact(artifact: ArtifactRef): string {
   return `<div class="artifact"><a href="${escapeAttr(artifact.url)}">${escapeHtml(artifact.name)}</a><span class="muted"> ${escapeHtml(artifact.type)}</span></div>`;
+}
+
+function renderScreenshotThumbs(artifacts: ArtifactRef[], emptyText: string): string {
+  const visible = uniqueArtifacts(artifacts).slice(0, 80);
+  return `<div class="thumbs">
+      ${visible
+        .map((artifact) => `<div class="thumb"><img src="${escapeAttr(artifact.url)}" alt="${escapeAttr(artifact.name)}" /><div>${escapeHtml(artifact.name)}</div></div>`)
+        .join("") || `<div class="muted">${escapeHtml(emptyText)}</div>`}
+    </div>`;
+}
+
+function renderDiagnosticScreenshots(artifacts: ArtifactRef[]): string {
+  const visible = uniqueArtifacts(artifacts).slice(0, 80);
+  if (!visible.length) {
+    return "";
+  }
+  return `<details class="diagnostic-screenshots">
+      <summary>定位与断言证据（${visible.length} 张）</summary>
+      ${renderScreenshotThumbs(visible, "无诊断截图")}
+    </details>`;
+}
+
+function screenshotPresentationForRun(
+  run: TestRun,
+  screenshotArtifacts: ArtifactRef[],
+  artifactById: Map<string, ArtifactRef>
+): { primary: ArtifactRef[]; diagnostic: ArtifactRef[] } {
+  const primaryIds = new Set<string>();
+  for (const step of run.stepResults) {
+    const screenshot = primaryScreenshotForStep(step, artifactById);
+    if (screenshot) {
+      primaryIds.add(screenshot.id);
+    }
+  }
+  for (const event of run.events) {
+    if (event.severity !== "error") continue;
+    for (const artifactId of event.artifactIds) {
+      const artifact = artifactById.get(artifactId);
+      if (artifact) {
+        primaryIds.add(artifact.id);
+      }
+    }
+  }
+  const primary = screenshotArtifacts.filter((artifact) => primaryIds.has(artifact.id));
+  const diagnostic = screenshotArtifacts.filter((artifact) => !primaryIds.has(artifact.id));
+  return {
+    primary: primary.length ? primary : screenshotArtifacts.filter((artifact) => !isDiagnosticScreenshot(artifact)).slice(0, 1),
+    diagnostic
+  };
+}
+
+function primaryScreenshotForStep(step: StepResult, artifactById: Map<string, ArtifactRef>): ArtifactRef | undefined {
+  const screenshot = stepScreenshotForTable(step, artifactById);
+  if (!screenshot) {
+    return undefined;
+  }
+  if (step.status !== "passed" && step.status !== "skipped") {
+    return screenshot;
+  }
+  if (isVerificationOnlyStep(step) || isDiagnosticScreenshot(screenshot)) {
+    return undefined;
+  }
+  return screenshot;
+}
+
+function stepScreenshotForTable(step: StepResult, artifactById: Map<string, ArtifactRef>): ArtifactRef | undefined {
+  const afterScreenshot = step.afterScreenshotId ? artifactById.get(step.afterScreenshotId) : undefined;
+  if (afterScreenshot) {
+    return afterScreenshot;
+  }
+  const screenshots = step.artifacts.filter((artifact) => artifact.type === "screenshot" && !artifact.deletedAt);
+  return screenshots.find((artifact) => !isDiagnosticScreenshot(artifact)) ?? screenshots[0];
+}
+
+function isVerificationOnlyStep(step: StepResult): boolean {
+  return step.metadata?.executionPhase === "verification" || (step.type === "wait" && visibleExpectationResults(step.expectationResults).length > 0);
+}
+
+function isDiagnosticScreenshot(artifact: ArtifactRef): boolean {
+  const name = artifact.name.toLowerCase();
+  return name.startsWith("locator-")
+    || name.startsWith("condition-")
+    || name.startsWith("expectation-")
+    || name.startsWith("device-event-")
+    || name.includes("-attempt-")
+    || name.includes("retry");
+}
+
+function uniqueArtifacts(artifacts: ArtifactRef[]): ArtifactRef[] {
+  const seen = new Set<string>();
+  return artifacts.filter((artifact) => {
+    const key = artifact.path || artifact.url || artifact.id;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function renderAndroidAppMonitorReport(run: TestRun): string {

@@ -169,11 +169,16 @@ export async function generateScriptFlowDraft(input: {
     };
   }
   const plannerPrompt = buildScriptFlowPlannerPrompt(input.prompt, input.appId, input.platform, catalog, existingDocument, input.screenContext);
+  const plannerEffort = scriptFlowPlannerEffort({
+    prompt: input.prompt,
+    existingDocument,
+    screenContext: input.screenContext
+  });
   const result = await timedScriptFlowAiStage(input.timingContext, "planner_request", () => runAiJsonRequest(requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
     userContent: plannerPrompt,
-    effort: "medium"
-  }, input.fetchImpl ?? fetch), { channel, model: input.config.model, screenContext: Boolean(input.screenContext) });
+    effort: plannerEffort
+  }, input.fetchImpl ?? fetch), { channel, model: input.config.model, screenContext: Boolean(input.screenContext), effort: plannerEffort });
   const parseInput = {
     appId: input.appId,
     platform: input.platform,
@@ -436,6 +441,25 @@ export function classifyScriptFlowTestLevel(prompt: string): ScriptFlowTestLevel
     return "component";
   }
   return compact.length <= 18 && /测试|验证|检查/u.test(prompt) ? "probe" : "business_smoke";
+}
+
+export function scriptFlowPlannerEffort(input: {
+  prompt: string;
+  existingDocument?: ScriptFlowDocument;
+  screenContext?: ScreenUnderstandingContext;
+}): "low" | "medium" {
+  if (input.existingDocument || classifyScriptFlowTestLevel(input.prompt) === "full_regression") {
+    return "medium";
+  }
+  const compactPrompt = input.prompt.replace(/\s+/g, " ").trim();
+  if (compactPrompt.length > 240) {
+    return "medium";
+  }
+  if (input.screenContext) {
+    return "low";
+  }
+  const explicitOperations = extractExplicitOperationContract(input.prompt);
+  return explicitOperations.length > 0 && explicitOperations.length <= 6 ? "low" : "medium";
 }
 
 function buildScriptFlowRepairPrompt(plannerPrompt: string, invalidResponse: string, error: unknown): string {

@@ -14,6 +14,10 @@ export type PublicExecutionFailureKind =
 export type PublicExecutionFailure = {
   kind: PublicExecutionFailureKind;
   message: string;
+  details?: Array<{
+    label: string;
+    value: string;
+  }>;
   nextAction: "supplement_process" | "supplement_parameter" | "retry" | "view_report";
 };
 
@@ -53,7 +57,9 @@ export function publicExecutionFailureFromRun(run: TestRun): PublicExecutionFail
 
   if (step.errorCode === "SEMANTIC_TARGET_NOT_FOUND") {
     const reason = nestedString(step.metadata, "semantic", "reason");
-    return publicExecutionFailure(isAmbiguousSemanticReason(reason) ? "target_ambiguous" : "target_not_found");
+    const kind = isAmbiguousSemanticReason(reason) ? "target_ambiguous" : "target_not_found";
+    const failure = publicExecutionFailure(kind);
+    return kind === "target_not_found" ? detailedTextTargetFailure(run, step, failure) : failure;
   }
   if (step.errorCode === "SEMANTIC_ACTION_UNSUPPORTED") {
     return publicExecutionFailure("target_not_found");
@@ -97,3 +103,127 @@ function nestedString(metadata: Record<string, unknown> | undefined, parent: str
 function isAmbiguousSemanticReason(reason: string | undefined): boolean {
   return reason === "ambiguous_target" || reason === "ambiguous_icon_candidates";
 }
+
+function detailedTextTargetFailure(
+  run: TestRun,
+  result: TestRun["stepResults"][number],
+  fallback: PublicExecutionFailure
+): PublicExecutionFailure {
+  const semantic = nestedRecord(result.metadata, "semantic");
+  if (semantic?.type !== "text") return fallback;
+
+  const expected = stringList(semantic.expected);
+  if (!expected.length) return fallback;
+
+  const target = formatTextTargets(expected);
+  const attempts = positiveInteger(semantic.attempts);
+  const candidateCount = nonNegativeInteger(semantic.candidateCount);
+  const actual = typeof semantic.actual === "string" ? semantic.actual.trim() : "";
+  const search = nestedRecord(semantic, "search");
+  const scope = search?.mode === "visibleOnly" ? "当前屏幕" : "页面范围内";
+  const lookup = attempts && attempts > 1 ? `连续查找 ${attempts} 次` : "查找";
+  const action = run.steps.find((step) => step.id === result.stepId);
+  const actionTitle = action?.title?.trim();
+  const stepName = actionTitle && !GENERIC_ACTION_TITLES.has(actionTitle)
+    ? actionTitle
+    : `点击${expected[0]}`;
+  const nearest = nearestVisibleText(expected, actual);
+
+  const details: NonNullable<PublicExecutionFailure["details"]> = [
+    { label: "预期目标", value: `文字${target}` },
+    { label: "实际结果", value: ocrLookupResult(expected, actual, candidateCount) }
+  ];
+  if (nearest) {
+    details.push({ label: "相近文字", value: `现场识别到“${nearest}”，目标文字可能填写有误。` });
+  }
+
+  return {
+    ...fallback,
+    message: `步骤“${stepName}”需要点击文字${target}，但在${scope}${lookup}仍未找到。`,
+    details
+  };
+}
+
+function ocrLookupResult(expected: string[], actual: string, candidateCount: number | undefined): string {
+  const target = formatTextTargets(expected);
+  const empty = !actual || actual === "(empty OCR result)";
+  if (empty || candidateCount === 0) {
+    return `OCR 未识别到可用文字，因此无法匹配${target}。`;
+  }
+  if (candidateCount !== undefined) {
+    return `OCR 识别到 ${candidateCount} 个文字候选，但没有匹配到${target}。`;
+  }
+  return `OCR 已读取当前屏幕文字，但没有匹配到${target}。`;
+}
+
+function formatTextTargets(values: string[]): string {
+  return values.map((value) => `“${value}”`).join("或");
+}
+
+function nearestVisibleText(expected: string[], actual: string): string | undefined {
+  if (!actual || actual === "(empty OCR result)") return undefined;
+  const candidates = Array.from(new Set(actual
+    .split(/[\s,，。；;、|/]+/u)
+    .map((value) => value.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+    .filter(Boolean)));
+
+  let nearest: { value: string; score: number } | undefined;
+  for (const target of expected) {
+    const normalizedTarget = target.toLocaleLowerCase();
+    for (const candidate of candidates) {
+      const normalizedCandidate = candidate.toLocaleLowerCase();
+      if (normalizedCandidate === normalizedTarget) continue;
+      const longest = Math.max(characterLength(normalizedTarget), characterLength(normalizedCandidate));
+      if (longest === 0) continue;
+      const score = 1 - levenshteinDistance(normalizedTarget, normalizedCandidate) / longest;
+      const threshold = longest <= 2 ? 0.5 : 0.67;
+      if (score < threshold || (nearest && score <= nearest.score)) continue;
+      nearest = { value: candidate, score };
+    }
+  }
+  return nearest?.value;
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  const a = Array.from(left);
+  const b = Array.from(right);
+  const previous = b.map((_, index) => index + 1);
+  previous.unshift(0);
+
+  for (let row = 1; row <= a.length; row += 1) {
+    const current = [row];
+    for (let column = 1; column <= b.length; column += 1) {
+      const substitution = previous[column - 1]! + (a[row - 1] === b[column - 1] ? 0 : 1);
+      current[column] = Math.min(previous[column]! + 1, current[column - 1]! + 1, substitution);
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[b.length] ?? a.length;
+}
+
+function characterLength(value: string): number {
+  return Array.from(value).length;
+}
+
+function nestedRecord(value: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
+  const nested = value?.[key];
+  return nested && typeof nested === "object" && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : undefined;
+}
+
+function stringList(value: unknown): string[] {
+  if (typeof value === "string") return value.trim() ? [value.trim()] : [];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim());
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+const GENERIC_ACTION_TITLES = new Set(["tap", "tap_on_text", "点击目标"]);

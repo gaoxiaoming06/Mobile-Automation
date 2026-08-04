@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActionStep, ArtifactRef, MetricSample, StepExpectation } from "@mobile-automation/shared";
-import type { OcrInput, OcrResult, OcrService } from "./ocr.js";
+import type { OcrInput, OcrLayoutResult, OcrResult, OcrService } from "./ocr.js";
 import {
   StepExpectationEvaluator,
   annotateNonBlockingExpectationResults,
@@ -241,6 +241,36 @@ describe("StepExpectationEvaluator", () => {
 
     expect(hierarchyCalls).toBe(0);
     expect(results[0]).toEqual(expect.objectContaining({ status: "passed", actual: "教学方案列表" }));
+  });
+
+  it("passes exact OCR text assertions when one recognized text box matches", async () => {
+    const evaluator = new StepExpectationEvaluator({
+      ocr: new LayoutOcrService("19:07 搜索 请输入搜索内容", ["19:07", "搜索", "请输入搜索内容"]),
+      collectLogs: async () => "",
+      writeLog: async () => artifact("artifact-log", "log"),
+      captureExpectationScreenshot: async () => screenshot("artifact-retry", "retry")
+    });
+
+    const results = await evaluator.evaluate({
+      runId: "run-1",
+      serial: "device-1",
+      stepResultId: "step-result-1",
+      step: actionStep([expectation("text", {
+        expected: "搜索",
+        mode: "equals",
+        source: "ocr",
+        blocking: true,
+        timeoutMs: 1,
+        intervalMs: 1
+      })]),
+      afterScreenshot: screenshot("artifact-after", "after"),
+      runtimeFailure: false
+    });
+
+    expect(results[0]).toEqual(expect.objectContaining({
+      status: "passed",
+      actual: "19:07 搜索 请输入搜索内容"
+    }));
   });
 
   it("passes text expectations that use foreground activity as a state anchor", async () => {
@@ -641,6 +671,29 @@ class FakeOcrService implements OcrService {
       text: this.text,
       engine: "fake",
       lang: "zh-Hans"
+    };
+  }
+}
+
+class LayoutOcrService extends FakeOcrService {
+  constructor(text: string, private readonly boxes: string[]) {
+    super(text);
+  }
+
+  async locateText(input: OcrInput): Promise<OcrLayoutResult> {
+    const recognized = await this.recognize(input);
+    return {
+      ...recognized,
+      width: 1080,
+      height: 2400,
+      boxes: this.boxes.map((text, index) => ({
+        text,
+        confidence: 0.99,
+        x: 40,
+        y: 100 + index * 40,
+        width: 200,
+        height: 32
+      }))
     };
   }
 }

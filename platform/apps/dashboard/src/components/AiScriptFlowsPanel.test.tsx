@@ -9,8 +9,10 @@ import {
   draftRunOptions,
   draftRunEndpoint,
   draftSaveDestination,
+  draftFromImportedScript,
   ExecutionFailureNotice,
   ScriptItemPicker,
+  scriptImportErrorMessage,
   reusableFlowCandidates,
   StepTrialRunBar,
   stepTrialStatusForStep,
@@ -18,6 +20,7 @@ import {
   TrialOutcomeReview,
   updateDraftStepLocator
 } from "./AiScriptFlowsPanel.js";
+import { ApiError } from "../api.js";
 
 describe("AiScriptFlowsPanel", () => {
   it("keeps only stable compatible non-recursive cases as reusable candidates", () => {
@@ -42,6 +45,73 @@ describe("AiScriptFlowsPanel", () => {
       app: { id: "cn.eeo.classin", platform: "android" },
       currentFlowId: "flow-current"
     }).map((flow) => flow.id)).toEqual(["flow-login"]);
+  });
+
+  it("renders generation and YAML import as creation modes on the new test page", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+    />);
+
+    expect(markup).toContain("创建测试");
+    expect(markup).toContain("AI 生成");
+    expect(markup).toContain("导入 YAML");
+    expect(markup).not.toContain("导入 ScriptFlow");
+  });
+
+  it("builds a trial-ready orchestration draft from imported ScriptFlow YAML", () => {
+    const sourceYaml = `version: 1
+kind: case
+purpose: business
+testLevel: probe
+name: 从成长页进入全网搜索
+app:
+  id: cn.eeo.classin
+  platform: android
+steps:
+  - id: open-growth
+    role: business
+    tap:
+      target: { text: 成长, area: bottomBar }
+`;
+
+    const draft = draftFromImportedScript(sourceYaml, {
+      version: 1,
+      kind: "case",
+      purpose: "business",
+      testLevel: "probe",
+      name: "从成长页进入全网搜索",
+      app: { id: "cn.eeo.classin", platform: "android" },
+      parameters: {},
+      steps: [{ id: "open-growth", role: "business", tap: { target: { text: "成长", area: "bottomBar" } } }],
+      tags: []
+    });
+
+    expect(draft).toMatchObject({
+      status: "trial_ready",
+      sourceYaml,
+      document: { name: "从成长页进入全网搜索", app: { id: "cn.eeo.classin", platform: "android" } },
+      summary: "已导入脚本：从成长页进入全网搜索",
+      channel: "manual-import",
+      model: "scriptflow-yaml"
+    });
+    expect(stepReviewItems(draft.document)).toHaveLength(1);
+  });
+
+  it("formats ScriptFlow import validation issues for the operator", () => {
+    const message = scriptImportErrorMessage(new ApiError("Bad Request", 400, {
+      valid: false,
+      issues: [
+        { path: "steps.0.tap.target", message: "Target requires exactly one of text, icon, visual, or control" },
+        { path: "steps.1", message: "Unknown field" }
+      ]
+    }));
+
+    expect(message).toBe("脚本校验失败：steps.0.tap.target Target requires exactly one of text, icon, visual, or control；steps.1 Unknown field");
   });
 
   it("renders one script item picker with all sections and content types", () => {
@@ -346,7 +416,8 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("无前置准备，执行时依赖当前设备状态");
     expect(markup).toContain("未设置结果验证，执行完成后需要人工确认");
     expect(markup).toContain("2/2 已确认");
-    expect(markup).toContain("确认步骤 1：输入文本");
+    expect(markup).toContain("确认步骤 1：在“课堂标题”中输入“111”");
+    expect(markup).toContain("确认步骤 2：关闭“录制现场”开关");
     expect(markup).toContain("展开步骤 1");
     expect(markup).toContain("所有步骤已确认，可以执行或保存");
     expect(markup).toContain("<span>添加</span>");
@@ -918,6 +989,40 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).not.toContain("沉淀所选资产");
   });
 
+  it("places the new-test action in the page header when a draft is open", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[]}
+      selectedSerial=""
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      onStartNewTest={vi.fn()}
+      initialDraft={{
+        status: "trial_ready",
+        sourceYaml: "version: 1\nname: 打开添加好友",
+        document: {
+          version: 1,
+          kind: "case",
+          name: "打开添加好友",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [{ id: "open-add-friend", tap: { target: { text: "添加好友" } } }],
+          tags: []
+        },
+        summary: "打开添加好友页面",
+        assumptions: [],
+        channel: "codex",
+        model: "planner"
+      }}
+    />);
+
+    expect(markup).toContain("脚本编排");
+    expect(markup).toContain("新建测试");
+    expect(markup).toMatch(/<header class="ai-script-header">[\s\S]*class="workspace-action-button secondary ai-script-new-test-button"/);
+    expect(markup).not.toContain('class="workspace-action-button secondary script-new-test-button"');
+  });
+
   it("uses natural language to revise an existing use case", () => {
     const onStartNewTest = vi.fn();
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel
@@ -935,6 +1040,7 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("教师登录");
     expect(markup).toContain("描述你想怎样修改这个测试");
     expect(markup).toContain("新建测试");
+    expect(markup).toContain('class="workspace-action-button secondary ai-script-new-test-button"');
     expect(markup).not.toContain("App ID");
   });
 
@@ -946,6 +1052,7 @@ describe("AiScriptFlowsPanel", () => {
       setMessage={vi.fn()}
       onSaved={vi.fn()}
       onOpenRun={vi.fn()}
+      onStartNewTest={vi.fn()}
       revision={{ flowId: "flow-login", version: 3, name: "教师登录" }}
       initialDraft={{
         status: "ready",
@@ -970,6 +1077,8 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("脚本编排");
     expect(markup).toContain("点击登录");
     expect(markup).toContain("保存修改");
+    expect(markup).toMatch(/<header class="ai-script-header">[\s\S]*class="workspace-action-button secondary ai-script-new-test-button"/);
+    expect(markup).not.toContain('class="workspace-action-button secondary script-new-test-button"');
     expect(markup).not.toContain("描述你想怎样修改这个测试");
     expect(markup).not.toContain("生成修改方案");
     expect(markup).not.toContain("等待修改说明");
