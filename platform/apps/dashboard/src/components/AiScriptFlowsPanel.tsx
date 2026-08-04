@@ -111,7 +111,7 @@ type LearningSummaryResponse = {
   verification?: FlowVerification;
 };
 
-type TargetKind = "text" | "semantic" | "icon" | "control";
+type TargetKind = "text" | "icon" | "visual" | "control";
 
 type StepLocatorView = {
   targetKind: TargetKind;
@@ -152,8 +152,8 @@ type LocatorOption = { value: string; label: string };
 
 const TARGET_KIND_LABELS: Record<TargetKind, string> = {
   text: "屏幕文字",
-  semantic: "语义描述",
   icon: "图标",
+  visual: "视觉目标",
   control: "表单控件"
 };
 
@@ -1474,7 +1474,7 @@ function StepLocatorEditor({
       <label>限定文字<input value={locator.scopeText ?? ""} onChange={(event) => onChange(stepKey, { scopeText: event.target.value })} /></label>
       <label>匹配序号<input type="number" min="1" value={locator.ordinal ?? ""} onChange={(event) => onChange(stepKey, { ordinal: event.target.value })} /></label>
       {locator.targetKind === "control" && locator.targetValue === "switch" ? <label>选中状态<select value={locator.checked ?? "false"} onChange={(event) => onChange(stepKey, { checked: event.target.value })}><option value="true">已选中</option><option value="false">未选中</option></select></label> : null}
-      {locator.targetKind === "icon" ? <label>相对位置<select value={locator.position ?? ""} onChange={(event) => onChange(stepKey, { position: event.target.value })}><option value="">自动</option><option value="leading">前侧</option><option value="trailing">后侧</option></select></label> : null}
+      {locator.targetKind === "icon" || locator.targetKind === "visual" ? <label>相对位置<select value={locator.position ?? ""} onChange={(event) => onChange(stepKey, { position: event.target.value })}><option value="">自动</option><option value="leading">前侧</option><option value="trailing">后侧</option></select></label> : null}
       {locator.usesSearchPolicy ? <>
         <label>滚动方向<select value={locator.direction ?? ""} onChange={(event) => onChange(stepKey, { direction: event.target.value })}><option value="">自动</option><option value="down">向下</option><option value="up">向上</option><option value="both">双向</option></select></label>
         <label>最多滑动次数<input type="number" min="1" value={locator.maxSwipes ?? ""} onChange={(event) => onChange(stepKey, { maxSwipes: event.target.value })} /></label>
@@ -1501,8 +1501,8 @@ function locatorSearchSummary(locator: StepLocatorView): string {
 
 function locatorTargetValueLabel(kind: TargetKind): string {
   if (kind === "text") return "屏幕上的文字";
-  if (kind === "semantic") return "元素描述";
   if (kind === "icon") return "图标描述";
+  if (kind === "visual") return "视觉目标描述";
   return "控件类型";
 }
 
@@ -1829,10 +1829,11 @@ function locatorView(step: CaseSourceStep): StepLocatorView | undefined {
 
 function primaryTargetValue(target: Record<string, unknown>): { kind: TargetKind; value: string } {
   if (typeof target.text === "string") return { kind: "text", value: target.text };
-  if (typeof target.semantic === "string") return { kind: "semantic", value: target.semantic };
   if (typeof target.icon === "string") return { kind: "icon", value: target.icon };
+  const visual = recordValue(target.visual);
+  if (typeof visual?.query === "string") return { kind: "visual", value: visual.query };
   if (typeof target.control === "string") return { kind: "control", value: target.control };
-  return { kind: "semantic", value: "" };
+  return { kind: "text", value: "" };
 }
 
 function optionalStringField<K extends keyof StepLocatorView>(

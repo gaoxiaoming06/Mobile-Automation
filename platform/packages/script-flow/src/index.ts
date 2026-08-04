@@ -30,5 +30,7 @@ export type {
   ScriptStepRole,
   ScriptTarget,
   ScriptTargetArea,
-  ScriptTargetPosition
+  ScriptTargetPosition,
+  ScriptVisualTarget,
+  ScriptVisualTargetKind
 } from "./types.js";

@@ -26,20 +26,21 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "每个步骤必须显式标记 role：setup、navigation、business、assertion、reset、cleanup 或 recovery。role 按该步骤在整个测试中的语义填写，不能仅根据动作类型猜测。",
   "新草稿使用显式步骤表达前置准备、业务操作、结果验证和每轮复位：setup 步骤属于前置准备，business 步骤属于业务操作，assertion 步骤属于结果验证，reset 步骤属于循环业务与验证时每轮结束后回到业务起点的动作。不要使用 entry、outcome 或 start 让执行器补动作。",
   "每轮复位不得自动推断。只有用户明确描述循环时每轮结束后的返回路径，才生成 role: reset 的步骤；只有用户明确说明业务执行后自然回到起点、无需复位时，才输出顶层 loop: { reset: \"none\" }；其他情况省略 loop 和 reset 步骤，交给用户在编排器确认。",
-  "页面目录只负责页面身份。动作目标必须且只能使用 text、semantic、icon 或 control：已知屏幕原文用 text，不知道准确标签时用 semantic 描述操作意图，常见标准图标用 icon，通用表单控件用 control。",
+  "页面目录只负责页面身份。动作目标必须且只能使用 text、icon、visual 或 control：已知屏幕原文用 text；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual；通用表单控件用 control。禁止生成 semantic 目标字段。",
   "页面 key、页面 id、ScriptFlow id 和类似 classin.teacher.xxx 的内部引用不能作为 tap、inputText、clearText、selectText 或 scrollUntilVisible 的动作目标。",
-  "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。semantic 用于‘进入教学方案的入口’这类概念目标，不能伪装成屏幕原文。",
-  "text、semantic、icon 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
+  "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。需要表达‘进入教学方案的入口’这类文本语义目标时，使用 text + match: semantic，不能伪装成屏幕原文。",
+  "text、icon、visual 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
   "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、onPage、reachPage 或 runFlow，也不要把页面目录当成动作前置条件。",
   "表单字段动作默认使用 search: { mode: auto }。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或受控 screenContext 明确给出当前可见候选时，才使用 visibleOnly。",
   "用户说通过滑动、滚动、查找、找到、定位或搜索某字段/条目/控件时，这是目标动作的运行时查找策略，不是独立 swipe 步骤；即使 screenContext 当前首屏没有该字段，也应生成该字段的直接动作并使用 search: { mode: auto }，不能因此追问。",
   "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确说点击某个入口时，禁止擅自补“点击修改”或其他桥接动作；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification 询问准确字段位置或完整操作路径。",
-  "text 或 semantic 目标默认不要猜测 topBar/bottomBar。只有用户明确说顶部、底部、左上角、右上角等位置，或目录中的已验证导航入口/原用例已经给出同一目标位置时，才可增加窄区域约束；否则省略 area，让执行器在当前屏幕查找。",
+  "text 目标默认不要猜测 topBar/bottomBar。只有用户明确说顶部、底部、左上角、右上角等位置，或目录中的已验证导航入口/原用例已经给出同一目标位置时，才可增加窄区域约束；否则省略 area，让执行器在当前屏幕查找。",
   "发布、提交、删除、支付等操作按钮可能位于顶部、内容区或底部；用户或已验证知识未提供位置时必须省略 area，禁止根据动作名称猜测区域。",
-  "icon 必须描述 area 和 position。顶部栏标准图标使用 topBar；内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
+  "icon 的 area 和 position 是可选范围提示。用户明确说顶部、底部、左上角、右上角、左侧或右侧时才填写对应 area/position；无法确定时省略，让执行器按标准视觉 role 在当前可见范围定位。内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
+  "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象，例如 { visual: { kind: icon, query: \"排序图标\", area: content } } 或 { visual: { kind: image, query: \"封面图片\" } }。area、position、nearText 只是范围提示；执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
   "用户明确说‘点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复、reachPage 或重启。",
   "control 当前支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content、scopeText 和 ordinal，用于预填输入框没有稳定标签的场景。",
-  "执行器能力合同：semantic 仅支持 tap；selectText 和 scrollUntilVisible 必须使用 text；inputText 和 clearText 必须使用 text 或 control: textField。",
+  "执行器能力合同：visual 仅支持 tap；selectText 和 scrollUntilVisible 必须使用 text；inputText 和 clearText 必须使用 text 或 control: textField。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
   "用户明确操作是硬约束：点击、输入、清空、滑动或启动等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。用户明确要求启动时生成唯一一个 role: setup 的 launchApp；没有要求启动时不要添加。",
   "ScriptFlow 的 launchApp 表示保留应用数据，先终止应用进程再重新启动；步骤名称应写为‘重启 App’，不能把它描述成仅切回前台。",
@@ -394,7 +395,7 @@ export function buildScriptFlowPlannerPrompt(
     "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
     "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
-    "target 必须且只能使用 text、semantic、icon 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；不知道准确标签时改用 semantic。icon 必须带 area 和 position；control 支持 checkbox、switch 与 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content、scopeText 和 ordinal；禁止元素资产 ID、坐标、区域和临时视觉模板。",
+    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon，且 area/position 只是可选范围提示；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。control 支持 checkbox、switch 与 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content、scopeText 和 ordinal；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
     screenContext
       ? [
           "当前屏幕理解上下文由用户显式开启看屏后生成。它只能帮助理解用户对当前页面的描述，不能覆盖已验证资产。",
@@ -470,13 +471,19 @@ function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Re
       id: "tap-semantic-entry",
       role: "navigation",
       onPage: pageReference,
-      tap: { target: { semantic: "进入目标功能的入口", area: "content" }, search: { mode: "auto", direction: "down", maxSwipes: 6 } }
+      tap: { target: { text: "进入目标功能的入口", match: "semantic", area: "content" }, search: { mode: "auto", direction: "down", maxSwipes: 6 } }
     },
     {
       id: "tap-standard-icon",
       role: "navigation",
       onPage: pageReference,
       tap: { target: { icon: "add", area: "topBar", position: "trailing" }, search: { mode: "visibleOnly" } }
+    },
+    {
+      id: "tap-visual-icon",
+      role: "business",
+      onPage: pageReference,
+      tap: { target: { visual: { kind: "icon", query: "排序图标", area: "content" } }, search: { mode: "visibleOnly" } }
     },
     {
       id: "tap-floating-add",
@@ -501,7 +508,7 @@ function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Re
       role: "business",
       onPage: pageReference,
       inputText: {
-        target: { semantic: "课堂名称输入框", area: "content" },
+        target: { text: "课堂名称", area: "content" },
         value: "${lessonName}",
         search: { mode: "auto", direction: "down", maxSwipes: 6 }
       }
@@ -563,7 +570,7 @@ export function parseScriptFlowAiResponse(
   const document = validateScriptFlowDocument(normalizeGeneratedExecutableTargets(extractedDocument, input));
   validateGeneratedReferences(document, input);
   validateGeneratedActionTargetReferences(document, input.catalog);
-  validateGeneratedExecutableTargetContracts(document);
+  validateGeneratedExecutableTargetContracts(document, input.prompt);
   validateGeneratedNavigationReachability(document, input.catalog);
   return {
     status: "ready",
@@ -1085,8 +1092,14 @@ function normalizeExecutableTargetSteps(
         }
       };
     }
+    if ("tap" in step) {
+      return {
+        ...step,
+        tap: step.tap
+      };
+    }
     if ("selectText" in step) {
-      const target = normalizeNonTapSemanticTarget(step.selectText.target, input);
+      const target = step.selectText.target;
       return {
         ...step,
         selectText: {
@@ -1097,7 +1110,7 @@ function normalizeExecutableTargetSteps(
       };
     }
     if ("inputText" in step) {
-      const target = normalizeNonTapSemanticTarget(step.inputText.target, input);
+      const target = step.inputText.target;
       return {
         ...step,
         inputText: {
@@ -1108,7 +1121,7 @@ function normalizeExecutableTargetSteps(
       };
     }
     if ("clearText" in step) {
-      const target = normalizeNonTapSemanticTarget(step.clearText.target, input);
+      const target = step.clearText.target;
       return {
         ...step,
         clearText: {
@@ -1123,21 +1136,12 @@ function normalizeExecutableTargetSteps(
         ...step,
         scrollUntilVisible: {
           ...step.scrollUntilVisible,
-          target: normalizeNonTapSemanticTarget(step.scrollUntilVisible.target, input)
+          target: step.scrollUntilVisible.target
         }
       };
     }
     return step;
   });
-}
-
-function normalizeNonTapSemanticTarget(
-  target: ScriptTarget,
-  input: { prompt?: string; existingDocument?: ScriptFlowDocument; catalog: ScriptFlowPlannerCatalog }
-): ScriptTarget {
-  if (!target.semantic || target.text || target.icon || target.control) return target;
-  const literal = literalTargetFromSemantic(target.semantic, input);
-  return literal ? { ...target, text: literal, semantic: undefined } : target;
 }
 
 function normalizeFormSearchPolicy(
@@ -1158,33 +1162,6 @@ function isVisibleOnlyGroundedForFormAction(
     return true;
   }
   return Boolean(input.screenContext && screenControlCandidateMatchesTarget(target, input.screenContext));
-}
-
-function literalTargetFromSemantic(
-  semantic: string,
-  input: { prompt?: string; existingDocument?: ScriptFlowDocument; catalog: ScriptFlowPlannerCatalog }
-): string | undefined {
-  const candidates = semanticLiteralCandidates(semantic);
-  const normalizedPrompt = compactGroundingText(input.prompt ?? "");
-  const knownLiterals = new Set([
-    ...input.catalog.pages.map((page) => compactGroundingText(page.name)),
-    ...flattenSteps(input.existingDocument?.steps ?? []).flatMap((step) => {
-      const text = operationLiteralTargetText(step) ?? ("assertText" in step ? step.assertText.text : undefined);
-      return text ? [compactGroundingText(text)] : [];
-    })
-  ]);
-  return candidates.find((candidate) => {
-    const normalized = compactGroundingText(candidate);
-    return Boolean(normalized && (normalizedPrompt.includes(normalized) || knownLiterals.has(normalized)));
-  });
-}
-
-function semanticLiteralCandidates(semantic: string): string[] {
-  const trimmed = semantic.trim();
-  const stripped = trimmed
-    .replace(/(?:输入框|选择器|下拉框|字段|表单项|控件|选项|入口|按钮|图标)$/u, "")
-    .trim();
-  return [...new Set([trimmed, stripped].filter(Boolean))];
 }
 
 function validateGeneratedReferences(
@@ -1234,7 +1211,16 @@ function validateGeneratedActionTargetReferences(
   }
 }
 
-function validateGeneratedExecutableTargetContracts(document: ScriptFlowDocument): void {
+function validateGeneratedExecutableTargetContracts(document: ScriptFlowDocument, prompt?: string): void {
+  const tapOperations = prompt
+    ? extractExplicitOperationContract(prompt).filter((operation) => operation.kind === "tap")
+    : [];
+  const tapSteps = flattenSteps(document.steps).filter((step): step is Extract<ScriptStep, { tap: { target: ScriptTarget } }> => "tap" in step);
+  tapSteps.forEach((step, index) => {
+    const operationPhrase = tapOperations[index]?.phrase ?? (tapSteps.length === 1 ? prompt : undefined);
+    validateTapTargetContract(step.tap.target, operationPhrase);
+  });
+
   for (const step of flattenSteps(document.steps)) {
     if ("selectText" in step && !isTextTarget(step.selectText.target)) {
       throw new UnsupportedExecutableTargetError("selectText");
@@ -1251,8 +1237,26 @@ function validateGeneratedExecutableTargetContracts(document: ScriptFlowDocument
   }
 }
 
+function validateTapTargetContract(target: ScriptTarget, operationPhrase: string | undefined): void {
+  if (!isTextLikeTarget(target)) {
+    return;
+  }
+  const targetDescription = target.text ?? "";
+  if (hasExplicitVisualTargetCue(targetDescription) || (operationPhrase && hasExplicitVisualTargetCue(operationPhrase))) {
+    throw new Error("显式视觉目标必须使用 visual 或 icon，不能生成为 text OCR 文本目标");
+  }
+}
+
+function hasExplicitVisualTargetCue(value: string): boolean {
+  return /图标|图片|图像|图形|视觉|符号|icon|image|picture|visual|symbol/iu.test(value);
+}
+
+function isTextLikeTarget(target: ScriptTarget): boolean {
+  return Boolean(target.text && !target.icon && !target.visual && !target.control);
+}
+
 function isTextTarget(target: ScriptTarget): boolean {
-  return Boolean(target.text && !target.semantic && !target.icon && !target.control);
+  return Boolean(target.text && !target.icon && !target.visual && !target.control);
 }
 
 function isTextOrTextFieldTarget(target: ScriptTarget): boolean {

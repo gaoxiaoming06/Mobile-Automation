@@ -308,7 +308,7 @@ describe("ScriptFlowRunner", () => {
       flow: document([{
         id: "open-add-friend",
         onPage: "classin.home",
-        tap: { target: { semantic: "进入添加好友页面" } }
+        tap: { target: { text: "进入添加好友页面", match: "semantic" } }
       }]),
       interactionAssets: [{ stepId: "open-add-friend", asset }],
       deviceSerial: "device-1",

@@ -53,7 +53,7 @@ export function publicExecutionFailureFromRun(run: TestRun): PublicExecutionFail
 
   if (step.errorCode === "SEMANTIC_TARGET_NOT_FOUND") {
     const reason = nestedString(step.metadata, "semantic", "reason");
-    return publicExecutionFailure(reason === "ambiguous_target" ? "target_ambiguous" : "target_not_found");
+    return publicExecutionFailure(isAmbiguousSemanticReason(reason) ? "target_ambiguous" : "target_not_found");
   }
   if (step.errorCode === "SEMANTIC_ACTION_UNSUPPORTED") {
     return publicExecutionFailure("target_not_found");
@@ -92,4 +92,8 @@ function nestedString(metadata: Record<string, unknown> | undefined, parent: str
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const nested = (value as Record<string, unknown>)[key];
   return typeof nested === "string" ? nested : undefined;
+}
+
+function isAmbiguousSemanticReason(reason: string | undefined): boolean {
+  return reason === "ambiguous_target" || reason === "ambiguous_icon_candidates";
 }

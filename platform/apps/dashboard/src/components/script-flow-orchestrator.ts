@@ -1,7 +1,7 @@
 import { serializeScriptFlow, type ScriptFlowDocument } from "@mobile-automation/script-flow";
 import type { CaseDocumentView, CaseSourceStep } from "./case-view.js";
 
-export type TargetKind = "text" | "semantic" | "icon" | "control";
+export type TargetKind = "text" | "icon" | "visual" | "control";
 
 export type StepLocatorPatch = {
   targetKind?: TargetKind;
@@ -298,7 +298,7 @@ function defaultRole(action: EditableStepAction): "setup" | "business" | "assert
 
 function actionBody(action: EditableStepAction, appId: string): Record<string, unknown> {
   if (action === "launchApp") return { launchApp: { appId } };
-  if (action === "tap") return { tap: { target: { semantic: "待填写目标" }, search: { mode: "auto" } } };
+  if (action === "tap") return { tap: { target: { text: "待填写目标" }, search: { mode: "auto" } } };
   if (action === "inputText") return {
     inputText: {
       target: { control: "textField", area: "content", scopeText: "待填写字段", ordinal: 1 },
@@ -312,9 +312,9 @@ function actionBody(action: EditableStepAction, appId: string): Record<string, u
       search: { mode: "auto" }
     }
   };
-  if (action === "selectText") return { selectText: { target: { semantic: "待填写选项" }, value: "待填写选项", search: { mode: "auto" } } };
+  if (action === "selectText") return { selectText: { target: { text: "待填写选项" }, value: "待填写选项", search: { mode: "auto" } } };
   if (action === "swipe") return { swipe: { direction: "up" } };
-  if (action === "scrollUntilVisible") return { scrollUntilVisible: { target: { semantic: "待填写目标" }, direction: "down", maxSwipes: 6 } };
+  if (action === "scrollUntilVisible") return { scrollUntilVisible: { target: { text: "待填写目标" }, direction: "down", maxSwipes: 6 } };
   if (action === "reachPage") return { reachPage: { page: "待填写页面", policy: "safe" } };
   if (action === "waitForPage") return { waitForPage: "待填写页面" };
   if (action === "assertPage") return { assertPage: "待填写页面" };
@@ -490,7 +490,7 @@ function applyLocatorPatch(
 
 function normalizeTargetConstraints(target: Record<string, unknown>): void {
   const primary = primaryTargetValue(target);
-  if (primary.kind !== "icon") delete target.position;
+  if (primary.kind !== "icon" && primary.kind !== "visual") delete target.position;
   if (primary.kind !== "control" || primary.value !== "switch") delete target.checked;
 
   if (primary.kind === "icon") {
@@ -532,20 +532,28 @@ function applyPrimaryTargetPatch(target: Record<string, unknown>, patch: StepLoc
   delete target.text;
   delete target.semantic;
   delete target.icon;
+  delete target.visual;
   delete target.control;
-  if (value.trim()) target[kind] = value.trim();
+  if (!value.trim()) return;
+  if (kind === "visual") {
+    target.visual = { kind: "icon", query: value.trim() };
+    return;
+  }
+  target[kind] = value.trim();
 }
 
 function primaryTargetValue(target: Record<string, unknown>): { kind: TargetKind; value: string } {
   if (typeof target.text === "string") return { kind: "text", value: target.text };
-  if (typeof target.semantic === "string") return { kind: "semantic", value: target.semantic };
   if (typeof target.icon === "string") return { kind: "icon", value: target.icon };
+  const visual = recordValue(target.visual);
+  if (typeof visual?.query === "string") return { kind: "visual", value: visual.query };
   if (typeof target.control === "string") return { kind: "control", value: target.control };
-  return { kind: "semantic", value: "" };
+  return { kind: "text", value: "" };
 }
 
 function defaultTargetValue(kind: TargetKind, currentValue: string): string {
   if (kind === "control") return "textField";
+  if (kind === "visual") return "待填写视觉目标";
   return currentValue;
 }
 

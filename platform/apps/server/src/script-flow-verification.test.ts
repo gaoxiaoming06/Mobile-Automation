@@ -46,7 +46,7 @@ describe("ScriptFlow verification assessment", () => {
 
   it("blocks a draft when deterministic validation reports a hard reason", () => {
     const assessment = assessScriptFlowVerification({
-      document: flow([{ id: "tap-unknown", tap: { target: { semantic: "未知入口" } } }]),
+      document: flow([{ id: "tap-unknown", tap: { target: { text: "未知入口", match: "semantic" } } }]),
       sourceYaml: "version: 1\nname: 不完整流程",
       blockedReasons: ["缺少可验证的结果条件"]
     });

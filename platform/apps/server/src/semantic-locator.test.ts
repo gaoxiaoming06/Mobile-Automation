@@ -904,6 +904,294 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("searches the visible screen for a bare semantic icon instead of defaulting to the top bar", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("课节")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-visible-search-${attempt}`),
+        png: semanticIconScreenshot(1200, 2000, [
+          { role: "chevron", centerX: 876, centerY: 358 },
+          { role: "search", centerX: 955, centerY: 843 }
+        ])
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-visible-search",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "search",
+        semanticArea: "unknown",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 957, y: 845 }]);
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      role: "search",
+      semanticArea: "unknown",
+      relocatedBy: "visible_icon_current_visual",
+      currentVisual: expect.objectContaining({
+        phase: "global",
+        strategy: "semantic_icon_shape"
+      })
+    }));
+  });
+
+  it("resolves visual icon queries through current standard icon recognition", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("课节")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-visual-search-${attempt}`),
+        png: semanticIconScreenshot(1200, 2000, [
+          { role: "chevron", centerX: 876, centerY: 358 },
+          { role: "search", centerX: 955, centerY: 843 }
+        ])
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-visual-search",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "visual_query_locator",
+        visualKind: "icon",
+        visualQuery: "搜索图标",
+        semanticArea: "unknown",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 957, y: 845 }]);
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      type: "visual_query_locator",
+      action: "tap",
+      visualKind: "icon",
+      visualQuery: "搜索图标",
+      role: "search",
+      relocatedBy: "visible_icon_current_visual"
+    }));
+  });
+
+  it("fails unsupported visual queries instead of falling back to OCR text or region center", async () => {
+    const actions: DeviceActionRequest[] = [];
+    let screenshots = 0;
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("封面")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => {
+        screenshots += 1;
+        return {
+          ...screenshot(`artifact-visual-image-${attempt}`),
+          png: semanticIconScreenshot(1200, 2000, [])
+        };
+      }
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-visual-image",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "visual_query_locator",
+        visualKind: "image",
+        visualQuery: "封面图片",
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(screenshots).toBe(0);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: false,
+      metadata: expect.objectContaining({
+        type: "visual_query_locator",
+        action: "fail",
+        reason: "visual_grounding_unavailable",
+        visualKind: "image",
+        visualQuery: "封面图片"
+      })
+    }));
+  });
+
+  it("uses the requested content area before global icon fallback", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("课节")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-content-search-${attempt}`),
+        png: semanticIconScreenshot(1200, 2000, [
+          { role: "search", centerX: 1030, centerY: 210 },
+          { role: "search", centerX: 955, centerY: 843 }
+        ])
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-content-search",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "search",
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 957, y: 845 }]);
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      semanticArea: "content",
+      relocatedBy: "visible_icon_current_visual",
+      currentVisual: expect.objectContaining({ phase: "primary" })
+    }));
+  });
+
+  it("falls back globally when a requested icon area has no matching role", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("课节")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-content-miss-${attempt}`),
+        png: semanticIconScreenshot(1200, 2000, [
+          { role: "search", centerX: 1030, centerY: 210 },
+          { role: "chevron", centerX: 955, centerY: 843 }
+        ])
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-content-miss",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "search",
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 1032, y: 212 }]);
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      semanticArea: "content",
+      relocatedBy: "visible_icon_current_visual",
+      currentVisual: expect.objectContaining({ phase: "fallback_global" })
+    }));
+  });
+
+  it("does not treat a top chevron as search before falling back globally", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(topBarLayout()),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-top-fallback-search-${attempt}`),
+        png: semanticIconScreenshot(1200, 2000, [
+          { role: "chevron", centerX: 1030, centerY: 210 },
+          { role: "search", centerX: 955, centerY: 843 }
+        ])
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-top-fallback-search",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "search",
+        semanticArea: "top",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 957, y: 845 }]);
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      semanticArea: "top",
+      relocatedBy: "visible_icon_current_visual",
+      currentVisual: expect.objectContaining({ phase: "fallback_global" })
+    }));
+  });
+
+  it("does not tap when a visible icon target is ambiguous", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("课节")),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-ambiguous-search-${attempt}`),
+        png: semanticIconScreenshot(1200, 2000, [
+          { role: "search", centerX: 1030, centerY: 210 },
+          { role: "search", centerX: 955, centerY: 843 }
+        ])
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-ambiguous-search",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "search",
+        semanticArea: "unknown",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: false,
+      message: "当前屏幕找到 2 个搜索图标，无法判断要点击哪一个；请补充位置（例如右上角、底部、或某段文字附近）后重试。",
+      metadata: expect.objectContaining({
+        reason: "ambiguous_icon_candidates",
+        role: "search",
+        semanticArea: "unknown"
+      })
+    }));
+  });
+
   it("uses the current top bar visual order when a recorded search candidate is stale", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -5572,6 +5860,36 @@ function topBarIconScreenshot(
       drawCircle(pixels, width, height, icon.centerX - 3, icon.centerY - 3, 18, 5, colors.foreground);
       drawLine(pixels, width, height, icon.centerX + 9, icon.centerY + 9, icon.centerX + 24, icon.centerY + 24, 5, colors.foreground);
     } else if (icon.role === "back") {
+      drawLine(pixels, width, height, icon.centerX + 10, icon.centerY - 20, icon.centerX - 10, icon.centerY, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX - 10, icon.centerY, icon.centerX + 10, icon.centerY + 20, 5, colors.foreground);
+    } else {
+      drawLine(pixels, width, height, icon.centerX - 18, icon.centerY - 2, icon.centerX - 18, icon.centerY + 22, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX - 18, icon.centerY + 22, icon.centerX + 18, icon.centerY + 22, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX + 18, icon.centerY + 22, icon.centerX + 18, icon.centerY - 2, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX, icon.centerY + 8, icon.centerX, icon.centerY - 22, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX, icon.centerY - 22, icon.centerX - 10, icon.centerY - 12, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX, icon.centerY - 22, icon.centerX + 10, icon.centerY - 12, 5, colors.foreground);
+    }
+  }
+  return pgm(width, height, pixels);
+}
+
+function semanticIconScreenshot(
+  width: number,
+  height: number,
+  icons: Array<{ role: "add" | "search" | "back" | "share" | "chevron"; centerX: number; centerY: number }>,
+  colors: { background: number; foreground: number } = { background: 255, foreground: 20 }
+): Buffer {
+  const pixels = Array.from({ length: width * height }, () => colors.background);
+  for (const icon of icons) {
+    if (icon.role === "add") {
+      drawCircle(pixels, width, height, icon.centerX, icon.centerY, 22, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX - 13, icon.centerY, icon.centerX + 13, icon.centerY, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX, icon.centerY - 13, icon.centerX, icon.centerY + 13, 5, colors.foreground);
+    } else if (icon.role === "search") {
+      drawCircle(pixels, width, height, icon.centerX - 3, icon.centerY - 3, 18, 5, colors.foreground);
+      drawLine(pixels, width, height, icon.centerX + 9, icon.centerY + 9, icon.centerX + 24, icon.centerY + 24, 5, colors.foreground);
+    } else if (icon.role === "back" || icon.role === "chevron") {
       drawLine(pixels, width, height, icon.centerX + 10, icon.centerY - 20, icon.centerX - 10, icon.centerY, 5, colors.foreground);
       drawLine(pixels, width, height, icon.centerX - 10, icon.centerY, icon.centerX + 10, icon.centerY + 20, 5, colors.foreground);
     } else {

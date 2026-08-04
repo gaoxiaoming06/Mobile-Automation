@@ -14,7 +14,8 @@ import type {
   ScriptSearchPolicy,
   ScriptStep,
   ScriptStepRole,
-  ScriptTarget
+  ScriptTarget,
+  ScriptVisualTarget
 } from "./types.js";
 
 export type ScriptFlowValidationIssue = {
@@ -47,7 +48,7 @@ const actionFields = [
   "repeat",
   "when"
 ] as const;
-const targetFields = new Set(["text", "semantic", "icon", "control", "area", "position", "nearText", "scopeText", "ordinal", "checked", "match"]);
+const targetFields = new Set(["text", "icon", "visual", "control", "area", "position", "nearText", "scopeText", "ordinal", "checked", "match"]);
 const parameterReferencePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 export function parseScriptFlow(source: string): ScriptFlowDocument {
@@ -550,8 +551,8 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
   }
   const result: ScriptTarget = {
     ...optionalStringProperty(target.text, `${path}.text`, "text", issues),
-    ...optionalStringProperty(target.semantic, `${path}.semantic`, "semantic", issues),
     ...optionalStringProperty(target.icon, `${path}.icon`, "icon", issues),
+    ...readVisualTarget(target.visual, `${path}.visual`, issues),
     ...readTargetControl(target.control, `${path}.control`, issues),
     ...readTargetArea(target.area, `${path}.area`, issues),
     ...readTargetPosition(target.position, `${path}.position`, issues),
@@ -561,19 +562,13 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
     ...optionalBooleanProperty(target.checked, `${path}.checked`, "checked", issues),
     ...readTargetMatch(target.match, `${path}.match`, issues)
   };
-  if ([result.text, result.semantic, result.icon, result.control].filter(Boolean).length !== 1) {
-    issues.push({ path, message: "Target requires exactly one of text, semantic, icon, or control" });
-  }
-  if (result.icon && (!result.area || !result.position)) {
-    issues.push({ path, message: "Icon targets require area and position" });
+  if ([result.text, result.icon, result.visual, result.control].filter(Boolean).length !== 1) {
+    issues.push({ path, message: "Target requires exactly one of text, icon, visual, or control" });
   }
   if (result.icon && result.area === "bottomBar") {
     issues.push({ path: `${path}.area`, message: "Bottom bar icon targets are not supported yet" });
   }
-  if (result.icon && result.area === "content" && result.icon.trim().toLowerCase() !== "add") {
-    issues.push({ path: `${path}.icon`, message: "Content icon targets currently support only the standard add icon" });
-  }
-  if (result.position && !result.icon) {
+  if (result.position && !result.icon && result.visual?.kind !== "icon") {
     issues.push({ path: `${path}.position`, message: "Position is only supported for icon targets" });
   }
   if (result.match && !result.text) {
@@ -592,6 +587,30 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
     issues.push({ path, message: "textField control targets require scopeText, ordinal, and area content" });
   }
   return result;
+}
+
+function readVisualTarget(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Pick<ScriptTarget, "visual"> {
+  if (value === undefined) {
+    return {};
+  }
+  const target = recordAt(value, path, issues);
+  rejectUnknownFields(target, new Set(["kind", "query", "area", "position", "nearText"]), path, issues);
+  const kind = readVisualTargetKind(target.kind, `${path}.kind`, issues);
+  const query = requiredString(target.query, `${path}.query`, issues);
+  const visual: Partial<ScriptVisualTarget> = {
+    ...(kind ? { kind } : {}),
+    ...(query ? { query } : {}),
+    ...readTargetArea(target.area, `${path}.area`, issues),
+    ...readTargetPosition(target.position, `${path}.position`, issues),
+    ...optionalStringProperty(target.nearText, `${path}.nearText`, "nearText", issues)
+  };
+  if (visual.position && visual.kind !== "icon") {
+    issues.push({ path: `${path}.position`, message: "Position is only supported for visual icon targets" });
+  }
+  if (!visual.kind || !visual.query) {
+    return {};
+  }
+  return { visual: visual as ScriptVisualTarget };
 }
 
 function readSearchPolicy(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): ScriptSearchPolicy | undefined {
@@ -656,14 +675,22 @@ function readTargetControl(value: unknown, path: string, issues: ScriptFlowValid
   return {};
 }
 
+function readVisualTargetKind(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): ScriptVisualTarget["kind"] | undefined {
+  if (value === "icon" || value === "image" || value === "object") {
+    return value;
+  }
+  issues.push({ path, message: "Visual target kind must be icon, image, or object" });
+  return undefined;
+}
+
 function readTargetMatch(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Pick<ScriptTarget, "match"> {
   if (value === undefined) {
     return {};
   }
-  if (value === "contains" || value === "exact") {
+  if (value === "contains" || value === "exact" || value === "semantic") {
     return { match: value };
   }
-  issues.push({ path, message: "Target match must be contains or exact" });
+  issues.push({ path, message: "Target match must be contains, exact, or semantic" });
   return {};
 }
 

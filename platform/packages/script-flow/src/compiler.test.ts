@@ -163,7 +163,7 @@ steps:
     expect(plan).not.toHaveProperty("riskConfirmations");
   });
 
-  it("preserves semantic targets in the execution plan", () => {
+  it("preserves OCR semantic text match targets in the execution plan", () => {
     const flow = parseScriptFlow(`
 version: 1
 name: open teaching plan
@@ -171,15 +171,52 @@ app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: open-teaching-plan
     tap:
-      target: { semantic: 进入教学方案的入口, area: content }
+      target: { text: 进入教学方案的入口, match: semantic, area: content }
       search: { mode: auto }
 `);
 
     expect(compileScriptFlow(flow).steps[0]).toMatchObject({
       action: "tap",
       input: {
-        target: { semantic: "进入教学方案的入口", area: "content" },
+        target: { text: "进入教学方案的入口", match: "semantic", area: "content" },
         search: { mode: "auto" }
+      }
+    });
+  });
+
+  it("preserves visual targets and renders nested visual query parameters", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: tap visual icon
+app: { id: cn.eeo.classin, platform: android }
+parameters:
+  visualQuery:
+    type: string
+    required: true
+steps:
+  - id: tap-sort-icon
+    tap:
+      target:
+        visual:
+          kind: icon
+          query: \${visualQuery}
+          area: content
+          nearText: 课节
+      search: { mode: visibleOnly }
+`);
+
+    expect(compileScriptFlow(flow, { parameters: { visualQuery: "排序图标" } }).steps[0]).toMatchObject({
+      action: "tap",
+      input: {
+        target: {
+          visual: {
+            kind: "icon",
+            query: "排序图标",
+            area: "content",
+            nearText: "课节"
+          }
+        },
+        search: { mode: "visibleOnly" }
       }
     });
   });

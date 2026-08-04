@@ -44,8 +44,8 @@ export class ScriptTargetResolver {
     if (input.target.text) {
       return this.resolveRuntimeText(input, input.target.text);
     }
-    if (input.target.semantic) {
-      return this.resolveSemanticQuery(input, input.target.semantic);
+    if (input.target.visual) {
+      return this.resolveVisualQuery(input);
     }
     if (input.target.icon) {
       return this.resolveSemanticIcon(input);
@@ -53,7 +53,7 @@ export class ScriptTargetResolver {
     if (input.target.control) {
       return this.resolveSemanticControl(input);
     }
-    throw new ScriptTargetResolutionError("Target has no executable text, semantic query, icon, or control");
+    throw new ScriptTargetResolutionError("Target has no executable text, visual query, icon, or control");
   }
 
   private resolveInteractionAsset(
@@ -76,28 +76,10 @@ export class ScriptTargetResolver {
       strategy: `interaction_asset:${resolved.strategy}`,
       params: {
         ...resolved.params,
-        ...(input.action === "tap" && input.target.semantic
-          ? { fallbackSemanticQuery: input.target.semantic }
-          : {}),
         interactionAssetId: asset.id,
         interactionAssetKey: asset.key,
         interactionAssetVersion: asset.version,
         allowRegionFallback: false
-      }
-    };
-  }
-
-  private resolveSemanticQuery(input: ScriptTargetResolutionInput, query: string): ResolvedScriptTarget {
-    if (input.action !== "tap") {
-      throw new ScriptTargetResolutionError(`Semantic targets do not support ${input.action}`);
-    }
-    return {
-      type: "tap_on_text",
-      strategy: "semantic_query",
-      params: {
-        text: query,
-        mode: "semantic",
-        ...searchParams(input.target, input.search)
       }
     };
   }
@@ -111,7 +93,7 @@ export class ScriptTargetResolver {
         strategy,
         params: {
           text,
-          mode: input.target.match === "exact" ? "equals" : "contains",
+          mode: runtimeTextMatchMode(input.target.match),
           ...search
         }
       };
@@ -174,20 +156,50 @@ export class ScriptTargetResolver {
       throw new ScriptTargetResolutionError(`Icon targets do not support ${input.action}`);
     }
     const semanticArea = semanticAreaParam(input.target.area);
+    const iconSemanticArea = semanticArea ?? "unknown";
     const role = (input.target.icon ?? "").trim().toLowerCase();
-    if (semanticArea !== "top" && !(semanticArea === "content" && role === "add")) {
-      throw new ScriptTargetResolutionError("Standard icon target is not supported in this area");
-    }
     return {
       type: "tap_on_image",
       strategy: "semantic_icon",
       params: {
         locatorKind: "semantic_icon_locator",
         role,
-        slot: input.target.position,
-        semanticArea,
+        ...(input.target.position ? { slot: input.target.position } : {}),
+        semanticArea: iconSemanticArea,
         ...(input.target.nearText ? { anchorText: input.target.nearText } : {}),
         ...searchParams(input.target, input.search),
+        allowRegionFallback: false
+      }
+    };
+  }
+
+  private resolveVisualQuery(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
+    if (input.action !== "tap") {
+      throw new ScriptTargetResolutionError(`Visual targets do not support ${input.action}`);
+    }
+    const visual = input.target.visual;
+    if (!visual) {
+      throw new ScriptTargetResolutionError("Visual target is missing");
+    }
+    const area = visual.area ?? input.target.area;
+    const position = visual.position ?? input.target.position;
+    const nearText = visual.nearText ?? input.target.nearText;
+    const targetForSearch: ScriptTarget = { ...input.target, area };
+    const search = searchParams(targetForSearch, input.search);
+    const semanticArea = (search.semanticArea as "top" | "content" | "bottom" | undefined)
+      ?? semanticAreaParam(area)
+      ?? "unknown";
+    return {
+      type: "tap_on_image",
+      strategy: "visual_query",
+      params: {
+        locatorKind: "visual_query_locator",
+        visualKind: visual.kind,
+        visualQuery: visual.query,
+        ...(position ? { slot: position } : {}),
+        ...(nearText ? { anchorText: nearText } : {}),
+        ...search,
+        semanticArea,
         allowRegionFallback: false
       }
     };
@@ -315,31 +327,27 @@ function targetFromInteractionAsset(
     return {
       ...original,
       text: selectedText,
-      semantic: undefined,
       icon: undefined,
+      visual: undefined,
       control: undefined
     };
   }
-  const semantic = nonEmptyString(asset.semanticContract.semantic);
-  if (semantic) {
-    return { ...original, text: undefined, semantic, icon: undefined, control: undefined };
-  }
   const icon = nonEmptyString(asset.semanticContract.icon);
   if (icon) {
-    return { ...original, text: undefined, semantic: undefined, icon, control: undefined };
+    return { ...original, text: undefined, icon, visual: undefined, control: undefined };
   }
   const control = nonEmptyString(asset.semanticContract.control);
   if (control) {
     return {
       ...original,
       text: undefined,
-      semantic: undefined,
       icon: undefined,
+      visual: undefined,
       control: control as ScriptTarget["control"],
       nearText: nonEmptyString(asset.semanticContract.nearText) ?? original.nearText
     };
   }
-  throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} has no executable semantic locator`);
+  throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} has no executable locator`);
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -364,6 +372,12 @@ function searchParams(target: ScriptTarget, policy: ScriptSearchPolicy | undefin
     resetToTop: policy?.resetToTop ?? true,
     ...(policy?.container ? { searchContainer: policy.container } : {})
   };
+}
+
+function runtimeTextMatchMode(match: ScriptTarget["match"]): "contains" | "equals" | "semantic" {
+  if (match === "exact") return "equals";
+  if (match === "semantic") return "semantic";
+  return "contains";
 }
 
 function semanticAreaParam(area: ScriptTarget["area"]): "top" | "content" | "bottom" | undefined {

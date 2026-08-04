@@ -17,6 +17,17 @@ describe("publicExecutionFailureFromRun", () => {
     expect(JSON.stringify(failure)).not.toContain("12,34");
   });
 
+  it("classifies ambiguous icon candidates as an ambiguous target", () => {
+    expect(publicExecutionFailureFromRun(failedRun({
+      errorCode: "SEMANTIC_TARGET_NOT_FOUND",
+      metadata: { semantic: { reason: "ambiguous_icon_candidates", candidateCount: 3 } }
+    }))).toEqual({
+      kind: "target_ambiguous",
+      message: "当前操作匹配到多个目标，请补充位置、附近文字或更明确的操作描述。",
+      nextAction: "supplement_process"
+    });
+  });
+
   it("distinguishes leaving the target app from an unrecognized page", () => {
     expect(publicExecutionFailureFromRun(failedRun({
       errorCode: "PAGE_NAVIGATION_FAILED",

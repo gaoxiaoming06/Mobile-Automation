@@ -49,10 +49,20 @@ export type ScriptTargetPosition = "leading" | "trailing";
 
 export type ScriptTargetControl = "checkbox" | "switch" | "textField";
 
+export type ScriptVisualTargetKind = "icon" | "image" | "object";
+
+export type ScriptVisualTarget = {
+  kind: ScriptVisualTargetKind;
+  query: string;
+  area?: ScriptTargetArea;
+  position?: ScriptTargetPosition;
+  nearText?: string;
+};
+
 export type ScriptTarget = {
   text?: string;
-  semantic?: string;
   icon?: string;
+  visual?: ScriptVisualTarget;
   control?: ScriptTargetControl;
   area?: ScriptTargetArea;
   position?: ScriptTargetPosition;
@@ -60,7 +70,7 @@ export type ScriptTarget = {
   scopeText?: string;
   ordinal?: number;
   checked?: boolean;
-  match?: "contains" | "exact";
+  match?: "contains" | "exact" | "semantic";
 };
 
 export type ScriptSearchPolicy = {

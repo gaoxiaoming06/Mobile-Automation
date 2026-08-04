@@ -68,18 +68,30 @@ describe("ScriptTargetResolver", () => {
     expect(result.params).not.toHaveProperty("maxSwipes");
   });
 
-  it("turns a semantic target into an outcome-aware OCR grounding request", () => {
+  it("rejects legacy semantic targets", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(() => resolver.resolve({
+      action: "tap",
+      target: { semantic: "进入教学方案的入口", area: "content" } as any,
+      search: { mode: "auto", direction: "down", maxSwipes: 6 },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toThrow(ScriptTargetResolutionError);
+  });
+
+  it("turns text targets with semantic match into OCR semantic matching instead of legacy semantic targets", () => {
     const resolver = new ScriptTargetResolver();
 
     expect(resolver.resolve({
       action: "tap",
-      target: { semantic: "进入教学方案的入口", area: "content" },
+      target: { text: "进入教学方案的入口", match: "semantic", area: "content" },
       search: { mode: "auto", direction: "down", maxSwipes: 6 },
       appId: "cn.eeo.classin",
       platform: "android"
     })).toEqual({
       type: "tap_on_text",
-      strategy: "semantic_query",
+      strategy: "semantic_text",
       params: {
         text: "进入教学方案的入口",
         mode: "semantic",
@@ -88,6 +100,37 @@ describe("ScriptTargetResolver", () => {
         searchDirection: "down",
         maxSwipes: 6,
         resetToTop: true
+      }
+    });
+  });
+
+  it("routes visual icon queries to the visual locator instead of OCR text matching", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: {
+        visual: {
+          kind: "icon",
+          query: "排序图标",
+          area: "content",
+          nearText: "课节"
+        }
+      },
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "tap_on_image",
+      strategy: "visual_query",
+      params: {
+        locatorKind: "visual_query_locator",
+        visualKind: "icon",
+        visualQuery: "排序图标",
+        semanticArea: "content",
+        anchorText: "课节",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
       }
     });
   });
@@ -157,6 +200,50 @@ describe("ScriptTargetResolver", () => {
         role: "add",
         slot: "trailing",
         semanticArea: "top",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      }
+    });
+  });
+
+  it("resolves a known icon role even when the planner omits a precise area and position", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: { icon: "search" },
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "tap_on_image",
+      strategy: "semantic_icon",
+      params: {
+        locatorKind: "semantic_icon_locator",
+        role: "search",
+        semanticArea: "unknown",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      }
+    });
+  });
+
+  it("resolves a content search icon as a semantic visual target", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: { icon: "search", area: "content" },
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "tap_on_image",
+      strategy: "semantic_icon",
+      params: {
+        locatorKind: "semantic_icon_locator",
+        role: "search",
+        semanticArea: "content",
         searchMode: "visibleOnly",
         allowRegionFallback: false
       }
@@ -331,7 +418,7 @@ describe("ScriptTargetResolver", () => {
     const resolver = new ScriptTargetResolver();
     const result = resolver.resolve({
       action: "tap",
-      target: { semantic: "进入添加好友页面" },
+      target: { text: "进入添加好友页面", match: "semantic" },
       onPage: "classin.home",
       appId: "cn.eeo.classin",
       platform: "android",

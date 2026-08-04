@@ -86,7 +86,7 @@ function actionTarget(step: ScriptStep): { kind: SupportedAction; target: Script
 }
 
 function semanticContract(target: ScriptTarget): Record<string, string> {
-  const allowed = ["text", "semantic", "icon", "control", "area", "position", "nearText", "match"] as const;
+  const allowed = ["text", "icon", "control", "area", "position", "nearText", "match"] as const;
   return Object.fromEntries(allowed.flatMap((key) => {
     const value = nonEmptyString(target[key]);
     return value ? [[key, value]] : [];
@@ -94,7 +94,7 @@ function semanticContract(target: ScriptTarget): Record<string, string> {
 }
 
 function targetIdentity(contract: Record<string, string>): string | undefined {
-  const keys = ["text", "semantic", "icon", "control", "area", "position", "nearText", "match"] as const;
+  const keys = ["text", "icon", "control", "area", "position", "nearText", "match"] as const;
   const segments = keys.flatMap((key) => contract[key] ? [`${key}.${stableSegment(contract[key])}`] : []);
   return segments.length ? segments.join(".") : undefined;
 }

@@ -12,7 +12,9 @@ import {
 } from "./script-flow-ai-planner.js";
 
 it("only instructs AI to use supported ScriptFlow target modes", () => {
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("text、semantic、icon 或 control");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("text、icon、visual 或 control");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("文本语义匹配使用 text + match: semantic");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止擅自增加");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("未录入页面");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("完整操作链");
@@ -44,6 +46,8 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("作为每轮复位时标记 role: reset");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("严格按照脚本中的显式命令执行");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon 的 area 和 position 是可选范围提示");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("icon 必须描述 area 和 position");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("点击左上角返回按钮");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon: back");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon: share");
@@ -567,13 +571,6 @@ describe("ScriptFlow AI planner", () => {
 
   it("keeps an incomplete full form regression draft editable instead of blocking generation", async () => {
     const response = fullRegressionLessonResponse();
-    for (const step of response.document.steps) {
-      if (!("inputText" in step) || !step.inputText.target.semantic) continue;
-      step.inputText.target = {
-        text: step.inputText.target.semantic.replace(/输入框$/u, ""),
-        area: "content"
-      };
-    }
     let aiCalls = 0;
 
     const result = await generateScriptFlowDraft({
@@ -1251,6 +1248,68 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
+  it("keeps AI-generated visual icon targets executable without rewriting them to text", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.summary = "点击排序图标";
+    response.document.name = "点击排序图标";
+    response.document.purpose = "navigation";
+    response.document.steps = [{
+      id: "tap-sort-icon",
+      role: "navigation",
+      tap: {
+        target: {
+          visual: {
+            kind: "icon",
+            query: "排序图标",
+            area: "content"
+          }
+        },
+        search: { mode: "visibleOnly" }
+      }
+    }];
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "点击排序图标"
+    })).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [{
+          tap: {
+            target: { visual: { kind: "icon", query: "排序图标", area: "content" } },
+            search: { mode: "visibleOnly" }
+          }
+        }]
+      }
+    });
+  });
+
+  it("rejects AI drafts that encode an explicit visual request as a semantic text target", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.summary = "点击搜索图标";
+    response.document.name = "点击搜索图标";
+    response.document.purpose = "navigation";
+    response.document.steps = [{
+      id: "tap-search-icon",
+      role: "navigation",
+      tap: {
+        target: { semantic: "搜索图标" } as any,
+        search: { mode: "visibleOnly" }
+      }
+    }];
+
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "点击屏幕上搜索图标"
+    })).toThrow(/visual|icon|视觉目标/i);
+  });
+
   it("accepts a target-only request as reachPage without asking how to navigate", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
@@ -1274,6 +1333,8 @@ describe("ScriptFlow AI planner", () => {
     expect(prompt).toContain("reachPage");
     expect(prompt).toContain("不要因为“回到”推断系统返回");
     expect(prompt).toContain("tap、inputText、clearText 和 selectText 使用同一 search 合同");
+    expect(prompt).toContain("area/position 只是可选范围提示");
+    expect(prompt).not.toContain("icon 必须带 area 和 position");
     expect(prompt).toContain('"kind": "case | scenario"');
     expect(prompt).not.toContain('"entry":');
     expect(prompt).not.toContain('"outcome":');
@@ -1792,7 +1853,7 @@ describe("ScriptFlow AI planner", () => {
         role: "navigation",
         onPage: "classin.home",
         tap: {
-          target: { semantic: "进入教学方案的入口", area: "content" },
+          target: { text: "进入教学方案的入口", match: "semantic", area: "content" },
           search: { mode: "auto" }
         }
       },
@@ -1832,7 +1893,7 @@ describe("ScriptFlow AI planner", () => {
       {
         id: "open-teaching-plan",
         role: "navigation",
-        tap: { target: { semantic: "进入教学方案的入口", area: "content" }, search: { mode: "auto" } }
+        tap: { target: { text: "进入教学方案的入口", match: "semantic", area: "content" }, search: { mode: "auto" } }
       }
     ];
 
@@ -2007,7 +2068,7 @@ describe("ScriptFlow AI planner", () => {
     expect(calls).toBe(1);
   });
 
-  it("canonicalizes grounded picker semantic targets into executable text targets", () => {
+  it("repairs legacy semantic non-tap targets into executable text targets", async () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
     response.document.name = "设置课堂时长";
@@ -2018,19 +2079,40 @@ describe("ScriptFlow AI planner", () => {
       role: "business",
       risk: "interaction",
       selectText: {
-        target: { semantic: "课堂时长" },
+        target: { semantic: "课堂时长" } as any,
+        value: "11小时20分钟",
+        search: { mode: "auto" }
+      }
+    }];
+    const repaired = JSON.parse(JSON.stringify(response)) as typeof response;
+    repaired.document.steps = [{
+      id: "select-duration",
+      role: "business",
+      selectText: {
+        target: { text: "课堂时长" },
         value: "11小时20分钟",
         search: { mode: "auto" }
       }
     }];
 
-    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+    let calls = 0;
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "修改课堂时长为11小时20分钟",
       appId: "cn.eeo.classin",
       platform: "android",
-      catalog,
-      prompt: "修改课堂时长为11小时20分钟"
-    })).toMatchObject({
-      status: "ready",
+      pageCatalog: pageCatalog(),
+      flows: [],
+      fetchImpl: async () => {
+        calls += 1;
+        const content = calls === 1 ? response : repaired;
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 });
+      }
+    });
+
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({
+      status: "trial_ready",
       document: {
         steps: [{
           selectText: { target: { text: "课堂时长" } }
@@ -2049,7 +2131,7 @@ describe("ScriptFlow AI planner", () => {
       role: "business",
       risk: "interaction",
       selectText: {
-        target: { semantic: "要调整的选择器" },
+        target: { visual: { kind: "object", query: "要调整的选择器" } },
         value: "11小时20分钟",
         search: { mode: "auto" }
       }
@@ -2288,7 +2370,7 @@ function fullRegressionLessonResponse(): ReturnType<typeof readyResponse> {
       onPage: "classin.lesson.create",
       risk: "interaction",
       inputText: {
-        target: { semantic: "课堂名称输入框", area: "content" },
+        target: { text: "课堂名称", area: "content" },
         value: "自动化课堂",
         search: { mode: "auto" }
       }
@@ -2299,7 +2381,7 @@ function fullRegressionLessonResponse(): ReturnType<typeof readyResponse> {
       onPage: "classin.lesson.create",
       risk: "interaction",
       inputText: {
-        target: { semantic: "课堂说明输入框", area: "content" },
+        target: { text: "课堂说明", area: "content" },
         value: "自动化说明",
         search: { mode: "auto" }
       }

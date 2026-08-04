@@ -197,8 +197,84 @@ steps:
     });
   });
 
-  it("accepts a semantic target when the exact visible label is unknown", () => {
+  it("accepts a standard icon target even when the precise bar position is unknown", () => {
     const flow = parseScriptFlow(`
+version: 1
+name: open search
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open-search
+    tap:
+      target:
+        icon: search
+      search: { mode: visibleOnly }
+`);
+
+    expect(flow.steps[0]).toMatchObject({
+      tap: {
+        target: { icon: "search" },
+        search: { mode: "visibleOnly" }
+      }
+    });
+  });
+
+  it("accepts a visual icon target with scoped visual hints", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: tap sort icon
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: tap-sort-icon
+    tap:
+      target:
+        visual:
+          kind: icon
+          query: 排序图标
+          area: content
+          nearText: 课节
+      search: { mode: visibleOnly }
+`);
+
+    expect(flow.steps[0]).toMatchObject({
+      tap: {
+        target: {
+          visual: {
+            kind: "icon",
+            query: "排序图标",
+            area: "content",
+            nearText: "课节"
+          }
+        },
+        search: { mode: "visibleOnly" }
+      }
+    });
+  });
+
+  it("accepts OCR text targets with semantic match mode", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: open teaching plan
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open-teaching-plan
+    tap:
+      target:
+        text: 进入教学方案的入口
+        match: semantic
+        area: content
+      search: { mode: auto }
+`);
+
+    expect(flow.steps[0]).toMatchObject({
+      tap: {
+        target: { text: "进入教学方案的入口", match: "semantic", area: "content" },
+        search: { mode: "auto" }
+      }
+    });
+  });
+
+  it("rejects legacy semantic targets", () => {
+    expect(() => parseScriptFlow(`
 version: 1
 name: open teaching plan
 app: { id: cn.eeo.classin, platform: android }
@@ -209,14 +285,7 @@ steps:
         semantic: 进入教学方案的入口
         area: content
       search: { mode: auto }
-`);
-
-    expect(flow.steps[0]).toMatchObject({
-      tap: {
-        target: { semantic: "进入教学方案的入口", area: "content" },
-        search: { mode: "auto" }
-      }
-    });
+`)).toThrow(/target\.semantic.*Unknown field/i);
   });
 
   it("accepts stable visible text as a result assertion", () => {
@@ -247,7 +316,7 @@ steps:
 `)).toThrow(/assertText\.text.*non-empty string/i);
   });
 
-  it("requires semantic and literal target forms to remain mutually exclusive", () => {
+  it("rejects legacy semantic targets even when mixed with a text target", () => {
     expect(() => parseScriptFlow(`
 version: 1
 name: ambiguous target
@@ -258,7 +327,7 @@ steps:
       target:
         text: 教学方案
         semantic: 进入教学方案的入口
-`)).toThrow(/exactly one of text, semantic, icon, or control/i);
+`)).toThrow(/target\.semantic.*Unknown field/i);
   });
 
   it("accepts a standard floating add icon in the page content", () => {
@@ -450,7 +519,7 @@ steps:
   - id: target
     tap:
       target: { text: 主页, icon: home, area: topBar, position: leading }
-`)).toThrow(/exactly one of text, semantic, icon, or control/i);
+`)).toThrow(/exactly one of text, icon, visual, or control/i);
   });
 
   it("rejects reusable element references as an unknown target field", () => {
@@ -545,7 +614,31 @@ steps:
           area: "content",
           scopeText: "课堂信息",
           ordinal: 1
-        }
+        },
+        value: "${lessonName}",
+        search: { mode: "visibleOnly" }
+      }
+    });
+  });
+
+  it("accepts a content search icon target as a semantic visual target", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: open content search
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open-search
+    tap:
+      target:
+        icon: search
+        area: content
+      search: { mode: visibleOnly }
+`);
+
+    expect(flow.steps[0]).toMatchObject({
+      tap: {
+        target: { icon: "search", area: "content" },
+        search: { mode: "visibleOnly" }
       }
     });
   });
