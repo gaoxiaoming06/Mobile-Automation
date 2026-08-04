@@ -65,6 +65,32 @@ describe("ScriptFlowRunner", () => {
     expect(selected.steps.map((step) => step.id)).toEqual(["repeat-fields[1].fill-name"]);
   });
 
+  it("selects every expanded core step when trialing a runFlow reference", () => {
+    const child = document([
+      { id: "restart-child", role: "setup", launchApp: { appId: "cn.eeo.classin" } },
+      { id: "open-growth", role: "business", tap: { target: { text: "成长" } } },
+      { id: "verify-notes", role: "assertion", assertText: { text: "笔记" } },
+      { id: "return-home", role: "reset", tap: { target: { text: "主页" } } }
+    ]);
+    child.name = "open notes";
+    const plan = compileScriptFlow(document([
+      { id: "reuse-notes", role: "business", runFlow: "flow-open-notes" },
+      { id: "next-step", role: "business", tap: { target: { text: "下一步" } } }
+    ]), {
+      resolveFlow: (id) => id === "flow-open-notes" ? child : undefined
+    });
+
+    const selected = selectScriptExecutionSteps(plan, {
+      startStepId: "reuse-notes",
+      endStepId: "reuse-notes"
+    });
+
+    expect(selected.steps.map((step) => step.id)).toEqual([
+      "reuse-notes.open-growth",
+      "reuse-notes.verify-notes"
+    ]);
+  });
+
   it("rejects a partial range whose end step precedes its start step", () => {
     const plan = compileScriptFlow(document([
       { id: "open-form", tap: { target: { text: "创建课堂" } } },

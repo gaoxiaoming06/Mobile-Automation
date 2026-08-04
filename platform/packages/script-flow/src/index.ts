@@ -4,7 +4,7 @@ export {
   validateScriptFlowDocument,
   type ScriptFlowValidationIssue
 } from "./parser.js";
-export { ScriptFlowCompileError, compileScriptFlow } from "./compiler.js";
+export { ScriptFlowCompileError, compileScriptFlow, reusableCoreSteps } from "./compiler.js";
 export { serializeScriptFlow } from "./serializer.js";
 export type {
   CompileScriptFlowOptions,

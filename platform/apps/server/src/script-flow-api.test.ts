@@ -628,6 +628,39 @@ steps:
     expect(context.runner.inputs).toEqual([]);
   });
 
+  it("does not freeze a dependency used only by a reused case preparation", async () => {
+    const context = await apiContext(servers);
+    const fixture = ((await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: childSource("登录准备")
+    })).body as { flow: ScriptFlow }).flow;
+    const child = ((await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: `
+version: 1
+name: 打开笔记
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: setup-login
+    role: setup
+    runFlow: ${fixture.id}
+  - id: open-notes
+    role: business
+    tap: { target: { text: 笔记 } }
+`
+    })).body as { flow: ScriptFlow }).flow;
+    const parent = ((await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: parentSource(child.id)
+    })).body as { flow: ScriptFlow }).flow;
+
+    const preview = await post(context.baseUrl, `/api/script-flows/${parent.id}/preview`, {
+      expectedVersion: parent.version,
+      parameters: {}
+    });
+
+    expect((preview.body as { dependencies: Array<{ flowId: string }> }).dependencies.map((item) => item.flowId)).toEqual([
+      child.id
+    ]);
+  });
+
   it("requires every exact runFlow dependency version to be verified before normal execution", async () => {
     const context = await apiContext(servers);
     const child = ((await post(context.baseUrl, "/api/script-flows", {

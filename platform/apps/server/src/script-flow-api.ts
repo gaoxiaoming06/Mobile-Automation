@@ -5,6 +5,7 @@ import {
   ScriptFlowValidationError,
   compileScriptFlow,
   parseScriptFlow,
+  reusableCoreSteps,
   type ScriptExecutionPlan,
   type ScriptFlowDocument,
   type ScriptParameterValue
@@ -867,7 +868,7 @@ function collectDependencies(
     const child = parseScriptFlow(flow.sourceYaml);
     documents.set(flow.id, child);
     dependencies.set(flow.id, dependencySnapshot(flow, child));
-    collectDependencies(storage, child.steps, documents, dependencies);
+    collectDependencies(storage, reusableCoreSteps(child.steps), documents, dependencies);
   }
 }
 

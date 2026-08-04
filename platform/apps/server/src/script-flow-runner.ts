@@ -470,16 +470,26 @@ export function selectScriptExecutionSteps(
 ): ScriptExecutionPlan {
   const belongsToRootFlow = (step: ScriptExecutionPlanStep, stepId: string) =>
     step.source.flowName === plan.flowName && step.source.stepId === stepId;
-  const startIndex = plan.steps.findIndex((step) => belongsToRootFlow(step, selection.startStepId));
+  const belongsToExpandedGroup = (step: ScriptExecutionPlanStep, stepId: string) =>
+    step.id.startsWith(`${stepId}.`);
+  const directStartIndex = plan.steps.findIndex((step) => belongsToRootFlow(step, selection.startStepId));
+  const startIndex = directStartIndex >= 0
+    ? directStartIndex
+    : plan.steps.findIndex((step) => belongsToExpandedGroup(step, selection.startStepId));
   if (startIndex < 0) {
     throw new Error(`Source step not found in execution plan: ${selection.startStepId}`);
   }
 
   let endIndex = plan.steps.length - 1;
   if (selection.endStepId) {
-    endIndex = plan.steps.findIndex(
+    const directEndIndex = plan.steps.findIndex(
       (step, index) => index >= startIndex && belongsToRootFlow(step, selection.endStepId!)
     );
+    endIndex = directEndIndex >= 0
+      ? directEndIndex
+      : findLastIndex(plan.steps, (step, index) => (
+          index >= startIndex && belongsToExpandedGroup(step, selection.endStepId!)
+        ));
     if (endIndex < 0) {
       const earlierEndIndex = plan.steps.findIndex((step) => belongsToRootFlow(step, selection.endStepId!));
       if (earlierEndIndex >= 0 && earlierEndIndex < startIndex) {
@@ -501,6 +511,13 @@ export function selectScriptExecutionSteps(
     ...plan,
     steps
   };
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T, index: number) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index]!, index)) return index;
+  }
+  return -1;
 }
 
 function maskPlanDifferences<T>(runtime: T, redacted: T): T {

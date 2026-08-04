@@ -37,6 +37,11 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("每轮复位");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不得自动推断");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("场景编排命中完全匹配的启用用例时自动使用 runFlow");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("runFlow 只复用子用例的业务步骤与结果验证");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不继承子用例的前置准备和每轮复位");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("用于登录或环境准备时标记 role: setup");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("作为结果验证时标记 role: assertion");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("作为每轮复位时标记 role: reset");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("严格按照脚本中的显式命令执行");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("点击左上角返回按钮");

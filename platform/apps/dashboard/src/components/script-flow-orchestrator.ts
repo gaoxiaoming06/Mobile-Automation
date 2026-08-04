@@ -50,6 +50,15 @@ export type EditableGeneratedDraft = {
   verification?: unknown;
 };
 
+export type DraftStepPlacement = "setup" | "business" | "assertion" | "reset";
+
+export type ReusableFlowReferenceInput = {
+  id: string;
+  name: string;
+  placement: DraftStepPlacement;
+  parameters: CaseDocumentView["parameters"];
+};
+
 type StepLocation = {
   parent: CaseSourceStep[];
   index: number;
@@ -108,7 +117,7 @@ export function addDraftStep<T extends EditableGeneratedDraft>(
   draft: T,
   afterStepKey: string | undefined,
   action: EditableStepAction,
-  role?: "reset"
+  role?: DraftStepPlacement
 ): { draft: T; stepKey: string } {
   const document = cloneDocument(draft.document);
   const ids = collectStepIds(document.steps);
@@ -123,12 +132,90 @@ export function addDraftStep<T extends EditableGeneratedDraft>(
     parent = location.parent;
     insertIndex = location.index + 1;
     parentPath = location.path.slice(0, -1);
+  } else {
+    insertIndex = sectionInsertIndex(parent, sourceStepPhase(step));
   }
   parent.splice(insertIndex, 0, step);
   return {
     draft: finalizeDraft(draft, document),
     stepKey: reviewStepKey([...parentPath, insertIndex], step)
   };
+}
+
+export function addDraftFlowReference<T extends EditableGeneratedDraft>(
+  draft: T,
+  afterStepKey: string | undefined,
+  reference: ReusableFlowReferenceInput
+): { draft: T; stepKey: string } {
+  const document = cloneDocument(draft.document);
+  const ids = collectStepIds(document.steps);
+  const id = uniqueStepId(`reuse-${reference.id.replace(/^flow-/, "")}`, ids);
+  const bindings: Record<string, string> = {};
+
+  for (const [childKey, childDefinition] of Object.entries(reference.parameters)) {
+    const existing = document.parameters[childKey];
+    const parentKey = existing && existing.type !== childDefinition.type
+      ? uniqueParameterKey(childKey, document.parameters)
+      : childKey;
+    if (!document.parameters[parentKey]) {
+      document.parameters[parentKey] = JSON.parse(JSON.stringify(childDefinition));
+    } else {
+      const parentDefinition = document.parameters[parentKey]!;
+      document.parameters[parentKey] = {
+        ...parentDefinition,
+        ...(parentDefinition.default === undefined && childDefinition.default !== undefined
+          ? { default: childDefinition.default }
+          : {}),
+        ...(childDefinition.required ? { required: true } : {}),
+        ...(childDefinition.sensitive ? { sensitive: true } : {})
+      };
+    }
+    bindings[childKey] = `\${${parentKey}}`;
+  }
+
+  const step: CaseSourceStep = {
+    id,
+    name: `复用${reference.name}`,
+    role: reference.placement,
+    runFlow: reference.id,
+    ...(Object.keys(bindings).length ? { with: bindings } : {})
+  };
+  if (reference.placement === "reset") delete document.loop;
+  let parent = document.steps;
+  let insertIndex = parent.length;
+  let parentPath: number[] = [];
+  if (afterStepKey) {
+    const location = locateStep(document.steps, afterStepKey);
+    parent = location.parent;
+    insertIndex = location.index + 1;
+    parentPath = location.path.slice(0, -1);
+  } else {
+    insertIndex = sectionInsertIndex(parent, sourceStepPhase(step));
+  }
+  parent.splice(insertIndex, 0, step);
+  return {
+    draft: finalizeDraft(draft, document),
+    stepKey: reviewStepKey([...parentPath, insertIndex], step)
+  };
+}
+
+function sourceStepPhase(step: CaseSourceStep): "preparation" | "business" | "verification" | "reset" {
+  const action = sourceActionName(step);
+  if (step.role === "reset") return "reset";
+  if (step.role === "setup" || step.role === "recovery" || action === "launchApp") return "preparation";
+  if (step.role === "assertion" || step.role === "cleanup" || action === "waitForPage" || action === "assertPage" || action === "assertText") {
+    return "verification";
+  }
+  return "business";
+}
+
+function sectionInsertIndex(
+  steps: CaseSourceStep[],
+  phase: "preparation" | "business" | "verification" | "reset"
+): number {
+  const rank = { preparation: 0, business: 1, verification: 2, reset: 3 } as const;
+  const index = steps.findIndex((step) => rank[sourceStepPhase(step)] > rank[phase]);
+  return index < 0 ? steps.length : index;
 }
 
 export function setDraftLoopResetMode<T extends EditableGeneratedDraft>(
@@ -191,10 +278,10 @@ function changeStepAction(
   const next = { ...step };
   for (const key of ACTION_KEYS) delete next[key];
   delete next.risk;
-  return { ...next, role: step.role === "reset" ? "reset" : defaultRole(action), ...actionBody(action, appId) };
+  return { ...next, role: step.role ?? defaultRole(action), ...actionBody(action, appId) };
 }
 
-function createStep(id: string, action: EditableStepAction, appId: string, role?: "reset"): CaseSourceStep {
+function createStep(id: string, action: EditableStepAction, appId: string, role?: DraftStepPlacement): CaseSourceStep {
   return {
     id,
     name: defaultStepName(action),
@@ -315,6 +402,12 @@ function uniqueStepId(base: string, ids: Set<string>): string {
   let suffix = 2;
   while (ids.has(`${base}-${suffix}`)) suffix += 1;
   return `${base}-${suffix}`;
+}
+
+function uniqueParameterKey(base: string, parameters: CaseDocumentView["parameters"]): string {
+  let suffix = 2;
+  while (`${base}_${suffix}` in parameters) suffix += 1;
+  return `${base}_${suffix}`;
 }
 
 function locateStep(steps: CaseSourceStep[], stepKey: string): StepLocation {

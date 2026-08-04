@@ -273,6 +273,141 @@ steps:
     });
   });
 
+  it("reuses only the child business and verification steps", () => {
+    const fixture = parseScriptFlow(`
+version: 1
+name: child fixture
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: fixture-action
+    role: business
+    tap: { target: { text: 登录 } }
+`);
+    const child = parseScriptFlow(`
+version: 1
+name: open notes
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: restart-child
+    role: setup
+    launchApp: { appId: cn.eeo.classin }
+  - id: child-setup-flow
+    role: setup
+    runFlow: flow-child-fixture
+  - id: open-growth
+    role: business
+    tap: { target: { text: 成长 } }
+  - id: verify-notes
+    role: assertion
+    assertText: { text: 笔记 }
+  - id: return-home
+    role: reset
+    tap: { target: { text: 主页 } }
+`);
+    const parent = parseScriptFlow(`
+version: 1
+name: parent
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: restart-parent
+    role: setup
+    launchApp: { appId: cn.eeo.classin }
+  - id: reuse-notes
+    role: business
+    runFlow: flow-open-notes
+  - id: parent-reset
+    role: reset
+    tap: { target: { text: 主页 } }
+`);
+
+    const plan = compileScriptFlow(parent, {
+      resolveFlow: (id) => id === "flow-open-notes" ? child : id === "flow-child-fixture" ? fixture : undefined
+    });
+
+    expect(plan.steps.map((step) => [step.id, step.phase])).toEqual([
+      ["restart-parent", "preparation"],
+      ["reuse-notes.open-growth", "business"],
+      ["reuse-notes.verify-notes", "verification"],
+      ["parent-reset", "reset"]
+    ]);
+  });
+
+  it("runs a reusable flow core entirely in preparation when the call site is setup", () => {
+    const child = parseScriptFlow(`
+version: 1
+name: teacher login
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: restart-child
+    role: setup
+    launchApp: { appId: cn.eeo.classin }
+  - id: enter-account
+    role: business
+    inputText: { target: { text: 手机号 }, value: teacher }
+  - id: verify-login
+    role: assertion
+    assertText: { text: 首页 }
+  - id: logout
+    role: reset
+    tap: { target: { text: 退出登录 } }
+`);
+    const parent = parseScriptFlow(`
+version: 1
+name: open notes
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: prepare-login
+    role: setup
+    runFlow: flow-teacher-login
+  - id: open-growth
+    role: business
+    tap: { target: { text: 成长 } }
+`);
+
+    const plan = compileScriptFlow(parent, {
+      resolveFlow: (id) => id === "flow-teacher-login" ? child : undefined
+    });
+
+    expect(plan.steps.map((step) => [step.id, step.phase])).toEqual([
+      ["prepare-login.enter-account", "preparation"],
+      ["prepare-login.verify-login", "preparation"],
+      ["open-growth", "business"]
+    ]);
+  });
+
+  it.each([
+    ["assertion", "verification"],
+    ["reset", "reset"]
+  ] as const)("runs a reusable flow core entirely in %s phase", (role, phase) => {
+    const child = parseScriptFlow(`
+version: 1
+name: reusable core
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: tap-home
+    role: business
+    tap: { target: { text: 主页 } }
+  - id: verify-home
+    role: assertion
+    assertText: { text: 首页 }
+`);
+    const parent = parseScriptFlow(`
+version: 1
+name: parent
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: reuse-core
+    role: ${role}
+    runFlow: flow-reusable-core
+`);
+
+    const plan = compileScriptFlow(parent, {
+      resolveFlow: (id) => id === "flow-reusable-core" ? child : undefined
+    });
+
+    expect(plan.steps.map((step) => step.phase)).toEqual([phase, phase]);
+  });
+
   it("does not turn a child flow outcome into an implicit assertion", () => {
     const child = parseScriptFlow(`
 version: 1

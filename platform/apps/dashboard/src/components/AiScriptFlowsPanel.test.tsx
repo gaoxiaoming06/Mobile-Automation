@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { TestRun } from "@mobile-automation/shared";
+import type { ScriptFlow, TestRun } from "@mobile-automation/shared";
 import {
   AiScriptFlowsPanel,
   buildAiGenerateRequestBody,
@@ -10,6 +10,8 @@ import {
   draftRunEndpoint,
   draftSaveDestination,
   ExecutionFailureNotice,
+  ScriptItemPicker,
+  reusableFlowCandidates,
   StepTrialRunBar,
   stepTrialStatusForStep,
   stepReviewItems,
@@ -18,6 +20,114 @@ import {
 } from "./AiScriptFlowsPanel.js";
 
 describe("AiScriptFlowsPanel", () => {
+  it("keeps only stable compatible non-recursive cases as reusable candidates", () => {
+    const flows = [
+      reusableFlow("flow-current", "当前用例", [{ id: "current", tap: { target: { text: "当前" } } }]),
+      reusableFlow("flow-login", "教师登录", [
+        { id: "restart", role: "setup", launchApp: { appId: "cn.eeo.classin" } },
+        { id: "login", role: "business", tap: { target: { text: "登录" } } },
+        { id: "reset", role: "reset", tap: { target: { text: "退出" } } }
+      ]),
+      { ...reusableFlow("flow-draft", "草稿", [{ id: "draft", tap: { target: { text: "草稿" } } }]), status: "draft" as const },
+      reusableFlow("flow-empty", "只有生命周期", [
+        { id: "restart", role: "setup", launchApp: { appId: "cn.eeo.classin" } },
+        { id: "reset", role: "reset", tap: { target: { text: "主页" } } }
+      ]),
+      reusableFlow("flow-cycle", "循环引用", [{ id: "back", runFlow: "flow-current" }]),
+      { ...reusableFlow("flow-ios", "iOS 用例", [{ id: "ios", tap: { target: { text: "登录" } } }]), platform: "ios" as const,
+        parsed: { ...reusableFlow("flow-ios", "iOS 用例", []).parsed, app: { id: "cn.eeo.classin", platform: "ios" } } }
+    ];
+
+    expect(reusableFlowCandidates(flows, {
+      app: { id: "cn.eeo.classin", platform: "android" },
+      currentFlowId: "flow-current"
+    }).map((flow) => flow.id)).toEqual(["flow-login"]);
+  });
+
+  it("renders one script item picker with all sections and content types", () => {
+    const markup = renderToStaticMarkup(<ScriptItemPicker
+      flows={[reusableFlow("flow-login", "教师登录", [
+        { id: "restart", role: "setup", launchApp: { appId: "cn.eeo.classin" } },
+        { id: "login", role: "business", tap: { target: { text: "登录" } } },
+        { id: "verify", role: "assertion", assertText: { text: "首页" } }
+      ], { account: { type: "string", required: true } })]}
+      query=""
+      loading={false}
+      mode="flow"
+      placement="reset"
+      action="tap"
+      onModeChange={vi.fn()}
+      onQueryChange={vi.fn()}
+      onPlacementChange={vi.fn()}
+      onActionChange={vi.fn()}
+      onAddAction={vi.fn()}
+      onSelectFlow={vi.fn()}
+      onClose={vi.fn()}
+    />);
+
+    expect(markup).toContain('role="dialog"');
+    expect(markup).toContain('aria-modal="true"');
+    expect(markup).toContain("添加脚本内容");
+    expect(markup).toContain("添加位置");
+    expect(markup).toContain("内容来源");
+    expect(markup).toContain('aria-label="添加位置"');
+    expect(markup).toContain('<option value="setup">前置准备</option>');
+    expect(markup).toContain('<option value="business">业务步骤</option>');
+    expect(markup).toContain('<option value="assertion">结果验证</option>');
+    expect(markup).toContain('<option value="reset" selected="">每轮复位</option>');
+    expect(markup).toContain("新建操作");
+    expect(markup).toContain("引用已有用例");
+    expect(markup).not.toContain('aria-label="选择添加位置"');
+    expect(markup).not.toContain("业务前执行");
+    expect(markup).not.toContain("核心测试操作");
+    expect(markup).not.toContain("检查执行结果");
+    expect(markup).not.toContain("循环后恢复");
+    expect(markup).toContain("教师登录");
+    expect(markup).toContain("核心步骤 2");
+    expect(markup).toContain("参数 1");
+    expect(markup).toContain("不继承子用例自身的前置准备和每轮复位");
+    expect(markup).toContain("作为每轮复位引用教师登录");
+  });
+
+  it("renders operation choices and one confirm action in the unified picker", () => {
+    const markup = renderToStaticMarkup(<ScriptItemPicker
+      flows={[]}
+      query=""
+      loading={false}
+      mode="action"
+      placement="business"
+      action="tap"
+      onModeChange={vi.fn()}
+      onQueryChange={vi.fn()}
+      onPlacementChange={vi.fn()}
+      onActionChange={vi.fn()}
+      onAddAction={vi.fn()}
+      onSelectFlow={vi.fn()}
+      onClose={vi.fn()}
+    />);
+
+    expect(markup).toContain("点击目标");
+    expect(markup).toContain("输入文本");
+    expect(markup).toContain("将“点击目标”添加到“业务步骤”");
+    expect(markup).toContain("添加到业务步骤");
+  });
+
+  it("treats a runFlow reference as an operable orchestrator step", () => {
+    const [step] = stepReviewItems({
+      version: 1,
+      kind: "scenario",
+      purpose: "business",
+      testLevel: "business_smoke",
+      name: "组合场景",
+      app: { id: "cn.eeo.classin", platform: "android" },
+      parameters: {},
+      steps: [{ id: "reuse-login", role: "business", runFlow: "flow-login" }],
+      tags: []
+    });
+
+    expect(step).toMatchObject({ action: "runFlow", structural: false, phase: "business" });
+  });
+
   it("uses separate execution endpoints for verified and trial-ready drafts", () => {
     expect(draftRunEndpoint("ready")).toBe("/api/script-flow-drafts/runs");
     expect(draftRunEndpoint("trial_ready")).toBe("/api/script-flow-drafts/trial-runs");
@@ -147,6 +257,42 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).not.toContain("保存到用例中心");
   });
 
+  it("hides the generated summary and exposes assumptions from a compact help control", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialDraft={{
+        status: "ready",
+        sourceYaml: "version: 1\nname: 点击搜索图标",
+        document: {
+          version: 1,
+          kind: "case",
+          purpose: "business",
+          testLevel: "business_smoke",
+          name: "点击搜索图标",
+          app: { id: "cn.eeo.classin", platform: "android" },
+          parameters: {},
+          steps: [{ id: "tap-search", role: "business", tap: { target: { icon: "search" } } }],
+          tags: []
+        },
+        summary: "这段生成摘要不应显示",
+        assumptions: ["用户当前位于含搜索入口的页面", "未要求校验点击后的目标页面"],
+        channel: "codex",
+        model: "planner"
+      } as never}
+    />);
+
+    expect(markup).not.toContain("这段生成摘要不应显示");
+    expect(markup).toContain('aria-label="查看生成假设"');
+    expect(markup).toContain('role="tooltip"');
+    expect(markup).toContain("用户当前位于含搜索入口的页面");
+    expect(markup).toContain("未要求校验点击后的目标页面");
+  });
+
   it("renders generated steps collapsed and confirmed by default", () => {
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel
       defaultAppId="cn.eeo.classin"
@@ -203,7 +349,9 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("确认步骤 1：输入文本");
     expect(markup).toContain("展开步骤 1");
     expect(markup).toContain("所有步骤已确认，可以执行或保存");
-    expect(markup).toContain("添加步骤");
+    expect(markup).toContain("<span>添加</span>");
+    expect(markup).not.toContain("添加步骤");
+    expect(markup).not.toContain("引用用例");
     expect(markup).not.toContain("步骤名称");
     expect(markup).not.toContain("这一步会操作");
     expect(markup).not.toContain("上移步骤 1");
@@ -283,6 +431,27 @@ describe("AiScriptFlowsPanel", () => {
     expect(stepTrialStatusForStep(run, "launch-app")).toBe("passed");
     expect(stepTrialStatusForStep(run, "tap-growth-tab")).toBe("paused");
     expect(stepTrialStatusForStep(run, "tap-notes-entry")).toBeUndefined();
+  });
+
+  it("aggregates expanded child action statuses on the runFlow reference", () => {
+    const run = stepTrialRun({ status: "passed", stepResults: [] });
+    run.steps = [
+      { ...run.steps[1]!, id: "reuse-login.input-account", params: { scriptStepId: "reuse-login.input-account" } },
+      { ...run.steps[1]!, id: "reuse-login.tap-login", params: { scriptStepId: "reuse-login.tap-login" } }
+    ];
+    run.stepResults = run.steps.map((step, index) => ({
+      id: `result-child-${index}`,
+      runId: run.id,
+      iterationIndex: 1,
+      stepId: step.id,
+      stepOrder: index + 1,
+      type: step.type,
+      status: "passed",
+      startedAt: "2026-08-03T00:00:00.000Z",
+      artifacts: []
+    }));
+
+    expect(stepTrialStatusForStep(run, "reuse-login")).toBe("passed");
   });
 
   it("renders the active step trial and its controls at the orchestrator", () => {
@@ -434,7 +603,8 @@ describe("AiScriptFlowsPanel", () => {
     />);
 
     expect(markup).toContain("脚本编排");
-    expect(markup).toContain("添加步骤");
+    expect(markup).toContain("<span>添加</span>");
+    expect(markup).not.toContain("添加复位步骤");
     expect(markup).toContain("请至少添加一个步骤");
     expect(markup).toContain("disabled");
   });
@@ -695,7 +865,7 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("保存到用例中心");
     expect(markup).not.toContain("执行逻辑");
     expect(markup).toContain("启动 ClassIn");
-    expect(markup).toContain("启动 App 并等待主页");
+    expect(markup).not.toContain("启动 App 并等待主页");
     expect(markup).not.toContain("version: 1");
     expect(markup).not.toContain("进入脚本编辑器");
     expect(markup).not.toContain("识别当前设备页面");
@@ -840,6 +1010,37 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain('value="demo-secret"');
   });
 });
+
+function reusableFlow(
+  id: string,
+  name: string,
+  steps: Array<Record<string, unknown>>,
+  parameters: Record<string, Record<string, unknown>> = {}
+): ScriptFlow {
+  return {
+    id,
+    appId: "cn.eeo.classin",
+    platform: "android",
+    name,
+    sourceYaml: "version: 1",
+    parsed: {
+      version: 1,
+      kind: "case",
+      purpose: "business",
+      testLevel: "business_smoke",
+      name,
+      app: { id: "cn.eeo.classin", platform: "android" },
+      parameters,
+      steps,
+      tags: []
+    },
+    status: "active",
+    version: 3,
+    tags: [],
+    createdAt: "2026-08-03T00:00:00.000Z",
+    updatedAt: "2026-08-03T00:00:00.000Z"
+  };
+}
 
 function stepTrialRun(input: {
   status: TestRun["status"];

@@ -24,9 +24,12 @@ type ExpansionContext = {
   redactSensitiveParameters: boolean;
   stack: string[];
   prefix: string;
+  phaseOverride?: ScriptExecutionPlanStep["phase"];
 };
 
-type CompiledBodyStep = Omit<ScriptExecutionPlanStep, "order" | "phase">;
+type CompiledBodyStep = Omit<ScriptExecutionPlanStep, "order" | "phase"> & {
+  phaseOverride?: ScriptExecutionPlanStep["phase"];
+};
 
 export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScriptFlowOptions = {}): ScriptExecutionPlan {
   const parameters = resolveParameters(flow.parameters, options.parameters ?? {});
@@ -39,7 +42,10 @@ export function compileScriptFlow(flow: ScriptFlowDocument, options: CompileScri
     redactSensitiveParameters,
     stack: [flow.name],
     prefix: ""
-  }).map((step) => ({ ...step, phase: executionPhase(step) }));
+  }).map((step) => {
+    const { phaseOverride, ...compiledStep } = step;
+    return { ...compiledStep, phase: phaseOverride ?? executionPhase(step) };
+  });
   const steps = bodySteps.map((step, index) => ({ ...step, order: index + 1 }));
   return {
     flowName: flow.name,
@@ -139,15 +145,52 @@ function expandChildFlow(
   const renderedParameters = context.redactSensitiveParameters
     ? redactParameters(child.parameters, resolveParameters(child.parameters, renderedBindings))
     : parameters;
-  return expandSteps(child.steps, {
+  const phaseOverride = context.phaseOverride
+    ?? runFlowPhaseOverride(step.role);
+  return expandSteps(reusableCoreSteps(child.steps), {
     flow: child,
     parameters,
     renderedParameters,
     resolveFlow: context.resolveFlow,
     redactSensitiveParameters: context.redactSensitiveParameters,
     stack: [...context.stack, step.runFlow],
-    prefix: expandedId
+    prefix: expandedId,
+    ...(phaseOverride ? { phaseOverride } : {})
+  }).filter((childStep) => {
+    const phase = executionPhase(childStep);
+    return phase !== "preparation" && phase !== "reset";
   });
+}
+
+function runFlowPhaseOverride(role: ScriptExecutionPlanStep["role"] | undefined): ScriptExecutionPlanStep["phase"] | undefined {
+  if (role === "setup" || role === "recovery") return "preparation";
+  if (role === "assertion" || role === "cleanup") return "verification";
+  if (role === "reset") return "reset";
+  return undefined;
+}
+
+export function reusableCoreSteps(steps: ScriptStep[]): ScriptStep[] {
+  const result: ScriptStep[] = [];
+  for (const step of steps) {
+    if (!isReusableCoreStep(step)) continue;
+    if ("repeat" in step) {
+      result.push({ ...step, repeat: { ...step.repeat, steps: reusableCoreSteps(step.repeat.steps) } });
+      continue;
+    }
+    if ("when" in step) {
+      result.push({ ...step, when: { ...step.when, steps: reusableCoreSteps(step.when.steps) } });
+      continue;
+    }
+    result.push(step);
+  }
+  return result;
+}
+
+function isReusableCoreStep(step: ScriptStep): boolean {
+  return step.role !== "setup"
+    && step.role !== "recovery"
+    && step.role !== "reset"
+    && !("launchApp" in step);
 }
 
 function interpolateBindingValue(value: unknown, parameters: Record<string, ScriptParameterValue>): unknown {
@@ -177,7 +220,8 @@ function compileExecutableStep(
     source: {
       flowName: context.flow.name,
       stepId: step.id
-    }
+    },
+    ...(context.phaseOverride ? { phaseOverride: context.phaseOverride } : {})
   };
 }
 

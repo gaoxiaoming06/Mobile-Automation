@@ -3,9 +3,11 @@ import {
   ArrowUp,
   ChevronDown,
   ChevronRight,
+  CircleHelp,
   Copy,
   FileSearch,
   History,
+  Link2,
   Play,
   Plus,
   RotateCcw,
@@ -13,7 +15,8 @@ import {
   Sparkles,
   Square,
   StepForward,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { publicExecutionFailureFromRun } from "@mobile-automation/shared";
@@ -49,6 +52,7 @@ import {
   type CaseSourceStep
 } from "./case-view.js";
 import {
+  addDraftFlowReference,
   addDraftStep,
   duplicateDraftStep,
   moveDraftStep,
@@ -56,6 +60,7 @@ import {
   setDraftLoopResetMode,
   updateDraftStep,
   updateDraftStepLocator as updateOrchestratorStepLocator,
+  type DraftStepPlacement,
   type DraftStepPatch,
   type EditableStepAction
 } from "./script-flow-orchestrator.js";
@@ -252,6 +257,12 @@ export function AiScriptFlowsPanel({
   const [useCurrentScreen, setUseCurrentScreen] = useState(false);
   const [executionMode, setExecutionMode] = useState<ScriptRunExecutionMode>("once");
   const [newStepAction, setNewStepAction] = useState<EditableStepAction>("tap");
+  const [scriptItemPickerOpen, setScriptItemPickerOpen] = useState(false);
+  const [scriptItemPickerMode, setScriptItemPickerMode] = useState<"action" | "flow">("action");
+  const [reusableFlowLoading, setReusableFlowLoading] = useState(false);
+  const [reusableFlowQuery, setReusableFlowQuery] = useState("");
+  const [reusableFlows, setReusableFlows] = useState<ScriptFlow[]>([]);
+  const [scriptItemPlacement, setScriptItemPlacement] = useState<DraftStepPlacement>("business");
   const [stepRunContext, setStepRunContext] = useState<{ stepId: string; mode: "single" | "from_here" }>();
   const [confirmedStepKeys, setConfirmedStepKeys] = useState<Set<string>>(() => confirmedKeysForDraft(initialDraft));
   const [expandedStepKeys, setExpandedStepKeys] = useState<Set<string>>(() => new Set());
@@ -261,6 +272,15 @@ export function AiScriptFlowsPanel({
   useEffect(() => {
     if (selectedSerial) setDeviceSerial(selectedSerial);
   }, [selectedSerial]);
+
+  useEffect(() => {
+    if (!scriptItemPickerOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setScriptItemPickerOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [scriptItemPickerOpen]);
 
   useEffect(() => {
     const activeStepRun = activeStepTrialRun(activeRunForDevice);
@@ -528,7 +548,7 @@ export function AiScriptFlowsPanel({
   const stepTrialActive = Boolean(isStepTrial && lastRun && ["pending", "running", "paused"].includes(lastRun.status));
   const continuousRunActive = Boolean(!isStepTrial && lastRun && ["pending", "running", "paused"].includes(lastRun.status));
   const retryStepId = lastRun ? failedScriptStepId(lastRun) : undefined;
-  const retryStep = reviewSteps.find((step) => step.id === retryStepId)
+  const retryStep = reviewSteps.find((step) => retryStepId === step.id || retryStepId?.startsWith(`${step.id}.`))
     ?? (stepRunContext ? reviewSteps.find((step) => step.id === stepRunContext.stepId) : undefined);
 
   function toggleStepConfirmed(stepKey: string, confirmed: boolean) {
@@ -576,25 +596,74 @@ export function AiScriptFlowsPanel({
     }
   }
 
-  function addStep() {
+  function addActionFromPicker() {
     if (!generatedDraft) return;
     try {
-      const added = addDraftStep(generatedDraft, undefined, newStepAction);
-      applyStructuralDraftChange(added.draft);
-      setMessage(`已添加${caseActionLabel(newStepAction)}步骤`);
+      const added = addDraftStep(generatedDraft, undefined, newStepAction, scriptItemPlacement);
+      applyStructuralDraftChange(added.draft, added.stepKey);
+      setScriptItemPickerOpen(false);
+      setMessage(`已将${caseActionLabel(newStepAction)}添加到${draftStepPlacementLabel(scriptItemPlacement)}`);
     } catch (error) {
       setMessage(errorMessage(error));
     }
   }
 
-  function addResetStep() {
+  async function openScriptItemPicker() {
     if (!generatedDraft) return;
+    setScriptItemPickerOpen(true);
+    setScriptItemPickerMode("action");
+    setReusableFlowLoading(true);
+    setReusableFlowQuery("");
+    setScriptItemPlacement("business");
+    setNewStepAction("tap");
     try {
-      const added = addDraftStep(generatedDraft, undefined, newStepAction, "reset");
-      applyStructuralDraftChange(added.draft);
-      setMessage(`已添加每轮复位步骤：${caseActionLabel(newStepAction)}`);
+      const query = new URLSearchParams({
+        appId: generatedDraft.document.app.id,
+        platform: generatedDraft.document.app.platform,
+        status: "active"
+      });
+      const response = await apiFetchJson<{ flows: ScriptFlow[] }>(`/api/script-flows?${query.toString()}`);
+      setReusableFlows(reusableFlowCandidates(response.flows, {
+        app: generatedDraft.document.app,
+        currentFlowId: revision?.flowId ?? generatedDraft.sourceFlow?.id
+      }));
     } catch (error) {
       setMessage(errorMessage(error));
+    } finally {
+      setReusableFlowLoading(false);
+    }
+  }
+
+  function addReusableFlow(flow: ScriptFlow) {
+    if (!generatedDraft) return;
+    const document = readCaseDocument(flow.parsed);
+    if (!document) {
+      setMessage("所选用例脚本无法解析，不能引用");
+      return;
+    }
+    try {
+      const added = addDraftFlowReference(generatedDraft, undefined, {
+        id: flow.id,
+        name: flow.name,
+        placement: scriptItemPlacement,
+        parameters: document.parameters
+      });
+      applyStructuralDraftChange(added.draft);
+      setParameterValues((current) => ({
+        ...defaultCaseParameterValues(added.draft.document),
+        ...current
+      }));
+      setScriptItemPickerOpen(false);
+      setMessage(`已将稳定用例“${flow.name}”添加到${draftStepPlacementLabel(scriptItemPlacement)}`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  function changeScriptItemPlacement(placement: DraftStepPlacement) {
+    setScriptItemPlacement(placement);
+    if (!editableActionsForPlacement(placement).includes(newStepAction)) {
+      setNewStepAction(defaultActionForPlacement(placement));
     }
   }
 
@@ -648,12 +717,12 @@ export function AiScriptFlowsPanel({
     });
   }
 
-  function applyStructuralDraftChange(next: GeneratedDraft) {
+  function applyStructuralDraftChange(next: GeneratedDraft, expandedStepKey?: string) {
     setDraft(next);
     setPlan(undefined);
     setStepReviewRequired(true);
     setConfirmedStepKeys(new Set());
-    setExpandedStepKeys(new Set());
+    setExpandedStepKeys(expandedStepKey ? new Set([expandedStepKey]) : new Set());
   }
 
   async function runDraftStep(step: StepReviewItem, mode: "single" | "from_here") {
@@ -798,8 +867,13 @@ export function AiScriptFlowsPanel({
           {!draft ? <div className="empty"><strong>{revision ? "等待修改说明" : "等待生成"}</strong><span>规划时不会读取或改变当前设备页面。</span></div> : null}
           {draft?.status === "needs_clarification" ? <div className="ai-script-clarification"><strong>需要补充信息</strong><p>{draft.clarification}</p></div> : null}
           {generatedDraft ? <>
-            <header><div><span className={`test-kind-badge ${generatedDraft.document.kind}`}>{testKindLabel(generatedDraft.document.kind)}</span><span className={`test-purpose-badge ${generatedDraft.document.purpose ?? "business"}`}>{testPurposeLabel(generatedDraft.document.purpose)}</span><span className={`test-level-badge ${generatedDraft.document.testLevel ?? "business_smoke"}`}>{testLevelLabel(generatedDraft.document.testLevel)}</span><h3>{generatedDraft.document.name}</h3><p>{generatedDraft.summary}</p></div><span>{steps.length} 个步骤</span></header>
-            {generatedDraft.assumptions.length ? <div className="ai-script-assumptions"><strong>生成假设</strong>{generatedDraft.assumptions.map((item) => <p key={item}>{item}</p>)}</div> : null}
+            <header>
+              <div><span className={`test-kind-badge ${generatedDraft.document.kind}`}>{testKindLabel(generatedDraft.document.kind)}</span><span className={`test-purpose-badge ${generatedDraft.document.purpose ?? "business"}`}>{testPurposeLabel(generatedDraft.document.purpose)}</span><span className={`test-level-badge ${generatedDraft.document.testLevel ?? "business_smoke"}`}>{testLevelLabel(generatedDraft.document.testLevel)}</span><h3>{generatedDraft.document.name}</h3></div>
+              <div className="ai-script-result-meta">
+                <span>{steps.length} 个步骤</span>
+                {generatedDraft.assumptions.length ? <AssumptionsHelp assumptions={generatedDraft.assumptions} /> : null}
+              </div>
+            </header>
             {showStepOrchestrator ? <StepReviewPanel
               steps={reviewSteps}
               startStrategy={generatedDraft.document.start?.strategy}
@@ -812,14 +886,11 @@ export function AiScriptFlowsPanel({
               trialRun={stepTrialRun}
               trialStatusesEnabled={trialStatusesEnabled}
               runControlBusy={busyAction === "runControl"}
-              newStepAction={newStepAction}
               onConfirm={toggleStepConfirmed}
               onToggleExpanded={toggleStepExpanded}
               onStepChange={updateStep}
               onLocatorChange={updateStepLocator}
-              onNewStepActionChange={setNewStepAction}
-              onAddStep={addStep}
-              onAddResetStep={addResetStep}
+              onOpenItemPicker={() => void openScriptItemPicker()}
               onNoResetNeededChange={setNoResetNeeded}
               onDuplicateStep={duplicateStep}
               onMoveStep={moveStep}
@@ -828,6 +899,21 @@ export function AiScriptFlowsPanel({
               onControlRun={(action) => void controlStepRun(action)}
               onOpenRun={onOpenRun}
               onRetryStep={retryStep ? () => void runDraftStep(retryStep, "single") : undefined}
+            /> : null}
+            {scriptItemPickerOpen ? <ScriptItemPicker
+              flows={reusableFlows}
+              query={reusableFlowQuery}
+              loading={reusableFlowLoading}
+              mode={scriptItemPickerMode}
+              placement={scriptItemPlacement}
+              action={newStepAction}
+              onModeChange={setScriptItemPickerMode}
+              onQueryChange={setReusableFlowQuery}
+              onPlacementChange={changeScriptItemPlacement}
+              onActionChange={setNewStepAction}
+              onAddAction={addActionFromPicker}
+              onSelectFlow={addReusableFlow}
+              onClose={() => setScriptItemPickerOpen(false)}
             /> : null}
             {caseCenterEligible(generatedDraft.document) ? <div className="ai-case-actions">
               <button type="button" onClick={() => void saveDraft()} disabled={busy || reviewBlocked}><Save size={16} /><span>{revision ? "保存修改" : generatedDraft.sourceFlow ? "更新用例中心" : "保存到用例中心"}</span></button>
@@ -906,6 +992,210 @@ export function StepTrialRunBar({
   </section>;
 }
 
+function AssumptionsHelp({ assumptions }: { assumptions: string[] }) {
+  return <details className="ai-script-assumptions-help">
+    <summary aria-label="查看生成假设" title="生成假设"><CircleHelp size={16} /></summary>
+    <div className="ai-script-assumptions-popover" role="tooltip">
+      <strong>生成假设</strong>
+      <ul>{assumptions.map((item) => <li key={item}>{item}</li>)}</ul>
+    </div>
+  </details>;
+}
+
+export function reusableFlowCandidates(
+  flows: ScriptFlow[],
+  context: { app: CaseDocumentView["app"]; currentFlowId?: string }
+): ScriptFlow[] {
+  const flowsById = new Map(flows.map((flow) => [flow.id, flow]));
+  return flows.filter((flow) => {
+    if (flow.status !== "active" || flow.id === context.currentFlowId) return false;
+    if (flow.appId !== context.app.id || flow.platform !== context.app.platform) return false;
+    const document = readCaseDocument(flow.parsed);
+    if (!document || document.app.id !== context.app.id || document.app.platform !== context.app.platform) return false;
+    if (reusableCoreStepCount(document.steps) === 0) return false;
+    return !context.currentFlowId || !referencesFlow(flow, context.currentFlowId, flowsById, new Set());
+  });
+}
+
+export function ScriptItemPicker({
+  flows,
+  query,
+  loading,
+  mode,
+  placement,
+  action,
+  onModeChange,
+  onQueryChange,
+  onPlacementChange,
+  onActionChange,
+  onAddAction,
+  onSelectFlow,
+  onClose
+}: {
+  flows: ScriptFlow[];
+  query: string;
+  loading: boolean;
+  mode: "action" | "flow";
+  placement: DraftStepPlacement;
+  action: EditableStepAction;
+  onModeChange: (mode: "action" | "flow") => void;
+  onQueryChange: (query: string) => void;
+  onPlacementChange: (placement: DraftStepPlacement) => void;
+  onActionChange: (action: EditableStepAction) => void;
+  onAddAction: () => void;
+  onSelectFlow: (flow: ScriptFlow) => void;
+  onClose: () => void;
+}) {
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleFlows = flows.filter((flow) => !normalizedQuery || [flow.name, flow.description, ...flow.tags]
+    .filter(Boolean)
+    .some((value) => value!.toLowerCase().includes(normalizedQuery)));
+  const placementLabel = draftStepPlacementLabel(placement);
+  const availableActions = editableActionsForPlacement(placement);
+  return <div className="reusable-flow-modal-backdrop" onMouseDown={(event) => {
+    if (event.target === event.currentTarget) onClose();
+  }}>
+    <section className="reusable-flow-picker script-item-picker" role="dialog" aria-modal="true" aria-labelledby="script-item-picker-title">
+      <header>
+        <h3 id="script-item-picker-title">添加脚本内容</h3>
+        <button type="button" title="关闭" aria-label="关闭添加脚本内容" onClick={onClose}><X size={16} /></button>
+      </header>
+      <div className="script-item-picker-layout">
+        <div className="script-item-picker-main">
+          <div className="script-item-picker-controls">
+            <label className="script-item-placement-field">
+              <span>添加位置</span>
+              <select
+                aria-label="添加位置"
+                value={placement}
+                onChange={(event) => onPlacementChange(event.target.value as DraftStepPlacement)}
+              >
+                <option value="setup">前置准备</option>
+                <option value="business">业务步骤</option>
+                <option value="assertion">结果验证</option>
+                <option value="reset">每轮复位</option>
+              </select>
+            </label>
+            <div className="script-item-source-field">
+              <span>内容来源</span>
+              <div className="script-item-mode" role="group" aria-label="添加内容类型">
+                <button type="button" aria-pressed={mode === "action"} onClick={() => onModeChange("action")}>新建操作</button>
+                <button type="button" aria-pressed={mode === "flow"} onClick={() => onModeChange("flow")}>引用已有用例</button>
+              </div>
+            </div>
+          </div>
+          {mode === "action" ? <>
+            <div className="script-action-list" role="group" aria-label="具体操作步骤">
+              {availableActions.map((candidate) => <button
+                type="button"
+                key={candidate}
+                aria-pressed={action === candidate}
+                onClick={() => onActionChange(candidate)}
+              >{caseActionLabel(candidate)}</button>)}
+            </div>
+            <footer className="script-item-picker-footer">
+              <span>将“{caseActionLabel(action)}”添加到“{placementLabel}”</span>
+              <button type="button" onClick={onAddAction}><Plus size={15} /><span>添加到{placementLabel}</span></button>
+            </footer>
+          </> : <>
+            <div className="reusable-flow-toolbar">
+              <label>搜索用例<input autoFocus value={query} onChange={(event) => onQueryChange(event.target.value)} /></label>
+              <div
+                className="reusable-flow-scope"
+                title={`${referencePlacementScope(placement)}；不继承子用例自身的前置准备和每轮复位`}
+              ><CircleHelp size={14} /><span>引用规则</span></div>
+            </div>
+            {loading ? <p className="reusable-flow-empty">正在加载稳定用例</p> : visibleFlows.length ? <div className="reusable-flow-list">
+              {visibleFlows.map((flow) => {
+                const document = readCaseDocument(flow.parsed)!;
+                return <article key={flow.id}>
+                  <div className="reusable-flow-copy">
+                    <strong>{flow.name}</strong>
+                    {flow.description ? <span>{flow.description}</span> : null}
+                    <small>v{flow.version} · 核心步骤 {reusableCoreStepCount(document.steps)} · 参数 {Object.keys(document.parameters).length}</small>
+                  </div>
+                  <button type="button" aria-label={`作为${placementLabel}引用${flow.name}`} onClick={() => onSelectFlow(flow)}><Link2 size={15} /><span>引用</span></button>
+                </article>;
+              })}
+            </div> : <p className="reusable-flow-empty">没有匹配的稳定用例</p>}
+          </>}
+        </div>
+      </div>
+    </section>
+  </div>;
+}
+
+function draftStepPlacementLabel(placement: DraftStepPlacement): string {
+  if (placement === "setup") return "前置准备";
+  if (placement === "assertion") return "结果验证";
+  if (placement === "reset") return "每轮复位";
+  return "业务步骤";
+}
+
+function referencePlacementScope(placement: DraftStepPlacement): string {
+  if (placement === "setup") return "核心步骤将在父用例的前置准备阶段执行";
+  if (placement === "assertion") return "核心步骤将在父用例的结果验证阶段执行";
+  if (placement === "reset") return "核心步骤将在父用例的每轮复位阶段执行";
+  return "引用范围：业务步骤与结果验证";
+}
+
+function editableActionsForPlacement(placement: DraftStepPlacement): EditableStepAction[] {
+  if (placement === "assertion") return ["waitForPage", "assertPage", "assertText"];
+  if (placement === "business") return EDITABLE_ACTIONS.filter((action) => action !== "launchApp"
+    && action !== "waitForPage"
+    && action !== "assertPage"
+    && action !== "assertText");
+  return EDITABLE_ACTIONS.filter((action) => action !== "waitForPage" && action !== "assertPage" && action !== "assertText");
+}
+
+function defaultActionForPlacement(placement: DraftStepPlacement): EditableStepAction {
+  if (placement === "setup") return "launchApp";
+  if (placement === "assertion") return "assertText";
+  return "tap";
+}
+
+function reusableCoreStepCount(steps: CaseSourceStep[]): number {
+  return steps.reduce((count, step) => {
+    if (!isReusableCoreSourceStep(step)) return count;
+    const children = nestedSteps(step);
+    return count + (children ? reusableCoreStepCount(children) : 1);
+  }, 0);
+}
+
+function isReusableCoreSourceStep(step: CaseSourceStep): boolean {
+  return step.role !== "setup"
+    && step.role !== "recovery"
+    && step.role !== "reset"
+    && !("launchApp" in step);
+}
+
+function referencesFlow(
+  flow: ScriptFlow,
+  targetFlowId: string,
+  flowsById: Map<string, ScriptFlow>,
+  visited: Set<string>
+): boolean {
+  if (visited.has(flow.id)) return false;
+  visited.add(flow.id);
+  const document = readCaseDocument(flow.parsed);
+  if (!document) return false;
+  for (const referenceId of reusableCoreReferenceIds(document.steps)) {
+    if (referenceId === targetFlowId) return true;
+    const referenced = flowsById.get(referenceId);
+    if (referenced && referencesFlow(referenced, targetFlowId, flowsById, visited)) return true;
+  }
+  return false;
+}
+
+function reusableCoreReferenceIds(steps: CaseSourceStep[]): string[] {
+  return steps.flatMap((step) => {
+    if (!isReusableCoreSourceStep(step)) return [];
+    const children = nestedSteps(step);
+    if (children) return reusableCoreReferenceIds(children);
+    return typeof step.runFlow === "string" ? [step.runFlow] : [];
+  });
+}
+
 function StepReviewPanel({
   steps,
   startStrategy,
@@ -918,14 +1208,11 @@ function StepReviewPanel({
   trialRun,
   trialStatusesEnabled,
   runControlBusy,
-  newStepAction,
   onConfirm,
   onToggleExpanded,
   onStepChange,
   onLocatorChange,
-  onNewStepActionChange,
-  onAddStep,
-  onAddResetStep,
+  onOpenItemPicker,
   onNoResetNeededChange,
   onDuplicateStep,
   onMoveStep,
@@ -946,14 +1233,11 @@ function StepReviewPanel({
   trialRun?: TestRun;
   trialStatusesEnabled: boolean;
   runControlBusy: boolean;
-  newStepAction: EditableStepAction;
   onConfirm: (stepKey: string, confirmed: boolean) => void;
   onToggleExpanded: (stepKey: string) => void;
   onStepChange: (stepKey: string, patch: DraftStepPatch) => void;
   onLocatorChange: (stepKey: string, patch: StepLocatorPatch) => void;
-  onNewStepActionChange: (action: EditableStepAction) => void;
-  onAddStep: () => void;
-  onAddResetStep: () => void;
+  onOpenItemPicker: () => void;
   onNoResetNeededChange: (checked: boolean) => void;
   onDuplicateStep: (stepKey: string) => void;
   onMoveStep: (stepKey: string, direction: "up" | "down") => void;
@@ -974,10 +1258,7 @@ function StepReviewPanel({
     <header>
       <div><h3>脚本编排</h3><span>{confirmationRequired ? `${confirmedCount}/${steps.length} 已确认` : "已有执行记录"}</span></div>
       <div className="orchestrator-add-step">
-        <select aria-label="新增步骤动作" value={newStepAction} onChange={(event) => onNewStepActionChange(event.target.value as EditableStepAction)} disabled={busy}>
-          {EDITABLE_ACTIONS.map((action) => <option key={action} value={action}>{caseActionLabel(action)}</option>)}
-        </select>
-        <button type="button" onClick={onAddStep} disabled={busy}><Plus size={15} /><span>添加步骤</span></button>
+        <button type="button" onClick={onOpenItemPicker} disabled={busy}><Plus size={15} /><span>添加</span></button>
       </div>
     </header>
     {trialRun ? <StepTrialRunBar
@@ -996,7 +1277,6 @@ function StepReviewPanel({
           <h4 id={`step-section-${section.id}`}>{section.title}</h4>
           <div>
             <span>{section.steps.length} 项</span>
-            {section.id === "reset" ? <button type="button" onClick={onAddResetStep} disabled={busy}><Plus size={14} /><span>添加复位步骤</span></button> : null}
           </div>
         </header>
         {section.id === "preparation" && displayedStartStrategy ? <p className="legacy-start-strategy">启动策略：{startStrategyLabel(displayedStartStrategy)}</p> : null}
@@ -1109,12 +1389,14 @@ function StepActionEditor({
   return <div className="step-action-editor">
     <div className="step-action-grid">
       <label>步骤名称<input value={typeof step.source.name === "string" ? step.source.name : ""} placeholder={step.name} onChange={(event) => onChange(step.key, { name: event.target.value })} /></label>
-      {step.structural ? <label>动作类型<input value={caseActionLabel(step.action)} disabled /></label> : <label>动作类型<select value={step.action} onChange={(event) => onChange(step.key, { action: event.target.value as EditableStepAction })}>
-        {EDITABLE_ACTIONS.map((action) => <option key={action} value={action}>{caseActionLabel(action)}</option>)}
+      {step.structural || step.action === "runFlow" ? <label>动作类型<input value={caseActionLabel(step.action)} disabled /></label> : <label>动作类型<select value={step.action} onChange={(event) => onChange(step.key, { action: event.target.value as EditableStepAction })}>
+        {editableActionsForPlacement(role).map((action) => <option key={action} value={action}>{caseActionLabel(action)}</option>)}
       </select></label>}
-      <label>所属部分<select value={role} onChange={(event) => onChange(step.key, { role: event.target.value })}>
-        {SECTION_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select></label>
+      {step.action === "runFlow"
+        ? <label>所属部分<input value={draftStepPlacementLabel(role)} disabled /></label>
+        : <label>所属部分<select value={role} onChange={(event) => onChange(step.key, { role: event.target.value })}>
+            {SECTION_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select></label>}
       <StepActionFields step={step} onChange={onChange} />
     </div>
   </div>;
@@ -1128,6 +1410,12 @@ function StepActionFields({
   onChange: (stepKey: string, patch: DraftStepPatch) => void;
 }) {
   const action = step.action;
+  if (action === "runFlow") {
+    return <>
+      <label>引用标识<input value={typeof step.source.runFlow === "string" ? step.source.runFlow : ""} disabled /></label>
+      <label>引用范围<input value={referencePlacementScope(roleForReviewPhase(step.phase))} disabled /></label>
+    </>;
+  }
   const value = stepActionValue(step.source, action);
   if (action === "inputText" || action === "selectText") {
     return <label>{action === "inputText" ? "输入内容" : "选择内容"}<input value={value} onChange={(event) => onChange(step.key, { value: event.target.value })} /></label>;
@@ -1293,7 +1581,10 @@ function activeStepTrialRun(run: TestRun | undefined): TestRun | undefined {
 }
 
 export function stepTrialStatusForStep(run: TestRun, scriptStepId: string): StepTrialStatus | undefined {
-  const plannedSteps = run.steps.filter((step) => actionScriptStepId(step) === scriptStepId);
+  const plannedSteps = run.steps.filter((step) => {
+    const actionStepId = actionScriptStepId(step);
+    return actionStepId === scriptStepId || actionStepId?.startsWith(`${scriptStepId}.`);
+  });
   if (!plannedSteps.length) return undefined;
 
   const plannedActionIds = new Set(plannedSteps.map((step) => step.id));
@@ -1437,7 +1728,7 @@ export function stepReviewItems(document: CaseDocumentView | undefined): StepRev
       context: view?.context,
       phase: reviewPhase(entry.step, action),
       source: entry.step,
-      structural: !EDITABLE_ACTIONS.includes(action as EditableStepAction),
+      structural: action !== "runFlow" && !EDITABLE_ACTIONS.includes(action as EditableStepAction),
       canMoveUp: entry.path.at(-1)! > 0,
       canMoveDown: entry.path.at(-1)! < siblings.length - 1,
       locator: locatorView(entry.step)

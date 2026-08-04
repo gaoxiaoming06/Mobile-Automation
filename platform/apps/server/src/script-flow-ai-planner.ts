@@ -52,6 +52,7 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "只能引用目录中存在的 page key 和 active ScriptFlow id。禁止元素资产 ID、坐标、bounds、region_center、圈选区域或固定屏幕区域点击。",
   "用户只说到达一个未录入页面、又没有提供操作路径时返回 needs_clarification，请用户补充从已知状态开始的完整点击过程或目标页独有稳定文字。不要要求用户先录制资产。",
   "目标型请求生成 reachPage；过程型请求按用户描述保留每个动作，不擅自扩展成创建、发布、提交或删除。场景编排命中完全匹配的启用用例时自动使用 runFlow，不要求用户再确认复用；用户明确描述具体操作过程时则保留该过程。",
+  "runFlow 只复用子用例的业务步骤与结果验证，不继承子用例的前置准备和每轮复位。引用用于登录或环境准备时标记 role: setup，引用作为被测流程时标记 role: business，作为结果验证时标记 role: assertion，作为每轮复位时标记 role: reset；父测试必须显式维护自己的启动、环境准备和复位步骤。",
   "动态业务值必须声明为 parameters 并在步骤中使用 ${parameterName}。用户已给出的值放入顶层 parameterValues，仅用于本次运行；未给出但执行必需的值设 required: true。",
   "账号、密码等 sensitive 参数禁止写入 parameters.default、summary 或 assumptions，必须只放入顶层 parameterValues。",
   "runFlow 会自动继承父测试中的同名参数；规划器会把复用用例和 reachPage 导航路径所需参数汇总到运行配置。",

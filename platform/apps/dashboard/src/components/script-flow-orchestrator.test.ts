@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GeneratedDraft } from "./AiScriptFlowsPanel.js";
 import {
+  addDraftFlowReference,
   addDraftStep,
   duplicateDraftStep,
   moveDraftStep,
@@ -11,6 +12,91 @@ import {
 } from "./script-flow-orchestrator.js";
 
 describe("script-flow orchestrator", () => {
+  it("adds a reusable flow reference and exposes its parameters on the parent case", () => {
+    const added = addDraftFlowReference(baseDraft(), undefined, {
+      id: "flow-teacher-login",
+      name: "教师登录",
+      placement: "business",
+      parameters: {
+        account: { type: "string", required: true },
+        password: { type: "string", required: true, sensitive: true }
+      }
+    });
+
+    expect(added.draft.document.steps.at(-1)).toMatchObject({
+      id: "reuse-teacher-login",
+      name: "复用教师登录",
+      role: "business",
+      runFlow: "flow-teacher-login",
+      with: {
+        account: "${account}",
+        password: "${password}"
+      }
+    });
+    expect(added.draft.document.parameters).toMatchObject({
+      account: { type: "string", required: true },
+      password: { type: "string", required: true, sensitive: true }
+    });
+    expect(added.draft.sourceYaml).toContain("runFlow: \"flow-teacher-login\"");
+  });
+
+  it("inserts a reusable preparation flow before business steps", () => {
+    const added = addDraftFlowReference(baseDraft(), undefined, {
+      id: "flow-teacher-login",
+      name: "教师登录",
+      placement: "setup",
+      parameters: {}
+    });
+
+    expect(added.draft.document.steps.map((step) => step.id)).toEqual([
+      "reuse-teacher-login",
+      "tap-target"
+    ]);
+    expect(added.draft.document.steps[0]).toMatchObject({
+      role: "setup",
+      runFlow: "flow-teacher-login"
+    });
+  });
+
+  it("inserts direct steps into the selected script sections", () => {
+    const verification = addDraftStep(baseDraft(), undefined, "assertText", "assertion");
+    const preparation = addDraftStep(verification.draft, undefined, "tap", "setup");
+
+    expect(preparation.draft.document.steps.map((step) => step.id)).toEqual([
+      "tap-step",
+      "tap-target",
+      "assert-text-step"
+    ]);
+    expect(preparation.draft.document.steps[0]).toMatchObject({ role: "setup" });
+    expect(preparation.draft.document.steps[2]).toMatchObject({ role: "assertion" });
+  });
+
+  it("inserts reusable verification and reset flows into their selected sections", () => {
+    const draft = baseDraft();
+    draft.document.loop = { reset: "none" };
+    const verification = addDraftFlowReference(draft, undefined, {
+      id: "flow-verify-home",
+      name: "验证主页",
+      placement: "assertion",
+      parameters: {}
+    });
+    const reset = addDraftFlowReference(verification.draft, undefined, {
+      id: "flow-return-home",
+      name: "返回主页",
+      placement: "reset",
+      parameters: {}
+    });
+
+    expect(reset.draft.document.steps.map((step) => step.id)).toEqual([
+      "tap-target",
+      "reuse-verify-home",
+      "reuse-return-home"
+    ]);
+    expect(reset.draft.document.steps[1]).toMatchObject({ role: "assertion" });
+    expect(reset.draft.document.steps[2]).toMatchObject({ role: "reset" });
+    expect(reset.draft.document.loop).toBeUndefined();
+  });
+
   it("adds a reset step and can explicitly declare that no reset is needed", () => {
     const added = addDraftStep(baseDraft(), undefined, "tap", "reset");
 
