@@ -22,6 +22,7 @@ type AndroidAppMonitorRunSupportOptions = {
   stopRun: () => void;
   markRuntimeFailure: () => void;
   getActiveStepResultId?: () => string | undefined;
+  normalizeIncident?: (incident: AndroidAppMonitorIncident) => AndroidAppMonitorIncident | undefined;
   summaryPrefix?: string;
 };
 
@@ -90,7 +91,8 @@ export class AndroidAppMonitorRunSupport {
     }
 
     try {
-      const enrichedSummary = await this.options.artifactService.writeAndroidAppMonitorArtifacts(this.options.runId, summary, {
+      const normalizedSummary = this.normalizeSummary(summary);
+      const enrichedSummary = await this.options.artifactService.writeAndroidAppMonitorArtifacts(this.options.runId, normalizedSummary, {
         cpu: this.cpuSamples,
         memory: this.memorySamples,
         lifecycle: this.lifecycleEvents
@@ -102,28 +104,49 @@ export class AndroidAppMonitorRunSupport {
   }
 
   private recordIncident(incident: AndroidAppMonitorIncident): void {
-    const runtimeFailure = isRuntimeFailureIncident(incident.type);
+    const normalizedIncident = this.normalizeIncident(incident);
+    if (!normalizedIncident) {
+      return;
+    }
+    const runtimeFailure = isRuntimeFailureIncident(normalizedIncident);
     if (runtimeFailure) {
       this.options.markRuntimeFailure();
     }
-    const severity = incident.type === "cpu_threshold" || incident.type === "memory_threshold"
-      ? incident.severity === "error" ? "error" : "warning"
-      : incident.severity;
+    const severity = normalizedIncident.type === "cpu_threshold" || normalizedIncident.type === "memory_threshold"
+      ? normalizedIncident.severity === "error" ? "error" : "warning"
+      : normalizedIncident.severity;
     this.options.addDeviceEvent({
       id: createId("event"),
       runId: this.options.runId,
       stepResultId: this.options.getActiveStepResultId?.(),
       deviceSerial: this.options.deviceSerial,
-      type: mapIncidentType(incident.type),
+      type: mapIncidentType(normalizedIncident.type),
       severity,
-      occurredAt: incident.occurredAt,
-      summary: `${this.options.summaryPrefix ?? "[Android App Monitor]"} ${incident.summary}`,
-      detail: formatIncidentDetail(incident),
-      artifactIds: [...incident.artifactIds]
+      occurredAt: normalizedIncident.occurredAt,
+      summary: `${this.options.summaryPrefix ?? "[Android App Monitor]"} ${normalizedIncident.summary}`,
+      detail: formatIncidentDetail(normalizedIncident),
+      artifactIds: [...normalizedIncident.artifactIds]
     });
     if ((runtimeFailure || severity === "error") && this.options.stopOnFailure) {
       this.options.stopRun();
     }
+  }
+
+  private normalizeSummary(summary: AndroidAppMonitorSummary): AndroidAppMonitorSummary {
+    if (!this.options.normalizeIncident) {
+      return summary;
+    }
+    const incidents = summary.incidents
+      .map((incident) => this.normalizeIncident(incident))
+      .filter((incident): incident is AndroidAppMonitorIncident => Boolean(incident));
+    return {
+      ...summary,
+      incidents
+    };
+  }
+
+  private normalizeIncident(incident: AndroidAppMonitorIncident): AndroidAppMonitorIncident | undefined {
+    return this.options.normalizeIncident ? this.options.normalizeIncident(incident) : incident;
   }
 
   private recordSummary(summary: AndroidAppMonitorSummary): void {
@@ -201,8 +224,11 @@ function mapIncidentType(type: AndroidAppMonitorIncident["type"]): DeviceEvent["
   }
 }
 
-function isRuntimeFailureIncident(type: AndroidAppMonitorIncident["type"]): boolean {
-  return type === "java_crash" || type === "native_crash" || type === "anr" || type === "process_death";
+function isRuntimeFailureIncident(incident: AndroidAppMonitorIncident): boolean {
+  return incident.type === "java_crash"
+    || incident.type === "native_crash"
+    || incident.type === "anr"
+    || (incident.type === "process_death" && incident.severity === "error");
 }
 
 function formatIncidentDetail(incident: AndroidAppMonitorIncident): string | undefined {

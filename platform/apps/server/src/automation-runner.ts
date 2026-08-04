@@ -10,6 +10,7 @@ import {
   createId,
   nowIso,
   stepToAction,
+  type AndroidAppMonitorIncident,
   type ActionStep,
   type ArtifactRef,
   type DeviceActionResult,
@@ -92,6 +93,19 @@ type ActiveRun = {
   promise: Promise<void>;
   controller: RunExecutionController;
   deviceSerial: string;
+};
+
+type ExpectedProcessDeathWindow = {
+  packageName: string;
+  expiresAtMs: number;
+};
+
+type MarkExpectedProcessDeath = (packageName: string) => void;
+
+type ProcessEventLike = {
+  type: string;
+  summary: string;
+  processName?: string;
 };
 
 type PreconditionEvaluationOutcome = {
@@ -339,6 +353,13 @@ export class AutomationRunner {
     let runtimeFailure = false;
     let runtimeFailureEventType: DeviceEvent["type"] | undefined;
     let activeStepResultId: string | undefined;
+    let expectedProcessDeathWindow: ExpectedProcessDeathWindow | undefined;
+    const markExpectedProcessDeath: MarkExpectedProcessDeath = (packageName) => {
+      expectedProcessDeathWindow = {
+        packageName,
+        expiresAtMs: Date.now() + 5000
+      };
+    };
 
     try {
       controller.throwIfStopped();
@@ -356,6 +377,10 @@ export class AutomationRunner {
         markRuntimeFailure: () => {
           runtimeFailure = true;
         },
+        normalizeIncident: (incident) => normalizeAndroidAppMonitorIncident(incident, {
+          packageName: config.androidAppMonitor?.packageName,
+          expectedProcessDeathWindow
+        }),
         getActiveStepResultId: () => activeStepResultId
       });
       await appMonitor.start();
@@ -363,13 +388,21 @@ export class AutomationRunner {
         runId,
         config.deviceSerial,
         (event) => {
-          if (event.type === "crash" || event.type === "anr") {
+          const observed = normalizeObservedDeviceEvent(event, {
+            packageName: config.androidAppMonitor?.packageName ?? config.startAppPackageName,
+            expectedProcessDeathWindow
+          });
+          if (!observed) {
+            return undefined;
+          }
+          if (isRuntimeFailureObservedEvent(observed, config.androidAppMonitor?.packageName ?? config.startAppPackageName)) {
             runtimeFailure = true;
-            runtimeFailureEventType = event.type;
+            runtimeFailureEventType ??= observed.type;
             if (config.stopOnFailure) {
               controller.stop();
             }
           }
+          return observed;
         },
         (eventWrite) => pendingEventWrites.push(eventWrite),
         () => activeStepResultId,
@@ -410,7 +443,7 @@ export class AutomationRunner {
 
       controller.throwIfStopped();
       if (config.startSetupScope !== "before_each_iteration") {
-        await this.applyStartStrategy(runId, config);
+        await this.applyStartStrategy(runId, config, markExpectedProcessDeath);
       }
       await this.collectMetric(runId, config.deviceSerial);
       const loopSteps = stepsForLoopScope(testCase.steps, config);
@@ -421,14 +454,14 @@ export class AutomationRunner {
         controller,
         beforeIteration: async () => {
           if (config.startSetupScope === "before_each_iteration") {
-            await this.applyStartStrategy(runId, config);
+            await this.applyStartStrategy(runId, config, markExpectedProcessDeath);
           }
         },
         onStatusChange: (status) => this.storage.updateRunStatus(runId, status),
         executeStep: ({ iterationIndex, step, signal }) =>
           this.executeStep(runId, iterationIndex, step, config, deviceSize, signal, (stepResultId) => {
             activeStepResultId = stepResultId;
-          }, () => runtimeFailure, () => runtimeFailureEventType)
+          }, () => runtimeFailure, () => runtimeFailureEventType, markExpectedProcessDeath)
       });
       const result = await stateMachine.run();
       failed = result.failed || runtimeFailure;
@@ -472,7 +505,8 @@ export class AutomationRunner {
     signal: AbortSignal,
     setActiveStepResultId?: (stepResultId: string | undefined) => void,
     isRuntimeFailure?: () => boolean,
-    getRuntimeFailureEventType?: () => DeviceEvent["type"] | undefined
+    getRuntimeFailureEventType?: () => DeviceEvent["type"] | undefined,
+    markExpectedProcessDeath?: MarkExpectedProcessDeath
   ): Promise<StepResult> {
     if (step.timing?.delayBeforeMs) {
       await sleepInterruptibly(step.timing.delayBeforeMs, signal);
@@ -609,8 +643,12 @@ export class AutomationRunner {
           } else {
             const action = stepToAction(step, deviceSize);
             if (step.type === "launch_app" && step.params.restartBeforeLaunch === true && action.type === "launch_app") {
+              markExpectedProcessDeath?.(action.packageName);
               await this.driver.performAction(config.deviceSerial, { type: "close_app", packageName: action.packageName });
               await sleepInterruptibly(500, signal);
+            }
+            if (action.type === "close_app") {
+              markExpectedProcessDeath?.(action.packageName);
             }
             const actionResult = await this.driver.performAction(config.deviceSerial, action);
             result.metadata = mergeActionBackendMetadata(result.metadata, actionResult);
@@ -938,7 +976,7 @@ export class AutomationRunner {
     };
   }
 
-  private async applyStartStrategy(runId: string, config: RunConfig): Promise<void> {
+  private async applyStartStrategy(runId: string, config: RunConfig, markExpectedProcessDeath?: MarkExpectedProcessDeath): Promise<void> {
     const strategy = config.startStrategy ?? "keep_current";
     try {
       if (strategy === "keep_current") {
@@ -953,12 +991,14 @@ export class AutomationRunner {
         throw new Error(`${strategy} requires startAppPackageName`);
       }
       if (strategy === "restart_app") {
+        markExpectedProcessDeath?.(packageName);
         await this.driver.performAction(config.deviceSerial, { type: "close_app", packageName });
         await sleep(500);
         await this.driver.performAction(config.deviceSerial, { type: "launch_app", packageName });
         return;
       }
       if (strategy === "clear_data_and_launch") {
+        markExpectedProcessDeath?.(packageName);
         await this.driver.performAction(config.deviceSerial, { type: "close_app", packageName });
         await this.driver.clearAppData(config.deviceSerial, packageName);
         await sleep(500);
@@ -1003,7 +1043,7 @@ export class AutomationRunner {
   private async startEventWatcher(
     runId: string,
     serial: string,
-    onObservedEvent: (event: ObservedDeviceEvent) => void,
+    onObservedEvent: (event: ObservedDeviceEvent) => ObservedDeviceEvent | undefined,
     trackEventWrite?: (write: Promise<void>) => void,
     getActiveStepResultId?: () => string | undefined,
     since?: Date,
@@ -1014,8 +1054,11 @@ export class AutomationRunner {
     }
     try {
       return await this.driver.watchDeviceEvents(serial, (event) => {
-        onObservedEvent(event);
-        const eventWrite = this.recordObservedDeviceEvent(runId, serial, event, getActiveStepResultId?.()).catch((error) => {
+        const observed = onObservedEvent(event);
+        if (!observed) {
+          return;
+        }
+        const eventWrite = this.recordObservedDeviceEvent(runId, serial, observed, getActiveStepResultId?.()).catch((error) => {
           this.addDeviceEvent({
             id: createId("event"),
             runId,
@@ -1053,7 +1096,7 @@ export class AutomationRunner {
       ? await this.artifactService.writeLog(runId, `device-event-${observed.type}-${Date.now()}.txt`, observed.detail)
       : undefined;
     const screenshot =
-      observed.type === "crash" || observed.type === "anr"
+      shouldCaptureObservedEventScreenshot(observed)
         ? await this.artifactService.captureRunEventScreenshot(runId, stepResultId, observed.type, serial).catch(() => undefined)
         : undefined;
     this.addDeviceEvent({
@@ -1070,6 +1113,81 @@ export class AutomationRunner {
     });
   }
 
+}
+
+function normalizeObservedDeviceEvent(
+  event: ObservedDeviceEvent,
+  options: {
+    packageName?: string;
+    expectedProcessDeathWindow?: ExpectedProcessDeathWindow;
+  }
+): ObservedDeviceEvent | undefined {
+  if (isExpectedProcessDeath(event, options.expectedProcessDeathWindow)) {
+    return undefined;
+  }
+  if (event.type === "process_death" && isMainProcessDeath(event, options.packageName)) {
+    return { ...event, severity: "error" };
+  }
+  return event;
+}
+
+function normalizeAndroidAppMonitorIncident(
+  incident: AndroidAppMonitorIncident,
+  options: {
+    packageName?: string;
+    expectedProcessDeathWindow?: ExpectedProcessDeathWindow;
+  }
+): AndroidAppMonitorIncident | undefined {
+  if (incident.type !== "process_death") {
+    return incident;
+  }
+  if (isExpectedProcessDeath(incident, options.expectedProcessDeathWindow)) {
+    return undefined;
+  }
+  if (isMainProcessDeath(incident, options.packageName)) {
+    return { ...incident, severity: "error" };
+  }
+  return incident;
+}
+
+function isRuntimeFailureObservedEvent(event: ObservedDeviceEvent, packageName?: string): boolean {
+  if (event.type === "crash" || event.type === "native_crash" || event.type === "anr") {
+    return true;
+  }
+  return event.type === "process_death" && isMainProcessDeath(event, packageName);
+}
+
+function isExpectedProcessDeath(event: ProcessEventLike, window: ExpectedProcessDeathWindow | undefined): boolean {
+  if (event.type !== "process_death" || !window || Date.now() > window.expiresAtMs) {
+    return false;
+  }
+  return processBelongsToPackage(observedProcessName(event), window.packageName);
+}
+
+function isMainProcessDeath(event: Pick<ProcessEventLike, "summary" | "processName">, packageName: string | undefined): boolean {
+  const processName = observedProcessName(event);
+  if (!processName || !packageName) {
+    return false;
+  }
+  return processName === packageName;
+}
+
+function processBelongsToPackage(processName: string | undefined, packageName: string): boolean {
+  return processName === packageName || Boolean(processName?.startsWith(`${packageName}:`));
+}
+
+function observedProcessName(event: Pick<ProcessEventLike, "summary" | "processName">): string | undefined {
+  if (event.processName) {
+    return event.processName;
+  }
+  return event.summary.match(/Process death detected:\s*([^\s]+)/)?.[1];
+}
+
+function shouldCaptureObservedEventScreenshot(event: ObservedDeviceEvent): boolean {
+  return event.type === "crash"
+    || event.type === "native_crash"
+    || event.type === "anr"
+    || (event.type === "process_death" && event.severity === "error");
 }
 
 function runtimeFailureMessage(eventType: DeviceEvent["type"] | undefined): string {

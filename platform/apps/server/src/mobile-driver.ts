@@ -25,6 +25,8 @@ export type MobileAppMonitorSession = Pick<AndroidAppMonitorSession, "start" | "
 export type ObservedDeviceEvent = Pick<DeviceEvent, "type" | "severity" | "summary"> & {
   occurredAt?: string;
   detail?: string;
+  processName?: string;
+  pid?: number;
 };
 
 export type DeviceEventWatcher = {

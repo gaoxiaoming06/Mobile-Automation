@@ -7,6 +7,7 @@ import {
   type ActionStep,
   type AndroidAppMonitorConfig,
   type AndroidAppMonitorIncident,
+  type AndroidAppMonitorSummary,
   type AndroidProcessLifecycleEvent,
   type AndroidProcessMetricSample,
   type ArtifactRef,
@@ -1212,6 +1213,204 @@ describe("AutomationRunner regression flow", () => {
     expect(driver.watchOptions).toEqual(expect.objectContaining({ packageName: "demo.app" }));
   });
 
+  it("records watched Android native crash events and fails the run", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new EventMockDriver({
+      type: "native_crash",
+      severity: "error",
+      occurredAt: new Date().toISOString(),
+      summary: "Native crash detected: demo.app",
+      detail: "Fatal signal 11 (SIGSEGV)",
+      processName: "demo.app",
+      pid: 1234
+    });
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Native Crash Flow",
+      steps: [
+        driver.createTapStep(120, 240),
+        {
+          ...driver.createTapStep(220, 340),
+          id: "step-2",
+          order: 2
+        }
+      ],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startAppPackageName: "demo.app"
+    });
+
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(run.stepResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "failed",
+          errorCode: "DEVICE_EVENT_FAILED",
+          errorMessage: "Run stopped after Android app native crash event."
+        })
+      ])
+    );
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "native_crash",
+          severity: "error",
+          summary: "Native crash detected: demo.app"
+        })
+      ])
+    );
+    expect(run.artifacts.some((artifact) => artifact.type === "log" && artifact.name.includes("device-event-native_crash"))).toBe(true);
+    expect(run.artifacts.some((artifact) => artifact.type === "screenshot" && artifact.name.includes("native_crash"))).toBe(true);
+  });
+
+  it("fails the run when the main app process dies during a business step", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new EventMockDriver({
+      type: "process_death",
+      severity: "warning",
+      occurredAt: new Date().toISOString(),
+      summary: "Process death detected: demo.app",
+      detail: "ActivityManager: Process demo.app (pid 1234) has died",
+      processName: "demo.app",
+      pid: 1234
+    });
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Process Death Flow",
+      steps: [
+        driver.createTapStep(120, 240),
+        {
+          ...driver.createTapStep(220, 340),
+          id: "step-2",
+          order: 2
+        }
+      ],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startAppPackageName: "demo.app"
+    });
+
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(run.stepResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "failed",
+          errorCode: "DEVICE_EVENT_FAILED",
+          errorMessage: "Run stopped after Android app process death event."
+        })
+      ])
+    );
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "process_death",
+          severity: "error",
+          summary: "Process death detected: demo.app"
+        })
+      ])
+    );
+    expect(run.artifacts.some((artifact) => artifact.type === "log" && artifact.name.includes("device-event-process_death"))).toBe(true);
+    expect(run.artifacts.some((artifact) => artifact.type === "screenshot" && artifact.name.includes("process_death"))).toBe(true);
+  });
+
+  it("does not record process deaths caused by a restart launch step as abnormal events", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new RestartProcessDeathMockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const launchStep: ActionStep = {
+      id: "launch",
+      order: 1,
+      type: "launch_app",
+      enabled: true,
+      title: "重启 App",
+      params: {
+        packageName: "demo.app",
+        restartBeforeLaunch: true
+      },
+      createdAt: nowIso()
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Restart Flow",
+      steps: [
+        launchStep,
+        {
+          ...driver.createTapStep(220, 340),
+          id: "step-2",
+          order: 2
+        }
+      ],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startAppPackageName: "demo.app"
+    });
+
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "close_app", packageName: "demo.app" },
+      { type: "launch_app", packageName: "demo.app" },
+      { type: "tap", x: 220, y: 340 }
+    ]);
+    expect(run.events.filter((event) => event.type === "process_death")).toEqual([]);
+  });
+
+  it("does not fail android app monitor runs for process deaths caused by a restart launch step", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new AppMonitorRestartProcessDeathMockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver);
+    const launchStep: ActionStep = {
+      id: "launch",
+      order: 1,
+      type: "launch_app",
+      enabled: true,
+      title: "重启 App",
+      params: {
+        packageName: "demo.app",
+        restartBeforeLaunch: true
+      },
+      createdAt: nowIso()
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Restart With Monitor Flow",
+      steps: [
+        launchStep,
+        {
+          ...driver.createTapStep(220, 340),
+          id: "step-2",
+          order: 2
+        }
+      ],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startAppPackageName: "demo.app",
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "demo.app"
+      }
+    });
+
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(run.events.filter((event) => event.type === "process_death")).toEqual([]);
+    expect(run.events.filter((event) => event.severity !== "info")).toEqual([]);
+  });
+
   it("passes no_crash and app_alive expectations after a successful step", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
@@ -2307,9 +2506,19 @@ class SequenceUiHierarchyMockDriver extends MockDriver {
 }
 
 class EventMockDriver extends MockDriver {
-  private eventListener?: (event: ObservedDeviceEvent) => void;
+  protected eventListener?: (event: ObservedDeviceEvent) => void;
   private emittedCrash = false;
   watchOptions?: { since?: Date; packageName?: string };
+
+  constructor(private readonly event: ObservedDeviceEvent = {
+    type: "crash",
+    severity: "error",
+    occurredAt: new Date().toISOString(),
+    summary: "Android crash detected",
+    detail: "FATAL EXCEPTION: main\nProcess: demo.app"
+  }) {
+    super();
+  }
 
   async watchDeviceEvents(
     _serial: string,
@@ -2327,15 +2536,129 @@ class EventMockDriver extends MockDriver {
     const result = await super.performAction(serial, action);
     if (!this.emittedCrash) {
       this.emittedCrash = true;
+      this.eventListener?.(this.event);
+    }
+    return result;
+  }
+}
+
+class RestartProcessDeathMockDriver extends MockDriver {
+  private eventListener?: (event: ObservedDeviceEvent) => void;
+
+  async watchDeviceEvents(
+    _serial: string,
+    onEvent: (event: ObservedDeviceEvent) => void,
+    options?: { since?: Date; packageName?: string }
+  ): Promise<DeviceEventWatcher> {
+    this.eventListener = onEvent;
+    return {
+      stop: async () => undefined
+    };
+  }
+
+  override async performAction(serial: string, action: Parameters<MockDriver["performAction"]>[1]): ReturnType<MockDriver["performAction"]> {
+    const result = await super.performAction(serial, action);
+    if (action.type === "close_app") {
       this.eventListener?.({
-        type: "crash",
-        severity: "error",
+        type: "process_death",
+        severity: "warning",
         occurredAt: new Date().toISOString(),
-        summary: "Android crash detected",
-        detail: "FATAL EXCEPTION: main\nProcess: demo.app"
+        summary: `Process death detected: ${action.packageName}`,
+        detail: `ActivityManager: Process ${action.packageName} (pid 1234) has died`,
+        processName: action.packageName,
+        pid: 1234
+      });
+      this.eventListener?.({
+        type: "process_death",
+        severity: "warning",
+        occurredAt: new Date().toISOString(),
+        summary: `Process death detected: ${action.packageName}:worker`,
+        detail: `ActivityManager: Killing 2345:${action.packageName}:worker/u0a123`,
+        processName: `${action.packageName}:worker`,
+        pid: 2345
       });
     }
     return result;
+  }
+}
+
+class AppMonitorRestartProcessDeathMockDriver extends MockDriver {
+  private monitorCallbacks?: {
+    onLifecycleEvent?: (event: AndroidProcessLifecycleEvent) => void | Promise<void>;
+    onIncident?: (incident: AndroidAppMonitorIncident) => void | Promise<void>;
+  };
+  private monitorConfig?: AndroidAppMonitorConfig;
+  private readonly monitorIncidents: AndroidAppMonitorIncident[] = [];
+
+  async startAppMonitor(
+    serial: string,
+    runId: string,
+    config: AndroidAppMonitorConfig,
+    _writeTextArtifact: (runId: string, fileName: string, content: string) => Promise<{ id: string }>,
+    callbacks: {
+      onLifecycleEvent?: (event: AndroidProcessLifecycleEvent) => void | Promise<void>;
+      onIncident?: (incident: AndroidAppMonitorIncident) => void | Promise<void>;
+    } = {}
+  ): Promise<MobileAppMonitorSession> {
+    this.monitorCallbacks = callbacks;
+    this.monitorConfig = config;
+    return {
+      start: async () => {
+        await callbacks.onLifecycleEvent?.({
+          occurredAt: nowIso(),
+          type: "process_started",
+          pid: 123,
+          processName: config.packageName
+        });
+      },
+      stop: async () => this.getMonitorSummary(),
+      getSummary: () => this.getMonitorSummary()
+    };
+  }
+
+  override async performAction(serial: string, action: Parameters<MockDriver["performAction"]>[1]): ReturnType<MockDriver["performAction"]> {
+    const result = await super.performAction(serial, action);
+    if (action.type === "close_app") {
+      const incident: AndroidAppMonitorIncident = {
+        id: "incident-process-death",
+        type: "process_death",
+        severity: "warning",
+        occurredAt: nowIso(),
+        processName: action.packageName,
+        pid: 1234,
+        summary: `Process death detected: ${action.packageName}`,
+        detail: `ActivityManager: Process ${action.packageName} (pid 1234) has died`,
+        artifactIds: []
+      };
+      this.monitorIncidents.push(incident);
+      await this.monitorCallbacks?.onIncident?.(incident);
+    }
+    return result;
+  }
+
+  private getMonitorSummary(): AndroidAppMonitorSummary {
+    const packageName = this.monitorConfig?.packageName ?? "demo.app";
+    return {
+      packageName,
+      startedAt: "2026-06-09T00:00:00.000Z",
+      endedAt: "2026-06-09T00:00:02.000Z",
+      processes: [
+        {
+          pid: 123,
+          processName: packageName,
+          packageName,
+          isMainProcess: true,
+          discoveredAt: "2026-06-09T00:00:00.000Z"
+        }
+      ],
+      sampleCounts: {
+        cpu: 0,
+        memory: 0,
+        lifecycle: 1
+      },
+      incidents: this.monitorIncidents,
+      artifacts: {}
+    };
   }
 }
 
