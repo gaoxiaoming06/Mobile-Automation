@@ -65,9 +65,7 @@ export class ScriptTargetResolver {
       .filter((candidate) => candidate.platform === input.platform)
       .sort((left, right) => right.confidence - left.confidence)[0];
     if (!variant) {
-      throw new ScriptTargetResolutionError(
-        `Interaction asset ${asset.key} has no ${input.platform} locator variant`
-      );
+      return this.resolveUnbound({ ...input, interactionAsset: undefined });
     }
     const target = targetFromInteractionAsset(input.target, asset, variant.descriptor);
     const resolved = this.resolveUnbound({ ...input, target, interactionAsset: undefined });
@@ -289,14 +287,21 @@ export class ScriptTargetResolver {
   }
 }
 
-function runtimePickerMode(targetText: string, selectedValue: string): "duration_hours_minutes" | undefined {
+function runtimePickerMode(targetText: string, selectedValue: string): "duration_hours_minutes" | "date_time" | undefined {
   const compactTarget = targetText.toLowerCase().replace(/\s+/g, "");
+  const normalizedValue = selectedValue.trim().toLowerCase().replace(/\s+/g, " ");
   const compactValue = selectedValue.replace(/\s+/g, "");
-  const durationValue = /^(?:(\d+)小时)?(?:(\d+)分钟)?$/u.exec(compactValue);
-  if (!durationValue || (!durationValue[1] && !durationValue[2])) return undefined;
-  return /时长|持续时间|duration/u.test(compactTarget) || Boolean(durationValue[1] && durationValue[2])
-    ? "duration_hours_minutes"
-    : undefined;
+  const durationValue = /^(?:(\d+)(?:小时|时))?(?:(\d+)(?:分钟|分))?$/u.exec(compactValue);
+  if (durationValue && (durationValue[1] || durationValue[2])) {
+    return /时长|持续时间|duration/u.test(compactTarget) || Boolean(durationValue[1] && durationValue[2])
+      ? "duration_hours_minutes"
+      : undefined;
+  }
+  const dateTimeValue = /^(?:current|now|当前时间|\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?(?:[t\s]+\d{1,2}[:：]\d{2})?)$/iu.test(normalizedValue);
+  if (dateTimeValue && /开始时间|结束时间|上课时间|下课时间|开课时间|时间|日期|date|time/u.test(compactTarget)) {
+    return "date_time";
+  }
+  return undefined;
 }
 
 function validateInteractionAsset(input: ScriptTargetResolutionInput, asset: InteractionAsset): void {

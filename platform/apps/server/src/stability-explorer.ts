@@ -10,7 +10,8 @@ import {
   type RunConfig,
   type StepResult,
   type RuntimeFlow,
-  type TestRun
+  type TestRun,
+  type Platform
 } from "@mobile-automation/shared";
 import type { Observation } from "@mobile-automation/graph-core";
 import type { AutomationDeviceDriver, DeviceEventWatcher, ObservedDeviceEvent } from "./mobile-driver.js";
@@ -76,7 +77,7 @@ export type StabilityExplorerStorage = RunArtifactStorage & {
   addMetricSample(sample: MetricSample): void;
   addDeviceEvent(event: DeviceEvent): void;
   listRunIdsByStatus(status: TestRun["status"]): string[];
-  listRuntimeInterceptorRules?(filter?: { enabledOnly?: boolean; platform?: "android" | "ios"; appPackageName?: string; iosBundleId?: string }): RuntimeInterceptorRule[];
+  listRuntimeInterceptorRules?(filter?: { enabledOnly?: boolean; platform?: Platform; appPackageName?: string; iosBundleId?: string }): RuntimeInterceptorRule[];
 };
 
 type ActiveStabilityRun = {

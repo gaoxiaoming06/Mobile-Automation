@@ -1,6 +1,7 @@
 import { DatabaseZap, RefreshCw, Save, Sparkles } from "lucide-react";
 import { useRef, useState } from "react";
 import type { PointerEvent, ReactNode } from "react";
+import type { DeviceInfo } from "@mobile-automation/shared";
 
 export type AssetRecordingSavedAsset = {
   id: string;
@@ -80,7 +81,7 @@ export type AssetRecordingPanelProps = {
   aiIdentifying?: boolean;
   onSaveCurrentPageAsset: (mode: "create" | "update") => void | Promise<void>;
   libraryInitialization?: {
-    platform: "android" | "ios";
+    platform: DeviceInfo["platform"];
     targetIdentifier: string;
     defaultName: string;
   };
@@ -314,7 +315,7 @@ export function AssetRecordingPanel({
               </div>
             </div>
             <div className="asset-facts compact">
-              <div><span>平台</span><strong>{libraryInitialization.platform === "android" ? "Android" : "iOS"}</strong></div>
+              <div><span>平台</span><strong>{assetRecordingPlatformLabel(libraryInitialization.platform)}</strong></div>
               <div><span>App 标识</span><strong>{libraryInitialization.targetIdentifier}</strong></div>
             </div>
             <label className="asset-initialization-name">
@@ -556,6 +557,12 @@ export function AssetRecordingPanel({
       </div>
     </section>
   );
+}
+
+function assetRecordingPlatformLabel(platform: DeviceInfo["platform"]): string {
+  if (platform === "ios") return "iOS";
+  if (platform === "harmony") return "HarmonyOS";
+  return "Android";
 }
 
 function pointerToPercent(event: PointerEvent<HTMLDivElement>, imageLayer: HTMLElement | null): { x: number; y: number } {

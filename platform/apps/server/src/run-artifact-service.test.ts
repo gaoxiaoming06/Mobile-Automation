@@ -18,14 +18,15 @@ afterEach(async () => {
 describe("RunArtifactService", () => {
   it("captures screenshots and persists artifact metadata", async () => {
     const storage = new MemoryArtifactStorage();
+    const png = pngBuffer();
     const service = new RunArtifactService(storage, {
-      screenshot: async () => Buffer.from("png"),
+      screenshot: async () => png,
       stopVideoRecording: async () => undefined
     });
 
     const capture = await service.captureStepScreenshotWithBytes("run-1", "step-result-1", 0, 1, "device-1", "after");
 
-    expect(capture.png).toEqual(Buffer.from("png"));
+    expect(capture.png).toEqual(png);
     expect(capture.artifact).toEqual(
       expect.objectContaining({
         runId: "run-1",
@@ -38,10 +39,58 @@ describe("RunArtifactService", () => {
     expect(storage.writes[0]?.relativePath).toContain("runs/run-1/screenshots/");
   });
 
+  it("retries empty screenshots before writing an artifact", async () => {
+    const storage = new MemoryArtifactStorage();
+    const png = pngBuffer();
+    let attempts = 0;
+    const service = new RunArtifactService(
+      storage,
+      {
+        screenshot: async () => {
+          attempts += 1;
+          return attempts === 1 ? Buffer.alloc(0) : png;
+        },
+        stopVideoRecording: async () => undefined
+      },
+      { screenshotRetryDelayMs: 0 }
+    );
+
+    const capture = await service.captureLocatorScreenshot("run-1", "step-result-1", "device-1", "select-duration", 1);
+
+    expect(attempts).toBe(2);
+    expect(capture.png).toEqual(png);
+    expect(storage.artifacts).toHaveLength(1);
+    expect(storage.artifacts[0]?.sizeBytes).toBe(png.byteLength);
+    expect(storage.writes).toEqual([expect.objectContaining({ bytes: png })]);
+  });
+
+  it("rejects invalid screenshots after retrying without writing an artifact", async () => {
+    const storage = new MemoryArtifactStorage();
+    let attempts = 0;
+    const service = new RunArtifactService(
+      storage,
+      {
+        screenshot: async () => {
+          attempts += 1;
+          return attempts === 1 ? Buffer.alloc(0) : Buffer.from("not-a-png");
+        },
+        stopVideoRecording: async () => undefined
+      },
+      { screenshotRetryDelayMs: 0 }
+    );
+
+    await expect(service.captureLocatorScreenshot("run-1", "step-result-1", "device-1", "select-duration", 1)).rejects.toThrow(
+      "Invalid screenshot captured from device device-1 after 3 attempts"
+    );
+    expect(attempts).toBe(3);
+    expect(storage.artifacts).toEqual([]);
+    expect(storage.writes).toEqual([]);
+  });
+
   it("writes logs and stores them as log artifacts", async () => {
     const storage = new MemoryArtifactStorage();
     const service = new RunArtifactService(storage, {
-      screenshot: async () => Buffer.from("png"),
+      screenshot: async () => pngBuffer(),
       stopVideoRecording: async () => undefined
     });
 
@@ -61,7 +110,7 @@ describe("RunArtifactService", () => {
   it("writes android app monitor CSV and summary JSON artifacts", async () => {
     const storage = new MemoryArtifactStorage();
     const service = new RunArtifactService(storage, {
-      screenshot: async () => Buffer.from("png"),
+      screenshot: async () => pngBuffer(),
       stopVideoRecording: async () => undefined
     });
 
@@ -108,7 +157,7 @@ describe("RunArtifactService", () => {
     await writeFile(videoPath, "video");
     const storage = new MemoryArtifactStorage();
     const service = new RunArtifactService(storage, {
-      screenshot: async () => Buffer.from("png"),
+      screenshot: async () => pngBuffer(),
       stopVideoRecording: async () => videoPath
     });
 
@@ -149,7 +198,7 @@ describe("RunArtifactService", () => {
       endedAt: "2026-06-09T00:00:01.000Z"
     };
     const service = new RunArtifactService(storage, {
-      screenshot: async () => Buffer.from("png"),
+      screenshot: async () => pngBuffer(),
       stopVideoRecording: async () => undefined
     });
 
@@ -172,7 +221,7 @@ describe("RunArtifactService", () => {
     await writeFile(videoPath, "video");
     const storage = new MemoryArtifactStorage();
     const service = new RunArtifactService(storage, {
-      screenshot: async () => Buffer.from("png"),
+      screenshot: async () => pngBuffer(),
       stopVideoRecording: async () => {
         throw new Error("stop failed");
       }
@@ -219,4 +268,12 @@ function videoRecording(localPath: string): MobileVideoRecording {
     localPath,
     startedAt: "2026-06-09T00:00:00.000Z"
   };
+}
+
+function pngBuffer(width = 1, height = 1): Buffer {
+  const buffer = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer, 0);
+  buffer.writeUInt32BE(width, 16);
+  buffer.writeUInt32BE(height, 20);
+  return buffer;
 }

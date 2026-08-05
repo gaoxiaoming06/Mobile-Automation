@@ -85,7 +85,7 @@ export function PreviewPanel({
 
   const previewStatus = formatPreviewStatus(previewMode, scrcpyStreamStatus, selectedDevice);
   const selectedDeviceMeta = selectedDevice
-    ? `${selectedDevice.platform === "ios" ? "iOS" : "Android"}${selectedDevice.osVersion ? ` ${selectedDevice.osVersion}` : ""}${
+    ? `${devicePlatformLabel(selectedDevice.platform)}${selectedDevice.osVersion ? ` ${selectedDevice.osVersion}` : ""}${
         selectedDevice.resolution ? ` · ${selectedDevice.resolution.width} x ${selectedDevice.resolution.height}` : ""
       }`
     : "请选择设备";
@@ -257,8 +257,14 @@ function formatPreviewStatus(previewMode: PreviewMode, rawStatus: string, select
 }
 
 function formatDeviceSwitchMeta(device: DeviceInfo): string {
-  const platform = device.platform === "ios" ? "iOS" : "Android";
+  const platform = devicePlatformLabel(device.platform);
   const version = device.osVersion ? ` ${device.osVersion}` : "";
   const status = device.status === "online" ? "在线" : device.status;
   return `${platform}${version} · ${status} · ${device.serial}`;
+}
+
+export function devicePlatformLabel(platform: DeviceInfo["platform"]): string {
+  if (platform === "ios") return "iOS";
+  if (platform === "harmony") return "HarmonyOS";
+  return "Android";
 }

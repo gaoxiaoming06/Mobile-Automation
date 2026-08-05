@@ -26,7 +26,7 @@ describe("ScriptFlow AI API", () => {
       body: JSON.stringify({ prompt: "打开班级详情", appId: "cn.eeo.classin", platform: "android" })
     });
     expect(response.status).toBe(200);
-    expect(generateDraft).toHaveBeenCalledWith({ prompt: "打开班级详情", appId: "cn.eeo.classin", platform: "android" });
+    expect(generateDraft).toHaveBeenCalledWith({ prompt: "打开班级详情", appId: "classin", platform: "android" });
 
     const bypass = await fetch(`${baseUrl}/api/script-flow-drafts/generate`, {
       method: "POST",
@@ -63,7 +63,7 @@ describe("ScriptFlow AI API", () => {
     expect(response.status).toBe(200);
     expect(generateDraft).toHaveBeenCalledWith({
       prompt: "把当前页第一个输入框改成自动化课堂",
-      appId: "cn.eeo.classin",
+      appId: "classin",
       platform: "android",
       screenAssist: { mode: "current", deviceSerial: "device-1" }
     });

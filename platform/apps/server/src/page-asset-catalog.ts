@@ -1,6 +1,7 @@
 import type { BusinessGraph, BusinessGraphVersion, BusinessNode, PlatformScope, StateMatcher } from "@mobile-automation/graph-core";
+import type { Platform } from "@mobile-automation/shared";
 
-export type PageAssetPlatform = "android" | "ios" | "harmony" | "flutter";
+export type PageAssetPlatform = Platform | "flutter" | "mobile";
 
 export type PageAssetSummary = {
   id: string;
@@ -107,6 +108,9 @@ function isConfirmedPage(node: BusinessNode): boolean {
 function supportsPlatform(scope: PlatformScope | undefined, platform: PageAssetPlatform): boolean {
   if (!scope || scope === "mobile-both") {
     return true;
+  }
+  if (platform === "mobile" || platform === "flutter") {
+    return false;
   }
   return scope === platform;
 }

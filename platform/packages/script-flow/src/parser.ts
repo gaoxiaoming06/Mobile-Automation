@@ -3,7 +3,6 @@ import type {
   ScriptFlowDocument,
   ScriptFlowKind,
   ScriptFlowPurpose,
-  ScriptFlowPlatform,
   ScriptFlowState,
   ScriptFlowStartStrategy,
   ScriptFlowTestLevel,
@@ -174,11 +173,7 @@ function readApp(value: unknown, issues: ScriptFlowValidationIssue[]): ScriptFlo
   const app = recordAt(value, "app", issues);
   rejectUnknownFields(app, new Set(["id", "platform"]), "app", issues);
   const id = requiredString(app.id, "app.id", issues);
-  const platform = requiredString(app.platform, "app.platform", issues);
-  if (!isScriptPlatform(platform)) {
-    issues.push({ path: "app.platform", message: "Platform must be android, ios, harmony, or flutter" });
-  }
-  return { id, platform: isScriptPlatform(platform) ? platform : "android" };
+  return { id };
 }
 
 function readStart(value: unknown, issues: ScriptFlowValidationIssue[]): ScriptFlowDocument["start"] | undefined {
@@ -927,10 +922,6 @@ function readStringArray(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isScriptPlatform(value: string): value is ScriptFlowPlatform {
-  return value === "android" || value === "ios" || value === "harmony" || value === "flutter";
 }
 
 function isStartStrategy(value: string): value is ScriptFlowStartStrategy {

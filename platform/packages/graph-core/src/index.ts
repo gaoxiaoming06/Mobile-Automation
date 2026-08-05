@@ -413,7 +413,7 @@ function isChangedImageRegionCoveredByOtherPageAnchors(result: MatcherResult, ma
 }
 
 function isImageRegionCoveredByMatchedSemanticRegion(result: MatcherResult, matchedSemanticImageRegions: MatcherResult[]): boolean {
-  return result.type === "image_region" && !result.critical && !result.matched && Boolean(result.region) && matchedSemanticImageRegions.some((semanticRegion) => semanticRegion.region && rectsNearlyEqual(result.region!, semanticRegion.region));
+  return result.type === "image_region" && !result.matched && Boolean(result.region) && matchedSemanticImageRegions.some((semanticRegion) => semanticRegion.region && rectsNearlyEqual(result.region!, semanticRegion.region));
 }
 
 function isImageRegionMatcherType(type: StateMatcher["type"]): boolean {

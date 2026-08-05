@@ -46,6 +46,34 @@ describe("Page asset library API", () => {
     });
   });
 
+  it("creates a HarmonyOS product-scoped library with the runtime bundle in the target profile", async () => {
+    const context = await apiContext(servers);
+
+    const response = await post(context.baseUrl, "/api/page-assets", {
+      appId: "classin",
+      name: "ClassIn 页面资产",
+      platform: "harmony",
+      targetIdentifier: "com.eeo.classin.harmony"
+    });
+
+    expect(response.status).toBe(201);
+    expect(context.storage.createdInputs).toEqual([{
+      appId: "classin",
+      name: "ClassIn 页面资产",
+      targetApp: {
+        productId: "classin",
+        productName: "ClassIn 页面资产",
+        profiles: [{
+          id: "harmony:com.eeo.classin.harmony",
+          platform: "harmony",
+          displayName: "ClassIn 页面资产 HarmonyOS",
+          harmonyBundleName: "com.eeo.classin.harmony",
+          isPrimary: true
+        }]
+      }
+    }]);
+  });
+
   it("rejects duplicate target apps and unknown request fields", async () => {
     const context = await apiContext(servers);
     await post(context.baseUrl, "/api/page-assets", {

@@ -1,4 +1,4 @@
-export type Platform = "android" | "ios";
+export type Platform = "android" | "ios" | "harmony";
 
 export * from "./public-execution-failure.js";
 
@@ -162,6 +162,7 @@ export type RuntimeFlow = {
   targetApp?: {
     androidPackageName?: string;
     iosBundleId?: string;
+    harmonyBundleId?: string;
   };
   tags: string[];
   version: number;
@@ -190,7 +191,9 @@ export type InstalledAppInfo = {
 };
 
 
-export type ScriptFlowPlatform = "android" | "ios" | "harmony" | "flutter";
+export const CROSS_PLATFORM_SCRIPT_SCOPE = "mobile" as const;
+
+export type ScriptFlowPlatform = Platform | "flutter" | typeof CROSS_PLATFORM_SCRIPT_SCOPE;
 
 export type ScriptFlowStatus = "draft" | "active" | "archived";
 
@@ -704,6 +707,7 @@ export type TestRun = {
     flowId: string;
     version: number;
     planDigest: string;
+    executionPlatform?: Platform;
     executionPurpose?: ScriptFlowExecutionPurpose;
     sourceHash?: string;
     verificationAssessment?: ScriptFlowVerificationAssessment;
@@ -825,7 +829,7 @@ export type DeviceActionRequest =
   | { type: "launch_app"; packageName: string }
   | { type: "close_app"; packageName: string };
 
-export type DriverChannel = "adb_input" | "uiautomator2" | "appium" | "scrcpy_control" | "mock";
+export type DriverChannel = "adb_input" | "uiautomator2" | "appium" | "scrcpy_control" | "hdc_input" | "mock";
 
 export type SemanticElementLocator = {
   strategy?: "android_uiautomator";
@@ -956,6 +960,36 @@ export function defaultIosCapabilities(options: { screenshot?: boolean; control?
       crash: false,
       anr: false,
       logs: false
+    }
+  };
+}
+
+export function defaultHarmonyCapabilities(): DeviceCapabilities {
+  return {
+    preview: true,
+    tap: true,
+    longPress: true,
+    swipe: true,
+    back: true,
+    home: true,
+    recentApps: false,
+    textInput: true,
+    screenshot: true,
+    launchApp: true,
+    closeApp: true,
+    recordVideo: false,
+    metrics: {
+      cpu: false,
+      memory: false,
+      fps: false,
+      network: false,
+      battery: false,
+      temperature: false
+    },
+    events: {
+      crash: false,
+      anr: false,
+      logs: true
     }
   };
 }

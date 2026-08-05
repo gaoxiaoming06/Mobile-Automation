@@ -1605,7 +1605,7 @@ describe("ScriptFlow AI planner", () => {
       purpose: "business",
       testLevel: "component",
       name: "设置课堂时长",
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       parameters: {},
       steps: [{
         id: "select-duration",
@@ -1681,7 +1681,7 @@ describe("ScriptFlow AI planner", () => {
         purpose: "navigation",
         testLevel: "business_smoke",
         name: "进入主页",
-        app: { id: "cn.eeo.classin", platform: "android" },
+        app: { id: "cn.eeo.classin" },
         parameters: {},
         steps: [{ role: "assertion", action: "assertPage", page: "classin.home" }],
         tags: ["ai-generated"]
@@ -2297,7 +2297,7 @@ function readyResponse(): {
       purpose: "navigation" as const,
       testLevel: "business_smoke" as const,
       name: "打开添加好友",
-      app: { id: "cn.eeo.classin", platform: "android" as const },
+      app: { id: "cn.eeo.classin" },
       start: { strategy: "keepCurrent" as const },
       parameters: {},
       steps: [
@@ -2547,7 +2547,7 @@ function planningFlows(): ScriptFlow[] {
         version: 1,
         kind: "case",
         name: "教师登录",
-        app: { id: "cn.eeo.classin", platform: "android" },
+        app: { id: "cn.eeo.classin" },
         entry: { page: "classin.login", session: "unauthenticated" },
         outcome: { page: "classin.home", session: "authenticated", role: "teacher" },
         parameters: {
@@ -2566,7 +2566,7 @@ function planningFlows(): ScriptFlow[] {
         version: 1,
         kind: "case",
         name: "进入新建课堂",
-        app: { id: "cn.eeo.classin", platform: "android" },
+        app: { id: "cn.eeo.classin" },
         entry: { page: "classin.home", session: "authenticated", role: "teacher" },
         outcome: { page: "classin.lesson.create", session: "authenticated", role: "teacher" },
         parameters: {

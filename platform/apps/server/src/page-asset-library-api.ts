@@ -7,7 +7,7 @@ export type PageAssetLibraryApiStorage = Pick<
   "listBusinessGraphs" | "createPageAssetLibrary" | "getBusinessGraphVersionSummary"
 >;
 
-type SupportedPlatform = "android" | "ios";
+type SupportedPlatform = "android" | "ios" | "harmony";
 
 export function registerPageAssetLibraryRoutes(
   app: express.Application,
@@ -56,8 +56,8 @@ function readCreateInput(body: unknown): {
   const appId = requiredString(record.appId, "appId");
   const name = requiredString(record.name, "name");
   const platform = record.platform;
-  if (platform !== "android" && platform !== "ios") {
-    throw new RequestError("platform must be android or ios");
+  if (platform !== "android" && platform !== "ios" && platform !== "harmony") {
+    throw new RequestError("platform must be android, ios, or harmony");
   }
   const targetIdentifier = requiredString(record.targetIdentifier, "targetIdentifier");
   return { appId, name, platform, targetIdentifier };
@@ -79,10 +79,10 @@ function targetProfile(input: ReturnType<typeof readCreateInput>): GraphTargetPr
   return {
     id: `${input.platform}:${input.targetIdentifier}`,
     platform: input.platform,
-    displayName: `${input.name} ${input.platform === "android" ? "Android" : "iOS"}`,
-    ...(input.platform === "android"
-      ? { androidPackageName: input.targetIdentifier }
-      : { iosBundleId: input.targetIdentifier }),
+    displayName: `${input.name} ${platformDisplayName(input.platform)}`,
+    ...(input.platform === "android" ? { androidPackageName: input.targetIdentifier } : {}),
+    ...(input.platform === "ios" ? { iosBundleId: input.targetIdentifier } : {}),
+    ...(input.platform === "harmony" ? { harmonyBundleName: input.targetIdentifier } : {}),
     isPrimary: true
   };
 }
@@ -92,9 +92,21 @@ function libraryOwnsTarget(library: BusinessGraph, platform: SupportedPlatform, 
     if (profile.platform !== platform) {
       return false;
     }
-    const identifier = platform === "android" ? profile.androidPackageName : profile.iosBundleId;
+    const identifier = profileIdentifier(profile, platform);
     return normalize(identifier) === normalize(targetIdentifier);
   });
+}
+
+function platformDisplayName(platform: SupportedPlatform): string {
+  if (platform === "android") return "Android";
+  if (platform === "ios") return "iOS";
+  return "HarmonyOS";
+}
+
+function profileIdentifier(profile: GraphTargetProfile, platform: SupportedPlatform): string | undefined {
+  if (platform === "android") return profile.androidPackageName;
+  if (platform === "ios") return profile.iosBundleId;
+  return profile.harmonyBundleName;
 }
 
 function libraryResponse(graph: BusinessGraph, storage: PageAssetLibraryApiStorage): BusinessGraph & {

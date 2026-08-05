@@ -7,7 +7,7 @@ export type CaseDocumentView = {
   testLevel?: "probe" | "component" | "business_smoke" | "full_regression";
   name: string;
   description?: string;
-  app: { id: string; platform: string };
+  app: { id: string };
   start?: { strategy: "keepCurrent" | "goHome" | "launchApp" | "restartApp" | "clearDataAndLaunch" };
   entry?: { page?: string; session?: "authenticated" | "unauthenticated"; role?: string };
   outcome?: { page?: string; session?: "authenticated" | "unauthenticated"; role?: string };

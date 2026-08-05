@@ -3664,6 +3664,66 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("selects abbreviated minute labels in a duration picker", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        durationPickerLayout("7小时", "0分", "5分"),
+        durationPickerLayout("7小时", "0分", "5分"),
+        durationPickerLayout("7小时", "20分", "25分"),
+        {
+          text: "确定",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "确定", confidence: 0.99, x: 820, y: 1120, width: 100, height: 55 }
+          ]
+        },
+        fieldValueLayout("课堂时长", "7小时20分钟")
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-abbrev-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-abbrev",
+      stepResultId: "step-result-abbrev",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        region: { x: 8, y: 38, width: 84, height: 7 },
+        fieldType: "picker_select",
+        targetText: "课堂时长",
+        selectedValue: "7小时20分",
+        confirmText: "确定",
+        verifySelectedValue: true,
+        pickerOpenDelayMs: 1,
+        pickerConfirmDelayMs: 1,
+        pickerScrollIntervalMs: 1,
+        structuralLocator: { pickerMode: "duration_hours_minutes" }
+      })
+    });
+
+    expect(actions[0]).toEqual({ type: "tap", x: 500, y: 830 });
+    expect(actions).toContainEqual(expect.objectContaining({ type: "swipe", startX: 750, endX: 750 }));
+    expect(actions.at(-1)).toEqual({ type: "tap", x: 870, y: 1148 });
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        pickerMode: "duration_hours_minutes",
+        selectedValue: "7小时20分",
+        verifiedSelectedValue: "7小时20分钟",
+        selectedParts: ["7小时", "20分钟"],
+        confirmedBy: "确定"
+      })
+    }));
+  });
+
   it("taps a visible duration value and verifies that it reaches the picker center", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({

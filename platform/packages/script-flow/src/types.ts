@@ -1,5 +1,3 @@
-export type ScriptFlowPlatform = "android" | "ios" | "harmony" | "flutter";
-
 export type ScriptFlowKind = "case" | "scenario";
 
 export type ScriptFlowPurpose = "navigation" | "fixture" | "business" | "recovery";
@@ -211,7 +209,6 @@ export type ScriptFlowDocument = {
   description?: string;
   app: {
     id: string;
-    platform: ScriptFlowPlatform;
   };
   start?: {
     strategy: ScriptFlowStartStrategy;

@@ -2,6 +2,7 @@ import {
   androidAppMonitorDisplaySummaryFromRun,
   shouldDisplayExpectationResult,
   type AndroidAppMonitorDisplaySummary,
+  type ActionStep,
   type ArtifactRef,
   type MetricSample,
   type StepExpectationResult,
@@ -24,6 +25,7 @@ export function renderReportHtml(run: TestRun): string {
   const skippedSteps = run.stepResults.filter((step) => step.status === "skipped");
   const expectationResults = run.stepResults.flatMap((step) => visibleExpectationResults(step.expectationResults));
   const durationMs = runDurationMs(run);
+  const sourceStepTitles = sourceStepTitlesForRun(run);
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -153,7 +155,7 @@ export function renderReportHtml(run: TestRun): string {
 	            const videoOffset = primaryVideo ? videoOffsetSeconds(primaryVideo.createdAt, step.startedAt) : undefined;
             return `<tr>
               <td>${step.stepOrder}</td>
-              <td>${renderStepActionCell(step)}</td>
+              <td>${renderStepActionCell(step, run.steps, sourceStepTitles)}</td>
               <td>${renderStepStatus(step.status)}${renderPreconditionDetail(step.metadata)}${renderConditionDetail(step.metadata)}</td>
               <td>${renderExpectationSummary(step.expectationResults ?? [])}</td>
               <td>${step.durationMs ?? "-"} ms</td>
@@ -281,9 +283,240 @@ function renderStabilityReport(run: TestRun): string {
     : undefined;
 }
 
-function renderStepActionCell(step: StepResult): string {
-  return escapeHtml(step.type);
+function renderStepActionCell(step: StepResult, plannedSteps: ActionStep[], sourceStepTitles: Map<string, string>): string {
+  const plannedStep = plannedStepForResult(step, plannedSteps);
+  const sourceStepId = sourceStepIdForResult(step, plannedStep);
+  const sourceTitle = sourceStepId ? sourceStepTitles.get(sourceStepId) : undefined;
+  return escapeHtml(sourceTitle ?? readablePlannedStepTitle(plannedStep) ?? step.type);
 }
+
+function plannedStepForResult(step: StepResult, plannedSteps: ActionStep[]): ActionStep | undefined {
+  return plannedSteps.find((candidate) => candidate.id === step.stepId)
+    ?? plannedSteps.find((candidate) => candidate.order === step.stepOrder);
+}
+
+function sourceStepTitlesForRun(run: TestRun): Map<string, string> {
+  const parsed = recordValue(run.sourceSnapshot?.parsed);
+  const steps = Array.isArray(parsed?.steps) ? parsed.steps : [];
+  return new Map(flattenSourceSteps(steps).flatMap((step) => {
+    const id = nonEmptyString(step.id);
+    return id ? [[id, sourceStepDisplayName(step)]] : [];
+  }));
+}
+
+function flattenSourceSteps(steps: unknown[]): Record<string, unknown>[] {
+  return steps.flatMap((value) => {
+    const step = recordValue(value);
+    if (!step) return [];
+    const repeat = recordValue(step.repeat);
+    const when = recordValue(step.when);
+    const nested = Array.isArray(repeat?.steps) ? repeat.steps : Array.isArray(when?.steps) ? when.steps : undefined;
+    return nested ? [step, ...flattenSourceSteps(nested)] : [step];
+  });
+}
+
+function sourceStepDisplayName(step: Record<string, unknown>): string {
+  const action = sourceAction(step);
+  const explicitName = nonEmptyString(step.name);
+  if (explicitName && !isGenericStepName(explicitName, action)) return explicitName;
+  return sourceActionSummary(step, action) ?? explicitName ?? caseActionLabel(action);
+}
+
+function sourceAction(step: Record<string, unknown>): string {
+  const actions = ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"];
+  return actions.find((action) => action in step) ?? "unknown";
+}
+
+function sourceActionSummary(step: Record<string, unknown>, action: string): string | undefined {
+  if (action === "tap") {
+    const tap = actionTargetRecord(step.tap);
+    return tap ? tapSummary(tap.target) : undefined;
+  }
+  if (action === "inputText") {
+    const input = actionTargetRecord(step.inputText);
+    if (!input) return undefined;
+    const label = descriptiveTargetLabel(input.target);
+    const value = nonEmptyString(input.action.value);
+    if (label && value) return `在“${label}”中输入“${value}”`;
+    if (value) return `输入“${value}”`;
+    return label ? `在“${label}”中输入文本` : undefined;
+  }
+  if (action === "clearText") {
+    const clear = actionTargetRecord(step.clearText);
+    const label = clear ? descriptiveTargetLabel(clear.target) : undefined;
+    return label ? `清空“${label}”` : undefined;
+  }
+  if (action === "selectText") {
+    const select = actionTargetRecord(step.selectText);
+    if (!select) return undefined;
+    const label = descriptiveTargetLabel(select.target);
+    const value = nonEmptyString(select.action.value);
+    if (label && value) return `将“${label}”选择为“${value}”`;
+    if (value) return `选择“${value}”`;
+    return label ? `选择“${label}”` : undefined;
+  }
+  if (action === "scrollUntilVisible") {
+    const scroll = actionTargetRecord(step.scrollUntilVisible);
+    if (!scroll) return undefined;
+    const label = descriptiveTargetLabel(scroll.target);
+    const direction = directionLabel(nonEmptyString(scroll.action.direction));
+    return label ? `${direction}滚动查找“${label}”` : `${direction}滚动查找内容`;
+  }
+  if (action === "swipe") {
+    const swipe = recordValue(step.swipe);
+    return `${directionLabel(nonEmptyString(swipe?.direction))}滑动页面`;
+  }
+  if (action === "reachPage") {
+    const page = nonEmptyString(recordValue(step.reachPage)?.page);
+    return page ? `到达页面“${page}”` : undefined;
+  }
+  if (action === "waitForPage") {
+    const page = nonEmptyString(step.waitForPage);
+    return page ? `等待进入页面“${page}”` : undefined;
+  }
+  if (action === "assertPage") {
+    const page = nonEmptyString(step.assertPage);
+    return page ? `确认已进入页面“${page}”` : undefined;
+  }
+  if (action === "assertText") {
+    const text = nonEmptyString(recordValue(step.assertText)?.text);
+    return text ? `确认出现“${text}”` : undefined;
+  }
+  return undefined;
+}
+
+function tapSummary(target: Record<string, unknown>): string | undefined {
+  const control = nonEmptyString(target.control);
+  const label = descriptiveTargetLabel(target);
+  const checked = typeof target.checked === "boolean" ? target.checked : undefined;
+  if (control === "switch") {
+    const subject = label ? `“${label}”开关` : "开关";
+    return checked === true ? `打开${subject}` : checked === false ? `关闭${subject}` : `点击${subject}`;
+  }
+  if (control === "checkbox") {
+    const subject = label ? `“${label}”` : "复选框";
+    return checked === true ? `勾选${subject}` : checked === false ? `取消勾选${subject}` : `点击${subject}`;
+  }
+  const icon = nonEmptyString(target.icon);
+  if (icon) return `点击${targetPositionLabel(target)}${iconLabel(icon)}`;
+  const visual = nonEmptyString(recordValue(target.visual)?.query);
+  if (visual) return `点击视觉目标“${visual}”`;
+  return label ? `点击“${label}”` : control ? `点击${control}` : undefined;
+}
+
+function sourceStepIdForResult(step: StepResult, plannedStep: ActionStep | undefined): string | undefined {
+  return nonEmptyString(plannedStep?.params.scriptStepId)
+    ?? nonEmptyString(step.metadata?.scriptStepId)
+    ?? nonEmptyString(step.stepId);
+}
+
+function readablePlannedStepTitle(plannedStep: ActionStep | undefined): string | undefined {
+  const title = nonEmptyString(plannedStep?.title) ?? nonEmptyString(plannedStep?.note);
+  if (!title || title === plannedStep?.type || GENERIC_EXECUTION_TITLES.has(title)) return undefined;
+  return title;
+}
+
+function actionTargetRecord(value: unknown): { action: Record<string, unknown>; target: Record<string, unknown> } | undefined {
+  const action = recordValue(value);
+  const target = recordValue(action?.target);
+  return action && target ? { action, target } : undefined;
+}
+
+function descriptiveTargetLabel(target: Record<string, unknown>): string | undefined {
+  return nonEmptyString(target.text)
+    ?? nonEmptyString(target.nearText)
+    ?? nonEmptyString(target.scopeText)
+    ?? nonEmptyString(target.semantic);
+}
+
+function targetPositionLabel(target: Record<string, unknown>): string {
+  const area = nonEmptyString(target.area);
+  const position = nonEmptyString(target.position);
+  if (area === "topBar" && position === "leading") return "左上角";
+  if (area === "topBar" && position === "trailing") return "右上角";
+  if (area === "bottomBar" && position === "leading") return "左下角";
+  if (area === "bottomBar" && position === "trailing") return "右下角";
+  if (area === "topBar") return "顶部";
+  if (area === "bottomBar") return "底部";
+  return "";
+}
+
+function directionLabel(direction: string | undefined): string {
+  if (direction === "up") return "向上";
+  if (direction === "left") return "向左";
+  if (direction === "right") return "向右";
+  return "向下";
+}
+
+function iconLabel(icon: string | undefined): string | undefined {
+  if (!icon) return undefined;
+  const labels: Record<string, string> = {
+    add: "新增图标",
+    back: "返回图标",
+    close: "关闭图标",
+    home: "主页图标",
+    more: "更多图标",
+    search: "搜索图标",
+    share: "分享图标"
+  };
+  return labels[icon] ?? `${icon} 图标`;
+}
+
+function caseActionLabel(action: string): string {
+  const labels: Record<string, string> = {
+    launchApp: "重启 App",
+    tap: "点击目标",
+    inputText: "输入文本",
+    clearText: "清空输入",
+    selectText: "选择选项",
+    swipe: "滑动页面",
+    scrollUntilVisible: "查找内容",
+    reachPage: "到达页面",
+    waitForPage: "等待页面",
+    assertPage: "确认页面",
+    assertText: "确认出现指定内容",
+    runFlow: "执行复用用例",
+    repeat: "重复执行",
+    when: "条件执行"
+  };
+  return labels[action] ?? action;
+}
+
+function isGenericStepName(name: string, action: string): boolean {
+  return name === action || GENERIC_EXECUTION_TITLES.has(name) || name === caseActionLabel(action);
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+const GENERIC_EXECUTION_TITLES = new Set([
+  "tap",
+  "inputText",
+  "clearText",
+  "selectText",
+  "swipe",
+  "scrollUntilVisible",
+  "reachPage",
+  "waitForPage",
+  "assertPage",
+  "assertText",
+  "点击目标",
+  "输入文本",
+  "清空输入",
+  "选择选项",
+  "滑动页面",
+  "查找内容",
+  "到达页面",
+  "等待页面",
+  "确认页面",
+  "确认文字",
+  "确认出现指定内容"
+]);
 
 function renderExpectationDetails(run: TestRun): string {
   const rows = run.stepResults.flatMap((step) =>

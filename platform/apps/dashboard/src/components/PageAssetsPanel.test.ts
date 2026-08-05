@@ -5,7 +5,8 @@ import {
   PageAssetsPanel,
   assetIdentitySummary,
   displayRegionEvidenceSummary,
-  loadPageAssetsSnapshot
+  loadPageAssetsSnapshot,
+  platformLabel
 } from "./PageAssetsPanel.js";
 
 const library = {
@@ -64,6 +65,11 @@ describe("PageAssetsPanel", () => {
 
   it("removes region encoding from evidence text", () => {
     expect(displayRegionEvidenceSummary(["ocr_text:主页@region(10,2,30,8)"])).toBe("主页");
+  });
+
+  it("labels HarmonyOS page asset scopes", () => {
+    expect(platformLabel("harmony")).toBe("HarmonyOS");
+    expect(platformLabel("mobile-both")).toBe("Android / iOS / HarmonyOS");
   });
 
   it("loads assets from the active page asset library", async () => {

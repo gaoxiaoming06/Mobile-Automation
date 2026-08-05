@@ -11,6 +11,7 @@ import {
   type ScriptParameterValue
 } from "@mobile-automation/script-flow";
 import {
+  CROSS_PLATFORM_SCRIPT_SCOPE,
   publicExecutionFailure,
   publicExecutionFailureFromRun,
   type InteractionAsset,
@@ -29,6 +30,7 @@ import type {
 import { selectScriptExecutionSteps } from "./script-flow-runner.js";
 import { ScriptTargetResolutionError } from "./script-target-resolver.js";
 import { assessScriptFlowVerification } from "./script-flow-verification.js";
+import { targetAppIdAliases } from "./target-app-runtime.js";
 
 export type ScriptFlowApiStorage = Pick<
   Storage,
@@ -55,7 +57,7 @@ export function registerScriptFlowRoutes(
 ): void {
   app.get("/api/script-flows", (req, res) => {
     try {
-      res.json({ flows: deps.storage.listScriptFlows(scriptFlowFilter(req.query)) });
+      res.json({ flows: listScriptFlows(deps.storage, scriptFlowFilter(req.query)) });
     } catch (error) {
       sendScriptFlowError(res, error);
     }
@@ -63,7 +65,7 @@ export function registerScriptFlowRoutes(
 
   app.get("/api/temporary-tests", (req, res) => {
     try {
-      res.json({ tests: deps.storage.listTemporaryTests(temporaryTestFilter(req.query)) });
+      res.json({ tests: listTemporaryTests(deps.storage, temporaryTestFilter(req.query)) });
     } catch (error) {
       sendScriptFlowError(res, error);
     }
@@ -503,7 +505,7 @@ function temporaryFlow(sourceYaml: string): ScriptFlow {
   return {
     id: `temporary:${sha256(sourceYaml).slice(0, 24)}`,
     appId: document.app.id,
-    platform: document.app.platform,
+    platform: CROSS_PLATFORM_SCRIPT_SCOPE,
     name: document.name,
     description: document.description,
     sourceYaml,
@@ -577,6 +579,46 @@ function scriptFlowStatus(value: unknown): { status?: ScriptFlow["status"] } {
   return { status: value };
 }
 
+function listScriptFlows(
+  storage: Pick<ScriptFlowApiStorage, "listScriptFlows">,
+  filter: {
+    appId?: string;
+    platform?: ScriptFlow["platform"];
+    status?: ScriptFlow["status"];
+  }
+): ScriptFlow[] {
+  if (!filter.appId) {
+    return storage.listScriptFlows(filter);
+  }
+  const flowsById = new Map<string, ScriptFlow>();
+  for (const appId of targetAppIdAliases(filter.appId)) {
+    for (const flow of storage.listScriptFlows({ ...filter, appId })) {
+      flowsById.set(flow.id, flow);
+    }
+  }
+  return [...flowsById.values()];
+}
+
+function listTemporaryTests(
+  storage: Pick<ScriptFlowApiStorage, "listTemporaryTests">,
+  filter: {
+    appId?: string;
+    platform?: ScriptFlow["platform"];
+    limit?: number;
+  }
+) {
+  if (!filter.appId) {
+    return storage.listTemporaryTests(filter);
+  }
+  const testsById = new Map<string, ReturnType<ScriptFlowApiStorage["listTemporaryTests"]>[number]>();
+  for (const appId of targetAppIdAliases(filter.appId)) {
+    for (const test of storage.listTemporaryTests({ ...filter, appId })) {
+      testsById.set(test.id, test);
+    }
+  }
+  return [...testsById.values()].slice(0, filter.limit ?? 50);
+}
+
 function scriptFlowFilter(query: express.Request["query"]): {
   appId?: string;
   platform?: ScriptFlow["platform"];
@@ -585,7 +627,7 @@ function scriptFlowFilter(query: express.Request["query"]): {
   const appId = optionalString(query.appId);
   const platform = optionalString(query.platform);
   const status = optionalString(query.status);
-  if (platform && !["android", "ios", "harmony", "flutter"].includes(platform)) {
+  if (platform && !["android", "ios", "harmony", "flutter", CROSS_PLATFORM_SCRIPT_SCOPE].includes(platform)) {
     throw new ScriptFlowApiError(400, "Invalid ScriptFlow platform");
   }
   if (status && !["draft", "active", "archived"].includes(status)) {
@@ -760,7 +802,7 @@ function freezeInteractionAssets(
   storage: ScriptFlowApiStorage,
   plan: ScriptExecutionPlan
 ): ScriptInteractionAssetBinding[] {
-  const assets = storage.listInteractionAssets({ appId: plan.app.id, platform: plan.app.platform })
+  const assets = storage.listInteractionAssets({ appId: plan.app.id, platform: CROSS_PLATFORM_SCRIPT_SCOPE })
     .filter((asset) => asset.status === "active");
   return plan.steps.flatMap((step) => {
     if (!isInteractionAction(step.action) || !step.onPage) return [];
@@ -770,7 +812,7 @@ function freezeInteractionAssets(
       asset.owner.kind === "page"
       && asset.owner.key === step.onPage
       && asset.supportedActions.includes(step.action as InteractionAsset["supportedActions"][number])
-      && asset.locatorVariants.some((variant) => variant.platform === plan.app.platform)
+      && asset.locatorVariants.length > 0
       && interactionTargetMatches(target, asset)
     );
     if (matches.length > 1) {

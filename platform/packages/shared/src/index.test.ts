@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   androidAppMonitorDisplaySummaryFromRun,
+  defaultHarmonyCapabilities,
   normalizeAndroidAppMonitorConfig,
   stepToAction,
   type ActionStep,
@@ -12,6 +13,38 @@ import {
   type LearningSession,
   type TestRun
 } from "./index.js";
+
+describe("platform capabilities", () => {
+  it("describes HarmonyOS MVP execution capabilities", () => {
+    expect(defaultHarmonyCapabilities()).toMatchObject({
+      preview: true,
+      tap: true,
+      longPress: true,
+      swipe: true,
+      back: true,
+      home: true,
+      recentApps: false,
+      textInput: true,
+      screenshot: true,
+      launchApp: true,
+      closeApp: true,
+      recordVideo: false,
+      metrics: {
+        cpu: false,
+        memory: false,
+        fps: false,
+        network: false,
+        battery: false,
+        temperature: false
+      },
+      events: {
+        crash: false,
+        anr: false,
+        logs: true
+      }
+    });
+  });
+});
 
 describe("trial learning domain models", () => {
   it("round-trips verification and learning records without hidden runtime state", () => {

@@ -283,7 +283,6 @@ export function CaseCenterPanel({
               <div><span>类型</span><strong>{testKindLabel(document?.kind)}</strong></div>
               <div><span>用途</span><strong>{testPurposeLabel(document?.purpose)}</strong></div>
               <div><span>App</span><strong>{selected.appId}</strong></div>
-              <div><span>平台</span><strong>{platformLabel(selected.platform)}</strong></div>
               <div><span>版本</span><strong>v{selected.version}</strong></div>
               <div><span>状态</span><strong>{statusLabel(selected.status)}</strong></div>
               <div><span>验证</span><strong>{verificationLabel(verification?.status)}</strong></div>
@@ -369,10 +368,6 @@ function statusLabel(status: ScriptFlow["status"]): string {
 function verificationLabel(status: ScriptFlowVerificationStatus | undefined): string {
   if (!status) return "检查中";
   return { verified: "已验证", needs_trial: "待首次验证", blocked: "不可执行" }[status];
-}
-
-function platformLabel(platform: ScriptFlow["platform"]): string {
-  return { android: "Android", ios: "iOS", harmony: "鸿蒙", flutter: "Flutter" }[platform];
 }
 
 function errorMessage(error: unknown): string {

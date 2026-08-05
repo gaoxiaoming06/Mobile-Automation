@@ -149,7 +149,7 @@ function trialRun(): TestRun {
       },
       dependencies: [],
       parsed: {
-        app: { id: "cn.eeo.classin", platform: "android" },
+        app: { id: "cn.eeo.classin" },
         steps: [{ id: "open-add-friend", onPage: "classin.home", tap: { target: { text: "添加好友" } } }]
       }
     },

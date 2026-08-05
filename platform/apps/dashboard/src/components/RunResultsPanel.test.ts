@@ -108,6 +108,49 @@ describe("RunResultsPanel", () => {
     expect(markup).toContain("App 性能正常");
   });
 
+  it("labels HarmonyOS devices explicitly", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(RunResultsPanel, {
+        selectedDevice: {
+          id: "harmony-1",
+          serial: "harmony-1",
+          platform: "harmony",
+          status: "online",
+          capabilities: {
+            preview: true,
+            tap: true,
+            longPress: true,
+            swipe: true,
+            back: true,
+            home: true,
+            recentApps: false,
+            textInput: true,
+            screenshot: true,
+            launchApp: true,
+            closeApp: true,
+            recordVideo: false,
+            metrics: { cpu: false, memory: false, fps: false, network: false, battery: false, temperature: false },
+            events: { crash: false, anr: false, logs: true }
+          },
+          lastSeenAt: "2026-08-04T00:00:00.000Z"
+        },
+        currentRun: null,
+        runs: [],
+        runsLimit: 30,
+        selectedSerial: "harmony-1",
+        setCurrentRunId: () => undefined,
+        stopCurrentRun: async () => undefined,
+        pauseCurrentRun: async () => undefined,
+        resumeCurrentRun: async () => undefined,
+        stepCurrentRun: async () => undefined,
+        loadMoreRuns: () => undefined
+      })
+    );
+
+    expect(markup).toContain("HarmonyOS");
+    expect(markup).not.toContain("Android");
+  });
+
   it("shows a public failure summary instead of raw step errors", () => {
     const currentRun = run({
       id: "run-failed",
@@ -146,6 +189,107 @@ describe("RunResultsPanel", () => {
     expect(markup).toContain("未找到当前操作的目标");
     expect(markup).not.toContain("OCR locator failed");
     expect(markup).not.toContain("internal-step-id");
+  });
+
+  it("uses planned case step titles for current run step results", () => {
+    const currentRun = run({
+      id: "run-readable-steps",
+      caseName: "创建公开课并发布",
+      status: "running",
+      startedMinute: 1,
+      steps: [
+        {
+          id: "open-create-lesson",
+          order: 1,
+          type: "tap_on_text",
+          enabled: true,
+          title: "tap",
+          params: { text: "创建公开课" },
+          createdAt: "2026-07-23T08:01:00.000Z"
+        },
+        {
+          id: "select-duration",
+          order: 2,
+          type: "tap_on_image",
+          enabled: true,
+          title: "selectText",
+          params: { text: "课堂时长", value: "7小时20分钟" },
+          createdAt: "2026-07-23T08:01:05.000Z"
+        }
+      ],
+      stepResults: [
+        {
+          id: "result-1",
+          runId: "run-readable-steps",
+          iterationIndex: 0,
+          stepId: "open-create-lesson",
+          stepOrder: 1,
+          type: "tap_on_text",
+          status: "passed",
+          startedAt: "2026-07-23T08:01:00.000Z",
+          durationMs: 9414,
+          artifacts: []
+        },
+        {
+          id: "result-2",
+          runId: "run-readable-steps",
+          iterationIndex: 0,
+          stepId: "select-duration",
+          stepOrder: 2,
+          type: "tap_on_image",
+          status: "passed",
+          startedAt: "2026-07-23T08:01:05.000Z",
+          durationMs: 25303,
+          artifacts: []
+        }
+      ],
+      sourceSnapshot: {
+        kind: "script_flow",
+        flowId: "temporary:readable-steps",
+        version: 1,
+        planDigest: "digest",
+        dependencies: [],
+        parsed: {
+          version: 1,
+          kind: "case",
+          name: "创建公开课并发布",
+          app: { id: "classin" },
+          parameters: {},
+          steps: [
+            {
+              id: "open-create-lesson",
+              role: "business",
+              tap: { target: { text: "创建公开课" } }
+            },
+            {
+              id: "select-duration",
+              role: "business",
+              selectText: {
+                target: { text: "课堂时长", area: "content" },
+                value: "7小时20分钟"
+              }
+            }
+          ],
+          tags: []
+        }
+      }
+    });
+
+    const markup = renderToStaticMarkup(React.createElement(RunResultsPanel, {
+      currentRun,
+      runs: [currentRun],
+      runsLimit: 30,
+      selectedSerial: "device-1",
+      setCurrentRunId: () => undefined,
+      stopCurrentRun: async () => undefined,
+      pauseCurrentRun: async () => undefined,
+      resumeCurrentRun: async () => undefined,
+      stepCurrentRun: async () => undefined,
+      loadMoreRuns: () => undefined
+    }));
+
+    expect(markup).toContain("点击“创建公开课”");
+    expect(markup).toContain("将“课堂时长”选择为“7小时20分钟”");
   });
 
   it("shows structured target lookup diagnostics", () => {
@@ -217,6 +361,7 @@ function run(input: {
   artifacts?: TestRun["artifacts"];
   steps?: TestRun["steps"];
   stepResults?: TestRun["stepResults"];
+  sourceSnapshot?: TestRun["sourceSnapshot"];
 }): TestRun {
   return {
     id: input.id,
@@ -238,6 +383,7 @@ function run(input: {
     metrics: [],
     events: input.events ?? [],
     artifacts: input.artifacts ?? [],
+    ...(input.sourceSnapshot ? { sourceSnapshot: input.sourceSnapshot } : {}),
     startedAt: `2026-07-23T08:0${input.startedMinute}:00.000Z`
   };
 }

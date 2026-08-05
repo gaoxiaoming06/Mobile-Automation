@@ -7,12 +7,14 @@ import type {
   BusinessGraph,
   BusinessGraphVersion,
   BusinessNode,
+  GraphTargetProfile,
   GraphTargetApp,
   PlatformScope,
   StateMatcher
 } from "@mobile-automation/graph-core";
 import { parseScriptFlow, type ScriptFlowDocument, type ScriptParameterValue, type ScriptStep, type ScriptTarget } from "@mobile-automation/script-flow";
 import {
+  CROSS_PLATFORM_SCRIPT_SCOPE,
   createId,
   nowIso,
   type ActionStep,
@@ -29,6 +31,7 @@ import {
   type LearningSession,
   type MetricSample,
   type NavigationEntry,
+  type Platform,
   type ScriptFlow,
   type ScriptFlowVersion,
   type StepResult,
@@ -123,7 +126,7 @@ export type CreateLearningCandidateInput = Omit<LearningCandidate, "id" | "creat
 
 type RuntimeInterceptorRuleFilter = {
   enabledOnly?: boolean;
-  platform?: "android" | "ios";
+  platform?: Platform;
   appPackageName?: string;
   iosBundleId?: string;
   flowId?: string;
@@ -295,7 +298,7 @@ export class Storage {
       createId("temporary_test"),
       sourceHash,
       input.document.app.id,
-      input.document.app.platform,
+      CROSS_PLATFORM_SCRIPT_SCOPE,
       input.document.kind,
       input.document.purpose ?? "business",
       input.document.name,
@@ -312,7 +315,7 @@ export class Storage {
        FROM temporary_tests
        LEFT JOIN runs ON runs.id = temporary_tests.last_run_id
        WHERE temporary_tests.app_id = ? AND temporary_tests.platform = ? AND temporary_tests.source_hash = ?`
-    ).get(input.document.app.id, input.document.app.platform, sourceHash) as Row;
+    ).get(input.document.app.id, CROSS_PLATFORM_SCRIPT_SCOPE, sourceHash) as Row;
     return rowToTemporaryTest(row);
   }
 
@@ -351,9 +354,9 @@ export class Storage {
   }): PageNavigationSegmentSnapshot[] {
     const rows = this.db.prepare(
       `SELECT * FROM script_navigation_segments
-       WHERE app_id = ? AND platform = ?
+       WHERE app_id = ? AND platform IN (?, ?)
        ORDER BY from_page ASC, to_page ASC, flow_id ASC, segment_order ASC`
-    ).all(filter.appId, filter.platform) as Row[];
+    ).all(filter.appId, filter.platform, CROSS_PLATFORM_SCRIPT_SCOPE) as Row[];
     const flowSegments = rows.map(rowToPageNavigationSegment);
     const learnedSegments = this.listNavigationEntries(filter)
       .filter((entry) => entry.status === "active" && entry.from.kind === "page")
@@ -599,25 +602,14 @@ export class Storage {
     const proposal = approvedPageLearningProposal(analysis);
     let graph = this.findBusinessGraphByAppId(aggregate.appId);
     if (!graph) {
+      const profile = learningTargetProfile(aggregate.platform, aggregate.appId);
       graph = this.createPageAssetLibrary({
         appId: aggregate.appId,
         name: `${aggregate.appId} 页面资产库`,
         targetApp: {
           productId: aggregate.appId,
           productName: aggregate.appId,
-          profiles: [{
-            id: `${aggregate.platform}:${aggregate.appId}`,
-            platform: aggregate.platform,
-            displayName: `${aggregate.appId} ${aggregate.platform}`,
-            ...(aggregate.platform === "android"
-              ? { androidPackageName: aggregate.appId }
-              : aggregate.platform === "ios"
-                ? { iosBundleId: aggregate.appId }
-                : aggregate.platform === "harmony"
-                  ? { harmonyBundleName: aggregate.appId }
-                  : { flutterAppId: aggregate.appId }),
-            isPrimary: true
-          }]
+          profiles: [profile]
         }
       });
     }
@@ -1759,7 +1751,7 @@ export class Storage {
     const app = sourceSnapshot.parsed.app;
     if (!app || typeof app !== "object" || Array.isArray(app)) return;
     const appRecord = app as Record<string, unknown>;
-    if (typeof appRecord.id !== "string" || typeof appRecord.platform !== "string") return;
+    if (typeof appRecord.id !== "string") return;
     const storedFlow = this.db.prepare("SELECT id FROM script_flows WHERE id = ?").get(sourceSnapshot.flowId) as Row | undefined;
     const totalSteps = Array.isArray(runSnapshot.steps) ? runSnapshot.steps.length : 0;
 
@@ -1768,7 +1760,7 @@ export class Storage {
       ...(storedFlow ? { flowId: sourceSnapshot.flowId, flowVersion: sourceSnapshot.version } : {}),
       sourceHash: sourceSnapshot.sourceHash,
       appId: appRecord.id,
-      platform: appRecord.platform as ScriptFlow["platform"],
+      platform: CROSS_PLATFORM_SCRIPT_SCOPE,
       runId,
       status: verificationStatus,
       coverage: {
@@ -1803,7 +1795,7 @@ export class Storage {
     const app = sourceSnapshot.parsed.app;
     if (!app || typeof app !== "object" || Array.isArray(app)) return;
     const appRecord = app as Record<string, unknown>;
-    if (typeof appRecord.id !== "string" || typeof appRecord.platform !== "string") return;
+    if (typeof appRecord.id !== "string" || !sourceSnapshot.executionPlatform) return;
 
     const executionPassed = runStatus === "passed";
     const unresolvedOutcome = isTrial && sourceSnapshot.verificationAssessment.unresolvedOutcome;
@@ -1827,7 +1819,7 @@ export class Storage {
       sessionId,
       runId,
       appRecord.id,
-      appRecord.platform,
+      sourceSnapshot.executionPlatform,
       sourceSnapshot.sourceHash,
       executionPassed ? 1 : 0,
       executionPassed && !unresolvedOutcome ? "verified" : "unverified",
@@ -2604,7 +2596,11 @@ function numberOrUndefined(value: unknown): number | undefined {
 }
 
 function platformScopeOrUndefined(value: unknown): PlatformScope | undefined {
-  return value === "android" || value === "ios" || value === "mobile-both" ? value : undefined;
+  return value === "android" || value === "ios" || value === "harmony" || value === "mobile-both" ? value : undefined;
+}
+
+function runtimePlatformOrUndefined(value: unknown): Platform | undefined {
+  return value === "android" || value === "ios" || value === "harmony" ? value : undefined;
 }
 
 function runtimeInterceptorRuleFromRow(row: Row): RuntimeInterceptorRule {
@@ -2682,6 +2678,25 @@ function parseJsonObject(value: string): Record<string, unknown> {
   }
 }
 
+function learningTargetProfile(platform: LearningAggregate["platform"], appId: string): GraphTargetProfile {
+  if (platform === CROSS_PLATFORM_SCRIPT_SCOPE) {
+    throw new Error("Cross-platform ScriptFlow scope cannot be promoted as a runtime target profile");
+  }
+  return {
+    id: `${platform}:${appId}`,
+    platform,
+    displayName: `${appId} ${platform}`,
+    ...(platform === "android"
+      ? { androidPackageName: appId }
+      : platform === "ios"
+        ? { iosBundleId: appId }
+        : platform === "harmony"
+          ? { harmonyBundleName: appId }
+          : { flutterAppId: appId }),
+    isPrimary: true
+  };
+}
+
 
 function scriptFlowFromInput(
   id: string,
@@ -2693,7 +2708,7 @@ function scriptFlowFromInput(
   return {
     id,
     appId: input.document.app.id,
-    platform: input.document.app.platform,
+    platform: CROSS_PLATFORM_SCRIPT_SCOPE,
     name: input.document.name,
     description: input.document.description,
     sourceYaml: input.sourceYaml,
@@ -3199,6 +3214,7 @@ function scriptFlowSourceSnapshot(runSnapshot: Record<string, unknown>): Pick<Te
       flowId: snapshot.flowId,
       version: snapshot.version,
       planDigest: snapshot.planDigest,
+      ...(runtimePlatformOrUndefined(snapshot.executionPlatform) ? { executionPlatform: runtimePlatformOrUndefined(snapshot.executionPlatform) } : {}),
       ...(snapshot.executionPurpose === "trial" || snapshot.executionPurpose === "step_trial" || snapshot.executionPurpose === "normal"
         ? { executionPurpose: snapshot.executionPurpose }
         : {}),

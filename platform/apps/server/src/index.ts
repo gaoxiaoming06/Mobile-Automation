@@ -137,12 +137,13 @@ registerScriptFlowAiRoutes(app, {
             includeOcr: true
           }), { deviceSerial: screenAssist.deviceSerial })
         : undefined;
+      const screenPlatform = observation?.platform ?? platform;
       const screenContext = observation
         ? await timedScriptFlowAiStage(timingContext, "understand_screen", () => understandScreenForScriptFlow({
             config,
             prompt,
             appId,
-            platform,
+            platform: screenPlatform,
             observation
           }), { deviceSerial: screenAssist?.deviceSerial })
         : undefined;
@@ -671,7 +672,7 @@ app.delete("/api/page-assets/:versionId/assets/nodes/:nodeId", (req, res) => {
 
 app.get("/api/runtime-interceptor-rules", (req, res) => {
   try {
-    const platform = req.query.platform === "android" || req.query.platform === "ios" ? req.query.platform : undefined;
+    const platform = req.query.platform === "android" || req.query.platform === "ios" || req.query.platform === "harmony" ? req.query.platform : undefined;
     const enabledOnly = parseBooleanQuery(req.query.enabledOnly, false);
     const appPackageName = typeof req.query.appPackageName === "string" ? req.query.appPackageName.trim() : undefined;
     const flowId = typeof req.query.flowId === "string" ? req.query.flowId.trim() : undefined;
@@ -1079,7 +1080,7 @@ function readRuntimeInterceptorRuleShape(
     text: typeof input.text === "string" ? input.text : undefined,
     matchers: input.matchers === undefined ? undefined : readRuntimeInterceptorMatchers(input.matchers),
     action,
-    platformScope: input.platformScope === "android" || input.platformScope === "ios" || input.platformScope === "mobile-both" ? input.platformScope : undefined,
+    platformScope: input.platformScope === "android" || input.platformScope === "ios" || input.platformScope === "harmony" || input.platformScope === "mobile-both" ? input.platformScope : undefined,
     appPackageName: stringOrUndefined(input.appPackageName),
     iosBundleId: stringOrUndefined(input.iosBundleId),
     flowId: stringOrUndefined(input.flowId),

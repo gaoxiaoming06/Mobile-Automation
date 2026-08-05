@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
+import { CROSS_PLATFORM_SCRIPT_SCOPE } from "@mobile-automation/shared";
 import type { FlowVerification, InteractionAsset, ScriptFlow, ScriptFlowVersion, TemporaryTest, TestRun } from "@mobile-automation/shared";
 import { derivePageNavigationSegments } from "./page-navigation.js";
 import { registerScriptFlowRoutes, type ScriptFlowApiStorage } from "./script-flow-api.js";
@@ -14,7 +15,6 @@ version: 1
 name: 打开添加好友
 app:
   id: cn.eeo.classin
-  platform: android
 parameters:
   friendName:
     type: string
@@ -63,7 +63,7 @@ describe("ScriptFlow API", () => {
     const created = (createdResponse.body as { flow: ScriptFlow }).flow;
     expect(created).toEqual(expect.objectContaining({ name: "打开添加好友", appId: "cn.eeo.classin", version: 1 }));
 
-    const listResponse = await get(context.baseUrl, "/api/script-flows?appId=cn.eeo.classin&platform=android");
+    const listResponse = await get(context.baseUrl, "/api/script-flows?appId=cn.eeo.classin");
     expect((listResponse.body as { flows: ScriptFlow[] }).flows).toHaveLength(1);
 
     const updatedYaml = sourceYaml.replace("打开添加好友", "打开添加好友页面");
@@ -142,7 +142,7 @@ describe("ScriptFlow API", () => {
 version: 1
 purpose: fixture
 name: 教师登录
-app: { id: cn.eeo.classin, platform: android }
+app: { id: classin }
 parameters:
   account: { type: string, required: true }
   password: { type: string, required: true, sensitive: true }
@@ -164,7 +164,7 @@ steps:
       deviceSerial: "device-1",
       parameters: { account: "teacher@example.com", password: "secret" }
     });
-    const history = await get(context.baseUrl, "/api/temporary-tests?appId=cn.eeo.classin&platform=android");
+    const history = await get(context.baseUrl, "/api/temporary-tests?appId=cn.eeo.classin");
 
     expect(started.status).toBe(202);
     expect(history.body).toEqual({
@@ -174,6 +174,36 @@ steps:
         parameterValues: { account: "teacher@example.com" },
         lastRunId: "run-1"
       })]
+    });
+  });
+
+  it("finds cross-platform temporary history when queried with a ClassIn runtime package", async () => {
+    const context = await apiContext(servers);
+    const productSource = `
+version: 1
+name: 打开成长
+app: { id: classin }
+steps:
+  - id: open-growth
+    tap: { target: { text: 成长 } }
+`;
+    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
+      sourceYaml: productSource,
+      parameters: {}
+    });
+    await post(context.baseUrl, "/api/script-flow-drafts/trial-runs", {
+      prompt: "打开成长",
+      sourceYaml: productSource,
+      planDigest: (preview.body as { planDigest: string }).planDigest,
+      deviceSerial: "device-1",
+      parameters: {}
+    });
+
+    expect((await get(context.baseUrl, "/api/temporary-tests?appId=cn.eeo.classin")).body).toEqual({
+      tests: [expect.objectContaining({ appId: "classin", name: "打开成长" })]
+    });
+    expect((await get(context.baseUrl, "/api/temporary-tests?appId=cn.eeo.hos.classin.mobile")).body).toEqual({
+      tests: [expect.objectContaining({ appId: "classin", name: "打开成长" })]
     });
   });
 
@@ -810,12 +840,12 @@ class MemoryScriptFlowStorage implements ScriptFlowApiStorage {
     parameterValues: Record<string, string | number | boolean>;
     runId: string;
   }): TemporaryTest {
-    const key = `${input.document.app.id}:${input.document.app.platform}:${createHash("sha256").update(input.sourceYaml).digest("hex")}`;
+    const key = `${input.document.app.id}:${CROSS_PLATFORM_SCRIPT_SCOPE}:${createHash("sha256").update(input.sourceYaml).digest("hex")}`;
     const existing = this.temporaryTests.get(key);
     const next: TemporaryTest = {
       id: existing?.id ?? `temporary-${this.temporaryTests.size + 1}`,
       appId: input.document.app.id,
-      platform: input.document.app.platform,
+      platform: CROSS_PLATFORM_SCRIPT_SCOPE,
       kind: input.document.kind,
       purpose: input.document.purpose ?? "business",
       name: input.document.name,
@@ -850,7 +880,7 @@ function interactionAsset(version: number): InteractionAsset {
     id: "asset-add-friend",
     key: "classin.home.tap.text.添加好友",
     appId: "cn.eeo.classin",
-    platformScope: "android",
+    platformScope: "mobile-both",
     owner: { kind: "page", key: "classin.home" },
     name: "添加好友",
     aliases: ["添加好友"],
@@ -945,6 +975,7 @@ steps:
 class CapturingScriptFlowRunner {
   readonly inputs: StartScriptFlowRunInput[] = [];
   validationError?: Error;
+  startError?: Error;
   constructor(private readonly storage: MemoryScriptFlowStorage) {}
 
   validatePlan(): void {
@@ -952,6 +983,7 @@ class CapturingScriptFlowRunner {
   }
 
   async start(input: StartScriptFlowRunInput): Promise<TestRun> {
+    if (this.startError) throw this.startError;
     this.inputs.push(input);
     const run: TestRun = {
       id: "run-1",
@@ -991,7 +1023,7 @@ function storedFlow(
   return {
     id,
     appId: input.document.app.id,
-    platform: input.document.app.platform,
+    platform: CROSS_PLATFORM_SCRIPT_SCOPE,
     name: input.document.name,
     description: input.document.description,
     sourceYaml: input.sourceYaml,

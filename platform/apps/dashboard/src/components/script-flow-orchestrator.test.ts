@@ -278,7 +278,7 @@ function baseDraft(): GeneratedDraft {
       purpose: "business",
       testLevel: "component",
       name: "创建课堂",
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       parameters: {
         classroomName: { type: "string", label: "课堂名称" }
       },

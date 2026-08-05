@@ -151,7 +151,7 @@ describe("Storage", () => {
     });
 
     expect(second.id).toBe(first.id);
-    expect(context.storage.listTemporaryTests({ appId: "cn.eeo.classin", platform: "android" })).toEqual([
+    expect(context.storage.listTemporaryTests({ appId: "cn.eeo.classin" })).toEqual([
       expect.objectContaining({
         id: first.id,
         prompt: "从主页进入班级四十二号",
@@ -550,7 +550,7 @@ function scriptFlowDocument(name: string): ScriptFlowDocument {
     version: 1,
     kind: "case",
     name,
-    app: { id: "cn.eeo.classin", platform: "android" },
+    app: { id: "cn.eeo.classin" },
     start: { strategy: "keepCurrent" },
     parameters: {},
     steps: [],
@@ -563,7 +563,7 @@ function navigationFlowDocument(targetPage: string): ScriptFlowDocument {
     version: 1,
     kind: "case",
     name: "主页导航",
-    app: { id: "cn.eeo.classin", platform: "android" },
+    app: { id: "cn.eeo.classin" },
     start: { strategy: "keepCurrent" },
     parameters: {},
     steps: [

@@ -66,6 +66,22 @@ export type SemanticResolutionOutcome = {
   metadata: Record<string, unknown>;
 };
 
+type PickerColumnValue = string | number;
+
+type PickerColumnCandidate<T extends PickerColumnValue> = {
+  value: T;
+  candidate: TextLocatorCandidate;
+};
+
+type WheelPickerColumnResult<T extends PickerColumnValue> = {
+  selected: boolean;
+  selectedPart?: string;
+  actionResult?: DeviceActionResult;
+  swipes: number;
+  failureReason?: "picker_value_not_found" | "picker_no_progress";
+  stalledAt?: string;
+};
+
 type SemanticStepResolverDeps = {
   ocr: OcrService;
   performAction: (serial: string, action: DeviceActionRequest) => Promise<DeviceActionResult | void>;
@@ -2446,36 +2462,28 @@ export class SemanticStepResolver {
       target: string | number,
       centerXPercent: number
     ): Promise<boolean> => {
-      for (let swipes = 0; swipes <= maxSwipes; swipes += 1) {
-        const layout = await captureLayout();
-        const candidates = column === "date"
-          ? pickerDateCandidates(layout, centerXPercent)
-          : pickerPlainNumberCandidates(layout, centerXPercent);
-        const selectedCenterY = pickerSelectedCenterY(layout);
-        const match = candidates
-          .filter((candidate) => candidate.value === target)
-          .sort((left, right) => Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY))[0];
-        if (match && Math.abs(match.candidate.centerY - selectedCenterY) <= layout.height * 0.12) {
-          selectedParts.push(String(target));
-          return true;
-        }
-        if (swipes >= maxSwipes || !candidates.length) {
-          return false;
-        }
-        const current = candidates
-          .slice()
-          .sort((left, right) => Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY))[0]!;
-        const direction = column === "date"
-          ? String(target) > String(current.value) ? "increase" : "decrease"
-          : Number(target) > Number(current.value) ? "increase" : "decrease";
-        actionResult = normalizeActionResult(await this.performAction(
-          input,
-          pickerColumnSwipeAction(centerXPercent, direction, input.deviceSize)
-        )) ?? actionResult;
-        totalSwipes += 1;
-        if (intervalMs > 0) {
-          await this.wait(input, intervalMs);
-        }
+      const result = await selectWheelPickerColumn<string | number>({
+        target,
+        centerXPercent,
+        maxSwipes,
+        intervalMs,
+        deviceSize: input.deviceSize,
+        captureLayout,
+        readCandidates: (layout, columnCenterXPercent) => column === "date"
+          ? pickerDateCandidates(layout, columnCenterXPercent)
+          : pickerPlainNumberCandidates(layout, columnCenterXPercent),
+        compare: (expected, current) => column === "date"
+          ? String(expected).localeCompare(String(current))
+          : Number(expected) - Number(current),
+        formatSelectedPart: (value) => String(value),
+        performAction: async (action) => normalizeActionResult(await this.performAction(input, action)),
+        wait: (ms) => this.wait(input, ms)
+      });
+      actionResult = result.actionResult ?? actionResult;
+      totalSwipes += result.swipes;
+      if (result.selected && result.selectedPart) {
+        selectedParts.push(result.selectedPart);
+        return true;
       }
       return false;
     };
@@ -2592,6 +2600,7 @@ export class SemanticStepResolver {
     const artifacts: ArtifactRef[] = [];
     let actionResult = normalizeActionResult(await this.performAction(input, { type: "tap", x: opener.x, y: opener.y }));
     await this.wait(input, positiveNumberParam(input.step.params.pickerOpenDelayMs, 350));
+    const expectedSelectedValue = formatDurationPickerValue(duration);
     const maxSwipes = Math.max(1, Math.floor(positiveNumberParam(input.step.params.pickerMaxSwipes, 16)));
     const intervalMs = nonNegativeNumberParam(input.step.params.pickerScrollIntervalMs, 250);
     let attempt = 0;
@@ -2603,70 +2612,33 @@ export class SemanticStepResolver {
     const selectColumn = async (column: "hours" | "minutes", target: number): Promise<boolean> => {
       const unit = column === "hours" ? "小时" : "分钟";
       const centerXPercent = column === "hours" ? 25 : 75;
-      let previousCenterValue: number | undefined;
-      let repeatedCenterCount = 0;
-      for (let swipes = 0; swipes <= maxSwipes; swipes += 1) {
-        attempt += 1;
-        const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
-        artifacts.push(screenshot.artifact);
-        const layout = await this.deps.ocr.locateText!({ image: screenshot.png, mode: "contains" });
-        const candidates = pickerColumnNumberCandidates(layout, unit, centerXPercent);
-        const selectedCenterY = pickerSelectedCenterY(layout);
-        const current = candidates
-          .slice()
-          .sort((left, right) => Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY))[0];
-        if (current?.value === target) {
-          selectedParts.push(`${target}${unit}`);
-          return true;
-        }
-        if (swipes >= maxSwipes || !candidates.length) {
-          return false;
-        }
-        if (!current) return false;
-
-        if (previousCenterValue === current.value) {
-          repeatedCenterCount += 1;
-        } else {
-          repeatedCenterCount = 0;
-        }
-        previousCenterValue = current.value;
-        if (repeatedCenterCount >= 2) {
-          failureReason = "picker_no_progress";
-          stalledAt = `${current.value}${unit}`;
-          return false;
-        }
-
-        const visibleTarget = candidates
-          .filter((candidate) => candidate.value === target)
-          .sort((left, right) =>
-            Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY)
-          )[0];
-        if (visibleTarget) {
-          const action = {
-            type: "tap",
-            x: scaleCoordinate(visibleTarget.candidate.centerX, layout.width, input.deviceSize?.width),
-            y: scaleCoordinate(visibleTarget.candidate.centerY, layout.height, input.deviceSize?.height)
-          } satisfies DeviceActionRequest;
-          actionResult = normalizeActionResult(await this.performAction(input, action)) ?? actionResult;
-          if (intervalMs > 0) {
-            await this.wait(input, intervalMs);
-          }
-          continue;
-        }
-
-        const direction = target > current.value ? "increase" : "decrease";
-        const action = pickerColumnSwipeAction(centerXPercent, direction, input.deviceSize, {
-          layout,
-          centerY: selectedCenterY,
-          rowSpacing: pickerColumnRowSpacing(candidates, layout.height),
-          rows: pickerColumnMovementRows(candidates, current.value, target)
-        });
-        actionResult = normalizeActionResult(await this.performAction(input, action)) ?? actionResult;
-        totalSwipes += 1;
-        if (intervalMs > 0) {
-          await this.wait(input, intervalMs);
-        }
+      const result = await selectWheelPickerColumn<number>({
+        target,
+        centerXPercent,
+        maxSwipes,
+        intervalMs,
+        deviceSize: input.deviceSize,
+        captureLayout: async () => {
+          attempt += 1;
+          const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
+          artifacts.push(screenshot.artifact);
+          return this.deps.ocr.locateText!({ image: screenshot.png, mode: "contains" });
+        },
+        readCandidates: (layout, columnCenterXPercent) => pickerColumnNumberCandidates(layout, unit, columnCenterXPercent),
+        compare: (expected, current) => expected - current,
+        formatSelectedPart: (value) => `${value}${unit}`,
+        performAction: async (action) => normalizeActionResult(await this.performAction(input, action)),
+        wait: (ms) => this.wait(input, ms),
+        detectNoProgress: true
+      });
+      actionResult = result.actionResult ?? actionResult;
+      totalSwipes += result.swipes;
+      if (result.selected && result.selectedPart) {
+        selectedParts.push(result.selectedPart);
+        return true;
       }
+      failureReason = result.failureReason ?? failureReason;
+      stalledAt = result.stalledAt;
       return false;
     };
 
@@ -2743,13 +2715,13 @@ export class SemanticStepResolver {
       const verificationLayout = await this.deps.ocr.locateText!({ image: verificationScreenshot.png, mode: "contains" });
       const targetText = textParam(input.step.params.targetText).trim();
       const actualValue = findDurationFieldValue(verificationLayout, targetText);
-      if (actualValue !== selectedValue) {
+      if (actualValue !== expectedSelectedValue) {
         return {
           supported: true,
           resolved: false,
           action: confirmAction,
           actionResult,
-          message: `Duration picker applied "${actualValue ?? "unknown"}" instead of "${selectedValue}".`,
+          message: `Duration picker applied "${actualValue ?? "unknown"}" instead of "${expectedSelectedValue}".`,
           artifacts,
           metadata: {
             type: "image_region",
@@ -2758,6 +2730,7 @@ export class SemanticStepResolver {
             reason: "picker_value_not_applied",
             pickerMode: "duration_hours_minutes",
             selectedValue,
+            normalizedSelectedValue: expectedSelectedValue,
             actualValue,
             selectedParts,
             attempts: attempt,
@@ -2774,7 +2747,7 @@ export class SemanticStepResolver {
       resolved: true,
       action: confirmAction,
       actionResult,
-      message: `Selected duration picker value "${selectedValue}".`,
+      message: `Selected duration picker value "${expectedSelectedValue}".`,
       artifacts,
       metadata: {
         type: "image_region",
@@ -2785,6 +2758,7 @@ export class SemanticStepResolver {
         semanticArea,
         opener,
         selectedValue,
+        normalizedSelectedValue: expectedSelectedValue,
         ...(verifiedSelectedValue ? { verifiedSelectedValue } : {}),
         selectedParts,
         attempts: attempt,
@@ -4668,6 +4642,109 @@ function findPickerValueCandidate(
   return compactMatch ?? findSplitPickerValueCandidate(layout, expected, options);
 }
 
+async function selectWheelPickerColumn<T extends PickerColumnValue>(input: {
+  target: T;
+  centerXPercent: number;
+  maxSwipes: number;
+  intervalMs: number;
+  deviceSize?: { width: number; height: number };
+  captureLayout: () => Promise<OcrLayoutResult>;
+  readCandidates: (layout: OcrLayoutResult, centerXPercent: number) => Array<PickerColumnCandidate<T>>;
+  compare: (target: T, current: T) => number;
+  formatSelectedPart: (value: T) => string;
+  performAction: (action: DeviceActionRequest) => Promise<DeviceActionResult | undefined>;
+  wait: (ms: number) => Promise<void>;
+  detectNoProgress?: boolean;
+}): Promise<WheelPickerColumnResult<T>> {
+  let previousCenterValue: T | undefined;
+  let repeatedCenterCount = 0;
+  let actionResult: DeviceActionResult | undefined;
+  let swipes = 0;
+  for (let attempt = 0; attempt <= input.maxSwipes; attempt += 1) {
+    const layout = await input.captureLayout();
+    const candidates = input.readCandidates(layout, input.centerXPercent);
+    const selectedCenterY = pickerSelectedCenterY(layout);
+    const current = candidates
+      .slice()
+      .sort((left, right) => Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY))[0];
+    if (current && pickerColumnValueEquals(current.value, input.target)) {
+      return {
+        selected: true,
+        selectedPart: input.formatSelectedPart(current.value),
+        actionResult,
+        swipes
+      };
+    }
+    if (attempt >= input.maxSwipes || !candidates.length || !current) {
+      return {
+        selected: false,
+        actionResult,
+        swipes,
+        failureReason: "picker_value_not_found"
+      };
+    }
+
+    if (input.detectNoProgress) {
+      if (previousCenterValue !== undefined && pickerColumnValueEquals(previousCenterValue, current.value)) {
+        repeatedCenterCount += 1;
+      } else {
+        repeatedCenterCount = 0;
+      }
+      previousCenterValue = current.value;
+      if (repeatedCenterCount >= 2) {
+        return {
+          selected: false,
+          actionResult,
+          swipes,
+          failureReason: "picker_no_progress",
+          stalledAt: input.formatSelectedPart(current.value)
+        };
+      }
+    }
+
+    const visibleTarget = candidates
+      .filter((candidate) => pickerColumnValueEquals(candidate.value, input.target))
+      .sort((left, right) =>
+        Math.abs(left.candidate.centerY - selectedCenterY) - Math.abs(right.candidate.centerY - selectedCenterY)
+      )[0];
+    if (visibleTarget) {
+      const action = {
+        type: "tap",
+        x: scaleCoordinate(visibleTarget.candidate.centerX, layout.width, input.deviceSize?.width),
+        y: scaleCoordinate(visibleTarget.candidate.centerY, layout.height, input.deviceSize?.height)
+      } satisfies DeviceActionRequest;
+      actionResult = await input.performAction(action) ?? actionResult;
+      if (input.intervalMs > 0) {
+        await input.wait(input.intervalMs);
+      }
+      continue;
+    }
+
+    const direction = input.compare(input.target, current.value) > 0 ? "increase" : "decrease";
+    const action = pickerColumnSwipeAction(input.centerXPercent, direction, input.deviceSize, {
+      layout,
+      centerY: selectedCenterY,
+      rowSpacing: pickerColumnRowSpacing(candidates, layout.height),
+      rows: pickerColumnMovementRows(candidates, current.value, input.target)
+    });
+    actionResult = await input.performAction(action) ?? actionResult;
+    swipes += 1;
+    if (input.intervalMs > 0) {
+      await input.wait(input.intervalMs);
+    }
+  }
+  return {
+    selected: false,
+    actionResult,
+    swipes,
+    failureReason: "picker_value_not_found"
+  };
+}
+
+function pickerColumnValueEquals(left: PickerColumnValue, right: PickerColumnValue): boolean {
+  return String(left) === String(right);
+}
+
 function parseDurationPickerValue(value: string): { hours: number; minutes: number } | undefined {
   const compact = compactPickerText(value);
   if (/^\d+$/.test(compact)) {
@@ -4676,7 +4753,7 @@ function parseDurationPickerValue(value: string): { hours: number; minutes: numb
       ? { hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 }
       : undefined;
   }
-  const match = compact.match(/^(?:(\d+)小时)?(?:(\d+)分钟)?$/);
+  const match = compact.match(/^(?:(\d+)(?:小时|时))?(?:(\d+)(?:分钟|分))?$/);
   if (!match || (!match[1] && !match[2])) {
     return undefined;
   }
@@ -4686,6 +4763,10 @@ function parseDurationPickerValue(value: string): { hours: number; minutes: numb
     return undefined;
   }
   return { hours, minutes };
+}
+
+function formatDurationPickerValue(value: { hours: number; minutes: number }): string {
+  return `${value.hours}小时${value.minutes}分钟`;
 }
 
 function parseDateTimePickerValue(value: string): "current" | { date: string; hours: number; minutes: number } | undefined {
@@ -4782,7 +4863,7 @@ function pickerColumnNumberCandidates(
     .filter((entry) => entry.parsed?.unit === unit && Math.abs(entry.candidate.centerX - centerX) <= maxDistance)
     .map((entry) => ({ value: Number(entry.parsed!.number), candidate: entry.candidate }))
     .filter((entry) => Number.isFinite(entry.value));
-  const unitCandidates = candidates.filter((candidate) => compactPickerText(candidate.text) === unit);
+  const unitCandidates = candidates.filter((candidate) => normalizePickerNumberUnit(compactPickerText(candidate.text)) === unit);
   const split = candidates
     .map((candidate) => ({ candidate, compact: compactPickerText(candidate.text) }))
     .filter((entry) => /^\d+(?:\.\d+)?$/.test(entry.compact) && Math.abs(entry.candidate.centerX - centerX) <= maxDistance)
@@ -4850,7 +4931,7 @@ function pickerColumnSwipeAction(
 }
 
 function pickerColumnRowSpacing(
-  candidates: Array<{ value: number; candidate: TextLocatorCandidate }>,
+  candidates: Array<PickerColumnCandidate<PickerColumnValue>>,
   layoutHeight: number
 ): number {
   const centerYs = [...new Set(candidates.map((entry) => Math.round(entry.candidate.centerY)))].sort((left, right) => left - right);
@@ -4863,11 +4944,16 @@ function pickerColumnRowSpacing(
 }
 
 function pickerColumnMovementRows(
-  candidates: Array<{ value: number; candidate: TextLocatorCandidate }>,
-  current: number,
-  target: number
+  candidates: Array<PickerColumnCandidate<PickerColumnValue>>,
+  current: PickerColumnValue,
+  target: PickerColumnValue
 ): number {
-  const values = [...new Set(candidates.map((entry) => entry.value))].sort((left, right) => left - right);
+  if (typeof current !== "number" || typeof target !== "number") {
+    return 1;
+  }
+  const values = [...new Set(candidates.map((entry) => entry.value))]
+    .filter((value): value is number => typeof value === "number")
+    .sort((left, right) => left - right);
   const increments = values
     .slice(1)
     .map((value, index) => value - values[index]!)
@@ -4881,11 +4967,11 @@ function findDurationFieldValue(layout: OcrLayoutResult, targetText: string): st
   const anchor = targetText ? findTextCandidate(layout, targetText, { mode: "contains" }) : undefined;
   const directCandidates = layout.boxes.flatMap((box) => {
     const compactBox = compactPickerText(box.text);
-    if (!compactBox.includes("小时") || !compactBox.includes("分钟")) return [];
+    if (!/(小时|时)/u.test(compactBox) || !/(分钟|分)/u.test(compactBox)) return [];
     const parsed = parseDurationPickerValue(box.text);
     if (!parsed) return [];
     return [{
-      value: `${parsed.hours}小时${parsed.minutes}分钟`,
+      value: formatDurationPickerValue(parsed),
       centerY: box.y + box.height / 2
     }];
   });
@@ -4898,7 +4984,7 @@ function findDurationFieldValue(layout: OcrLayoutResult, targetText: string): st
   if (directCandidates.length === 1) return directCandidates[0]!.value;
 
   const compact = compactPickerText(layout.text);
-  const matches = [...compact.matchAll(/(\d+)小时(\d+)分钟/gu)]
+  const matches = [...compact.matchAll(/(\d+)(?:小时|时)(\d+)(?:分钟|分)/gu)]
     .map((match) => `${Number(match[1])}小时${Number(match[2])}分钟`);
   return [...new Set(matches)].length === 1 ? matches[0] : undefined;
 }
@@ -4918,7 +5004,10 @@ function findSplitPickerValueCandidate(
     return undefined;
   }
   const candidates = layout.boxes.map((box) => toCandidate(box, options.preferredPoint));
-  const unitCandidates = candidates.filter((candidate) => compactPickerText(candidate.text).includes(target.unit));
+  const unitCandidates = candidates.filter((candidate) => {
+    const text = compactPickerText(candidate.text);
+    return text.includes(target.unit) || (target.unit === "分钟" && text.includes("分")) || (target.unit === "小时" && text.includes("时"));
+  });
   const numberCandidates = candidates.filter((candidate) => compactPickerText(candidate.text) === target.number);
   const combined = numberCandidates
     .map((numberCandidate) => {
@@ -5326,16 +5415,27 @@ function compactPickerText(value: string): string {
   return normalizeOcrText(value).replace(/\s+/g, "");
 }
 
-function parsePickerNumberUnit(value: string): { number: string; unit: string } | undefined {
+function parsePickerNumberUnit(value: string): { number: string; unit: "小时" | "分钟" | "天" | "月" | "年" } | undefined {
   const compact = compactPickerText(value);
-  const match = compact.match(/^(\d+(?:\.\d+)?)(分钟|小时|天|月|年)$/);
+  const match = compact.match(/^(\d+(?:\.\d+)?)(分钟|分|小时|时|天|月|年)$/);
   if (!match) {
+    return undefined;
+  }
+  const unit = normalizePickerNumberUnit(match[2] ?? "");
+  if (!unit) {
     return undefined;
   }
   return {
     number: match[1] ?? "",
-    unit: match[2] ?? ""
+    unit
   };
+}
+
+function normalizePickerNumberUnit(unit: string): "小时" | "分钟" | "天" | "月" | "年" | undefined {
+  if (unit === "小时" || unit === "时") return "小时";
+  if (unit === "分钟" || unit === "分") return "分钟";
+  if (unit === "天" || unit === "月" || unit === "年") return unit;
+  return undefined;
 }
 
 function samePickerRow(left: TextLocatorCandidate, right: TextLocatorCandidate): boolean {

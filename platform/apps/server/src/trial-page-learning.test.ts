@@ -101,7 +101,7 @@ function trialRun(): TestRun {
       },
       dependencies: [],
       parsed: {
-        app: { id: "cn.eeo.classin", platform: "android" },
+        app: { id: "cn.eeo.classin" },
         steps: [{
           id: "verify-teaching-plan",
           name: "确认进入教学方案页",

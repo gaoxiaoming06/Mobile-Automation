@@ -317,6 +317,7 @@ function visualSampleFromObservation(observation: Observation): Record<string, u
     platform: observation.platform,
     appPackageName: observation.platform === "android" ? observation.packageName : undefined,
     iosBundleId: observation.platform === "ios" ? observation.bundleId : undefined,
+    harmonyBundleName: observation.platform === "harmony" ? observation.bundleId : undefined,
     capturedAt: observation.capturedAt,
     resolution: observation.resolution,
     orientation: observation.orientation,
@@ -366,7 +367,7 @@ function confirmedMatchersFromMetadata(metadata: Record<string, unknown> | undef
   return [
     ...portableConfirmedMatchers,
     ...portableConfirmedOcrTextMatchers,
-    ...screenshotRegions.flatMap((region) => [imageRegionMatcher(region), semanticImageRegionMatcher(region)])
+    ...screenshotRegions.map(semanticImageRegionMatcher)
   ];
 }
 
@@ -440,25 +441,6 @@ async function writeScreenshotRegionBaselines(
     ...metadata,
     screenshotRegions
   };
-}
-
-function imageRegionMatcher(region: ScreenshotRegionMatcher): StateMatcher {
-  const matcher = {
-    ...confirmedMatcher("image_region", region.signature, 3, true, "mobile-both"),
-    threshold: 0.9,
-    region: region.rect,
-    semanticArea: region.semanticArea ?? semanticAreaForRect(region.rect),
-    coordinateSpace: region.coordinateSpace ?? "screen",
-    ignoreRegions: region.ignoreRegions
-  };
-  if (region.baselineArtifactId) {
-    matcher.source = {
-      ...(matcher.source ?? { sourceType: "manual_edit" as const }),
-      artifactId: region.baselineArtifactId,
-      artifactPath: region.baselinePath
-    };
-  }
-  return matcher;
 }
 
 function semanticImageRegionMatcher(region: ScreenshotRegionMatcher): StateMatcher {
@@ -804,10 +786,10 @@ function withRuntimeScreenshotRegionMatchers(node: BusinessNode): BusinessNode {
   const regions = readScreenshotRegionMatchers(node.metadata?.screenshotRegions).filter(hasVisualBaseline);
   const regionsByMatcherValue = new Map<string, ScreenshotRegionMatcher>();
   for (const region of regions) {
-    regionsByMatcherValue.set(`image_region:${region.signature}`, region);
     regionsByMatcherValue.set(`semantic_image_region:${semanticImageRegionSignature(region)}`, region);
   }
-  const enrichedMatchers = node.matchers.map((matcher) => {
+  const pageIdentityMatchers = node.matchers.filter((matcher) => matcher.type !== "image_region");
+  const enrichedMatchers = pageIdentityMatchers.map((matcher) => {
     const region = regionsByMatcherValue.get(`${matcher.type}:${matcher.value}`);
     if (!region) {
       return matcher;
@@ -821,11 +803,11 @@ function withRuntimeScreenshotRegionMatchers(node: BusinessNode): BusinessNode {
       }
     };
   });
-  const existingValues = new Set(enrichedMatchers.filter((matcher) => isImageRegionMatcherType(matcher.type)).map((matcher) => `${matcher.type}:${matcher.value}`));
+  const existingValues = new Set(enrichedMatchers.filter((matcher) => matcher.type === "semantic_image_region").map((matcher) => `${matcher.type}:${matcher.value}`));
   const missingMatchers = regions
-    .flatMap((region) => [imageRegionMatcher(region), semanticImageRegionMatcher(region)])
+    .map(semanticImageRegionMatcher)
     .filter((matcher) => !existingValues.has(`${matcher.type}:${matcher.value}`));
-  if (!missingMatchers.length && enrichedMatchers.every((matcher, index) => matcher === node.matchers[index])) {
+  if (!missingMatchers.length && enrichedMatchers.length === node.matchers.length && enrichedMatchers.every((matcher, index) => matcher === node.matchers[index])) {
     return node;
   }
   return {

@@ -91,7 +91,7 @@ describe("PageMatcher", () => {
     );
   });
 
-  it("enriches observations with visual baseline similarity before matching image regions", async () => {
+  it("enriches observations with semantic region similarity before matching page assets", async () => {
     const baseline = Buffer.from("same-region");
     const home = node({
       id: "node-home",
@@ -100,8 +100,8 @@ describe("PageMatcher", () => {
       tags: ["page-asset", "asset-recording"],
       matchers: [
         {
-          ...matcher("image_region", "screenshot-region:home-title:%E4%B8%BB%E9%A1%B5", 3, true, "mobile-both"),
-          threshold: 0.9,
+          ...matcher("semantic_image_region", "semantic-image-region:home-title:%E4%B8%BB%E9%A1%B5", 2.2, false, "mobile-both"),
+          threshold: 0.68,
           region: { x: 20, y: 8, width: 30, height: 8 },
           source: { sourceType: "manual_edit", artifactId: "artifact-home-title" }
         }
@@ -121,20 +121,20 @@ describe("PageMatcher", () => {
     expect(result.match.status).toBe("matched");
     expect(result.diagnostics.matchedEvidence).toEqual([
       expect.objectContaining({
-        type: "image_region",
-        expected: "screenshot-region:home-title:%E4%B8%BB%E9%A1%B5",
+        type: "semantic_image_region",
+        expected: "semantic-image-region:home-title:%E4%B8%BB%E9%A1%B5",
         matched: true
       })
     ]);
     expect(result.observation.imageRegions?.[0]).toEqual(
       expect.objectContaining({
-        value: "screenshot-region:home-title:%E4%B8%BB%E9%A1%B5",
-        similarity: 1
+        value: "semantic-image-region:home-title:%E4%B8%BB%E9%A1%B5",
+        similarity: 0.75
       })
     );
   });
 
-  it("does not report old derived region OCR noise as missing evidence when the image region matches", async () => {
+  it("does not report old derived region OCR noise as missing evidence when the semantic region matches", async () => {
     const sharedRegion = { x: 3.4, y: 90.36, width: 92.39, height: 7.36 };
     const home = node({
       id: "node-home",
@@ -143,8 +143,8 @@ describe("PageMatcher", () => {
       tags: ["page-asset", "asset-recording"],
       matchers: [
         {
-          ...matcher("image_region", "screenshot-region:home-bottom:%E5%87%BA%E5%8B%A4%200%2F2", 3, true, "mobile-both"),
-          threshold: 0.9,
+          ...matcher("semantic_image_region", "semantic-image-region:home-bottom:%E5%87%BA%E5%8B%A4%200%2F2", 2.2, false, "mobile-both"),
+          threshold: 0.68,
           region: sharedRegion
         },
         {
@@ -161,7 +161,7 @@ describe("PageMatcher", () => {
       observation: observation({
         imageRegions: [
           {
-            value: "screenshot-region:home-bottom:%E5%87%BA%E5%8B%A4%200%2F2",
+            value: "semantic-image-region:home-bottom:%E5%87%BA%E5%8B%A4%200%2F2",
             region: sharedRegion,
             similarity: 0.99
           }
@@ -170,7 +170,7 @@ describe("PageMatcher", () => {
     });
 
     expect(result.match.status).toBe("matched");
-    expect(result.diagnostics.matchedEvidence).toEqual([expect.objectContaining({ type: "image_region", matched: true })]);
+    expect(result.diagnostics.matchedEvidence).toEqual([expect.objectContaining({ type: "semantic_image_region", matched: true })]);
     expect(result.diagnostics.missingEvidence).toEqual([]);
   });
 
@@ -220,6 +220,130 @@ describe("PageMatcher", () => {
 
     expect(result.match.status).toBe("matched");
     expect(result.diagnostics.missingEvidence).toEqual([]);
+  });
+
+  it("does not report a missing critical pixel region when the same semantic region matches", async () => {
+    const titleRegion = { x: 10, y: 6, width: 42, height: 6 };
+    const editClassroomInfo = node({
+      id: "node-edit-classroom-info",
+      key: "classin.teacher.lesson.edit_classroom_info",
+      name: "编辑课堂信息",
+      tags: ["page-asset", "asset-recording"],
+      matchers: [
+        {
+          ...matcher("image_region", "screenshot-region:edit-classroom-info-title:%E7%BC%96%E8%BE%91%E8%AF%BE%E5%A0%82%E4%BF%A1%E6%81%AF", 3, true, "mobile-both"),
+          threshold: 0.9,
+          region: titleRegion
+        },
+        {
+          ...matcher("semantic_image_region", "semantic-image-region:edit-classroom-info-title:%E7%BC%96%E8%BE%91%E8%AF%BE%E5%A0%82%E4%BF%A1%E6%81%AF", 2.2, false, "mobile-both"),
+          threshold: 0.68,
+          region: titleRegion
+        },
+        {
+          ...matcher("ocr_text", "编辑课堂信息", 1.8, true, "mobile-both"),
+          region: titleRegion
+        }
+      ],
+      metadata: { assetRecordingConfirmed: true }
+    });
+
+    const result = await matchCurrentPage({
+      graphVersion: graph([editClassroomInfo]),
+      observation: observation({
+        resolution: { width: 1080, height: 2400 },
+        ocrTexts: ["联席教师", "添加"],
+        ocrTextRegions: [{ text: "编辑课堂信息", region: { x: 108, y: 144, width: 360, height: 70 } }],
+        imageRegions: [
+          {
+            value: "screenshot-region:edit-classroom-info-title:%E7%BC%96%E8%BE%91%E8%AF%BE%E5%A0%82%E4%BF%A1%E6%81%AF",
+            region: titleRegion,
+            similarity: 0.52
+          },
+          {
+            value: "semantic-image-region:edit-classroom-info-title:%E7%BC%96%E8%BE%91%E8%AF%BE%E5%A0%82%E4%BF%A1%E6%81%AF",
+            region: titleRegion,
+            similarity: 1
+          }
+        ]
+      })
+    });
+
+    expect(result.match.status).toBe("matched");
+    expect(result.diagnostics.missingEvidence).toEqual([]);
+  });
+
+  it("does not use legacy pixel image regions as page asset identity", async () => {
+    const baseline = Buffer.from("same-legacy-pixel-region");
+    const legacyVisualPage = node({
+      id: "node-legacy-visual-page",
+      key: "classin.legacy.visual",
+      name: "旧视觉页",
+      tags: ["page-asset", "asset-recording"],
+      matchers: [
+        {
+          ...matcher("image_region", "screenshot-region:legacy-title:%E6%97%A7%E8%A7%86%E8%A7%89%E9%A1%B5", 3, true, "mobile-both"),
+          threshold: 0.9,
+          region: { x: 0, y: 0, width: 100, height: 100 },
+          source: { sourceType: "manual_edit", artifactId: "artifact-legacy-title" }
+        }
+      ],
+      metadata: { assetRecordingConfirmed: true }
+    });
+
+    const result = await matchCurrentPage({
+      graphVersion: graph([legacyVisualPage]),
+      observation: observation({
+        screenshotBase64: baseline.toString("base64"),
+        resolution: { width: 1080, height: 2400 }
+      }),
+      baselineReader: async (artifactId) => (artifactId === "artifact-legacy-title" ? baseline : undefined),
+      promoteLocalState: false
+    });
+
+    expect(result.match.status).toBe("unknown");
+    expect(result.observation.imageRegions).toBeUndefined();
+  });
+
+  it("synthesizes only semantic region matchers from saved screenshot regions", async () => {
+    const titleRegion = { x: 10, y: 6, width: 40, height: 6 };
+    const home = node({
+      id: "node-home",
+      key: "classin.home",
+      name: "主页",
+      tags: ["page-asset", "asset-recording"],
+      metadata: {
+        assetRecordingConfirmed: true,
+        screenshotRegions: [
+          {
+            id: "region-home-title",
+            label: "主页标题",
+            ...titleRegion,
+            signature: "screenshot-region:region-home-title:%E4%B8%BB%E9%A1%B5",
+            baselineArtifactId: "artifact-home-title"
+          }
+        ]
+      }
+    });
+
+    const result = await matchCurrentPage({
+      graphVersion: graph([home]),
+      observation: observation({
+        resolution: { width: 1080, height: 2400 },
+        ocrTextRegions: [{ text: "主页", region: { x: 120, y: 144, width: 120, height: 56 } }]
+      }),
+      baselineReader: async () => undefined,
+      promoteLocalState: false
+    });
+
+    expect(result.match.status).toBe("matched");
+    expect(result.observation.imageRegions).toEqual([
+      expect.objectContaining({
+        value: "semantic-image-region:region-home-title:%E4%B8%BB%E9%A1%B5",
+        similarity: 1
+      })
+    ]);
+    expect(result.match.candidates[0]?.matcherResults.some((item) => item.type === "image_region")).toBe(false);
   });
 
   it("matches semantic image regions from OCR and layout tokens when dynamic numbers change", async () => {
@@ -428,8 +552,8 @@ describe("PageMatcher", () => {
           region: { x: 34, y: 40, width: 34, height: 6 }
         },
         {
-          ...matcher("image_region", "screenshot-region:class-detail-topbar:%E8%AF%BE%E8%8A%82", 2, false, "mobile-both"),
-          threshold: 0.9,
+          ...matcher("semantic_image_region", "semantic-image-region:class-detail-topbar:%E8%AF%BE%E8%8A%82", 2, false, "mobile-both"),
+          threshold: 0.68,
           region: { x: 5, y: 5.5, width: 90, height: 11 }
         }
       ],
@@ -584,8 +708,8 @@ describe("PageMatcher", () => {
     expect(result.match.status).toBe("matched");
     expect(result.observation.imageRegions?.[0]).toEqual(
       expect.objectContaining({
-        value: "screenshot-region:region-home:%E4%B8%BB%E9%A1%B5",
-        similarity: 1
+        value: "semantic-image-region:region-home:%E4%B8%BB%E9%A1%B5",
+        similarity: 0.75
       })
     );
   });
@@ -636,11 +760,11 @@ describe("PageMatcher", () => {
     });
 
     expect(result.match.status).toBe("unknown");
-    expect(result.observation.imageRegions?.[0]?.similarity).toBeLessThan(0.9);
+    expect(result.observation.imageRegions?.[0]?.similarity).toBeLessThan(0.68);
     expect(result.diagnostics.missingEvidence).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        type: "image_region",
-        expected: "screenshot-region:region-home:%E4%B8%BB%E9%A1%B5",
+        type: "semantic_image_region",
+        expected: "semantic-image-region:region-home:%E4%B8%BB%E9%A1%B5",
         matched: false
       })
     ]));
@@ -686,7 +810,7 @@ describe("PageMatcher", () => {
     expect(result.match.node?.id).toBe("node-home");
     expect(result.observation.imageRegions).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        value: "screenshot-region:home-bottom-selected-tab:%E4%B8%BB%E9%A1%B5%7Chome_selected_tab",
+        value: "semantic-image-region:home-bottom-selected-tab:%E4%B8%BB%E9%A1%B5%7Chome_selected_tab",
         similarity: 1
       })
     ]));
@@ -743,6 +867,7 @@ describe("PageMatcher", () => {
     expect(receivedFallbackPath).toBe(baselinePath);
     expect(result.match.status).toBe("matched");
     expect(result.match.node?.id).toBe("node-add-friend");
+    expect(result.match.candidates[0]?.matcherResults.some((item) => item.type === "image_region")).toBe(false);
   });
 
   it("automatically ignores overlapping system bar pixels when comparing visual regions", async () => {
@@ -792,8 +917,8 @@ describe("PageMatcher", () => {
     expect(result.match.status).toBe("matched");
     expect(result.observation.imageRegions?.[0]).toEqual(
       expect.objectContaining({
-        value: "screenshot-region:region-title:%E4%B8%BB%E9%A1%B5",
-        similarity: 1
+        value: "semantic-image-region:region-title:%E4%B8%BB%E9%A1%B5",
+        similarity: 0.75
       })
     );
   });
@@ -845,7 +970,10 @@ describe("PageMatcher", () => {
     });
 
     expect(result.match.status).toBe("matched");
-    expect(result.observation.imageRegions?.[0]?.similarity).toBeGreaterThanOrEqual(0.9);
+    expect(result.observation.imageRegions?.[0]).toEqual(expect.objectContaining({
+      value: "semantic-image-region:region-title:%E4%B8%BB%E9%A1%B5"
+    }));
+    expect(result.observation.imageRegions?.[0]?.similarity).toBeGreaterThanOrEqual(0.68);
   });
 
   it("reuses the same visual baseline within a page matching pass", async () => {

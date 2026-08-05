@@ -367,7 +367,7 @@ describe("graph-core state detector", () => {
     expect(result.candidates[0]?.quality.missingCriticalMatcherIds).toEqual([]);
   });
 
-  it("does not let non-critical semantic image regions satisfy missing critical pixel regions", () => {
+  it("lets matched semantic image regions satisfy missing same-region critical pixel regions", () => {
     const titleRegion = { x: 15.52, y: 7.15, width: 16.38, height: 5.06 };
     const toolbarRegion = { x: 70.58, y: 6.91, width: 23.12, height: 5.35 };
     const bottomRegion = { x: 2.2, y: 90.87, width: 93.9, height: 7.1 };
@@ -436,13 +436,9 @@ describe("graph-core state detector", () => {
       "android"
     );
 
-    expect(result.status).toBe("unknown");
-    expect(result.node).toBeUndefined();
-    expect(result.candidates[0]?.quality.missingCriticalMatcherIds).toEqual([
-      "image_region-screenshot-region:message-title:%E6%B6%88%E6%81%AF",
-      "image_region-screenshot-region:message-toolbar:contact%7Csearch",
-      "image_region-screenshot-region:message-bottom:fixed_bottom_navigation_container"
-    ]);
+    expect(result.status).toBe("matched");
+    expect(result.node?.id).toBe("message");
+    expect(result.candidates[0]?.quality.missingCriticalMatcherIds).toEqual([]);
   });
 
   it("returns multiple candidates when active nodes tie above threshold", () => {

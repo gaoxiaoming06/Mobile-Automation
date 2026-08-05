@@ -253,6 +253,110 @@ describe("renderReportHtml", () => {
     expect(html).toContain("step.png");
   });
 
+  it("renders planned case step titles in the step result table", () => {
+    const run: TestRun = {
+      id: "run-readable-steps",
+      caseName: "创建公开课并发布",
+      deviceSerial: "device-1",
+      status: "passed",
+      config: {
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 0,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false
+      },
+      steps: [
+        {
+          id: "open-create-lesson",
+          order: 1,
+          type: "tap_on_text",
+          enabled: true,
+          title: "tap",
+          params: { text: "创建公开课" },
+          createdAt: "2026-06-04T00:00:00.000Z"
+        },
+        {
+          id: "select-duration",
+          order: 2,
+          type: "tap_on_image",
+          enabled: true,
+          title: "selectText",
+          params: { text: "课堂时长", value: "7小时20分钟" },
+          createdAt: "2026-06-04T00:00:05.000Z"
+        }
+      ],
+      stepResults: [
+        {
+          id: "step-result-1",
+          runId: "run-readable-steps",
+          iterationIndex: 1,
+          stepId: "open-create-lesson",
+          stepOrder: 1,
+          type: "tap_on_text",
+          status: "passed",
+          startedAt: "2026-06-04T00:00:05.000Z",
+          durationMs: 120,
+          artifacts: []
+        },
+        {
+          id: "step-result-2",
+          runId: "run-readable-steps",
+          iterationIndex: 1,
+          stepId: "select-duration",
+          stepOrder: 2,
+          type: "tap_on_image",
+          status: "passed",
+          startedAt: "2026-06-04T00:00:10.000Z",
+          durationMs: 230,
+          artifacts: []
+        }
+      ],
+      metrics: [],
+      events: [],
+      artifacts: [],
+      startedAt: "2026-06-04T00:00:00.000Z",
+      endedAt: "2026-06-04T00:00:12.000Z",
+      sourceSnapshot: {
+        kind: "script_flow",
+        flowId: "temporary:readable-steps",
+        version: 1,
+        planDigest: "digest",
+        dependencies: [],
+        parsed: {
+          version: 1,
+          kind: "case",
+          name: "创建公开课并发布",
+          app: { id: "classin" },
+          parameters: {},
+          steps: [
+            {
+              id: "open-create-lesson",
+              role: "business",
+              tap: { target: { text: "创建公开课" } }
+            },
+            {
+              id: "select-duration",
+              role: "business",
+              selectText: {
+                target: { text: "课堂时长", area: "content" },
+                value: "7小时20分钟"
+              }
+            }
+          ],
+          tags: []
+        }
+      }
+    };
+
+    const html = renderReportHtml(run);
+
+    expect(html).toContain("点击“创建公开课”");
+    expect(html).toContain("将“课堂时长”选择为“7小时20分钟”");
+  });
+
   it("keeps the screenshot gallery focused on primary step screenshots and folds diagnostic captures", () => {
     const locatorGrowth = screenshotArtifact("artifact-locator-growth", "step-result-1", "locator-open-growth-tab-attempt-1.png");
     const afterGrowth = screenshotArtifact("artifact-after-growth", "step-result-1", "iter-1-step-1-after.png");
