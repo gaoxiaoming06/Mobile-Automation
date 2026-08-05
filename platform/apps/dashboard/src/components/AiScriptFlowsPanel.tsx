@@ -263,7 +263,6 @@ export function AiScriptFlowsPanel({
   const [importSource, setImportSource] = useState("");
   const [creationMode, setCreationMode] = useState<CreationMode>("generate");
   const [appId, setAppId] = useState(defaultAppId);
-  const [platform, setPlatform] = useState<ScriptFlow["platform"]>("android");
   const [draft, setDraft] = useState<AiDraft | undefined>(initialDraft);
   const [history, setHistory] = useState<TemporaryTest[]>(initialHistory);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string>();
@@ -310,8 +309,8 @@ export function AiScriptFlowsPanel({
 
   useEffect(() => {
     if (revision || !appId.trim()) return;
-    void refreshHistory(appId.trim(), platform).then(setHistory).catch(() => undefined);
-  }, [appId, platform, revision?.flowId]);
+    void refreshHistory(appId.trim()).then(setHistory).catch(() => undefined);
+  }, [appId, revision?.flowId]);
 
   useEffect(() => {
     if (!lastRun || !["pending", "running", "paused"].includes(lastRun.status)) return;
@@ -360,7 +359,6 @@ export function AiScriptFlowsPanel({
       const body = buildAiGenerateRequestBody({
         prompt: prompt.trim(),
         appId: appId.trim(),
-        platform,
         revision,
         useCurrentScreen,
         deviceSerial
@@ -417,7 +415,6 @@ export function AiScriptFlowsPanel({
       const nextDraft = await reconcileDraftVerification(imported);
       setPrompt(imported.document.description ?? imported.document.name);
       setAppId(imported.document.app.id);
-      setPlatform(imported.document.app.platform as ScriptFlow["platform"]);
       setDraft(nextDraft);
       setParameterValues(draftParameterValues(nextDraft));
       setConfirmedStepKeys(confirmedKeysForDraft(nextDraft));
@@ -506,7 +503,7 @@ export function AiScriptFlowsPanel({
       setLastRun(response.run);
       setLearning(undefined);
       setMessage(`已启动测试：${response.run.id}`);
-      if (!revision) setHistory(await refreshHistory(targetDraft.document.app.id, targetDraft.document.app.platform));
+      if (!revision) setHistory(await refreshHistory(targetDraft.document.app.id));
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -536,7 +533,6 @@ export function AiScriptFlowsPanel({
       const values = { ...defaultCaseParameterValues(document), ...item.parameterValues };
       setPrompt(item.prompt);
       setAppId(item.appId);
-      setPlatform(item.platform);
       setDraft(nextDraft);
       setParameterValues(values);
       setLastRun(undefined);
@@ -680,7 +676,6 @@ export function AiScriptFlowsPanel({
     try {
       const query = new URLSearchParams({
         appId: generatedDraft.document.app.id,
-        platform: generatedDraft.document.app.platform,
         status: "active"
       });
       const response = await apiFetchJson<{ flows: ScriptFlow[] }>(`/api/script-flows?${query.toString()}`);
@@ -905,9 +900,6 @@ export function AiScriptFlowsPanel({
             {creationMode === "generate" ? <>
               <div className="form-grid two-columns">
                 <label>App ID<input value={appId} onChange={(event) => setAppId(event.target.value)} /></label>
-                <label>平台<select value={platform} onChange={(event) => setPlatform(event.target.value as ScriptFlow["platform"])}>
-                  <option value="android">Android</option><option value="ios">iOS</option><option value="harmony">鸿蒙</option><option value="flutter">Flutter</option>
-                </select></label>
               </div>
               <label className="ai-script-prompt">
                 <span>测试目标或操作过程</span>
@@ -1119,9 +1111,9 @@ export function reusableFlowCandidates(
   const flowsById = new Map(flows.map((flow) => [flow.id, flow]));
   return flows.filter((flow) => {
     if (flow.status !== "active" || flow.id === context.currentFlowId) return false;
-    if (flow.appId !== context.app.id || flow.platform !== context.app.platform) return false;
+    if (flow.appId !== context.app.id) return false;
     const document = readCaseDocument(flow.parsed);
-    if (!document || document.app.id !== context.app.id || document.app.platform !== context.app.platform) return false;
+    if (!document || document.app.id !== context.app.id) return false;
     if (reusableCoreStepCount(document.steps) === 0) return false;
     return !context.currentFlowId || !referencesFlow(flow, context.currentFlowId, flowsById, new Set());
   });
@@ -1764,8 +1756,8 @@ function runStatusLabel(status: TestRun["status"]): string {
   return "设备已断开";
 }
 
-async function refreshHistory(appId: string, platform: string): Promise<TemporaryTest[]> {
-  const query = new URLSearchParams({ appId, platform, limit: "50" });
+async function refreshHistory(appId: string): Promise<TemporaryTest[]> {
+  const query = new URLSearchParams({ appId, limit: "50" });
   const response = await apiFetchJson<{ tests: TemporaryTest[] }>(`/api/temporary-tests?${query.toString()}`);
   return response.tests;
 }
@@ -1976,7 +1968,6 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 export function buildAiGenerateRequestBody(input: {
   prompt: string;
   appId: string;
-  platform: ScriptFlow["platform"];
   revision?: CaseRevision;
   useCurrentScreen: boolean;
   deviceSerial: string;
@@ -1994,7 +1985,6 @@ export function buildAiGenerateRequestBody(input: {
     : {
         prompt: input.prompt,
         appId: input.appId,
-        platform: input.platform,
         ...screenAssist
       };
 }

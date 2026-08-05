@@ -8,7 +8,7 @@ describe("serializeScriptFlow", () => {
       version: 1,
       kind: "case",
       name: "打开添加好友",
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "classin" },
       start: { strategy: "launchApp" },
       parameters: {},
       steps: [{
@@ -23,7 +23,9 @@ describe("serializeScriptFlow", () => {
 
     expect(parseScriptFlow(source)).toMatchObject({
       name: "打开添加好友",
+      app: { id: "classin" },
       steps: [{ onPage: "classin.home", expectPage: "classin.friend.add" }]
     });
+    expect(source).not.toContain("platform");
   });
 });

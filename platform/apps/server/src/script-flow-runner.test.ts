@@ -297,6 +297,102 @@ describe("ScriptFlowRunner", () => {
     }));
   });
 
+  it("does not block a generated action on an unresolved runtime-discovered expected page", async () => {
+    const backend = new CapturingBackend();
+    const runner = new ScriptFlowRunner({
+      backend,
+      driver: { getDeviceInfo: async () => device("harmony") },
+      targetResolver: new ScriptTargetResolver(),
+      pageCatalog: new EmptyCatalog()
+    });
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-runtime-unknown-target",
+      flow: document([{
+        id: "tap-create-public-lesson",
+        expectPage: "runtime.unknown.1u41ebp",
+        tap: { target: { text: "创建公开课" } }
+      }]),
+      deviceSerial: "device-1",
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
+      id: "tap-create-public-lesson",
+      type: "tap_on_text",
+      params: expect.objectContaining({
+        text: "创建公开课",
+        expectPage: "runtime.unknown.1u41ebp"
+      })
+    }));
+    expect(backend.input?.steps?.[0]?.expectations).toBeUndefined();
+  });
+
+  it("does not block a generated action on a confirmed runtime-discovered expected page", async () => {
+    const backend = new CapturingBackend();
+    const runner = new ScriptFlowRunner({
+      backend,
+      driver: { getDeviceInfo: async () => device("harmony") },
+      targetResolver: new ScriptTargetResolver(),
+      pageCatalog: new RuntimeUnknownCatalog()
+    });
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-runtime-confirmed-target",
+      flow: document([{
+        id: "tap-create-public-lesson",
+        expectPage: "runtime.unknown.1u41ebp",
+        tap: { target: { text: "创建公开课" } }
+      }]),
+      deviceSerial: "device-1",
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
+      id: "tap-create-public-lesson",
+      type: "tap_on_text",
+      params: expect.objectContaining({
+        text: "创建公开课",
+        expectPage: "runtime.unknown.1u41ebp"
+      })
+    }));
+    expect(backend.input?.steps?.[0]?.expectations).toBeUndefined();
+  });
+
+  it("does not block a generated action on an unresolved runtime-discovered source page", async () => {
+    const backend = new CapturingBackend();
+    const runner = new ScriptFlowRunner({
+      backend,
+      driver: { getDeviceInfo: async () => device("harmony") },
+      targetResolver: new ScriptTargetResolver(),
+      pageCatalog: new EmptyCatalog()
+    });
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-runtime-unknown-source",
+      flow: document([{
+        id: "tap-publish",
+        onPage: "runtime.unknown.1u41ebp",
+        tap: { target: { text: "发布" } }
+      }]),
+      deviceSerial: "device-1",
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
+      id: "tap-publish",
+      type: "tap_on_text",
+      params: expect.objectContaining({
+        text: "发布",
+        onPage: "runtime.unknown.1u41ebp"
+      })
+    }));
+    expect(backend.input?.steps?.[0]?.preconditions).toBeUndefined();
+  });
+
   it("executes with the frozen interaction asset version and records its reference", async () => {
     const backend = new CapturingBackend();
     const runner = runnerWith(backend);
@@ -524,16 +620,23 @@ describe("ScriptFlowRunner", () => {
     expect(backend.input?.steps?.[0]?.params.scriptParameters).toEqual({ lessonName: "本次课堂" });
   });
 
-  it("rejects a platform that the selected device cannot execute", async () => {
+  it("interprets a cross-platform script with the selected HarmonyOS device runtime bundle id", async () => {
     const backend = new CapturingBackend();
-    const runner = runnerWith(backend, "ios");
+    const runner = runnerWith(backend, "harmony");
 
-    await expect(runner.start({
+    await runner.start({
       ...previewBinding,
-      flowId: "flow-1",
-      flow: document([{ id: "open", tap: { target: { text: "主页" } } }]),
-      deviceSerial: "device-1"
-    })).rejects.toThrow("Script platform android does not match device platform ios");
+      flowId: "flow-harmony",
+      flow: {
+        ...document([{ id: "launch", launchApp: { appId: "classin" } }]),
+        app: { id: "classin" }
+      },
+      deviceSerial: "HARMONY",
+      env: { CLASSIN_HARMONY_BUNDLE_ID: "cn.eeo.hos.classin.mobile" }
+    });
+
+    expect(backend.input?.startAppPackageName).toBe("cn.eeo.hos.classin.mobile");
+    expect(backend.input?.steps?.[0]?.params.packageName).toBe("cn.eeo.hos.classin.mobile");
   });
 
   it("executes sensitive values in memory but sends redacted steps to persistence", async () => {
@@ -679,6 +782,24 @@ class NavigationCatalog extends EmptyCatalog {
   }
 }
 
+class RuntimeUnknownCatalog extends EmptyCatalog {
+  override resolvePage(reference: string, _appId: string, _platform: "android" | "ios" | "harmony" | "flutter"): ReturnType<PageAssetCatalog["resolvePage"]> {
+    if (reference !== "runtime.unknown.1u41ebp") {
+      return undefined;
+    }
+    return {
+      id: "node-runtime-public-lesson",
+      key: "runtime.unknown.1u41ebp",
+      name: "新建公开课",
+      appId: "classin",
+      graphVersionId: "v1",
+      platformScope: "mobile-both",
+      matcherCount: 6,
+      node: {} as never
+    };
+  }
+}
+
 function document(
   steps: ScriptFlowDocument["steps"],
   parameters: ScriptFlowDocument["parameters"] = {}
@@ -687,7 +808,7 @@ function document(
     version: 1,
     kind: "case",
     name: "创建课堂",
-    app: { id: "cn.eeo.classin", platform: "android" },
+    app: { id: "cn.eeo.classin" },
     start: { strategy: "keepCurrent" },
     parameters,
     steps,

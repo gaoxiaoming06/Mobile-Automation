@@ -5,6 +5,7 @@ import {
   type AndroidAppMonitorSessionOptions,
   type VideoRecording
 } from "@mobile-automation/android-driver";
+import { HarmonyDriver } from "@mobile-automation/harmony-driver";
 import { IosDriver, type IosVideoRecording } from "@mobile-automation/ios-driver";
 import type {
   AndroidAppMonitorConfig,
@@ -18,6 +19,7 @@ import type {
   SemanticDeviceActionRequest,
   ToolStatus
 } from "@mobile-automation/shared";
+import { resolveHarmonyAbilityName } from "./target-app-runtime.js";
 
 export type MobileVideoRecording = VideoRecording | IosVideoRecording;
 export type MobileAppMonitorSession = Pick<AndroidAppMonitorSession, "start" | "stop" | "getSummary">;
@@ -39,11 +41,11 @@ export interface AutomationDeviceDriver {
   getDeviceInfo(serial: string): Promise<DeviceInfo>;
   getInstalledAppInfo?(serial: string, appIdentifier: string): Promise<InstalledAppInfo>;
   screenshot(serial: string): Promise<Buffer>;
-  getForegroundApp?(serial: string): Promise<{ packageName?: string; activityName?: string; componentName?: string }>;
+  getForegroundApp?(serial: string): Promise<{ packageName?: string; bundleId?: string; activityName?: string; abilityName?: string; componentName?: string }>;
   dumpUiHierarchy?(serial: string): Promise<string>;
   performAction(serial: string, action: DeviceActionRequest): Promise<DeviceActionResult | void>;
   performSemanticAction?(serial: string, action: SemanticDeviceActionRequest): Promise<DeviceActionResult | void>;
-  clearAppData(serial: string, packageName: string): Promise<void>;
+  clearAppData?(serial: string, packageName: string): Promise<void>;
   collectLogs(serial: string, lines?: number): Promise<string>;
   watchDeviceEvents?(
     serial: string,
@@ -65,16 +67,28 @@ export interface AutomationDeviceDriver {
 export class MobileDriver implements AutomationDeviceDriver {
   private readonly platformCache = new Map<string, DeviceInfo["platform"]>();
 
-  constructor(private readonly android = new AndroidDriver(), private readonly ios = new IosDriver()) {}
+  constructor(
+    private readonly android = new AndroidDriver(),
+    private readonly ios = new IosDriver(),
+    private readonly harmony = new HarmonyDriver({ abilityName: () => resolveHarmonyAbilityName() })
+  ) {}
 
   async getToolStatus(): Promise<ToolStatus[]> {
-    const [androidTools, iosTools] = await Promise.all([this.android.getToolStatus(), this.ios.getToolStatus()]);
-    return [...androidTools, ...iosTools];
+    const [androidTools, iosTools, harmonyTools] = await Promise.all([
+      this.android.getToolStatus(),
+      this.ios.getToolStatus(),
+      this.harmony.getToolStatus()
+    ]);
+    return [...androidTools, ...iosTools, ...harmonyTools];
   }
 
   async listDevices(): Promise<DeviceInfo[]> {
-    const [androidDevices, iosDevices] = await Promise.all([this.android.listDevices(), this.ios.listDevices()]);
-    const devices = [...androidDevices, ...iosDevices];
+    const [androidDevices, iosDevices, harmonyDevices] = await Promise.all([
+      this.android.listDevices(),
+      this.ios.listDevices(),
+      this.harmony.listDevices().catch(() => [])
+    ]);
+    const devices = [...androidDevices, ...iosDevices, ...harmonyDevices];
     for (const device of devices) {
       this.platformCache.set(device.serial, device.platform);
     }
@@ -82,48 +96,43 @@ export class MobileDriver implements AutomationDeviceDriver {
   }
 
   async getDeviceInfo(serial: string): Promise<DeviceInfo> {
-    const platform = await this.resolvePlatform(serial);
-    return platform === "ios" ? this.ios.getDeviceInfo(serial) : this.android.getDeviceInfo(serial);
+    return (await this.driverFor(serial)).getDeviceInfo(serial);
   }
 
   async getInstalledAppInfo(serial: string, appIdentifier: string): Promise<InstalledAppInfo> {
-    const platform = await this.resolvePlatform(serial);
-    if (platform === "ios") {
-      throw new Error("iOS installed app version lookup is not supported yet");
+    const driver = await this.driverFor(serial);
+    if (!driver.getInstalledAppInfo) {
+      const platform = await this.resolvePlatform(serial);
+      throw new Error(`${platform} installed app version lookup is not supported yet`);
     }
-    return this.android.getInstalledAppInfo(serial, appIdentifier);
+    return driver.getInstalledAppInfo(serial, appIdentifier);
   }
 
   async screenshot(serial: string): Promise<Buffer> {
-    const platform = await this.resolvePlatform(serial);
-    return platform === "ios" ? this.ios.screenshot(serial) : this.android.screenshot(serial);
+    return (await this.driverFor(serial)).screenshot(serial);
   }
 
-  async getForegroundApp(serial: string): Promise<{ packageName?: string; activityName?: string; componentName?: string }> {
-    const platform = await this.resolvePlatform(serial);
-    if (platform === "ios") {
-      return {};
-    }
-    return this.android.getForegroundApp(serial);
+  async getForegroundApp(serial: string): Promise<{ packageName?: string; bundleId?: string; activityName?: string; abilityName?: string; componentName?: string }> {
+    const driver = await this.driverFor(serial);
+    return driver.getForegroundApp?.(serial) ?? {};
   }
 
   async dumpUiHierarchy(serial: string): Promise<string> {
     const platform = await this.resolvePlatform(serial);
-    if (platform === "ios") {
-      throw new Error("iOS UI hierarchy locator is not supported yet");
+    if (platform !== "android") {
+      throw new Error(`${platform} UI hierarchy locator is not supported yet`);
     }
     return this.android.dumpUiHierarchy(serial);
   }
 
   async performAction(serial: string, action: DeviceActionRequest): Promise<DeviceActionResult | void> {
-    const platform = await this.resolvePlatform(serial);
-    return platform === "ios" ? this.ios.performAction(serial, action) : this.android.performAction(serial, action);
+    return (await this.driverFor(serial)).performAction(serial, action);
   }
 
   async performSemanticAction(serial: string, action: SemanticDeviceActionRequest): Promise<DeviceActionResult | void> {
     const platform = await this.resolvePlatform(serial);
-    if (platform === "ios") {
-      throw new Error("iOS semantic action backend is not supported yet");
+    if (platform !== "android") {
+      throw new Error(`${platform} semantic action backend is not supported yet`);
     }
     return this.android.performSemanticAction(serial, action);
   }
@@ -133,12 +142,15 @@ export class MobileDriver implements AutomationDeviceDriver {
     if (platform === "ios") {
       throw new Error("clear_data_and_launch is not supported for iOS yet");
     }
-    return this.android.clearAppData(serial, packageName);
+    const driver = await this.driverFor(serial);
+    if (!driver.clearAppData) {
+      throw new Error(`${platform} clear_data_and_launch is not supported yet`);
+    }
+    return driver.clearAppData(serial, packageName);
   }
 
   async collectLogs(serial: string, lines?: number): Promise<string> {
-    const platform = await this.resolvePlatform(serial);
-    return platform === "ios" ? this.ios.collectLogs(serial, lines) : this.android.collectLogs(serial, lines);
+    return (await this.driverFor(serial)).collectLogs(serial, lines);
   }
 
   async watchDeviceEvents(
@@ -147,7 +159,7 @@ export class MobileDriver implements AutomationDeviceDriver {
     options?: { since?: Date; packageName?: string }
   ): Promise<DeviceEventWatcher> {
     const platform = await this.resolvePlatform(serial);
-    if (platform === "ios") {
+    if (platform !== "android") {
       return {
         stop: async () => undefined
       };
@@ -156,8 +168,7 @@ export class MobileDriver implements AutomationDeviceDriver {
   }
 
   async samplePerformance(serial: string, runId: string, stepResultId?: string): Promise<MetricSample> {
-    const platform = await this.resolvePlatform(serial);
-    return platform === "ios" ? this.ios.samplePerformance(serial, runId, stepResultId) : this.android.samplePerformance(serial, runId, stepResultId);
+    return (await this.driverFor(serial)).samplePerformance(serial, runId, stepResultId);
   }
 
   async startAppMonitor(
@@ -168,15 +179,17 @@ export class MobileDriver implements AutomationDeviceDriver {
     callbacks: AndroidAppMonitorCallbacks = {}
   ): Promise<MobileAppMonitorSession> {
     const platform = await this.resolvePlatform(serial);
-    if (platform === "ios") {
-      return createIosNoopAppMonitorSession(config);
+    if (platform !== "android") {
+      return createNoopAppMonitorSession(config);
     }
     return this.android.startAppMonitor(serial, runId, config, writeTextArtifact, callbacks);
   }
 
   async startVideoRecording(serial: string, runId: string, localDir: string): Promise<MobileVideoRecording> {
     const platform = await this.resolvePlatform(serial);
-    return platform === "ios" ? this.ios.startVideoRecording(serial, runId, localDir) : this.android.startVideoRecording(serial, runId, localDir);
+    if (platform === "android") return this.android.startVideoRecording(serial, runId, localDir);
+    if (platform === "ios") return this.ios.startVideoRecording(serial, runId, localDir);
+    throw new Error("HarmonyOS video recording is not supported yet");
   }
 
   async stopVideoRecording(recording: MobileVideoRecording, keep: boolean): Promise<string | undefined> {
@@ -208,9 +221,21 @@ export class MobileDriver implements AutomationDeviceDriver {
     }
     return device.platform;
   }
+
+  private async driverFor(serial: string): Promise<AutomationDeviceDriver> {
+    const platform = await this.resolvePlatform(serial);
+    switch (platform) {
+      case "android":
+        return this.android;
+      case "ios":
+        return this.ios;
+      case "harmony":
+        return this.harmony;
+    }
+  }
 }
 
-function createIosNoopAppMonitorSession(config: AndroidAppMonitorConfig): MobileAppMonitorSession {
+function createNoopAppMonitorSession(config: AndroidAppMonitorConfig): MobileAppMonitorSession {
   const summary: AndroidAppMonitorSummary = {
     packageName: config.packageName,
     startedAt: new Date().toISOString(),

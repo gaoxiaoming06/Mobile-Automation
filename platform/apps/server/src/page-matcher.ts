@@ -705,11 +705,13 @@ function summarizeEvidence(results: MatcherResult[], matched: boolean): PageMatc
 
 function effectiveDiagnosticMatcherResults(results: MatcherResult[]): MatcherResult[] {
   const matchedImageRegions = results.filter((result) => isImageRegionMatcherType(result.type) && result.matched && result.region);
+  const matchedSemanticImageRegions = results.filter((result) => result.type === "semantic_image_region" && result.matched && result.region);
   const matchedStrongSignals = results.filter((result) => result.matched && isStrongStateMatcher(result)).length;
   const matchedWeakSignals = results.filter((result) => result.matched && isWeakStateMatcher(result)).length;
   return results.filter(
     (result) =>
       !isDerivedRegionTextCoveredByMatchedImageRegion(result, matchedImageRegions) &&
+      !isImageRegionCoveredByMatchedSemanticRegion(result, matchedSemanticImageRegions) &&
       !isChangedImageRegionCoveredByOtherPageAnchors(result, matchedImageRegions, matchedStrongSignals, matchedWeakSignals)
   );
 }
@@ -726,6 +728,10 @@ function isDerivedRegionTextCoveredByMatchedImageRegion(result: MatcherResult, m
 
 function isChangedImageRegionCoveredByOtherPageAnchors(result: MatcherResult, matchedImageRegions: MatcherResult[], matchedStrongSignals: number, matchedWeakSignals: number): boolean {
   return isImageRegionMatcherType(result.type) && !result.matched && matchedImageRegions.length >= 1 && matchedStrongSignals >= 2 && matchedWeakSignals >= 2;
+}
+
+function isImageRegionCoveredByMatchedSemanticRegion(result: MatcherResult, matchedSemanticImageRegions: MatcherResult[]): boolean {
+  return result.type === "image_region" && !result.matched && Boolean(result.region) && matchedSemanticImageRegions.some((semanticRegion) => semanticRegion.region && rectsNearlyEqual(result.region!, semanticRegion.region));
 }
 
 function isStrongStateMatcher(result: MatcherResult): boolean {
@@ -753,10 +759,10 @@ function withRuntimeScreenshotRegionMatchers(node: BusinessNode): BusinessNode {
   const regions = readScreenshotRegionMatchers(node.metadata?.screenshotRegions).filter(hasVisualBaseline);
   const regionsByMatcherValue = new Map<string, ScreenshotRegionMatcher>();
   for (const region of regions) {
-    regionsByMatcherValue.set(`image_region:${region.signature}`, region);
     regionsByMatcherValue.set(`semantic_image_region:${semanticImageRegionSignature(region)}`, region);
   }
-  const enrichedMatchers = node.matchers.map((matcher) => {
+  const pageIdentityMatchers = node.matchers.filter((matcher) => matcher.type !== "image_region");
+  const enrichedMatchers = pageIdentityMatchers.map((matcher) => {
     const region = regionsByMatcherValue.get(`${matcher.type}:${matcher.value}`);
     if (!region) {
       return matcher;
@@ -770,11 +776,11 @@ function withRuntimeScreenshotRegionMatchers(node: BusinessNode): BusinessNode {
       }
     };
   });
-  const existingValues = new Set(enrichedMatchers.filter((matcher) => isImageRegionMatcherType(matcher.type)).map((matcher) => `${matcher.type}:${matcher.value}`));
+  const existingValues = new Set(enrichedMatchers.filter((matcher) => matcher.type === "semantic_image_region").map((matcher) => `${matcher.type}:${matcher.value}`));
   const missingMatchers = regions
-    .flatMap((region) => [imageRegionMatcher(region), semanticImageRegionMatcher(region)])
+    .map(semanticImageRegionMatcher)
     .filter((matcher) => !existingValues.has(`${matcher.type}:${matcher.value}`));
-  if (!missingMatchers.length && enrichedMatchers.every((matcher, index) => matcher === node.matchers[index])) {
+  if (!missingMatchers.length && enrichedMatchers.length === node.matchers.length && enrichedMatchers.every((matcher, index) => matcher === node.matchers[index])) {
     return node;
   }
   return {
@@ -788,33 +794,6 @@ function isConfirmedPageAssetNode(node: BusinessNode): boolean {
     return false;
   }
   return node.nodeType === "page" && (Boolean(node.metadata?.assetRecordingConfirmed) || node.tags.includes("page-asset"));
-}
-
-function imageRegionMatcher(region: ScreenshotRegionMatcher): StateMatcher {
-  const matcher: StateMatcher = {
-    id: `image_region-${region.signature}`,
-    type: "image_region",
-    value: region.signature,
-    weight: 3,
-    critical: true,
-    platformScope: "mobile-both",
-    threshold: 0.9,
-    region: region.rect,
-    ignoreRegions: region.ignoreRegions,
-    source: {
-      sourceType: "manual_edit",
-      confidence: 0.95
-    }
-  };
-  if (region.baselineArtifactId) {
-    matcher.source = {
-      sourceType: matcher.source?.sourceType ?? "manual_edit",
-      confidence: matcher.source?.confidence,
-      artifactId: region.baselineArtifactId,
-      artifactPath: region.baselinePath
-    };
-  }
-  return matcher;
 }
 
 function semanticImageRegionMatcher(region: ScreenshotRegionMatcher): StateMatcher {

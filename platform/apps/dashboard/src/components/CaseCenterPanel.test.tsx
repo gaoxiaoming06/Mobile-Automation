@@ -127,7 +127,7 @@ function flow(): ScriptFlow {
       kind: "case",
       name: "创建课堂但不发布",
       description: "进入指定班级并填写新课堂信息，不执行发布。",
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       parameters: { lessonName: { type: "string", label: "课堂名称", required: true } },
       steps: [{ id: "verify", name: "确认已进入新建课堂页", assertPage: "classin.lesson.create" }],
       tags: ["课堂"]

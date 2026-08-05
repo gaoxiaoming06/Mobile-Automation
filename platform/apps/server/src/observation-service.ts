@@ -15,7 +15,9 @@ export type ObservationOptions = {
 
 type ForegroundAppSnapshot = {
   packageName?: string;
+  bundleId?: string;
   activityName?: string;
+  abilityName?: string;
   componentName?: string;
 };
 
@@ -55,7 +57,8 @@ export class ObservationService {
       platform: device.platform,
       capturedAt,
       packageName: foreground.packageName,
-      activityName: foreground.activityName,
+      bundleId: foreground.bundleId,
+      activityName: foreground.activityName ?? foreground.abilityName,
       componentName: foreground.componentName,
       resolution: derivedSize,
       orientation: device.orientation,
@@ -77,6 +80,8 @@ export class ObservationService {
       raw: {
         device_ready: true,
         foreground_package: foreground.packageName,
+        foreground_bundle_id: foreground.bundleId,
+        foreground_ability: foreground.abilityName,
         foreground_package_not: foreground.packageName === "cn.eeo.classin" ? "" : "cn.eeo.classin",
         device,
         uiHierarchyXml: rawUiHierarchy,

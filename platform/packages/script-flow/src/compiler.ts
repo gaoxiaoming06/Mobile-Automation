@@ -116,8 +116,8 @@ function expandChildFlow(
   if (!child) {
     throw new ScriptFlowCompileError(`runFlow not found: ${step.runFlow}`);
   }
-  if (child.app.id !== context.flow.app.id || child.app.platform !== context.flow.app.platform) {
-    throw new ScriptFlowCompileError(`runFlow ${step.runFlow} targets a different app or platform`);
+  if (child.app.id !== context.flow.app.id) {
+    throw new ScriptFlowCompileError(`runFlow ${step.runFlow} targets a different app`);
   }
   const rawBindings = step.with ?? {};
   const bindings: Record<string, ScriptParameterValue> = {};

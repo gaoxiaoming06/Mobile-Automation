@@ -72,6 +72,9 @@ importers:
       '@mobile-automation/graph-core':
         specifier: workspace:*
         version: link:../../packages/graph-core
+      '@mobile-automation/harmony-driver':
+        specifier: workspace:*
+        version: link:../../packages/harmony-driver
       '@mobile-automation/ios-driver':
         specifier: workspace:^
         version: link:../../packages/ios-driver
@@ -128,6 +131,12 @@ importers:
   platform/packages/cli: {}
 
   platform/packages/graph-core:
+    dependencies:
+      '@mobile-automation/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  platform/packages/harmony-driver:
     dependencies:
       '@mobile-automation/shared':
         specifier: workspace:*

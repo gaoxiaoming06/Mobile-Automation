@@ -1,15 +1,14 @@
 import type {
   ScriptFlowDocument,
-  ScriptFlowPlatform,
   ScriptParameterDefinition,
   ScriptStep
 } from "@mobile-automation/script-flow";
-import type { ActionStep } from "@mobile-automation/shared";
+import { CROSS_PLATFORM_SCRIPT_SCOPE, type ActionStep, type ScriptFlow } from "@mobile-automation/shared";
 
 export type PageNavigationSegmentSnapshot = {
   id: string;
   appId: string;
-  platform: ScriptFlowPlatform;
+  platform: ScriptFlow["platform"];
   fromPage: string;
   toPage: string;
   flowId: string;
@@ -48,7 +47,7 @@ export function derivePageNavigationSegments(input: {
       result.push({
         id: `navigation:${input.flowId}:${input.flowVersion}:${segmentNumber}`,
         appId: input.document.app.id,
-        platform: input.document.app.platform,
+        platform: CROSS_PLATFORM_SCRIPT_SCOPE,
         fromPage: active.fromPage,
         toPage,
         flowId: input.flowId,

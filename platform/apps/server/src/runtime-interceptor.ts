@@ -1,5 +1,5 @@
 import { createId, nowIso, type ActionStep, type DeviceActionRequest } from "@mobile-automation/shared";
-import type { Observation, ObservationText, ObservationUiElement } from "@mobile-automation/graph-core";
+import type { Observation, ObservationText, ObservationUiElement, PlatformScope } from "@mobile-automation/graph-core";
 import { normalizeOcrText } from "./step-expectations.js";
 
 export type RuntimeInterceptorRule = {
@@ -9,7 +9,7 @@ export type RuntimeInterceptorRule = {
   text?: string;
   matchers?: RuntimeInterceptorMatcher[];
   action: RuntimeInterceptorAction;
-  platformScope?: "android" | "ios" | "mobile-both";
+  platformScope?: PlatformScope;
   appPackageName?: string;
   iosBundleId?: string;
   flowId?: string;
@@ -93,6 +93,18 @@ const DEFAULT_RULES: RuntimeInterceptorRule[] = [
       { type: "text", value: "选择学段和学科" }
     ],
     action: { type: "tap_text", text: "×", mode: "equals" },
+    platformScope: "mobile-both"
+  },
+  {
+    id: "classin-upgrade-popup",
+    name: "ClassIn 升级提示弹窗",
+    enabled: true,
+    matchers: [
+      { type: "text", value: "版本" },
+      { type: "text", value: "立即更新" },
+      { type: "text", value: "了解更新详情" }
+    ],
+    action: { type: "back" },
     platformScope: "mobile-both"
   },
   rule("android-permission-allow", "Android 权限允许", "允许"),

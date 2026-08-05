@@ -6,7 +6,7 @@ export type RuntimeInterceptorRule = {
   name: string;
   enabled?: boolean;
   text?: string;
-  platformScope?: "android" | "ios" | "mobile-both";
+  platformScope?: "android" | "ios" | "harmony" | "mobile-both";
   appPackageName?: string;
   iosBundleId?: string;
   matchers?: Array<{

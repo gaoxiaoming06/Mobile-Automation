@@ -11,6 +11,8 @@ import {
 import { ArrowLeft, Camera, CheckCircle2, Pause, Play, Smartphone, Square, StepForward, Video, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import { expectationLabel } from "./StepExpectationPanel";
+import { devicePlatformLabel } from "./PreviewPanel";
+import { caseStepViews, readCaseDocument } from "./case-view";
 import { formatShortTime } from "./time-format";
 
 type RunResultsPanelProps = {
@@ -46,9 +48,10 @@ export function RunResultsPanel({
   const failedRunCount = resultGroups.filter((group) => isFailureStatus(group.status)).length;
   const deviceTitle = selectedDevice?.name || selectedSerial || "未选择设备";
   const deviceMeta = selectedDevice
-    ? `${selectedDevice.platform === "ios" ? "iOS" : "Android"}${selectedDevice.osVersion ? ` ${selectedDevice.osVersion}` : ""} · ${selectedDevice.status} · ${selectedDevice.serial}`
+    ? `${devicePlatformLabel(selectedDevice.platform)}${selectedDevice.osVersion ? ` ${selectedDevice.osVersion}` : ""} · ${selectedDevice.status} · ${selectedDevice.serial}`
     : "请选择设备后查看执行结果";
   const executionFailure = currentRun ? publicExecutionFailureFromRun(currentRun) : undefined;
+  const sourceStepTitles = currentRun ? sourceStepTitlesForRun(currentRun) : new Map<string, string>();
 
   return (
     <aside className="steps-panel">
@@ -155,7 +158,7 @@ export function RunResultsPanel({
                 <div className="run-step-results">
                   {currentRun.stepResults.slice(0, 8).map((step) => {
                     const screenshot = step.artifacts.find((artifact) => artifact.type === "screenshot");
-                    const display = runStepResultDisplay(step);
+                    const display = runStepResultDisplay(step, currentRun.steps, sourceStepTitles);
                     return (
                       <div className="run-step-result" key={step.id}>
                         <span className="step-order">{step.stepOrder}</span>
@@ -342,18 +345,82 @@ function eventSummaryForDisplay(event: TestRun["events"][number]): string {
 }
 
 type RunStepResult = TestRun["stepResults"][number];
+type RunStep = TestRun["steps"][number];
 
 type RunStepResultDisplay = {
   label: string;
 };
 
-export function runStepResultDisplay(step: RunStepResult): RunStepResultDisplay {
-  return { label: step.type };
+export function runStepResultDisplay(
+  step: RunStepResult,
+  plannedSteps: RunStep[] = [],
+  sourceStepTitles: Map<string, string> = new Map()
+): RunStepResultDisplay {
+  const plannedStep = plannedStepForResult(step, plannedSteps);
+  const sourceStepId = sourceStepIdForResult(step, plannedStep);
+  const sourceTitle = sourceStepId ? sourceStepTitles.get(sourceStepId) : undefined;
+  return { label: sourceTitle ?? readablePlannedStepTitle(plannedStep) ?? step.type };
 }
 
 function formatRunStepResultDetail(step: RunStepResult, _display: RunStepResultDisplay): string {
   return `${step.durationMs ?? "-"} ms · ${step.status}`;
 }
+
+function plannedStepForResult(step: RunStepResult, plannedSteps: RunStep[]): RunStep | undefined {
+  return plannedSteps.find((candidate) => candidate.id === step.stepId)
+    ?? plannedSteps.find((candidate) => candidate.order === step.stepOrder);
+}
+
+function sourceStepTitlesForRun(run: TestRun): Map<string, string> {
+  const parsed = recordValue(run.sourceSnapshot?.parsed);
+  const document = readCaseDocument(parsed);
+  if (!document) return new Map();
+  return new Map(caseStepViews(document).map((step) => [step.id, step.name]));
+}
+
+function sourceStepIdForResult(step: RunStepResult, plannedStep: RunStep | undefined): string | undefined {
+  return nonEmptyString(plannedStep?.params.scriptStepId)
+    ?? nonEmptyString(step.metadata?.scriptStepId)
+    ?? nonEmptyString(step.stepId);
+}
+
+function readablePlannedStepTitle(plannedStep: RunStep | undefined): string | undefined {
+  const title = nonEmptyString(plannedStep?.title) ?? nonEmptyString(plannedStep?.note);
+  if (!title || title === plannedStep?.type || GENERIC_EXECUTION_TITLES.has(title)) return undefined;
+  return title;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+const GENERIC_EXECUTION_TITLES = new Set([
+  "tap",
+  "inputText",
+  "clearText",
+  "selectText",
+  "swipe",
+  "scrollUntilVisible",
+  "reachPage",
+  "waitForPage",
+  "assertPage",
+  "assertText",
+  "点击目标",
+  "输入文本",
+  "清空输入",
+  "选择选项",
+  "滑动页面",
+  "查找内容",
+  "到达页面",
+  "等待页面",
+  "确认页面",
+  "确认文字",
+  "确认出现指定内容"
+]);
 
 function renderStepConditionResult(metadata: Record<string, unknown> | undefined) {
   const condition = metadata?.condition;

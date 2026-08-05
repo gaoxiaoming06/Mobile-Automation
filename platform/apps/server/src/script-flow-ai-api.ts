@@ -1,7 +1,8 @@
 import type express from "express";
-import type { ScriptFlow } from "@mobile-automation/shared";
+import { CROSS_PLATFORM_SCRIPT_SCOPE, type ScriptFlow } from "@mobile-automation/shared";
 import type { PageAssetPlatform } from "./page-asset-catalog.js";
 import type { ScriptFlowAiDraft } from "./script-flow-ai-planner.js";
+import { normalizeTargetAppId } from "./target-app-runtime.js";
 
 export type ScriptFlowScreenAssistRequest = {
   mode: "current";
@@ -30,7 +31,7 @@ export function registerScriptFlowAiRoutes(
         ? await generateRevisionDraft(deps, flowId, body.expectedVersion, prompt, screenAssist)
         : await deps.generateDraft({
             prompt,
-            appId: requiredString(body.appId, "appId"),
+            appId: normalizeTargetAppId(requiredString(body.appId, "appId")),
             platform: platformValue(body.platform),
             ...(screenAssist ? { screenAssist } : {})
           });
@@ -117,8 +118,10 @@ function recordValue(value: unknown, field: string): Record<string, unknown> {
 }
 
 function platformValue(value: unknown): PageAssetPlatform {
+  if (value === undefined) return CROSS_PLATFORM_SCRIPT_SCOPE;
   if (value === "android" || value === "ios" || value === "harmony" || value === "flutter") return value;
-  throw new ScriptFlowAiApiError(400, "platform must be android, ios, harmony, or flutter");
+  if (value === CROSS_PLATFORM_SCRIPT_SCOPE) return value;
+  throw new ScriptFlowAiApiError(400, "platform must be android, ios, harmony, flutter, or mobile");
 }
 
 class ScriptFlowAiApiError extends Error {

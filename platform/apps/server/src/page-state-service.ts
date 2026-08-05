@@ -1,7 +1,9 @@
 import type { BusinessGraphVersion, Observation } from "@mobile-automation/graph-core";
+import { CROSS_PLATFORM_SCRIPT_SCOPE } from "@mobile-automation/shared";
 import { matchCurrentPage, type PageMatcherBaselineReader, type PageMatcherDiagnostics } from "./page-matcher.js";
 import type { ObservationOptions } from "./observation-service.js";
 import type { PageAsset, PageAssetCatalog, PageAssetPlatform, PageAssetSummary } from "./page-asset-catalog.js";
+import { isObservationInsideTargetApp, type RuntimeAppEnv } from "./target-app-runtime.js";
 
 export type PageObservationCollector = {
   collect(serial: string, options: ObservationOptions): Promise<Observation>;
@@ -45,7 +47,8 @@ export class DefaultPageStateService implements PageStateService {
   constructor(
     private readonly catalog: PageAssetCatalog,
     private readonly observations: PageObservationCollector,
-    private readonly baselineReader?: PageMatcherBaselineReader
+    private readonly baselineReader?: PageMatcherBaselineReader,
+    private readonly env?: RuntimeAppEnv
   ) {}
 
   async identifyCurrentPage(input: IdentifyPageInput): Promise<PageStateResult> {
@@ -91,12 +94,18 @@ export class DefaultPageStateService implements PageStateService {
       return observationResult.failure;
     }
     const observation = observationResult.observation;
-    if (observation.packageName && observation.packageName !== input.appId) {
+    const appMatch = isObservationInsideTargetApp({
+      appId: input.appId,
+      platform: input.platform === "flutter" || input.platform === CROSS_PLATFORM_SCRIPT_SCOPE ? observation.platform : input.platform,
+      observation,
+      env: this.env
+    });
+    if (!appMatch.inside) {
       return {
         status: "outside_app",
         candidates: [],
         observation,
-        actualAppId: observation.packageName
+        actualAppId: appMatch.actualAppIdentifier
       };
     }
     const graphVersion = graphForPages(pages);

@@ -183,6 +183,52 @@ describe("ScriptTargetResolver", () => {
     });
   });
 
+  it("routes abbreviated minute duration values to the bounded duration picker", () => {
+    const resolver = new ScriptTargetResolver();
+
+    const result = resolver.resolve({
+      action: "selectText",
+      target: { text: "课堂时长" },
+      value: "7小时20分",
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+
+    expect(result.params).toMatchObject({
+      targetText: "课堂时长",
+      selectedValue: "7小时20分",
+      structuralLocator: {
+        strategy: "ocr_runtime_picker",
+        text: "课堂时长",
+        pickerMode: "duration_hours_minutes"
+      },
+      verifySelectedValue: true
+    });
+  });
+
+  it("routes start-time values to the date-time picker", () => {
+    const resolver = new ScriptTargetResolver();
+
+    const result = resolver.resolve({
+      action: "selectText",
+      target: { text: "开始时间" },
+      value: "2026-08-05 14:25",
+      appId: "cn.eeo.classin",
+      platform: "android"
+    });
+
+    expect(result.params).toMatchObject({
+      targetText: "开始时间",
+      selectedValue: "2026-08-05 14:25",
+      structuralLocator: {
+        strategy: "ocr_runtime_picker",
+        text: "开始时间",
+        pickerMode: "date_time"
+      },
+      verifySelectedValue: true
+    });
+  });
+
   it("resolves a standard top-bar icon without consulting the page locator catalog", () => {
     const resolver = new ScriptTargetResolver();
 

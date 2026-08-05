@@ -156,6 +156,18 @@ describe("ObservationService", () => {
       }
     ]);
   });
+
+  it("collects HarmonyOS bundle id without requiring Android UI hierarchy", async () => {
+    const service = new ObservationService(new HarmonyDriver(), new TextOcrService("登录"));
+
+    const observation = await service.collect("HARMONY", { includeUiTree: true, includeOcr: true });
+
+    expect(observation.platform).toBe("harmony");
+    expect(observation.bundleId).toBe("com.eeo.classin.harmony");
+    expect(observation.activityName).toBe("EntryAbility");
+    expect(observation.uiElements).toEqual([]);
+    expect(observation.ocrTexts.map((item) => item.text)).toEqual(["登录"]);
+  });
 });
 
 class FakeDriver implements AutomationDeviceDriver {
@@ -190,7 +202,7 @@ class FakeDriver implements AutomationDeviceDriver {
     return Buffer.from("png");
   }
 
-  async getForegroundApp(): Promise<{ packageName?: string; activityName?: string; componentName?: string }> {
+  async getForegroundApp(): Promise<{ packageName?: string; bundleId?: string; activityName?: string; abilityName?: string; componentName?: string }> {
     return {
       packageName: "com.demo",
       activityName: "com.demo.HomeActivity",
@@ -235,6 +247,40 @@ class FakeDriver implements AutomationDeviceDriver {
 
   async stopVideoRecording(_recording: MobileVideoRecording, _keep: boolean): Promise<string | undefined> {
     return undefined;
+  }
+}
+
+class HarmonyDriver extends FakeDriver {
+  override async getDeviceInfo(): Promise<DeviceInfo> {
+    return {
+      id: "HARMONY",
+      serial: "HARMONY",
+      platform: "harmony",
+      name: "Mock HarmonyOS",
+      resolution: {
+        width: 1080,
+        height: 2400
+      },
+      orientation: "portrait",
+      status: "online",
+      capabilities: defaultAndroidCapabilities(),
+      lastSeenAt: nowIso()
+    };
+  }
+
+  override async screenshot(): Promise<Buffer> {
+    return pngHeaderWithSize(1080, 2400);
+  }
+
+  override async getForegroundApp(): Promise<{ bundleId?: string; abilityName?: string }> {
+    return {
+      bundleId: "com.eeo.classin.harmony",
+      abilityName: "EntryAbility"
+    };
+  }
+
+  override async dumpUiHierarchy(): Promise<string> {
+    throw new Error("HarmonyOS should not collect Android UI hierarchy");
   }
 }
 
@@ -332,6 +378,32 @@ class RecordingOcrService extends FakeOcrService {
   override async locateText(input: OcrInput): Promise<OcrLayoutResult> {
     this.started = true;
     return super.locateText(input);
+  }
+}
+
+class TextOcrService extends FakeOcrService {
+  constructor(private readonly text: string) {
+    super();
+  }
+
+  override async locateText(_input: OcrInput): Promise<OcrLayoutResult> {
+    return {
+      text: this.text,
+      engine: "fake",
+      lang: "chi_sim",
+      width: 1080,
+      height: 2400,
+      boxes: [
+        {
+          text: this.text,
+          confidence: 0.98,
+          x: 10,
+          y: 20,
+          width: 120,
+          height: 40
+        }
+      ]
+    };
   }
 }
 

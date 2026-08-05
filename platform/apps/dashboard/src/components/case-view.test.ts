@@ -7,7 +7,7 @@ describe("caseStepViews", () => {
       version: 1,
       kind: "case",
       name: "打开笔记",
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       parameters: {},
       steps: [{ id: "open-note", role: "business", tap: { target: { text: "笔记" } } }],
       tags: []
@@ -26,7 +26,7 @@ describe("caseStepViews", () => {
       version: 1,
       kind: "case",
       name: "验证未录入页面",
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       parameters: {},
       steps: [{
         id: "verify-result",
@@ -49,7 +49,7 @@ describe("caseStepViews", () => {
       purpose: "business",
       testLevel: "component",
       name: "新建课堂字段验证",
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       parameters: {},
       steps: [
         {
@@ -104,7 +104,7 @@ describe("caseStepViews", () => {
       version: 1,
       kind: "case",
       name: "发布课堂",
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       parameters: {},
       steps: [
         { id: "open-info", name: "点击目标", tap: { target: { text: "课堂信息" } } },

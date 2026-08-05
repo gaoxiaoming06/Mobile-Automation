@@ -14,7 +14,6 @@ export type {
   ScriptFlowDocument,
   ScriptFlowKind,
   ScriptFlowPurpose,
-  ScriptFlowPlatform,
   ScriptFlowState,
   ScriptFlowTestLevel,
   ScriptSessionState,

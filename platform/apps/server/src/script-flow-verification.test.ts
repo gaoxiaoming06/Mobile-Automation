@@ -85,7 +85,7 @@ function flow(
     version: 1,
     kind: "case",
     name: "测试流程",
-    app: { id: "cn.eeo.classin", platform: "android" },
+    app: { id: "cn.eeo.classin" },
     parameters: {},
     ...(outcome ? { outcome } : {}),
     steps,

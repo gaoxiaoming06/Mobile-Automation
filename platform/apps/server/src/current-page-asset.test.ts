@@ -647,6 +647,38 @@ describe("identifyOrCreateCurrentPageDraft", () => {
     );
   });
 
+  it("records HarmonyOS bundle in visual sample metadata", () => {
+    const storage = new MemoryCurrentPageStorage([]);
+    const node = createConfirmedPageAssetFromCandidate({
+      graphVersionId: "version-1",
+      observation: observation({
+        platform: "harmony",
+        resourceId: "unused",
+        text: "登录",
+        bundleId: "com.eeo.classin.harmony",
+        ocrTexts: [{ text: "登录", region: { x: 120, y: 680, width: 840, height: 80 } }]
+      }),
+      storage,
+      draft: {
+        key: "classin.login",
+        name: "登录页",
+        tags: ["page-asset", "asset-recording"],
+        metadata: {
+          confirmedOcrTexts: ["登录"]
+        }
+      }
+    });
+
+    expect(node.metadata?.visualSamples).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: "harmony",
+          harmonyBundleName: "com.eeo.classin.harmony"
+        })
+      ])
+    );
+  });
+
   it("can bind screenshot focus regions to visual baseline artifacts", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "page-asset-baseline-"));
     try {
@@ -699,10 +731,8 @@ describe("identifyOrCreateCurrentPageDraft", () => {
         }
       });
 
-      const imageMatcher = nodeInput.matchers.find((matcher) => matcher.type === "image_region");
       const semanticMatcher = nodeInput.matchers.find((matcher) => matcher.type === "semantic_image_region");
-      expect(imageMatcher?.source?.artifactId).toBe("artifact-1");
-      expect(imageMatcher?.ignoreRegions).toEqual([{ x: 10, y: 10, width: 12, height: 8 }]);
+      expect(nodeInput.matchers.some((matcher) => matcher.type === "image_region")).toBe(false);
       expect(semanticMatcher).toEqual(
         expect.objectContaining({
           type: "semantic_image_region",
@@ -713,7 +743,10 @@ describe("identifyOrCreateCurrentPageDraft", () => {
           region: { x: 65, y: 3, width: 32, height: 22 },
           semanticArea: "top",
           coordinateSpace: "screen",
-          ignoreRegions: [{ x: 10, y: 10, width: 12, height: 8 }]
+          ignoreRegions: [{ x: 10, y: 10, width: 12, height: 8 }],
+          source: expect.objectContaining({
+            artifactId: "artifact-1"
+          })
         })
       );
       expect(nodeInput.matchers).not.toEqual(
@@ -1231,10 +1264,12 @@ function node(input: Partial<BusinessNode> & { id: string; key: string; name: st
 }
 
 function observation(input: {
+  platform?: Observation["platform"];
   resourceId: string;
   text?: string;
   extraTexts?: string[];
   packageName?: string;
+  bundleId?: string;
   activityName?: string;
   ocrTexts?: Observation["ocrTexts"];
   resolution?: Observation["resolution"];
@@ -1243,9 +1278,10 @@ function observation(input: {
   const texts = [input.text ?? "首页", ...(input.extraTexts ?? [])];
   return {
     id: "observation-1",
-    platform: "android",
+    platform: input.platform ?? "android",
     capturedAt: "2026-06-14T10:00:00.000Z",
     packageName: input.packageName ?? "demo",
+    bundleId: input.bundleId,
     activityName: input.activityName ?? ".MainActivity",
     resolution: input.resolution,
     uiElements: texts.map((text, index) => ({

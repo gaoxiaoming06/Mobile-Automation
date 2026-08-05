@@ -53,4 +53,50 @@ describe("RuntimeInterceptorPanel", () => {
     expect(markup).toContain("看到 选择学科");
     expect(markup).toContain("点击文字 关闭");
   });
+
+  it("renders HarmonyOS-scoped rules", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(RuntimeInterceptorPanel, {
+        selectedSerial: "harmony-serial",
+        selectedDevice: {
+          id: "device-1",
+          serial: "harmony-serial",
+          platform: "harmony",
+          status: "online",
+          capabilities: {
+            preview: true,
+            tap: true,
+            longPress: true,
+            swipe: true,
+            back: true,
+            home: true,
+            recentApps: false,
+            textInput: true,
+            screenshot: true,
+            launchApp: true,
+            closeApp: true,
+            recordVideo: false,
+            metrics: { cpu: false, memory: false, fps: false, network: false, battery: false, temperature: false },
+            events: { crash: false, anr: false, logs: true }
+          },
+          lastSeenAt: "2026-08-04T00:00:00.000Z"
+        },
+        rules: [
+          {
+            id: "rule-harmony",
+            name: "鸿蒙临时页",
+            enabled: true,
+            platformScope: "harmony",
+            matchers: [{ type: "text", value: "权限申请" }],
+            action: { type: "back" }
+          }
+        ],
+        onMarkCurrentPage: async () => undefined,
+        onDeleteRule: async () => undefined
+      })
+    );
+
+    expect(markup).toContain("harmony");
+    expect(markup).toContain("权限申请");
+  });
 });

@@ -382,12 +382,15 @@ function PageAssetDetailPanel({ asset }: { asset: DecoratedPageAsset }) {
   );
 }
 
-function platformLabel(platformScope: string | undefined): string {
+export function platformLabel(platformScope: string | undefined): string {
   if (platformScope === "mobile-both") {
-    return "Android / iOS";
+    return "Android / iOS / HarmonyOS";
   }
   if (platformScope === "ios") {
     return "iOS";
+  }
+  if (platformScope === "harmony") {
+    return "HarmonyOS";
   }
   return "Android";
 }

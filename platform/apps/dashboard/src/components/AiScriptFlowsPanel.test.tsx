@@ -37,12 +37,12 @@ describe("AiScriptFlowsPanel", () => {
         { id: "reset", role: "reset", tap: { target: { text: "主页" } } }
       ]),
       reusableFlow("flow-cycle", "循环引用", [{ id: "back", runFlow: "flow-current" }]),
-      { ...reusableFlow("flow-ios", "iOS 用例", [{ id: "ios", tap: { target: { text: "登录" } } }]), platform: "ios" as const,
-        parsed: { ...reusableFlow("flow-ios", "iOS 用例", []).parsed, app: { id: "cn.eeo.classin", platform: "ios" } } }
+      { ...reusableFlow("flow-other-app", "其他 App 用例", [{ id: "other", tap: { target: { text: "登录" } } }]), appId: "com.example.other",
+        parsed: { ...reusableFlow("flow-other-app", "其他 App 用例", []).parsed, app: { id: "com.example.other" } } }
     ];
 
     expect(reusableFlowCandidates(flows, {
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       currentFlowId: "flow-current"
     }).map((flow) => flow.id)).toEqual(["flow-login"]);
   });
@@ -85,7 +85,7 @@ steps:
       purpose: "business",
       testLevel: "probe",
       name: "从成长页进入全网搜索",
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       parameters: {},
       steps: [{ id: "open-growth", role: "business", tap: { target: { text: "成长", area: "bottomBar" } } }],
       tags: []
@@ -94,7 +94,7 @@ steps:
     expect(draft).toMatchObject({
       status: "trial_ready",
       sourceYaml,
-      document: { name: "从成长页进入全网搜索", app: { id: "cn.eeo.classin", platform: "android" } },
+      document: { name: "从成长页进入全网搜索", app: { id: "cn.eeo.classin" } },
       summary: "已导入脚本：从成长页进入全网搜索",
       channel: "manual-import",
       model: "scriptflow-yaml"
@@ -189,7 +189,7 @@ steps:
       purpose: "business",
       testLevel: "business_smoke",
       name: "组合场景",
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       parameters: {},
       steps: [{ id: "reuse-login", role: "business", runFlow: "flow-login" }],
       tags: []
@@ -247,7 +247,7 @@ steps:
           kind: "case",
           purpose: "navigation",
           name: "从主页进入添加好友",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [{ id: "reach", role: "navigation", reachPage: { page: "classin.friend.add" } }],
           tags: []
@@ -303,7 +303,7 @@ steps:
           purpose: "business",
           testLevel: "probe",
           name: "临时验证发布按钮",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [{ id: "tap-publish", role: "business", tap: { target: { text: "发布" } } }],
           tags: []
@@ -344,7 +344,7 @@ steps:
           purpose: "business",
           testLevel: "business_smoke",
           name: "点击搜索图标",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [{ id: "tap-search", role: "business", tap: { target: { icon: "search" } } }],
           tags: []
@@ -380,7 +380,7 @@ steps:
           purpose: "business",
           testLevel: "component",
           name: "修改课堂标题",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [
             {
@@ -447,7 +447,7 @@ steps:
           purpose: "business",
           testLevel: "business_smoke",
           name: "启动并进入成长",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           start: { strategy: "launchApp" },
           parameters: {},
           steps: [
@@ -563,7 +563,7 @@ steps:
           version: 1,
           kind: "case",
           name: "启动后进入成长并点击笔记",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [
             { id: "launch-app", launchApp: { appId: "cn.eeo.classin" } },
@@ -621,7 +621,7 @@ steps:
           version: 1,
           kind: "case",
           name: "重复填写",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [{
             id: "repeat-fields",
@@ -661,7 +661,7 @@ steps:
           version: 1,
           kind: "case",
           name: "新测试",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [],
           tags: []
@@ -690,7 +690,7 @@ steps:
         purpose: "business" as const,
         testLevel: "component" as const,
         name: "修改课堂标题",
-        app: { id: "cn.eeo.classin", platform: "android" },
+        app: { id: "cn.eeo.classin" },
         parameters: {},
         steps: [{
           id: "fill-lesson-title",
@@ -748,7 +748,7 @@ steps:
           purpose: "business",
           testLevel: "component",
           name: "修改课堂标题",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {
             lessonTitle: { type: "string", label: "课堂标题", required: true }
           },
@@ -794,25 +794,21 @@ steps:
     expect(buildAiGenerateRequestBody({
       prompt: "当前页面第一个输入框改成自动化课堂",
       appId: "cn.eeo.classin",
-      platform: "android",
       useCurrentScreen: false,
       deviceSerial: "device-1"
     })).toEqual({
       prompt: "当前页面第一个输入框改成自动化课堂",
-      appId: "cn.eeo.classin",
-      platform: "android"
+      appId: "cn.eeo.classin"
     });
 
     expect(buildAiGenerateRequestBody({
       prompt: "当前页面第一个输入框改成自动化课堂",
       appId: "cn.eeo.classin",
-      platform: "android",
       useCurrentScreen: true,
       deviceSerial: "device-1"
     })).toEqual({
       prompt: "当前页面第一个输入框改成自动化课堂",
       appId: "cn.eeo.classin",
-      platform: "android",
       screenAssist: { mode: "current", deviceSerial: "device-1" }
     });
   });
@@ -848,7 +844,7 @@ steps:
           version: 1,
           kind: "case",
           name: "从主页进入添加好友页面",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [],
           tags: []
@@ -918,7 +914,7 @@ steps:
           version: 1,
           kind: "case",
           name: "打开主页",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [{ id: "launch", name: "启动 ClassIn", launchApp: { appId: "cn.eeo.classin" } }],
           tags: []
@@ -958,7 +954,7 @@ steps:
           version: 1,
           kind: "case",
           name: "打开添加好友",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [{ id: "open-add-friend", tap: { target: { text: "添加好友" } } }],
           tags: []
@@ -1005,7 +1001,7 @@ steps:
           version: 1,
           kind: "case",
           name: "打开添加好友",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [{ id: "open-add-friend", tap: { target: { text: "添加好友" } } }],
           tags: []
@@ -1061,7 +1057,7 @@ steps:
           version: 1,
           kind: "case",
           name: "教师登录",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {},
           steps: [{ id: "tap-login", name: "点击登录", tap: { target: { text: "登录" } } }],
           tags: []
@@ -1099,7 +1095,7 @@ steps:
           version: 1,
           kind: "case",
           name: "教师登录",
-          app: { id: "cn.eeo.classin", platform: "android" },
+          app: { id: "cn.eeo.classin" },
           parameters: {
             account: { type: "string", label: "手机号或邮箱", required: true, sensitive: true },
             password: { type: "string", label: "密码", required: true, sensitive: true }
@@ -1138,7 +1134,7 @@ function reusableFlow(
       purpose: "business",
       testLevel: "business_smoke",
       name,
-      app: { id: "cn.eeo.classin", platform: "android" },
+      app: { id: "cn.eeo.classin" },
       parameters,
       steps,
       tags: []

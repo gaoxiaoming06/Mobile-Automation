@@ -25,7 +25,7 @@ import {
   AssetRecordingPanel,
   type AssetRecordingCurrentPage
 } from "./components/AssetRecordingPanel";
-import { PreviewPanel } from "./components/PreviewPanel";
+import { devicePlatformLabel, PreviewPanel } from "./components/PreviewPanel";
 import { PageAssetsPanel } from "./components/PageAssetsPanel";
 import { CaseCenterPanel } from "./components/CaseCenterPanel";
 import {
@@ -153,7 +153,7 @@ export const DEFAULT_STABILITY_EXPLORER_APP_EXIT_POLICY: StabilityExplorerAppExi
 export const DEFAULT_STABILITY_EXPLORER_MAX_DEPTH = 4;
 export const DEFAULT_STABILITY_DANGEROUS_TEXT_PATTERNS = ["删除", "退出登录", "注销", "支付", "发布", "提交", "确认删除"];
 export const DEFAULT_STABILITY_DANGEROUS_TEXT = DEFAULT_STABILITY_DANGEROUS_TEXT_PATTERNS.join("\n");
-export const DEFAULT_SCRIPT_APP_ID = "cn.eeo.classin";
+export const DEFAULT_SCRIPT_APP_ID = "classin";
 export const DEFAULT_AI_MODEL_SETTINGS: PublicAiModelSettings = {
   enabled: false,
   baseURL: "",
@@ -241,8 +241,10 @@ type PageAssetTargetApp = {
 };
 
 type AssetTargetProfileLookup = {
+  appId?: string;
   androidPackageName?: string;
   iosBundleId?: string;
+  harmonyBundleName?: string;
 };
 
 type PageAssetLibraryInitialization = {
@@ -2255,7 +2257,7 @@ function DeviceManagementView({
               <div className="device-facts">
                 <div>
                   <span>平台</span>
-                  <strong>{selectedDevice.platform === "ios" ? "iOS" : "Android"}</strong>
+                  <strong>{devicePlatformLabel(selectedDevice.platform)}</strong>
                 </div>
                 <div>
                   <span>系统</span>
@@ -2390,15 +2392,18 @@ export function pageAssetLibraryInitialization(
   platform: DeviceInfo["platform"],
   targetProfile?: AssetTargetProfileLookup
 ): PageAssetLibraryInitialization | undefined {
-  const targetIdentifier = platform === "android"
-    ? normalizeText(targetProfile?.androidPackageName)
-    : normalizeText(targetProfile?.iosBundleId);
+  const targetIdentifier =
+    platform === "android"
+      ? normalizeText(targetProfile?.androidPackageName)
+      : platform === "ios"
+        ? normalizeText(targetProfile?.iosBundleId)
+        : normalizeText(targetProfile?.harmonyBundleName);
   if (!targetIdentifier) {
     return undefined;
   }
   return {
     platform,
-    appId: targetIdentifier,
+    appId: normalizeText(targetProfile?.appId) ?? (platform === "harmony" ? "classin" : targetIdentifier),
     targetIdentifier,
     defaultName: `${targetIdentifier} 页面资产`
   };
@@ -2424,8 +2429,12 @@ function libraryMatchesTargetProfile(library: PageAssetLibraryListItem, targetPr
       const androidPackageName = normalizeText(targetProfile?.androidPackageName);
       return profile.platform === "android" && Boolean(androidPackageName) && normalizeText(profile.androidPackageName) === androidPackageName;
     }
-    const iosBundleId = normalizeText(targetProfile?.iosBundleId);
-    return profile.platform === "ios" && Boolean(iosBundleId) && normalizeText(profile.iosBundleId) === iosBundleId;
+    if (platform === "ios") {
+      const iosBundleId = normalizeText(targetProfile?.iosBundleId);
+      return profile.platform === "ios" && Boolean(iosBundleId) && normalizeText(profile.iosBundleId) === iosBundleId;
+    }
+    const harmonyBundleName = normalizeText(targetProfile?.harmonyBundleName);
+    return profile.platform === "harmony" && Boolean(harmonyBundleName) && normalizeText(profile.harmonyBundleName) === harmonyBundleName;
   });
 }
 
@@ -2491,12 +2500,18 @@ function targetProfileLookupFromObservation(observation: AssetObservation | unde
     const androidPackageName = normalizeText(observation.packageName);
     return androidPackageName ? { androidPackageName } : undefined;
   }
+  if (observation.platform === "harmony") {
+    const harmonyBundleName = normalizeText(observation.bundleId);
+    return harmonyBundleName ? { appId: "classin", harmonyBundleName } : undefined;
+  }
   const iosBundleId = normalizeText(observation.bundleId);
   return iosBundleId ? { iosBundleId } : undefined;
 }
 
 function hasTargetProfileLookup(targetProfile: AssetTargetProfileLookup | undefined, platform: DeviceInfo["platform"]): boolean {
-  return platform === "android" ? Boolean(normalizeText(targetProfile?.androidPackageName)) : Boolean(normalizeText(targetProfile?.iosBundleId));
+  if (platform === "android") return Boolean(normalizeText(targetProfile?.androidPackageName));
+  if (platform === "ios") return Boolean(normalizeText(targetProfile?.iosBundleId));
+  return Boolean(normalizeText(targetProfile?.harmonyBundleName));
 }
 
 function platformScopeMatchesLibrary(scope: string | undefined, platform: DeviceInfo["platform"]): boolean {

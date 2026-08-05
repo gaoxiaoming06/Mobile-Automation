@@ -387,7 +387,7 @@ export function buildScriptFlowPlannerPrompt(
         testLevel: systemTestLevel,
         name: "测试名称",
         description: "测试说明",
-        app: { id: appId, platform },
+        app: { id: appId },
         parameters: {},
         steps: [],
         tags: ["ai-generated"]
@@ -422,7 +422,7 @@ export function buildScriptFlowPlannerPrompt(
     "直接理解用户的完整意图和操作顺序，不依赖服务端预先拆出的中文动作契约。用户明确描述的过程应逐步保留；只描述目标时可以使用已验证导航知识补全。",
     "明确操作即使缺少当前页面 key、目标页面资产或自动结果判据，也应返回 ready 并生成可试运行动作；省略无法确定的 onPage、expectPage、outcome 和断言，系统会将结果标记为待确认。只有缺少班级名、账号、输入值等实际执行参数时才能返回 needs_clarification。",
     existingDocument ? "修改现有用例：" : "输入：",
-    JSON.stringify({ prompt, appId, platform, ...(existingDocument ? { existingDocument } : {}), catalog }, null, 2)
+    JSON.stringify({ prompt, appId, ...(existingDocument ? { existingDocument } : {}), catalog }, null, 2)
   ].join("\n\n");
 }
 
@@ -682,7 +682,6 @@ function looksLikeScriptFlowDocumentShape(document: Record<string, unknown>): bo
     && !!stringValue(document.kind)
     && !!stringValue(document.name)
     && !!stringValue(app.id)
-    && !!stringValue(app.platform)
     && Array.isArray(document.steps);
 }
 
@@ -1192,8 +1191,8 @@ function validateGeneratedReferences(
   document: ScriptFlowDocument,
   input: { appId: string; platform: PageAssetPlatform; catalog: ScriptFlowPlannerCatalog }
 ): void {
-  if (document.app.id !== input.appId || document.app.platform !== input.platform) {
-    throw new Error("AI 草稿修改了指定 App 或平台");
+  if (document.app.id !== input.appId) {
+    throw new Error("AI 草稿修改了指定 App");
   }
   const pagesByReference = new Map<string, ScriptFlowPlannerCatalog["pages"][number]>();
   for (const page of input.catalog.pages) {

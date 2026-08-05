@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   App,
   DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
+  DEFAULT_SCRIPT_APP_ID,
   RetainedNavPanel,
   actionStrategyForWorkspace,
   aiModelSettingsRequestBody,
@@ -56,6 +57,10 @@ describe("App shell", () => {
     expect(androidAppMonitorDefaultEnabled("all_runs", "script_flow")).toBe(true);
   });
 
+  it("uses the cross-platform product id as the default ScriptFlow app id", () => {
+    expect(DEFAULT_SCRIPT_APP_ID).toBe("classin");
+  });
+
   it("only submits local Codex preferences from the settings page", () => {
     expect(aiModelSettingsRequestBody({ enabled: true, model: "gpt-5.4", timeoutMs: 15_000 })).toEqual({
       enabled: true,
@@ -70,6 +75,12 @@ describe("App shell", () => {
       appId: "cn.eeo.classin",
       targetIdentifier: "cn.eeo.classin",
       defaultName: "cn.eeo.classin 页面资产"
+    });
+    expect(pageAssetLibraryInitialization("harmony", { harmonyBundleName: "com.eeo.classin.harmony" })).toEqual({
+      platform: "harmony",
+      appId: "classin",
+      targetIdentifier: "com.eeo.classin.harmony",
+      defaultName: "com.eeo.classin.harmony 页面资产"
     });
     expect(pageAssetLibraryInitialization("ios", {})).toBeUndefined();
   });

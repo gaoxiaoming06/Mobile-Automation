@@ -21,11 +21,23 @@ export type RunArtifactStorage = {
   updateRunReport(runId: string, relativePath: string): void;
 };
 
+type RunArtifactServiceOptions = {
+  screenshotMaxAttempts?: number;
+  screenshotRetryDelayMs?: number;
+};
+
 export class RunArtifactService {
+  private readonly screenshotMaxAttempts: number;
+  private readonly screenshotRetryDelayMs: number;
+
   constructor(
     private readonly storage: RunArtifactStorage,
-    private readonly driver: Pick<AutomationDeviceDriver, "screenshot" | "stopVideoRecording">
-  ) {}
+    private readonly driver: Pick<AutomationDeviceDriver, "screenshot" | "stopVideoRecording">,
+    options: RunArtifactServiceOptions = {}
+  ) {
+    this.screenshotMaxAttempts = positiveInteger(options.screenshotMaxAttempts) ?? 3;
+    this.screenshotRetryDelayMs = nonNegativeInteger(options.screenshotRetryDelayMs) ?? 150;
+  }
 
   absoluteRunDir(runId: string, kind: "videos"): string {
     return path.join(artifactRoot, "runs", runId, kind);
@@ -43,13 +55,13 @@ export class RunArtifactService {
     serial: string,
     phase: "before" | "after"
   ): Promise<ScreenshotCapture> {
-    const png = await this.driver.screenshot(serial);
+    const png = await this.captureValidScreenshot(serial);
     const fileName = `iter-${iterationIndex}-step-${stepOrder}-${phase}-${Date.now()}.png`;
     return this.writeScreenshotArtifact(runId, stepResultId, fileName, png);
   }
 
   async captureRunEventScreenshot(runId: string, stepResultId: string | undefined, eventType: string, serial: string): Promise<ArtifactRef> {
-    const png = await this.driver.screenshot(serial);
+    const png = await this.captureValidScreenshot(serial);
     const fileName = `${eventType}-${Date.now()}.png`;
     return (await this.writeScreenshotArtifact(runId, stepResultId, fileName, png)).artifact;
   }
@@ -61,19 +73,19 @@ export class RunArtifactService {
     expectationId: string,
     attempt: number
   ): Promise<ScreenshotCapture> {
-    const png = await this.driver.screenshot(serial);
+    const png = await this.captureValidScreenshot(serial);
     const fileName = `expectation-${expectationId}-attempt-${attempt}-${Date.now()}.png`;
     return this.writeScreenshotArtifact(runId, stepResultId, fileName, png);
   }
 
   async captureConditionScreenshot(runId: string, stepResultId: string, serial: string, stepId: string, attempt: number): Promise<ScreenshotCapture> {
-    const png = await this.driver.screenshot(serial);
+    const png = await this.captureValidScreenshot(serial);
     const fileName = `condition-${stepId}-attempt-${attempt}-${Date.now()}.png`;
     return this.writeScreenshotArtifact(runId, stepResultId, fileName, png);
   }
 
   async captureLocatorScreenshot(runId: string, stepResultId: string, serial: string, stepId: string, attempt: number): Promise<ScreenshotCapture> {
-    const png = await this.driver.screenshot(serial);
+    const png = await this.captureValidScreenshot(serial);
     const fileName = `locator-${stepId}-attempt-${attempt}-${Date.now()}.png`;
     return this.writeScreenshotArtifact(runId, stepResultId, fileName, png);
   }
@@ -240,6 +252,26 @@ export class RunArtifactService {
     return { artifact, png };
   }
 
+  private async captureValidScreenshot(serial: string): Promise<Buffer> {
+    const errors: string[] = [];
+    for (let attempt = 1; attempt <= this.screenshotMaxAttempts; attempt += 1) {
+      try {
+        const png = await this.driver.screenshot(serial);
+        const invalidReason = invalidPngScreenshotReason(png);
+        if (!invalidReason) {
+          return png;
+        }
+        errors.push(`attempt ${attempt}: ${invalidReason}`);
+      } catch (error) {
+        errors.push(`attempt ${attempt}: ${errorToString(error)}`);
+      }
+      if (attempt < this.screenshotMaxAttempts && this.screenshotRetryDelayMs > 0) {
+        await sleep(this.screenshotRetryDelayMs);
+      }
+    }
+    throw new Error(`Invalid screenshot captured from device ${serial} after ${this.screenshotMaxAttempts} attempts: ${errors.join("; ")}`);
+  }
+
   private async writeTypedArtifact(
     runId: string,
     kind: "metrics" | "reports" | "logs",
@@ -298,6 +330,34 @@ function csvCell(value: string | number | undefined): string {
   }
   const text = String(value);
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function invalidPngScreenshotReason(buffer: Buffer): string | undefined {
+  if (buffer.byteLength === 0) {
+    return "empty screenshot";
+  }
+  const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (buffer.byteLength < 24 || !pngSignature.every((byte, index) => buffer[index] === byte)) {
+    return `not a PNG screenshot (${buffer.byteLength} bytes)`;
+  }
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  if (!width || !height) {
+    return "PNG screenshot has invalid dimensions";
+  }
+  return undefined;
+}
+
+function positiveInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function nonNegativeInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function errorToString(error: unknown): string {

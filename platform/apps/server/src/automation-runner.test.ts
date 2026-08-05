@@ -358,7 +358,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const now = nowIso();
     const runtimeStep: ActionStep = {
       id: "password",
@@ -389,7 +389,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const step = driver.createTapStep(120, 240);
     step.params = {
       ...step.params,
@@ -442,7 +442,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new AppMonitorMockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -507,7 +507,7 @@ describe("AutomationRunner regression flow", () => {
     };
     const driver = new AppMonitorMockDriver({ incidents: [incident] });
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -541,7 +541,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new AppMonitorMockDriver({ stopError: new Error("monitor stop failed") });
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -573,7 +573,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new UiHierarchyMockDriver(hierarchy("com.demo:id/join_class"));
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -604,7 +604,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new SemanticBackendMockDriver(hierarchy("com.demo:id/join_class"));
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -651,7 +651,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new UiHierarchyMockDriver(hierarchy("com.demo:id/other"));
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -713,7 +713,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/other"), hierarchy("com.demo:id/other"), hierarchy("com.demo:id/target")]);
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -745,7 +745,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/loading"), hierarchy("com.demo:id/loading"), hierarchy("com.demo:id/ready")]);
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -781,7 +781,7 @@ describe("AutomationRunner regression flow", () => {
     try {
       const storage = new MemoryRunnerStorage();
       const driver = new VideoMockDriver(tempDir);
-      const runner = new AutomationRunner(storage, driver);
+      const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
       const started = runner.start({
         deviceSerial: driver.device.serial,
@@ -805,7 +805,7 @@ describe("AutomationRunner regression flow", () => {
     try {
       const storage = new MemoryRunnerStorage();
       const driver = new VideoMockDriver(tempDir);
-      const runner = new AutomationRunner(storage, driver);
+      const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
       const started = runner.start({
         deviceSerial: driver.device.serial,
@@ -829,7 +829,7 @@ describe("AutomationRunner regression flow", () => {
     try {
       const storage = new MemoryRunnerStorage();
       const driver = new VideoMockDriver(tempDir);
-      const runner = new AutomationRunner(storage, driver);
+      const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
       const started = runner.start({
         deviceSerial: driver.device.serial,
@@ -855,7 +855,7 @@ describe("AutomationRunner regression flow", () => {
       const storage = new MemoryRunnerStorage();
       const driver = new VideoMockDriver(tempDir);
       driver.failActions = true;
-      const runner = new AutomationRunner(storage, driver);
+      const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
       const started = runner.start({
         deviceSerial: driver.device.serial,
@@ -878,7 +878,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const firstStep = driver.createTapStep(120, 240);
     const secondStep = {
       ...driver.createTapStep(220, 340),
@@ -912,7 +912,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const started = runner.start({
       deviceSerial: driver.device.serial,
       caseName: "Loop Flow",
@@ -933,7 +933,7 @@ describe("AutomationRunner regression flow", () => {
   it("does not mark a run stopped when it does not own the active worker", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     storage.createRun({
       id: "stability-run",
       caseName: "Stability run",
@@ -951,7 +951,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const business = {
       ...driver.createTapStep(20, 20),
       id: "business",
@@ -982,7 +982,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const reset = {
       ...driver.createTapStep(30, 30),
       id: "reset",
@@ -1016,7 +1016,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const business = {
       ...driver.createTapStep(20, 20),
       id: "business",
@@ -1049,7 +1049,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const preparation = {
       ...driver.createTapStep(10, 10),
       id: "prepare",
@@ -1096,7 +1096,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const launchStep: ActionStep = {
       id: "launch",
       order: 1,
@@ -1126,7 +1126,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const started = runner.start({
       deviceSerial: driver.device.serial,
       caseName: "Busy Flow",
@@ -1170,7 +1170,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new EventMockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const started = runner.start({
       deviceSerial: driver.device.serial,
       caseName: "Crash Flow",
@@ -1225,7 +1225,7 @@ describe("AutomationRunner regression flow", () => {
       pid: 1234
     });
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const started = runner.start({
       deviceSerial: driver.device.serial,
       caseName: "Native Crash Flow",
@@ -1279,7 +1279,7 @@ describe("AutomationRunner regression flow", () => {
       pid: 1234
     });
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const started = runner.start({
       deviceSerial: driver.device.serial,
       caseName: "Process Death Flow",
@@ -1325,7 +1325,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new RestartProcessDeathMockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const launchStep: ActionStep = {
       id: "launch",
       order: 1,
@@ -1370,7 +1370,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new AppMonitorRestartProcessDeathMockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const launchStep: ActionStep = {
       id: "launch",
       order: 1,
@@ -1415,7 +1415,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const step = withExpectations(driver.createTapStep(120, 240), [
       createExpectation("no_crash"),
       createExpectation("app_alive")
@@ -1443,7 +1443,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const step = withExpectations(driver.createTapStep(120, 240), [createExpectation("metric_below", { metric: "cpuPercent", threshold: 0 })]);
 
     const started = runner.start({
@@ -1477,7 +1477,7 @@ describe("AutomationRunner regression flow", () => {
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
     driver.logs.push("Activity resumed", "Frame rendered");
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const step = withExpectations(driver.createTapStep(120, 240), [createExpectation("log_not_contains", { text: "FATAL EXCEPTION" })]);
 
     const started = runner.start({
@@ -1748,7 +1748,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new ChangingScreenshotMockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const step = withExpectations(driver.createTapStep(120, 240), [createExpectation("screen_changed")]);
 
     const started = runner.start({
@@ -1767,9 +1767,15 @@ describe("AutomationRunner regression flow", () => {
 
   it("waits for post-action screen expectations before deciding the step result", async () => {
     const storage = new MemoryRunnerStorage();
-    const driver = new SequenceScreenshotMockDriver([Buffer.from("before"), Buffer.from("before"), Buffer.from("after")]);
+    const driver = new SequenceScreenshotMockDriver([
+      pngBuffer(1),
+      pngBuffer(2),
+      pngBuffer(1),
+      pngBuffer(2),
+      pngBuffer(3)
+    ]);
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const step = withExpectations(driver.createTapStep(120, 240), [
       createExpectation("screen_changed", {
         timeoutMs: 100,
@@ -1787,7 +1793,7 @@ describe("AutomationRunner regression flow", () => {
     const run = await waitForRun(runner, storage, started.id);
 
     expect(run.status).toBe("passed");
-    expect(driver.screenshotCount).toBeGreaterThanOrEqual(3);
+    expect(driver.screenshotCount).toBeGreaterThanOrEqual(5);
     expect(run.stepResults[0]?.expectationResults).toEqual([
       expect.objectContaining({
         type: "screen_changed",
@@ -1801,7 +1807,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
     const step = withExpectations(driver.createTapStep(120, 240), [
       createExpectation("screen_changed", {
         autoGenerated: true,
@@ -1912,7 +1918,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new SequenceUiHierarchyMockDriver([permissionHierarchy("允许"), hierarchy("com.demo:id/join_class")]);
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -1959,7 +1965,7 @@ describe("AutomationRunner regression flow", () => {
     });
     const driver = new SequenceUiHierarchyMockDriver([subjectPickerHierarchy(), hierarchy("com.demo:id/join_class")]);
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -1988,11 +1994,87 @@ describe("AutomationRunner regression flow", () => {
     );
   });
 
+  it("uses OCR runtime interceptors for Harmony blocking upgrade popups before replaying a step", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new HarmonyRuntimeInterceptorMockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const ocr = new SequenceLayoutOcrService([
+      ["版本6.1.0", "6.1.0", "新活动来了", "了解更新详情", "立即更新"],
+      ["主页", "创建公开课"],
+      ["主页", "创建公开课"]
+    ]);
+    const runner = new AutomationRunner(storage, driver, ocr);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Harmony Runtime Interceptor Flow",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "back" },
+      { type: "tap", x: 120, y: 240 }
+    ]);
+    expect(run.stepResults[0]?.metadata).toEqual(
+      expect.objectContaining({
+        runtimeInterceptors: [
+          expect.objectContaining({
+            phase: "precondition",
+            ruleId: "classin-upgrade-popup",
+            ruleName: "ClassIn 升级提示弹窗"
+          })
+        ]
+      })
+    );
+  });
+
+  it("uses OCR runtime interceptors for Android blocking upgrade popups before replaying a step", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/join_class")]);
+    driver.device.capabilities.recordVideo = false;
+    const ocr = new SequenceLayoutOcrService([
+      ["版本6.1.0", "了解更新详情", "立即更新"],
+      ["主页", "创建公开课"],
+      ["主页", "创建公开课"]
+    ]);
+    const runner = new AutomationRunner(storage, driver, ocr);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Android OCR Runtime Interceptor Flow",
+      steps: [createElementTapStep("com.demo:id/join_class", 140, 210)],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "back" },
+      { type: "tap", x: 240, y: 240 }
+    ]);
+    expect(run.stepResults[0]?.metadata).toEqual(
+      expect.objectContaining({
+        runtimeInterceptors: [
+          expect.objectContaining({
+            phase: "precondition",
+            ruleId: "classin-upgrade-popup",
+            ruleName: "ClassIn 升级提示弹窗"
+          })
+        ]
+      })
+    );
+  });
+
   it("applies go_home start strategy before replaying steps", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -2016,7 +2098,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -2041,7 +2123,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -2073,7 +2155,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -2113,7 +2195,7 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver);
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -2756,7 +2838,7 @@ class ChangingScreenshotMockDriver extends MockDriver {
   override async screenshot(serial: string): Promise<Buffer> {
     await this.getDeviceInfo(serial);
     this.screenshotCount += 1;
-    return Buffer.from(`mock-screenshot-${this.screenshotCount}`);
+    return pngBuffer(this.screenshotCount);
   }
 }
 
@@ -2769,9 +2851,35 @@ class SequenceScreenshotMockDriver extends MockDriver {
 
   override async screenshot(serial: string): Promise<Buffer> {
     await this.getDeviceInfo(serial);
-    const screenshot = this.screenshots[Math.min(this.screenshotCount, this.screenshots.length - 1)] ?? Buffer.from("fallback");
+    const screenshot = this.screenshots[Math.min(this.screenshotCount, this.screenshots.length - 1)] ?? pngBuffer(0);
     this.screenshotCount += 1;
     return screenshot;
+  }
+}
+
+class HarmonyRuntimeInterceptorMockDriver extends MockDriver {
+  constructor() {
+    super();
+    this.device.id = "mock-harmony-1";
+    this.device.serial = "mock-harmony-1";
+    this.device.platform = "harmony";
+    this.device.name = "Mock Harmony";
+    this.device.resolution = { width: 1080, height: 2400 };
+    this.device.orientation = "portrait";
+  }
+
+  override async getForegroundApp(serial: string): Promise<{
+    packageName?: string;
+    bundleId?: string;
+    activityName?: string;
+    abilityName?: string;
+    componentName?: string;
+  }> {
+    await this.getDeviceInfo(serial);
+    return {
+      bundleId: "cn.eeo.hos.classin.mobile",
+      abilityName: "EntryAbility"
+    };
   }
 }
 
@@ -2787,6 +2895,66 @@ class FakeOcrService implements OcrService {
   }
 }
 
+class EmptyOcrService implements OcrService {
+  async recognize(input: OcrInput): Promise<OcrResult> {
+    return {
+      text: "",
+      engine: "fake",
+      lang: input.lang ?? "test"
+    };
+  }
+
+  async locateText(input: OcrInput) {
+    return {
+      text: "",
+      engine: "fake",
+      lang: input.lang ?? "test",
+      width: 0,
+      height: 0,
+      boxes: []
+    };
+  }
+}
+
+class SequenceLayoutOcrService implements OcrService {
+  calls = 0;
+
+  constructor(private readonly textSequences: string[][]) {}
+
+  async recognize(input: OcrInput): Promise<OcrResult> {
+    const texts = this.currentTexts();
+    return {
+      text: texts.join("\n"),
+      engine: "fake",
+      lang: input.lang ?? "test"
+    };
+  }
+
+  async locateText(input: OcrInput) {
+    const texts = this.currentTexts();
+    this.calls += 1;
+    return {
+      text: texts.join("\n"),
+      engine: "fake",
+      lang: input.lang ?? "test",
+      width: 1080,
+      height: 2400,
+      boxes: texts.map((text, index) => ({
+        text,
+        confidence: 0.99,
+        x: 40,
+        y: 200 + index * 80,
+        width: 240,
+        height: 50
+      }))
+    };
+  }
+
+  private currentTexts(): string[] {
+    return this.textSequences[Math.min(this.calls, this.textSequences.length - 1)] ?? [];
+  }
+}
+
 class SequenceOcrService implements OcrService {
   calls = 0;
 
@@ -2799,6 +2967,17 @@ class SequenceOcrService implements OcrService {
       text,
       engine: "fake",
       lang: input.lang ?? "test"
+    };
+  }
+
+  async locateText(input: OcrInput) {
+    return {
+      text: "",
+      engine: "fake",
+      lang: input.lang ?? "test",
+      width: 0,
+      height: 0,
+      boxes: []
     };
   }
 }
@@ -2862,4 +3041,12 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function pngBuffer(seed = 0): Buffer {
+  const buffer = Buffer.alloc(32, seed);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer, 0);
+  buffer.writeUInt32BE(1, 16);
+  buffer.writeUInt32BE(1, 20);
+  return buffer;
 }

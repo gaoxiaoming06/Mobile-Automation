@@ -902,9 +902,9 @@ export class AutomationRunner {
       const interceptor = new RuntimeInterceptor({
         observe: () =>
           this.observationService.collect(input.serial, {
-            includeScreenshot: false,
+            includeScreenshot: true,
             includeUiTree: true,
-            includeOcr: false
+            includeOcr: true
           }),
         performAction: async (actionStep) => {
           await this.driver.performAction(input.serial, runtimeInterceptorStepToAction(actionStep, input.deviceSize));
@@ -1000,6 +1000,9 @@ export class AutomationRunner {
       if (strategy === "clear_data_and_launch") {
         markExpectedProcessDeath?.(packageName);
         await this.driver.performAction(config.deviceSerial, { type: "close_app", packageName });
+        if (!this.driver.clearAppData) {
+          throw new Error("clear_data_and_launch is not supported by this device driver");
+        }
         await this.driver.clearAppData(config.deviceSerial, packageName);
         await sleep(500);
         await this.driver.performAction(config.deviceSerial, { type: "launch_app", packageName });

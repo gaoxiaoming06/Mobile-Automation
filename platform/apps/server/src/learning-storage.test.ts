@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ScriptFlowDocument } from "@mobile-automation/script-flow";
+import type { Platform } from "@mobile-automation/shared";
 import type { Storage } from "./storage.js";
 
 describe("trial learning storage", () => {
@@ -693,7 +694,7 @@ async function createStorage(
 function createTrialRun(storage: Storage, input: {
   unresolvedOutcome: boolean;
   appId?: string;
-  platform?: ScriptFlowDocument["app"]["platform"];
+  platform?: Platform;
   steps?: ScriptFlowDocument["steps"];
   executionPurpose?: "trial" | "normal";
   verificationStatus?: "verified" | "needs_trial" | "blocked";
@@ -704,7 +705,7 @@ function createTrialRun(storage: Storage, input: {
     version: 1,
     kind: "case",
     name: "打开添加好友",
-    app: { id: appId, platform },
+    app: { id: appId },
     start: { strategy: "keepCurrent" },
     parameters: {},
     steps: input.steps ?? [{ id: "open-add-friend", onPage: "classin.home", tap: { target: { text: "添加好友" } } }],
@@ -726,6 +727,7 @@ function createTrialRun(storage: Storage, input: {
         flowId: flow.id,
         version: flow.version,
         planDigest: "3".repeat(64),
+        executionPlatform: platform,
         executionPurpose: input.executionPurpose ?? "trial",
         sourceHash,
         verificationAssessment: {

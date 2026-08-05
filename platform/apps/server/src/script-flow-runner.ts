@@ -8,6 +8,7 @@ import {
   type ScriptTarget
 } from "@mobile-automation/script-flow";
 import {
+  CROSS_PLATFORM_SCRIPT_SCOPE,
   nowIso,
   type ActionStep,
   type AndroidAppMonitorConfig,
@@ -18,7 +19,8 @@ import {
   type RunMode,
   type ScriptFlowExecutionPurpose,
   type ScriptFlowVerificationAssessment,
-  type TestRun
+  type TestRun,
+  type Platform
 } from "@mobile-automation/shared";
 import type { AutomationDeviceDriver } from "./mobile-driver.js";
 import type { PageAssetCatalog, PageAssetPlatform } from "./page-asset-catalog.js";
@@ -26,6 +28,7 @@ import type { PageNavigationEdge, PageNavigationSegmentSnapshot } from "./page-n
 import type { PageStateService } from "./page-state-service.js";
 import type { PageStateExpectationVerifier } from "./step-expectations.js";
 import { ScriptTargetResolver } from "./script-target-resolver.js";
+import { resolveRuntimeAppIdentifier, type RuntimeAppEnv } from "./target-app-runtime.js";
 
 export type ScriptFlowBackendStartInput = {
   deviceSerial: string;
@@ -83,6 +86,7 @@ export type StartScriptFlowRunInput = {
   stepSelection?: ScriptExecutionStepSelection;
   startStrategy?: FlowStartStrategy;
   androidAppMonitor?: AndroidAppMonitorConfig;
+  env?: RuntimeAppEnv;
 };
 
 export type ScriptExecutionStepSelection = {
@@ -100,10 +104,14 @@ export type ScriptFlowRunnerDeps = {
 export class ScriptFlowRunner {
   constructor(private readonly deps: ScriptFlowRunnerDeps) {}
 
-  validatePlan(plan: ScriptExecutionPlan, interactionAssets: ScriptInteractionAssetBinding[] = []): void {
+  validatePlan(
+    plan: ScriptExecutionPlan,
+    interactionAssets: ScriptInteractionAssetBinding[] = [],
+    platform: PageAssetPlatform = CROSS_PLATFORM_SCRIPT_SCOPE
+  ): void {
     const assetsByStep = interactionAssetMap(interactionAssets);
     for (const step of plan.steps) {
-      this.resolveAction(step, plan.app.id, plan.app.platform, plan.parameters, assetsByStep.get(step.id));
+      this.resolveAction(step, plan.app.id, plan.app.id, platform, plan.parameters, assetsByStep.get(step.id));
     }
   }
 
@@ -124,17 +132,20 @@ export class ScriptFlowRunner {
     const persistedPlan = input.stepSelection
       ? selectScriptExecutionSteps(compiledPersistedPlan, input.stepSelection)
       : compiledPersistedPlan;
-    this.validatePlan(plan, input.interactionAssets);
     const device = await this.deps.driver.getDeviceInfo(input.deviceSerial);
-    if (!platformCanRun(input.flow.app.platform, device.platform)) {
-      throw new Error(`Script platform ${input.flow.app.platform} does not match device platform ${device.platform}`);
-    }
+    this.validatePlan(plan, input.interactionAssets, device.platform);
+    const runtimeAppIdentifier = resolveRuntimeAppIdentifier({
+      appId: input.flow.app.id,
+      platform: device.platform,
+      env: input.env
+    });
     const scriptParameters = visibleParameters(input.flow, plan.parameters);
     const stepContext = {
       flowId: input.flowId,
       scriptVersion: input.scriptVersion ?? 1,
       appId: input.flow.app.id,
-      platform: input.flow.app.platform,
+      runtimeAppIdentifier,
+      platform: device.platform,
       scriptParameters,
       resolutionParameters: plan.parameters
     };
@@ -181,12 +192,13 @@ export class ScriptFlowRunner {
         : "before_run",
       androidAppMonitor: input.androidAppMonitor,
       startStrategy: input.startStrategy ?? executionStartStrategy(input.flow, plan),
-      startAppPackageName: input.flow.app.id,
+      startAppPackageName: runtimeAppIdentifier,
       sourceSnapshot: {
         kind: "script_flow",
         flowId: input.flowId,
         version: input.scriptVersion ?? 1,
         planDigest: input.planDigest,
+        executionPlatform: device.platform,
         executionPurpose: input.executionPurpose ?? "normal",
         ...(input.sourceHash ? { sourceHash: input.sourceHash } : {}),
         ...(input.verificationAssessment ? { verificationAssessment: input.verificationAssessment } : {}),
@@ -211,6 +223,7 @@ export class ScriptFlowRunner {
       flowId: string;
       scriptVersion: number;
       appId: string;
+      runtimeAppIdentifier: string;
       platform: PageAssetPlatform;
       scriptParameters: Record<string, ScriptParameterValue>;
       resolutionParameters: Record<string, ScriptParameterValue>;
@@ -222,6 +235,7 @@ export class ScriptFlowRunner {
     const resolved = this.resolveAction(
       step,
       context.appId,
+      context.runtimeAppIdentifier,
       context.platform,
       context.resolutionParameters,
       interactionAsset
@@ -241,10 +255,16 @@ export class ScriptFlowRunner {
       ? stringInput(step.input, "pageId")
       : step.expectPage;
     const timeoutMs = step.timeoutMs ?? 15_000;
+    const expectedPageExpectation = expectedPage
+      ? this.pageExpectationFor(`after:${step.id}`, expectedPage, context, timeoutMs, createdAt)
+      : undefined;
     const expectations = [
-      ...(expectedPage ? [pageExpectation(`after:${step.id}`, expectedPage, context, timeoutMs, createdAt)] : []),
+      ...(expectedPageExpectation ? [expectedPageExpectation] : []),
       ...(step.action === "assertText" ? [textExpectation(`after:${step.id}`, step.input, timeoutMs, createdAt)] : [])
     ];
+    const onPagePrecondition = step.onPage
+      ? this.pageExpectationFor(`before:${step.id}`, step.onPage, context, timeoutMs, createdAt)
+      : undefined;
     return {
       id: step.id,
       order: step.order,
@@ -259,16 +279,30 @@ export class ScriptFlowRunner {
         ...metadata
       },
       ...(resolved.coordinate ? { coordinate: resolved.coordinate } : {}),
-      ...(step.onPage ? { preconditions: [pageExpectation(`before:${step.id}`, step.onPage, context, timeoutMs, createdAt)] } : {}),
+      ...(onPagePrecondition ? { preconditions: [onPagePrecondition] } : {}),
       ...(expectations.length ? { expectations } : {}),
       ...(step.timeoutMs ? { timing: { timeoutMs: step.timeoutMs } } : {}),
       createdAt
     };
   }
 
+  private pageExpectationFor(
+    id: string,
+    pageId: string,
+    context: { appId: string; platform: PageAssetPlatform },
+    timeoutMs: number,
+    createdAt: string
+  ): NonNullable<ActionStep["expectations"]>[number] | undefined {
+    if (isRuntimeUnknownPageReference(pageId)) {
+      return undefined;
+    }
+    return pageExpectation(id, pageId, context, timeoutMs, createdAt);
+  }
+
   private resolveAction(
     step: ScriptExecutionPlanStep,
     appId: string,
+    runtimeAppIdentifier: string,
     platform: PageAssetPlatform,
     parameters: Record<string, ScriptParameterValue>,
     interactionAsset?: InteractionAsset
@@ -282,7 +316,7 @@ export class ScriptFlowRunner {
       return {
         type: "launch_app",
         params: {
-          packageName: stringInput(step.input, "appId") || appId,
+          packageName: launchAppIdentifier(step.input, appId, runtimeAppIdentifier),
           restartBeforeLaunch: true
         }
       };
@@ -380,6 +414,7 @@ export class ScriptFlowRunner {
       flowId: string;
       scriptVersion: number;
       appId: string;
+      runtimeAppIdentifier: string;
       platform: PageAssetPlatform;
       scriptParameters: Record<string, ScriptParameterValue>;
       resolutionParameters: Record<string, ScriptParameterValue>;
@@ -393,12 +428,12 @@ export class ScriptFlowRunner {
     for (const segment of segments) {
       let plan: ScriptExecutionPlan;
       try {
-        if (segment.appId !== context.appId || segment.platform !== context.platform) continue;
+        if (segment.appId !== context.appId || !navigationSegmentSupportsPlatform(segment.platform, context.platform as Platform)) continue;
         const document: ScriptFlowDocument = {
           version: 1,
           kind: "case",
           name: segment.flowName,
-          app: { id: segment.appId, platform: segment.platform },
+          app: { id: segment.appId },
           start: { strategy: "keepCurrent" },
           parameters: segment.parameters,
           steps: segment.steps,
@@ -425,7 +460,7 @@ export class ScriptFlowRunner {
             version: 1,
             kind: "case",
             name: segment.flowName,
-            app: { id: segment.appId, platform: segment.platform },
+            app: { id: segment.appId },
             parameters: segment.parameters,
             steps: segment.steps,
             tags: []
@@ -587,6 +622,10 @@ function pageExpectation(
   };
 }
 
+function isRuntimeUnknownPageReference(reference: string): boolean {
+  return reference.trim().startsWith("runtime.unknown.");
+}
+
 function textExpectation(
   id: string,
   input: Record<string, unknown>,
@@ -666,8 +705,8 @@ function visibleParameters(
   return Object.fromEntries(Object.entries(parameters).filter(([key]) => flow.parameters[key]?.sensitive !== true));
 }
 
-function platformCanRun(script: ScriptFlowDocument["app"]["platform"], device: "android" | "ios"): boolean {
-  return script === device || script === "flutter";
+function navigationSegmentSupportsPlatform(segmentPlatform: PageNavigationSegmentSnapshot["platform"], devicePlatform: Platform): boolean {
+  return segmentPlatform === CROSS_PLATFORM_SCRIPT_SCOPE || segmentPlatform === "flutter" || segmentPlatform === devicePlatform;
 }
 
 function startStrategy(flow: ScriptFlowDocument): FlowStartStrategy {
@@ -706,6 +745,11 @@ function defaultStepTitle(step: ScriptExecutionPlanStep): string {
 function stringInput(input: Record<string, unknown>, key: string): string {
   const value = input[key];
   return typeof value === "string" ? value : "";
+}
+
+function launchAppIdentifier(input: Record<string, unknown>, appId: string, runtimeAppIdentifier: string): string {
+  const explicitAppId = stringInput(input, "appId");
+  return explicitAppId && explicitAppId !== appId ? explicitAppId : runtimeAppIdentifier;
 }
 
 function optionalStringInput(input: Record<string, unknown>, key: string): string | undefined {

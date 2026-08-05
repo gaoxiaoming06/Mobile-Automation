@@ -171,6 +171,46 @@ describe("DefaultPageStateService", () => {
     expect(result.actualAppId).toBe("com.android.launcher");
   });
 
+  it("treats configured HarmonyOS ClassIn bundle as inside the ClassIn app", async () => {
+    const login = {
+      ...page("login", "classin.login", "登录"),
+      platformScope: "harmony" as const,
+      matchers: [matcher("bundle_id", "com.eeo.classin.harmony"), matcher("ocr_text", "登录")]
+    };
+    const service = serviceFor(
+      [login],
+      new QueueObservationCollector([harmonyObservation("登录", "com.eeo.classin.harmony")]),
+      "classin",
+      { CLASSIN_HARMONY_BUNDLE_ID: "com.eeo.classin.harmony" }
+    );
+
+    const result = await service.verifyExpectedPage({
+      serial: "HARMONY",
+      appId: "classin",
+      platform: "harmony",
+      pageId: "login"
+    });
+
+    expect(result.status).toBe("matched");
+  });
+
+  it("treats the default Android ClassIn package as inside the product-level ClassIn app", async () => {
+    const service = serviceFor(
+      [page("home", "classin.home", "主页")],
+      new QueueObservationCollector([observation("主页", "cn.eeo.classin")]),
+      "classin"
+    );
+
+    const result = await service.verifyExpectedPage({
+      serial: "device-1",
+      appId: "classin",
+      platform: "android",
+      pageId: "home"
+    });
+
+    expect(result.status).toBe("matched");
+  });
+
   it("returns capture_failed for observation or screenshot failures", async () => {
     const failed = serviceFor([page("home", "classin.home", "主页")], new ThrowingObservationCollector());
     const missingScreenshot = serviceFor(
@@ -202,9 +242,14 @@ describe("DefaultPageStateService", () => {
   });
 });
 
-function serviceFor(nodes: BusinessNode[], collector: QueueObservationCollector | ThrowingObservationCollector): DefaultPageStateService {
-  const storage = new MemoryCatalogStorage(graph(nodes));
-  return new DefaultPageStateService(new StoragePageAssetCatalog(storage), collector);
+function serviceFor(
+  nodes: BusinessNode[],
+  collector: QueueObservationCollector | ThrowingObservationCollector,
+  appId = "cn.eeo.classin",
+  env?: { CLASSIN_HARMONY_BUNDLE_ID?: string }
+): DefaultPageStateService {
+  const storage = new MemoryCatalogStorage(graph(nodes), appId);
+  return new DefaultPageStateService(new StoragePageAssetCatalog(storage), collector, undefined, env);
 }
 
 class QueueObservationCollector {
@@ -228,18 +273,20 @@ class ThrowingObservationCollector {
 }
 
 class MemoryCatalogStorage {
-  private readonly businessGraph: BusinessGraph = {
-    id: "graph",
-    appId: "cn.eeo.classin",
-    platformScope: "mobile-both",
-    name: "ClassIn",
-    status: "active",
-    activeVersionId: "version",
-    createdAt: "2026-07-28T00:00:00.000Z",
-    updatedAt: "2026-07-28T00:00:00.000Z"
-  };
+  private readonly businessGraph: BusinessGraph;
 
-  constructor(private readonly version: BusinessGraphVersion) {}
+  constructor(private readonly version: BusinessGraphVersion, appId = "cn.eeo.classin") {
+    this.businessGraph = {
+      id: "graph",
+      appId,
+      platformScope: "mobile-both",
+      name: "ClassIn",
+      status: "active",
+      activeVersionId: "version",
+      createdAt: "2026-07-28T00:00:00.000Z",
+      updatedAt: "2026-07-28T00:00:00.000Z"
+    };
+  }
 
   listBusinessGraphs(): BusinessGraph[] {
     return [this.businessGraph];
@@ -302,6 +349,22 @@ function observation(text: string, packageName = "cn.eeo.classin"): Observation 
     platform: "android",
     capturedAt: "2026-07-28T00:00:00.000Z",
     packageName,
+    resolution: { width: 1080, height: 2400 },
+    screenshot: { sizeBytes: 4, width: 1080, height: 2400 },
+    uiElements: [],
+    ocrTexts: [{ text, source: "ocr", region: { x: 50, y: 50, width: 500, height: 120 } }],
+    events: [],
+    raw: { screenshotBase64: Buffer.from("fake").toString("base64") }
+  };
+}
+
+function harmonyObservation(text: string, bundleId: string): Observation {
+  return {
+    id: `observation:${text}`,
+    deviceSerial: "HARMONY",
+    platform: "harmony",
+    capturedAt: "2026-08-04T00:00:00.000Z",
+    bundleId,
     resolution: { width: 1080, height: 2400 },
     screenshot: { sizeBytes: 4, width: 1080, height: 2400 },
     uiElements: [],

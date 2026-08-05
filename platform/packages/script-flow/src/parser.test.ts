@@ -6,7 +6,6 @@ version: 1
 name: 指定班级创建课堂但不发布
 app:
   id: cn.eeo.classin
-  platform: android
 start:
   strategy: restartApp
 parameters:
@@ -162,7 +161,7 @@ steps: []
     const flow = parseScriptFlow(validSource);
 
     expect(flow.version).toBe(1);
-    expect(flow.app).toEqual({ id: "cn.eeo.classin", platform: "android" });
+    expect(flow.app).toEqual({ id: "cn.eeo.classin" });
     expect(flow.parameters.className).toMatchObject({ type: "string", required: true });
     expect(flow.parameters.duration).toMatchObject({ type: "number", default: 30 });
     expect(flow.steps.map((step) => step.id)).toEqual(["open-class", "select-duration", "verify-form"]);
@@ -725,8 +724,8 @@ steps:
 `)).toThrow(new RegExp(`target\\.${field}.*unknown field`, "i"));
   });
 
-  it("accepts Harmony and Flutter as target profile platforms", () => {
-    expect(parseScriptFlow(validSource.replace("platform: android", "platform: harmony")).app.platform).toBe("harmony");
-    expect(parseScriptFlow(validSource.replace("platform: android", "platform: flutter")).app.platform).toBe("flutter");
+  it("ignores legacy app platform fields so scripts stay cross-platform", () => {
+    expect(parseScriptFlow(validSource.replace("id: cn.eeo.classin", "id: cn.eeo.classin\n  platform: harmony")).app).toEqual({ id: "cn.eeo.classin" });
+    expect(parseScriptFlow(validSource.replace("id: cn.eeo.classin", "id: cn.eeo.classin\n  platform: ios")).app).toEqual({ id: "cn.eeo.classin" });
   });
 });

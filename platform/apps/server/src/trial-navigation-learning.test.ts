@@ -114,7 +114,7 @@ function trialRun(): TestRun {
       },
       dependencies: [],
       parsed: {
-        app: { id: "cn.eeo.classin", platform: "android" },
+        app: { id: "cn.eeo.classin" },
         steps: [{
           id: "open-growth",
           onPage: "classin.home",

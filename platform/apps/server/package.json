@@ -11,6 +11,7 @@
   "dependencies": {
     "@mobile-automation/android-driver": "workspace:*",
     "@mobile-automation/graph-core": "workspace:*",
+    "@mobile-automation/harmony-driver": "workspace:*",
     "@mobile-automation/ios-driver": "workspace:^",
     "@mobile-automation/report-core": "workspace:*",
     "@mobile-automation/runner-core": "workspace:*",

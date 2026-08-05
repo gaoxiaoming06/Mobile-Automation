@@ -24,6 +24,26 @@ describe("page asset library target", () => {
       "当前页面属于 com.demo.notes，不属于页面资产库 cn.eeo.classin"
     );
   });
+
+  it("rejects HarmonyOS observations from another bundle", () => {
+    const harmonyLibrary: Pick<BusinessGraph, "targetApp"> = {
+      targetApp: {
+        productId: "classin",
+        profiles: [{ id: "classin-harmony", platform: "harmony", harmonyBundleName: "com.eeo.classin.harmony" }]
+      }
+    };
+    const otherApp = observation({
+      platform: "harmony",
+      packageName: undefined,
+      bundleId: "com.demo.notes",
+      activityName: undefined
+    });
+
+    expect(isObservationInPageAssetLibrary(otherApp, harmonyLibrary.targetApp)).toBe(false);
+    expect(pageAssetLibraryTargetMismatchMessage(harmonyLibrary, otherApp)).toBe(
+      "当前页面属于 com.demo.notes，不属于页面资产库 com.eeo.classin.harmony"
+    );
+  });
 });
 
 function observation(overrides: Partial<Observation> = {}): Observation {

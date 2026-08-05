@@ -150,6 +150,42 @@ describe("RuntimeInterceptor", () => {
     ]);
   });
 
+  it("dismisses the built-in ClassIn upgrade popup without tapping the update button", async () => {
+    const actions: ActionStep[] = [];
+    const observations = [
+      observation({
+        texts: ["版本6.1.0", "6.1.0", "新活动来了", "了解更新详情", "立即更新"]
+      }),
+      observation({ texts: ["主页", "创建公开课"] })
+    ];
+    const interceptor = new RuntimeInterceptor({
+      observe: async () => observations.shift() ?? observation({ texts: ["主页"] }),
+      performAction: async (action) => {
+        actions.push(action);
+      }
+    });
+
+    const outcome = await interceptor.handle({ phase: "state_transition", maxPasses: 1 });
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        type: "back",
+        params: expect.objectContaining({
+          source: "runtime_interceptor",
+          ruleId: "classin-upgrade-popup"
+        })
+      })
+    ]);
+    expect(outcome.records).toEqual([
+      expect.objectContaining({
+        ruleId: "classin-upgrade-popup",
+        ruleName: "ClassIn 升级提示弹窗",
+        matchedText: expect.stringContaining("版本"),
+        action: { type: "back" }
+      })
+    ]);
+  });
+
   it("accepts the built-in ClassIn service agreement startup dialog", async () => {
     const actions: ActionStep[] = [];
     const observations = [
