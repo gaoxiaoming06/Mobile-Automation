@@ -1,0 +1,14 @@
+interface:
+  display_name: "移动端自动化测试"
+  short_description: "通过 MCP 生成并执行移动端真机自动化验证"
+  default_prompt: "Use $mobile-automation-test to run a mobile app ScriptFlow validation through Mobile Automation MCP."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "mobile-automation"
+      description: "Mobile Automation MCP server for ScriptFlow generation, device validation, execution, and reports."
+      transport: "stdio"
+
+policy:
+  allow_implicit_invocation: true

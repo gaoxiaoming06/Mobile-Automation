@@ -1360,6 +1360,24 @@ describe("ScriptFlow AI planner", () => {
     expect(prompt).not.toContain("用户明确操作契约");
   });
 
+  it("includes external code context as non-authoritative planning hints", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), planningFlows(), "classin", "harmony");
+    const prompt = buildScriptFlowPlannerPrompt("从成长页进入全网搜索", "classin", "harmony", catalog, undefined, undefined, {
+      source: "classin-code",
+      implementationStack: "harmony-native",
+      summary: "Growth 页面顶栏存在搜索入口，点击后进入全网搜索页。",
+      relevantFiles: ["features/growth/SearchEntry.ets"],
+      candidateSteps: ["打开成长 Tab", "点击搜索入口", "确认搜索输入框"],
+      constraints: ["不要使用平台私有 selector"]
+    });
+
+    expect(prompt).toContain("外部代码上下文");
+    expect(prompt).toContain("仅作为生成线索");
+    expect(prompt).toContain("Growth 页面顶栏存在搜索入口");
+    expect(prompt).toContain("features/growth/SearchEntry.ets");
+    expect(prompt).toContain("不要使用平台私有 selector");
+  });
+
   it("rejects a bare reachPage for an unindexed bottom-tab page", () => {
     const catalog = buildScriptFlowPlannerCatalog(bottomTabPageCatalog(), planningFlows(), "cn.eeo.classin", "android");
     const response = readyResponse();

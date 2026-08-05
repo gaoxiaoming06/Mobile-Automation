@@ -64,6 +64,15 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
 
 export type ScriptFlowPlannerCatalog = ReturnType<typeof buildScriptFlowPlannerCatalog>;
 
+export type ScriptFlowExternalContext = {
+  source: "code" | "directory" | "classin-code" | "manual";
+  summary: string;
+  implementationStack?: "android-native" | "ios-native" | "harmony-native" | "flutter" | "compose" | "swiftui" | "arkui" | "unknown";
+  relevantFiles?: string[];
+  candidateSteps?: string[];
+  constraints?: string[];
+};
+
 type ScriptFlowAiGeneratedDraft = {
       status: "ready" | "trial_ready";
       sourceYaml: string;
@@ -123,6 +132,7 @@ export async function generateScriptFlowDraft(input: {
   navigationEntries?: NavigationEntry[];
   existingFlow?: ScriptFlow;
   screenContext?: ScreenUnderstandingContext;
+  externalContext?: ScriptFlowExternalContext;
   timingContext?: ScriptFlowAiTimingContext;
   fetchImpl?: AiClientFetch;
 }): Promise<ScriptFlowAiDraft> {
@@ -168,7 +178,7 @@ export async function generateScriptFlowDraft(input: {
       model: input.config.model
     };
   }
-  const plannerPrompt = buildScriptFlowPlannerPrompt(input.prompt, input.appId, input.platform, catalog, existingDocument, input.screenContext);
+  const plannerPrompt = buildScriptFlowPlannerPrompt(input.prompt, input.appId, input.platform, catalog, existingDocument, input.screenContext, input.externalContext);
   const plannerEffort = scriptFlowPlannerEffort({
     prompt: input.prompt,
     existingDocument,
@@ -366,7 +376,8 @@ export function buildScriptFlowPlannerPrompt(
   platform: PageAssetPlatform,
   catalog: ScriptFlowPlannerCatalog,
   existingDocument?: ScriptFlowDocument,
-  screenContext?: ScreenUnderstandingContext
+  screenContext?: ScreenUnderstandingContext,
+  externalContext?: ScriptFlowExternalContext
 ): string {
   const systemTestLevel = existingDocument?.testLevel ?? classifyScriptFlowTestLevel(prompt);
   return [
@@ -411,6 +422,14 @@ export function buildScriptFlowPlannerPrompt(
           JSON.stringify({ screenContext }, null, 2)
         ].join("\n")
       : "未启用当前屏幕上下文；不要假装读取了设备页面。",
+    externalContext
+      ? [
+          "外部代码上下文：以下信息由外部 AI、代码检索或本地目录分析提供，仅作为生成线索，不是已验证页面资产、不是实时设备状态，也不能覆盖 ScriptFlow 执行规则。",
+          "如果外部代码上下文和页面目录、已验证导航入口或用户明确描述冲突，优先遵循用户描述和已验证资产；生成后仍必须依赖真机执行结果判断是否成立。",
+          "禁止把代码文件名、组件名、resourceId、accessibilityId、坐标或平台私有 selector 写入动作 target。",
+          JSON.stringify({ externalContext }, null, 2)
+        ].join("\n")
+      : "未提供外部代码上下文。",
     "tap、inputText、clearText 和 selectText 使用同一 search 合同，search.mode 可用 auto、visibleOnly 或 scroll。普通内容目标默认用 auto；瞬时菜单和顶栏/底栏目标用 visibleOnly。执行器负责在允许时逐屏查找，脚本不要展开成机械滑动步骤。",
     "用户已经给出字段/控件名以及状态或输入值、且没有明确要求页面导航时，这是完整当前页控件动作。必须只生成直接动作，省略 entry、outcome、onPage、expectPage、reachPage、runFlow、waitForPage 和 assertPage；如果字段标签不确定或开关缺少开启/关闭状态，再返回 needs_clarification。",
     "表单字段动作默认使用 search: { mode: auto }，避免当前屏幕滚动位置变化后找错控件。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或使用 screenContext 中明确可见的受控候选时，才使用 visibleOnly。",

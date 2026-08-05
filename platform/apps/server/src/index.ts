@@ -126,7 +126,7 @@ registerTrialLearningRoutes(app, { storage });
 registerPageAssetLibraryRoutes(app, { storage });
 registerScriptFlowAiRoutes(app, {
   getFlow: (id) => storage.getScriptFlow(id),
-  generateDraft: async ({ prompt, appId, platform, existingFlow, screenAssist }) => {
+  generateDraft: async ({ prompt, appId, platform, existingFlow, screenAssist, externalContext }) => {
     const timingContext = createScriptFlowAiTimingContext(prompt);
     return timedScriptFlowAiStage(timingContext, "total", async () => {
       const config = resolveAiModelConfig(process.env, storage.getAiModelSettings());
@@ -154,6 +154,7 @@ registerScriptFlowAiRoutes(app, {
         platform,
         existingFlow,
         ...(screenContext ? { screenContext } : {}),
+        ...(externalContext ? { externalContext } : {}),
         timingContext,
         pageCatalog: pageAssetCatalog,
         flows: storage.listScriptFlows({ appId, platform }),

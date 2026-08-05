@@ -69,6 +69,48 @@ describe("ScriptFlow AI API", () => {
     });
   });
 
+  it("accepts external code context and scriptPlatform from external AI callers", async () => {
+    const generateDraft = vi.fn().mockResolvedValue({ status: "needs_clarification", clarification: "请选择入口", channel: "codex", model: "planner" });
+    const app = express();
+    app.use(express.json());
+    registerScriptFlowAiRoutes(app, { generateDraft, getFlow: () => undefined });
+    const server = createServer(app);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("address unavailable");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const response = await fetch(`${baseUrl}/api/script-flow-drafts/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "从成长页进入全网搜索",
+        appId: "classin",
+        scriptPlatform: "harmony",
+        externalContext: {
+          source: "classin-code",
+          implementationStack: "harmony-native",
+          summary: "Growth 页面顶栏存在搜索入口。",
+          candidateSteps: ["打开成长 Tab", "点击搜索入口", "确认搜索输入框"]
+        }
+      })
+    });
+
+    expect(response.status).toBe(200);
+    expect(generateDraft).toHaveBeenCalledWith({
+      prompt: "从成长页进入全网搜索",
+      appId: "classin",
+      platform: "harmony",
+      externalContext: {
+        source: "classin-code",
+        implementationStack: "harmony-native",
+        summary: "Growth 页面顶栏存在搜索入口。",
+        candidateSteps: ["打开成长 Tab", "点击搜索入口", "确认搜索输入框"]
+      }
+    });
+  });
+
   it("loads the current saved case as context when AI modifies a use case", async () => {
     const existingFlow: ScriptFlow = {
       id: "flow-login",

@@ -4,12 +4,18 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
+  },
+  "bin": {
+    "mobile-automation-mcp": "./src/server.ts"
   },
   "scripts": {
+    "start": "tsx src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@mobile-automation/shared": "workspace:*"
+    "@mobile-automation/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }
