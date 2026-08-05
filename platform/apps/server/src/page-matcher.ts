@@ -493,10 +493,22 @@ export function promoteParentPageLocalStateMatch(match: NodeMatchResult, observa
   if (match.status === "matched") {
     return match;
   }
-  const candidate = match.candidates.find((item) => isHighQualityPageAssetCandidate(item, match.threshold) || isParentPageLocalStateCandidate(item, observation));
+  const highQualityCandidate = match.candidates.find((item) => isHighQualityPageAssetCandidate(item, match.threshold));
+  if (highQualityCandidate) {
+    return promoteCandidate(match, highQualityCandidate);
+  }
+  const titleConfirmedCandidates = match.candidates.filter(isTitleTextConfirmedWithOnlyAuxiliaryVisualDrift);
+  if (titleConfirmedCandidates.length === 1) {
+    return promoteCandidate(match, titleConfirmedCandidates[0]!);
+  }
+  const candidate = match.candidates.find((item) => isParentPageLocalStateCandidate(item, observation));
   if (!candidate) {
     return match;
   }
+  return promoteCandidate(match, candidate);
+}
+
+function promoteCandidate(match: NodeMatchResult, candidate: NodeMatchResult["candidates"][number]): NodeMatchResult {
   return {
     status: "matched",
     observationId: match.observationId,
@@ -581,6 +593,33 @@ function isHighQualityPageAssetCandidate(candidate: NodeMatchResult["candidates"
   }
   const effectiveResults = effectiveDiagnosticMatcherResults(candidate.matcherResults);
   return effectiveResults.some((result) => result.matched && isPageIdentityMatcher(result));
+}
+
+function isTitleTextConfirmedWithOnlyAuxiliaryVisualDrift(candidate: NodeMatchResult["candidates"][number]): boolean {
+  if (!isPageAssetNode(candidate.node) || candidate.quality.missingCriticalMatcherIds.length > 0) {
+    return false;
+  }
+  const effectiveResults = effectiveDiagnosticMatcherResults(candidate.matcherResults);
+  if (!effectiveResults.some((result) => isMatchedCriticalTitleTextIdentity(candidate.node, result))) {
+    return false;
+  }
+  const missingStrongSignals = effectiveResults.filter((result) => isStrongStateMatcher(result) && !result.matched);
+  return missingStrongSignals.length > 0 && missingStrongSignals.every(isOptionalVisualRegionEvidence);
+}
+
+function isMatchedCriticalTitleTextIdentity(node: BusinessNode, result: MatcherResult): boolean {
+  if (!result.matched || !result.critical || !(result.type === "text" || result.type === "ocr_text") || !result.region || isCommonNavigationRegion(result.region)) {
+    return false;
+  }
+  if (result.region.y > 25 || result.region.height > 25) {
+    return false;
+  }
+  const normalizedPageName = normalizeSignatureText(node.name);
+  return titleMatchesText(normalizedPageName, result.actual ?? "") || titleMatchesText(normalizedPageName, safeDecodeURIComponent(result.expected));
+}
+
+function isOptionalVisualRegionEvidence(result: MatcherResult): boolean {
+  return !result.critical && isImageRegionMatcherType(result.type);
 }
 
 function isParentPageLocalStateCandidate(candidate: NodeMatchResult["candidates"][number], observation: Observation): boolean {
@@ -1480,9 +1519,14 @@ function normalizeSignatureParts(values: Array<string | undefined>): string {
       value
         ?.split(/[|,，\n]/)
         .map((part) => part.trim())
-        .filter(Boolean)
+        .filter(isPortableSignatureToken)
     )
   ).join("|");
+}
+
+function isPortableSignatureToken(value: string): boolean {
+  const normalized = value.replace(/\s+/g, "").trim();
+  return Boolean(normalized && /[\p{L}\p{N}]/u.test(normalized));
 }
 
 function readStringArray(value: unknown): string[] {

@@ -1013,9 +1013,14 @@ function normalizeSignatureParts(values: Array<string | undefined>): string {
       value
         ?.split(/[|,，\n]/)
         .map((part) => part.trim())
-        .filter(Boolean)
+        .filter(isPortableSignatureToken)
     )
   ).join("|");
+}
+
+function isPortableSignatureToken(value: string): boolean {
+  const normalized = value.replace(/\s+/g, "").trim();
+  return Boolean(normalized && /[\p{L}\p{N}]/u.test(normalized));
 }
 
 function decodeComponent(value: string): string {

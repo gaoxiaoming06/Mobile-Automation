@@ -389,6 +389,93 @@ describe("PageMatcher", () => {
     );
   });
 
+  it("confirms a title page when title OCR matches and only an optional visual region drifts", async () => {
+    const titleRegion = { x: 11.62, y: 8.11, width: 21.09, height: 2.5 };
+    const visualRegion = { x: 10.71, y: 6.1, width: 24.95, height: 5.44 };
+    const createLesson = node({
+      id: "node-create-lesson",
+      key: "classin.teacher.lesson.create.visual",
+      name: "新建课堂",
+      tags: ["page-asset", "asset-recording"],
+      matchers: [
+        {
+          ...matcher("semantic_image_region", "semantic-image-region:region-1781929561723:%3C%7C%E6%96%B0%E5%BB%BA%E8%AF%BE%E5%A0%82", 2.2, false, "mobile-both"),
+          threshold: 0.68,
+          region: visualRegion
+        },
+        {
+          ...matcher("ocr_text", "新建课堂", 1.8, true, "mobile-both"),
+          region: titleRegion
+        }
+      ],
+      metadata: { assetRecordingConfirmed: true }
+    });
+
+    const result = await matchCurrentPage({
+      graphVersion: graph([createLesson]),
+      observation: observation({
+        resolution: { width: 1256, height: 2760 },
+        ocrTextRegions: [{ text: "新建课堂", region: { x: 154, y: 226, width: 250, height: 64 } }],
+        imageRegions: [
+          {
+            value: "semantic-image-region:region-1781929561723:%3C%7C%E6%96%B0%E5%BB%BA%E8%AF%BE%E5%A0%82",
+            region: visualRegion,
+            similarity: 0.5
+          }
+        ]
+      })
+    });
+
+    expect(result.match.status).toBe("matched");
+    expect(result.match.node?.id).toBe("node-create-lesson");
+    expect(result.match.score).toBeLessThan(result.match.threshold);
+    expect(result.diagnostics.matchedEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "ocr_text", expected: "新建课堂", actual: "新建课堂", matched: true })
+      ])
+    );
+    expect(result.diagnostics.missingEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "semantic_image_region", matched: false })
+      ])
+    );
+  });
+
+  it("ignores icon-only symbol noise in semantic image region text signatures", async () => {
+    const titleRegion = { x: 10.71, y: 6.1, width: 24.95, height: 5.44 };
+    const semanticValue = "semantic-image-region:region-1781929561723:%3C%7C%E6%96%B0%E5%BB%BA%E8%AF%BE%E5%A0%82";
+    const createLesson = node({
+      id: "node-create-lesson",
+      key: "classin.teacher.lesson.create.visual",
+      name: "新建课堂",
+      tags: ["page-asset", "asset-recording"],
+      matchers: [
+        {
+          ...matcher("semantic_image_region", semanticValue, 2.2, true, "mobile-both"),
+          threshold: 0.68,
+          region: titleRegion
+        }
+      ],
+      metadata: { assetRecordingConfirmed: true }
+    });
+
+    const result = await matchCurrentPage({
+      graphVersion: graph([createLesson]),
+      observation: observation({
+        resolution: { width: 1256, height: 2760 },
+        ocrTextRegions: [{ text: "新建课堂", region: { x: 154, y: 226, width: 250, height: 64 } }]
+      })
+    });
+
+    expect(result.match.status).toBe("matched");
+    expect(result.observation.imageRegions?.[0]).toEqual(
+      expect.objectContaining({
+        value: semanticValue,
+        similarity: 1
+      })
+    );
+  });
+
   it("ignores platform-specific tokens in semantic image region signatures", async () => {
     const titleRegion = { x: 15, y: 7, width: 18, height: 6 };
     const semanticValue = "semantic-image-region:title:cn.eeo.classin%3Aid%2Ftitle%7Cuser%20avatar";
