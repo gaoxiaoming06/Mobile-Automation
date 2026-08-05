@@ -639,6 +639,107 @@ describe("SemanticStepResolver", () => {
     expect(outcome?.metadata).toEqual(expect.objectContaining({ relocatedBy: "top_bar_current_visual" }));
   });
 
+  it("does not treat OCR text strokes as a leading avatar candidate", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const layoutWithTabText = topBarLayout();
+    layoutWithTabText.text = "主页\n全部班级";
+    layoutWithTabText.boxes = [
+      { text: "主页", confidence: 0.99, x: 145, y: 170, width: 100, height: 54 },
+      { text: "全部班级", confidence: 0.98, x: 42, y: 278, width: 150, height: 100 }
+    ];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layoutWithTabText),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: topBarAvatarWithTextStrokeDistractorScreenshot(1200, 2000)
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-avatar-text-distractor",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "top-bar-icon:avatar",
+        locatorKind: "top_bar_icon_locator",
+        role: "avatar",
+        slot: "leading",
+        anchorText: "主页",
+        semanticArea: "top",
+        visualLocator: {
+          candidates: [
+            { role: "avatar", label: "头像", score: 0.93, semanticArea: "top", region: { x: 5, y: 7, width: 4, height: 4 } }
+          ]
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 84, y: 250 }]);
+    expect(outcome?.metadata).toEqual(
+      expect.objectContaining({
+        relocatedBy: "top_bar_current_visual",
+        currentVisual: expect.objectContaining({
+          strategy: "avatar_container",
+          ocrTextExcludedComponentCount: 1
+        })
+      })
+    );
+  });
+
+  it("uses the top title as a structural fallback for a pale leading avatar", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const layoutWithTabText = topBarLayout();
+    layoutWithTabText.text = "主页\n全部班级";
+    layoutWithTabText.boxes = [
+      { text: "主页", confidence: 0.99, x: 145, y: 170, width: 100, height: 54 },
+      { text: "全部班级", confidence: 0.98, x: 42, y: 278, width: 150, height: 100 }
+    ];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layoutWithTabText),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-${attempt}`),
+        png: topBarPaleAvatarWithTextStrokeDistractorScreenshot(1200, 2000)
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-avatar-pale",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locator: "top-bar-icon:avatar",
+        locatorKind: "top_bar_icon_locator",
+        role: "avatar",
+        slot: "leading",
+        semanticArea: "top",
+        visualLocator: {
+          candidates: [
+            { role: "avatar", label: "头像", score: 0.93, semanticArea: "top", region: { x: 5, y: 7, width: 4, height: 4 } }
+          ]
+        }
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 91, y: 197 }]);
+    expect(outcome?.metadata).toEqual(
+      expect.objectContaining({
+        relocatedBy: "top_bar_current_visual",
+        currentVisual: expect.objectContaining({
+          reason: "current_visual_icon_selected_by_title_relation",
+          fallbackStrategy: "top_title_leading_avatar"
+        })
+      })
+    );
+  });
+
   it("resolves top bar trailing icons from current screenshot visuals instead of candidate centers", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -6006,6 +6107,52 @@ function topBarAvatarComponentsScreenshot(
           pixels[y * width + x] = 232;
         }
       }
+    }
+  }
+  return pgm(width, height, pixels);
+}
+
+function topBarAvatarWithTextStrokeDistractorScreenshot(width: number, height: number): Buffer {
+  const pixels = Array.from({ length: width * height }, () => 255);
+  for (let y = 232; y <= 268; y += 1) {
+    for (let x = 66; x <= 102; x += 1) {
+      if (x < 0 || x >= width || y < 0 || y >= height) {
+        continue;
+      }
+      if (Math.hypot(x - 84, y - 250) <= 18) {
+        pixels[y * width + x] = 232;
+      }
+    }
+  }
+  for (let y = 286; y <= 369; y += 1) {
+    for (let x = 48; x <= 126; x += 1) {
+      if (x < 0 || x >= width || y < 0 || y >= height) {
+        continue;
+      }
+      pixels[y * width + x] = 28;
+    }
+  }
+  return pgm(width, height, pixels);
+}
+
+function topBarPaleAvatarWithTextStrokeDistractorScreenshot(width: number, height: number): Buffer {
+  const pixels = Array.from({ length: width * height }, () => 255);
+  for (let y = 232; y <= 268; y += 1) {
+    for (let x = 66; x <= 102; x += 1) {
+      if (x < 0 || x >= width || y < 0 || y >= height) {
+        continue;
+      }
+      if (Math.hypot(x - 84, y - 250) <= 18) {
+        pixels[y * width + x] = 252;
+      }
+    }
+  }
+  for (let y = 286; y <= 369; y += 1) {
+    for (let x = 48; x <= 126; x += 1) {
+      if (x < 0 || x >= width || y < 0 || y >= height) {
+        continue;
+      }
+      pixels[y * width + x] = 28;
     }
   }
   return pgm(width, height, pixels);

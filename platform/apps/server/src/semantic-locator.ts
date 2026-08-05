@@ -606,13 +606,41 @@ export class SemanticStepResolver {
     let anchor: TextLocatorCandidate | undefined;
     let anchorPoint: { x: number; y: number } | undefined;
     let actualText = "";
+    let locatorLayout: OcrLayoutResult | undefined;
+    const locateScreenshotText = async (mode: "contains" | "equals" | "not_contains" = "contains"): Promise<OcrLayoutResult | undefined> => {
+      if (!this.deps.ocr.locateText) {
+        return undefined;
+      }
+      if (!locatorLayout) {
+        const screenshot = await captureLocatorScreenshot();
+        locatorLayout = await this.deps.ocr.locateText({
+          image: screenshot.png,
+          mode
+        });
+      }
+      return locatorLayout;
+    };
     if (anchorText && this.deps.ocr.locateText) {
-      const screenshot = await captureLocatorScreenshot();
       const mode = tapTextMatchMode(params.mode);
-      const layout = await this.deps.ocr.locateText({
-        image: screenshot.png,
-        mode
-      });
+      const layout = await locateScreenshotText(mode);
+      if (!layout) {
+        return {
+          supported: true,
+          resolved: false,
+          message: "top_bar_icon_locator requires OCR layout support for anchor text.",
+          artifacts,
+          metadata: {
+            type: "top_bar_icon_locator",
+            action: "fail",
+            reason: "ocr_layout_unavailable",
+            role,
+            slot,
+            orderFromRight,
+            anchorText,
+            semanticArea
+          }
+        };
+      }
       actualText = layout.text;
       anchor = findTextCandidate(layout, anchorText, {
         mode,
@@ -670,7 +698,8 @@ export class SemanticStepResolver {
       orderFromRight,
       semanticArea,
       deviceSize: input.deviceSize,
-      anchorXPercent: anchorPoint ? (anchorPoint.x / input.deviceSize.width) * 100 : undefined
+      anchorXPercent: anchorPoint ? (anchorPoint.x / input.deviceSize.width) * 100 : undefined,
+      ocrLayout: locatorLayout ?? await locateScreenshotText().catch(() => undefined)
     });
     if (!currentVisual.selected) {
       return {
@@ -832,20 +861,30 @@ export class SemanticStepResolver {
     }
 
     const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, 1);
+    let locatorLayout: OcrLayoutResult | undefined;
+    const locateScreenshotText = async (mode: "contains" | "equals" | "not_contains" = "contains"): Promise<OcrLayoutResult | undefined> => {
+      if (!this.deps.ocr.locateText) {
+        return undefined;
+      }
+      if (!locatorLayout) {
+        locatorLayout = await this.deps.ocr.locateText({
+          image: screenshot.png,
+          mode
+        });
+      }
+      return locatorLayout;
+    };
     let anchor: TextLocatorCandidate | undefined;
     let anchorPoint: { x: number; y: number } | undefined;
     if (anchorText && this.deps.ocr.locateText) {
       const mode = tapTextMatchMode(params.mode);
-      const layout = await this.deps.ocr.locateText({
-        image: screenshot.png,
-        mode
-      });
-      anchor = findTextCandidate(layout, anchorText, {
+      const layout = await locateScreenshotText(mode);
+      anchor = layout ? findTextCandidate(layout, anchorText, {
         mode,
         semanticArea: semanticArea === "unknown" ? undefined : semanticArea,
         deviceSize: input.deviceSize
-      });
-      if (anchor) {
+      }) : undefined;
+      if (anchor && layout) {
         anchorPoint = textCandidateDevicePoint(anchor, layout, input.deviceSize);
       }
     }
@@ -857,7 +896,8 @@ export class SemanticStepResolver {
       slot: explicitSlot,
       orderFromRight,
       anchorPoint,
-      deviceSize: input.deviceSize
+      deviceSize: input.deviceSize,
+      ocrLayout: locatorLayout ?? await locateScreenshotText().catch(() => undefined)
     });
     if (!currentVisual.selected) {
       return {
@@ -932,10 +972,14 @@ export class SemanticStepResolver {
     }
 
     const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, 1);
+    const ocrLayout = this.deps.ocr.locateText
+      ? await this.deps.ocr.locateText({ image: screenshot.png, mode: "contains" }).catch(() => undefined)
+      : undefined;
     const currentVisual = await locateCurrentContentAddIconInScreenshot({
       screenshot: screenshot.png,
       slot,
-      deviceSize: input.deviceSize
+      deviceSize: input.deviceSize,
+      ocrLayout
     });
     if (!currentVisual.selected) {
       return {
@@ -6557,6 +6601,7 @@ async function locateCurrentTopBarIconInScreenshot(input: {
   semanticArea: VisualSemanticArea;
   deviceSize: { width: number; height: number };
   anchorXPercent?: number;
+  ocrLayout?: OcrLayoutResult;
 }): Promise<{
   selected?: {
     point: { x: number; y: number };
@@ -6593,9 +6638,11 @@ async function locateCurrentTopBarIconInScreenshot(input: {
   const rawComponents = avatarContainerStrategy
     ? findAvatarVisualComponents(sample, pixelSearchRegion)
     : findTopBarVisualComponents(sample, pixelSearchRegion);
+  const mergedRawComponents = mergeNearbyTopBarIconComponents(rawComponents, sample);
+  const textFiltered = excludeOcrTextOverlappingComponents(mergedRawComponents, input.ocrLayout, sample);
   const normalizedRole = input.role.trim().toLowerCase();
   const roleAware = isKnownTopBarIconRole(normalizedRole);
-  const components = mergeNearbyTopBarIconComponents(rawComponents, sample)
+  const components = textFiltered.components
     .map((component) => {
       const roleScores = avatarContainerStrategy || !roleAware ? undefined : semanticIconRoleScores(component, sample);
       const roleScore = avatarContainerStrategy ? undefined : roleScores?.get(normalizedRole) ?? topBarIconRoleShapeScore(component, sample, normalizedRole);
@@ -6620,6 +6667,9 @@ async function locateCurrentTopBarIconInScreenshot(input: {
     slot: input.slot,
     orderFromRight: input.orderFromRight
   });
+  const titleFallback = selected ? undefined : avatarContainerStrategy
+    ? locateLeadingAvatarByTopTitle(input.ocrLayout, sample, input.deviceSize)
+    : undefined;
   const diagnostic = {
     reason: selected ? "current_visual_icon_selected" : "current_visual_icon_not_found",
     strategy: avatarContainerStrategy ? "avatar_container" : "contrast_icon_shape",
@@ -6628,6 +6678,8 @@ async function locateCurrentTopBarIconInScreenshot(input: {
     orderFromRight: input.orderFromRight,
     candidateRegion: input.candidate.region,
     searchRegion,
+    rawComponentCount: mergedRawComponents.length,
+    ocrTextExcludedComponentCount: textFiltered.excludedCount,
     componentCount: components.length,
     bestScore: selected ? roundPercent(selected.score) : undefined,
     roleScore: selected?.roleScore === undefined ? undefined : roundPercent(selected.roleScore),
@@ -6635,8 +6687,23 @@ async function locateCurrentTopBarIconInScreenshot(input: {
     competingRole: selected?.competingRole,
     competingRoleScore: selected?.competingRoleScore === undefined ? undefined : roundPercent(selected.competingRoleScore),
     polarity: selected?.polarity,
-    selectedBounds: selected?.bounds
+    selectedBounds: selected?.bounds,
+    titleFallback: titleFallback?.diagnostic
   };
+  if (titleFallback) {
+    return {
+      selected: {
+        point: titleFallback.point,
+        region: titleFallback.region
+      },
+      diagnostic: {
+        ...diagnostic,
+        reason: "current_visual_icon_selected_by_title_relation",
+        fallbackStrategy: "top_title_leading_avatar",
+        selectedBounds: titleFallback.sampleBounds
+      }
+    };
+  }
   if (!selected) {
     return { diagnostic };
   }
@@ -6657,6 +6724,7 @@ async function locateCurrentContentAddIconInScreenshot(input: {
   screenshot: Buffer;
   slot: TopBarIconSlot;
   deviceSize: { width: number; height: number };
+  ocrLayout?: OcrLayoutResult;
 }): Promise<{
   selected?: {
     point: { x: number; y: number };
@@ -6675,7 +6743,9 @@ async function locateCurrentContentAddIconInScreenshot(input: {
   if (!pixelSearchRegion) {
     return { diagnostic: { reason: "invalid_search_region", searchRegion } };
   }
-  const candidates = findContentAddIconComponents(sample, pixelSearchRegion)
+  const rawComponents = findContentAddIconComponents(sample, pixelSearchRegion);
+  const textFiltered = excludeOcrTextOverlappingComponents(rawComponents, input.ocrLayout, sample);
+  const candidates = textFiltered.components
     .map((component) => ({
       ...component,
       score: contentAddIconScore(component, sample, input.slot)
@@ -6690,6 +6760,8 @@ async function locateCurrentContentAddIconInScreenshot(input: {
     strategy: "floating_add_shape",
     slot: input.slot,
     searchRegion,
+    rawComponentCount: rawComponents.length,
+    ocrTextExcludedComponentCount: textFiltered.excludedCount,
     componentCount: candidates.length,
     bestScore: selected ? roundPercent(selected.score) : undefined,
     selectedBounds: selected?.bounds
@@ -6717,6 +6789,7 @@ async function locateCurrentVisibleSemanticIconInScreenshot(input: {
   orderFromRight: number;
   anchorPoint?: { x: number; y: number };
   deviceSize: { width: number; height: number };
+  ocrLayout?: OcrLayoutResult;
 }): Promise<{
   selected?: {
     point: { x: number; y: number };
@@ -6760,7 +6833,8 @@ async function locateCurrentVisibleSemanticIconInScreenshot(input: {
 
   const diagnostics: Array<Record<string, unknown>> = [];
   for (const phase of phases) {
-    const candidates = findVisibleSemanticIconCandidates(sample, phase.region, role, input.deviceSize);
+    const phaseCandidates = findVisibleSemanticIconCandidates(sample, phase.region, role, input.deviceSize, input.ocrLayout);
+    const candidates = phaseCandidates.candidates;
     const selected = selectVisibleSemanticIconCandidate(candidates, {
       slot: input.slot,
       orderFromRight: input.orderFromRight,
@@ -6774,6 +6848,8 @@ async function locateCurrentVisibleSemanticIconInScreenshot(input: {
       normalizedRole: role,
       semanticArea: input.semanticArea,
       searchRegion: phase.region,
+      rawComponentCount: phaseCandidates.rawComponentCount,
+      ocrTextExcludedComponentCount: phaseCandidates.excludedCount,
       candidateCount: candidates.length,
       selectedRegion: selected.candidate?.region,
       bestScore: selected.candidate ? roundPercent(selected.candidate.score) : undefined,
@@ -6839,13 +6915,16 @@ function findVisibleSemanticIconCandidates(
   sample: ImageSample,
   region: { x: number; y: number; width: number; height: number },
   role: string,
-  deviceSize: { width: number; height: number }
-): VisibleSemanticIconCandidate[] {
+  deviceSize: { width: number; height: number },
+  ocrLayout?: OcrLayoutResult
+): { candidates: VisibleSemanticIconCandidate[]; rawComponentCount: number; excludedCount: number } {
   const pixelSearchRegion = percentRegionToSampleRect(region, sample);
   if (!pixelSearchRegion) {
-    return [];
+    return { candidates: [], rawComponentCount: 0, excludedCount: 0 };
   }
-  return mergeNearbyTopBarIconComponents(findTopBarVisualComponents(sample, pixelSearchRegion), sample)
+  const rawComponents = mergeNearbyTopBarIconComponents(findTopBarVisualComponents(sample, pixelSearchRegion), sample);
+  const textFiltered = excludeOcrTextOverlappingComponents(rawComponents, ocrLayout, sample);
+  const candidates = textFiltered.components
     .map((component) => {
       const roleScores = semanticIconRoleScores(component, sample);
       const roleScore = roleScores.get(role) ?? 0;
@@ -6871,6 +6950,11 @@ function findVisibleSemanticIconCandidates(
     })
     .filter((candidate) => candidate.roleScore >= 0.64 && candidate.score >= 0.64 && candidate.roleMargin >= 0.08)
     .sort((left, right) => right.score - left.score || right.roleScore - left.roleScore);
+  return {
+    candidates,
+    rawComponentCount: rawComponents.length,
+    excludedCount: textFiltered.excludedCount
+  };
 }
 
 function selectVisibleSemanticIconCandidate(
@@ -7315,6 +7399,164 @@ function mergeNearbyTopBarIconComponents(components: TopBarIconVisualComponent[]
     merged.push(current);
   }
   return merged;
+}
+
+function excludeOcrTextOverlappingComponents<T extends { bounds: { x: number; y: number; width: number; height: number }; center: { x: number; y: number } }>(
+  components: T[],
+  layout: OcrLayoutResult | undefined,
+  sample: ImageSample
+): { components: T[]; excludedCount: number } {
+  const textRects = ocrTextRectsInSample(layout, sample);
+  if (!textRects.length || !components.length) {
+    return { components, excludedCount: 0 };
+  }
+  const kept: T[] = [];
+  let excludedCount = 0;
+  for (const component of components) {
+    if (componentOverlapsOcrText(component, textRects)) {
+      excludedCount += 1;
+    } else {
+      kept.push(component);
+    }
+  }
+  return { components: kept, excludedCount };
+}
+
+function locateLeadingAvatarByTopTitle(
+  layout: OcrLayoutResult | undefined,
+  sample: ImageSample,
+  deviceSize: { width: number; height: number }
+): {
+  point: { x: number; y: number };
+  region: { x: number; y: number; width: number; height: number };
+  sampleBounds: { x: number; y: number; width: number; height: number };
+  diagnostic: Record<string, unknown>;
+} | undefined {
+  const title = findTopBarTitleCandidate(layout, sample);
+  if (!title) {
+    return undefined;
+  }
+  const titleRect = ocrBoxToSampleRect(title, layout!, sample);
+  const diameter = Math.max(36, Math.min(92, titleRect.height * 1.08));
+  const center = {
+    x: Math.max(diameter / 2, titleRect.x - titleRect.height),
+    y: titleRect.y + titleRect.height / 2
+  };
+  const sampleBounds = {
+    x: center.x - diameter / 2,
+    y: center.y - diameter / 2,
+    width: diameter,
+    height: diameter
+  };
+  const point = {
+    x: scaleCoordinate(center.x, sample.width, deviceSize.width),
+    y: scaleCoordinate(center.y, sample.height, deviceSize.height)
+  };
+  return {
+    point,
+    region: sampleRectToPercent(sampleBounds, sample),
+    sampleBounds,
+    diagnostic: {
+      titleText: normalizeOcrText(title.text),
+      titleBounds: titleRect,
+      inferredBounds: sampleBounds,
+      inferredPoint: point
+    }
+  };
+}
+
+function findTopBarTitleCandidate(layout: OcrLayoutResult | undefined, sample: ImageSample): OcrTextBox | undefined {
+  if (!layout?.boxes.length || layout.width <= 0 || layout.height <= 0) {
+    return undefined;
+  }
+  const scaleX = sample.width / layout.width;
+  const scaleY = sample.height / layout.height;
+  return layout.boxes
+    .filter((box) => normalizeOcrText(box.text).length > 0)
+    .map((box) => {
+      const rect = ocrBoxToSampleRect(box, layout, sample);
+      const centerYPercent = ((rect.y + rect.height / 2) / sample.height) * 100;
+      const centerXPercent = ((rect.x + rect.width / 2) / sample.width) * 100;
+      const height = box.height * scaleY;
+      const area = box.width * scaleX * height;
+      const leftBias = Math.max(0, 1 - centerXPercent / 45);
+      const score = height * 3 + Math.min(area / 1200, 120) + leftBias * 40;
+      return { box, centerYPercent, centerXPercent, height, score };
+    })
+    .filter((item) => item.centerYPercent >= 4 && item.centerYPercent <= 12.8)
+    .filter((item) => item.centerXPercent >= 8 && item.centerXPercent <= 48)
+    .filter((item) => item.height >= Math.max(24, sample.height * 0.014))
+    .sort((left, right) => right.score - left.score)[0]?.box;
+}
+
+function ocrBoxToSampleRect(box: OcrTextBox, layout: OcrLayoutResult, sample: ImageSample): { x: number; y: number; width: number; height: number } {
+  const scaleX = sample.width / layout.width;
+  const scaleY = sample.height / layout.height;
+  return {
+    x: box.x * scaleX,
+    y: box.y * scaleY,
+    width: box.width * scaleX,
+    height: box.height * scaleY
+  };
+}
+
+function componentOverlapsOcrText(
+  component: { bounds: { x: number; y: number; width: number; height: number }; center: { x: number; y: number } },
+  textRects: Array<{ x: number; y: number; width: number; height: number }>
+): boolean {
+  const componentArea = Math.max(1, component.bounds.width * component.bounds.height);
+  return textRects.some((rect) => {
+    const overlapArea = rectIntersectionArea(component.bounds, rect);
+    if (overlapArea <= 0) {
+      return false;
+    }
+    const overlapRatio = overlapArea / componentArea;
+    if (overlapRatio >= 0.32) {
+      return true;
+    }
+    return overlapRatio >= 0.12 && pointInsideRect(component.center, expandRect(rect, 2));
+  });
+}
+
+function ocrTextRectsInSample(layout: OcrLayoutResult | undefined, sample: ImageSample): Array<{ x: number; y: number; width: number; height: number }> {
+  if (!layout?.boxes.length || layout.width <= 0 || layout.height <= 0) {
+    return [];
+  }
+  const scaleX = sample.width / layout.width;
+  const scaleY = sample.height / layout.height;
+  return layout.boxes
+    .filter((box) => normalizeOcrText(box.text).length > 0)
+    .map((box) => ({
+      x: box.x * scaleX,
+      y: box.y * scaleY,
+      width: box.width * scaleX,
+      height: box.height * scaleY
+    }))
+    .filter((rect) => rect.width > 0 && rect.height > 0);
+}
+
+function rectIntersectionArea(
+  left: { x: number; y: number; width: number; height: number },
+  right: { x: number; y: number; width: number; height: number }
+): number {
+  const x1 = Math.max(left.x, right.x);
+  const y1 = Math.max(left.y, right.y);
+  const x2 = Math.min(left.x + left.width, right.x + right.width);
+  const y2 = Math.min(left.y + left.height, right.y + right.height);
+  return Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+}
+
+function pointInsideRect(point: { x: number; y: number }, rect: { x: number; y: number; width: number; height: number }): boolean {
+  return point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
+function expandRect(rect: { x: number; y: number; width: number; height: number }, amount: number): { x: number; y: number; width: number; height: number } {
+  return {
+    x: rect.x - amount,
+    y: rect.y - amount,
+    width: rect.width + amount * 2,
+    height: rect.height + amount * 2
+  };
 }
 
 function componentsShouldMerge(
