@@ -39,6 +39,42 @@ describe("HarmonyActionExecutor", () => {
     expect(calls).toEqual([["uitest", "uiInput", "swipe", "1", "2", "30", "40", "500"]]);
   });
 
+  it("clears focused text through Harmony key events", async () => {
+    const calls: string[][] = [];
+    const executor = new HarmonyActionExecutor({
+      shell: async (_serial, args) => {
+        calls.push(args);
+        return "";
+      },
+      sleep: async () => undefined
+    });
+
+    await executor.performAction("SERIAL", { type: "clear_text" });
+
+    expect(calls.slice(0, 3)).toEqual([
+      ["uitest", "uiInput", "keyEvent", "2082"],
+      ["uitest", "uiInput", "keyEvent", "2072", "2017"],
+      ["uitest", "uiInput", "keyEvent", "2055"]
+    ]);
+    expect(calls.filter((args) => args.join(" ") === "uitest uiInput keyEvent 2055")).toHaveLength(41);
+  });
+
+  it("does not treat hide keyboard as Back on Harmony", async () => {
+    const calls: string[][] = [];
+    const executor = new HarmonyActionExecutor({
+      shell: async (_serial, args) => {
+        calls.push(args);
+        return "";
+      },
+      sleep: async () => undefined
+    });
+
+    await expect(executor.performAction("SERIAL", { type: "hide_keyboard" }))
+      .rejects.toThrow("HarmonyOS action is not supported yet: hide_keyboard");
+
+    expect(calls).toEqual([]);
+  });
+
   it("maps launch app to aa start with ability when provided", async () => {
     const calls: string[][] = [];
     const executor = new HarmonyActionExecutor({

@@ -9,6 +9,11 @@ type HarmonyActionExecutorOptions = {
 };
 
 const LAUNCH_SETTLE_MS = 4500;
+const HARMONY_KEYCODE_A = "2017";
+const HARMONY_KEYCODE_DEL = "2055";
+const HARMONY_KEYCODE_CTRL_LEFT = "2072";
+const HARMONY_KEYCODE_MOVE_END = "2082";
+const CLEAR_TEXT_DELETE_KEYEVENT_COUNT = 40;
 
 export class HarmonyActionExecutor {
   private readonly sleep: (ms: number) => Promise<void>;
@@ -55,6 +60,10 @@ export class HarmonyActionExecutor {
       await this.shell(serial, ["uitest", "uiInput", "text", action.text]);
       return hdcInputResult();
     }
+    if (action.type === "clear_text") {
+      await this.clearText(serial);
+      return hdcInputResult();
+    }
     if (action.type === "launch_app") {
       await this.launchApp(serial, action.packageName);
       return hdcInputResult();
@@ -71,6 +80,15 @@ export class HarmonyActionExecutor {
 
   async clearAppData(serial: string, bundleName: string): Promise<void> {
     await this.shell(serial, ["bm", "clean", "-d", "-n", bundleName], { timeoutMs: 15000 });
+  }
+
+  private async clearText(serial: string): Promise<void> {
+    await this.shell(serial, ["uitest", "uiInput", "keyEvent", HARMONY_KEYCODE_MOVE_END]).catch(() => undefined);
+    await this.shell(serial, ["uitest", "uiInput", "keyEvent", HARMONY_KEYCODE_CTRL_LEFT, HARMONY_KEYCODE_A]).catch(() => undefined);
+    await this.shell(serial, ["uitest", "uiInput", "keyEvent", HARMONY_KEYCODE_DEL]);
+    for (let index = 0; index < CLEAR_TEXT_DELETE_KEYEVENT_COUNT; index += 1) {
+      await this.shell(serial, ["uitest", "uiInput", "keyEvent", HARMONY_KEYCODE_DEL]);
+    }
   }
 
   private async launchApp(serial: string, bundleName: string): Promise<void> {

@@ -3516,14 +3516,17 @@ export class SemanticStepResolver {
         };
       }
       actionResult = normalizeActionResult(await this.performAction(input, { type: "input_text", text })) ?? actionResult;
+      const allowUnreadableAfterInput = shouldAllowUnreadableTargetRegionAfterInput(focus, input.step.params);
       const verification = await this.verifyInputText(input, text, {
         attempt: 1,
         semanticArea: readSemanticArea(input.step.params.semanticArea) ?? semanticAreaForPercentRegion(region),
         percentRegion: inputVerificationRegion(region, focus, input.deviceSize),
-        percentRegionSource: inputVerificationRegionSource(focus)
+        percentRegionSource: inputVerificationRegionSource(focus),
+        allowUnreadableTargetRegion: allowUnreadableAfterInput,
+        unreadableTargetRegionStrategy: allowUnreadableAfterInput ? "target_region_unreadable_after_input" : undefined
       });
       if (!verification.verified) {
-        const keyEventRetry = await this.retrySensitiveInputWithKeyEvents(input, text, {
+        const keyEventRetry = await this.retryInputWithKeyEvents(input, text, {
           region,
           focus,
           previousActionResult: actionResult,
@@ -3558,6 +3561,8 @@ export class SemanticStepResolver {
             clearFirst: input.step.params.clearFirst !== false,
             sensitiveInput: isSensitiveInput(input.step.params),
             ...(verification.strategy ? { verificationStrategy: verification.strategy } : {}),
+            ...(verification.recovery ? { verificationRecovery: verification.recovery } : {}),
+            ...(verification.recoveryAction ? { verificationRecoveryAction: verification.recoveryAction } : {}),
             ...(verification.percentRegionSource ? { verificationRegionSource: verification.percentRegionSource } : {}),
             evidenceArtifactIds: verification.artifacts.map((artifact) => artifact.id),
             driverChannel: actionResult?.driverChannel
@@ -3587,6 +3592,8 @@ export class SemanticStepResolver {
           inputVerified: verification.verified,
           sensitiveInput: isSensitiveInput(input.step.params),
           ...(verification.strategy ? { verificationStrategy: verification.strategy } : {}),
+          ...(verification.recovery ? { verificationRecovery: verification.recovery } : {}),
+          ...(verification.recoveryAction ? { verificationRecoveryAction: verification.recoveryAction } : {}),
           ...(verification.percentRegionSource ? { verificationRegionSource: verification.percentRegionSource } : {}),
           ...(verification.candidate ? { verifiedBy: verification.candidate.text, verificationLocator: verification.candidate } : {}),
           evidenceArtifactIds: verification.artifacts.map((artifact) => artifact.id),
@@ -3682,6 +3689,8 @@ export class SemanticStepResolver {
           resolvedLocator: locatorFromCandidate(located.candidate),
           candidate: located.candidate,
           clearFirst: input.step.params.clearFirst !== false,
+          ...(verification.recovery ? { verificationRecovery: verification.recovery } : {}),
+          ...(verification.recoveryAction ? { verificationRecoveryAction: verification.recoveryAction } : {}),
           ...(verification.percentRegionSource ? { verificationRegionSource: verification.percentRegionSource } : {}),
           evidenceArtifactIds: verification.artifacts.map((artifact) => artifact.id),
           driverChannel: actionResult?.driverChannel
@@ -3706,6 +3715,8 @@ export class SemanticStepResolver {
         candidate: located.candidate,
         clearFirst: input.step.params.clearFirst !== false,
         inputVerified: verification.verified,
+        ...(verification.recovery ? { verificationRecovery: verification.recovery } : {}),
+        ...(verification.recoveryAction ? { verificationRecoveryAction: verification.recoveryAction } : {}),
         ...(verification.percentRegionSource ? { verificationRegionSource: verification.percentRegionSource } : {}),
         ...(verification.candidate ? { verifiedBy: verification.candidate.text, verificationLocator: verification.candidate } : {}),
         evidenceArtifactIds: verification.artifacts.map((artifact) => artifact.id),
@@ -3859,15 +3870,17 @@ export class SemanticStepResolver {
       };
     }
     actionResult = normalizeActionResult(await this.performAction(input, { type: "input_text", text })) ?? actionResult;
-
+    const allowUnreadableAfterInput = shouldAllowUnreadableTargetRegionAfterInput(focus, input.step.params);
     const verification = await this.verifyInputText(input, text, {
       attempt: 1,
       semanticArea,
       percentRegion: inputVerificationRegion(searchRegion, focus, input.deviceSize),
-      percentRegionSource: inputVerificationRegionSource(focus)
+      percentRegionSource: inputVerificationRegionSource(focus),
+      allowUnreadableTargetRegion: allowUnreadableAfterInput,
+      unreadableTargetRegionStrategy: allowUnreadableAfterInput ? "target_region_unreadable_after_input" : undefined
     });
     if (!verification.verified) {
-      const keyEventRetry = await this.retrySensitiveInputWithKeyEvents(input, text, {
+      const keyEventRetry = await this.retryInputWithKeyEvents(input, text, {
         region: searchRegion,
         focus,
         previousActionResult: actionResult,
@@ -3905,6 +3918,8 @@ export class SemanticStepResolver {
           clearFirst: input.step.params.clearFirst !== false,
           sensitiveInput: isSensitiveInput(input.step.params),
           ...(verification.strategy ? { verificationStrategy: verification.strategy } : {}),
+          ...(verification.recovery ? { verificationRecovery: verification.recovery } : {}),
+          ...(verification.recoveryAction ? { verificationRecoveryAction: verification.recoveryAction } : {}),
           ...(verification.percentRegionSource ? { verificationRegionSource: verification.percentRegionSource } : {}),
           evidenceArtifactIds: verification.artifacts.map((artifact) => artifact.id),
           driverChannel: actionResult?.driverChannel
@@ -3938,6 +3953,8 @@ export class SemanticStepResolver {
         inputVerified: verification.verified,
         sensitiveInput: isSensitiveInput(input.step.params),
         ...(verification.strategy ? { verificationStrategy: verification.strategy } : {}),
+        ...(verification.recovery ? { verificationRecovery: verification.recovery } : {}),
+        ...(verification.recoveryAction ? { verificationRecoveryAction: verification.recoveryAction } : {}),
         ...(verification.percentRegionSource ? { verificationRegionSource: verification.percentRegionSource } : {}),
         ...(verification.candidate ? { verifiedBy: verification.candidate.text, verificationLocator: verification.candidate } : {}),
         evidenceArtifactIds: verification.artifacts.map((artifact) => artifact.id),
@@ -3946,7 +3963,7 @@ export class SemanticStepResolver {
     };
   }
 
-  private async retrySensitiveInputWithKeyEvents(
+  private async retryInputWithKeyEvents(
     input: {
       runId: string;
       stepResultId: string;
@@ -3977,9 +3994,9 @@ export class SemanticStepResolver {
     }
   ): Promise<SemanticResolutionOutcome | undefined> {
     if (
-      !isSensitiveInput(input.step.params) ||
       input.step.params.secureKeyboardKeyEventRetry === false ||
       options.previousVerification.strategy !== "target_region_still_placeholder" ||
+      !isRetryableInputFocusResolver(options.focus.resolvedBy) ||
       !canInputTextWithKeyEvents(text)
     ) {
       return undefined;
@@ -4000,7 +4017,9 @@ export class SemanticStepResolver {
         attempt: 2,
         semanticArea: options.semanticArea,
         percentRegion: inputVerificationRegion(options.region, options.focus, input.deviceSize),
-        percentRegionSource: inputVerificationRegionSource(options.focus)
+        percentRegionSource: inputVerificationRegionSource(options.focus),
+        allowUnreadableTargetRegion: true,
+        unreadableTargetRegionStrategy: "target_region_unreadable_after_keyevent_retry"
       });
     if (!retryVerification.verified) {
       return undefined;
@@ -4010,7 +4029,7 @@ export class SemanticStepResolver {
       resolved: true,
       action: retryAction,
       actionResult: retryActionResult,
-      message: "Focused sensitive input region and used Android keyevents after secure keyboard blocked text injection.",
+      message: "Focused input region and used Android keyevents after text injection did not update the target region.",
       artifacts: [...options.previousVerification.artifacts, ...retryVerification.artifacts],
       metadata: {
         type: "element_input",
@@ -4026,10 +4045,12 @@ export class SemanticStepResolver {
         ...pageTaskSemanticMetadata(input.step.params),
         clearFirst: input.step.params.clearFirst !== false,
         inputVerified: retryVerification.verified,
-        sensitiveInput: true,
-        inputFallback: "secure_keyboard_keyevent_retry",
+        sensitiveInput: isSensitiveInput(input.step.params),
+        inputFallback: "keyevent_retry",
         initialVerificationStrategy: options.previousVerification.strategy,
         ...(retryVerification.strategy ? { verificationStrategy: retryVerification.strategy } : {}),
+        ...(retryVerification.recovery ? { verificationRecovery: retryVerification.recovery } : {}),
+        ...(retryVerification.recoveryAction ? { verificationRecoveryAction: retryVerification.recoveryAction } : {}),
         ...(retryVerification.percentRegionSource ? { verificationRegionSource: retryVerification.percentRegionSource } : {}),
         ...(retryVerification.candidate ? { verifiedBy: retryVerification.candidate.text, verificationLocator: retryVerification.candidate } : {}),
         evidenceArtifactIds: [
@@ -4055,6 +4076,8 @@ export class SemanticStepResolver {
       semanticArea?: VisualSemanticArea;
       percentRegion?: { x: number; y: number; width: number; height: number };
       percentRegionSource?: "recorded_region" | "runtime_focus_candidate" | "runtime_ui_candidate";
+      allowUnreadableTargetRegion?: boolean;
+      unreadableTargetRegionStrategy?: string;
     }
   ): Promise<{
     verified: boolean;
@@ -4062,6 +4085,8 @@ export class SemanticStepResolver {
     candidate?: TextLocatorCandidate;
     actual: string;
     strategy?: string;
+    recovery?: string;
+    recoveryAction?: "hide_keyboard" | "back";
     percentRegionSource?: "recorded_region" | "runtime_focus_candidate" | "runtime_ui_candidate";
     skippedReason?: string;
   }> {
@@ -4086,30 +4111,76 @@ export class SemanticStepResolver {
       await this.wait(input, delayMs);
     }
     const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, options.attempt);
-    const mode = tapTextMatchMode(input.step.params.inputVerificationMode ?? "contains");
-    const layout = await this.deps.ocr.locateText({
+    const mode = tapTextMatchMode(input.step.params.inputVerificationMode ?? "equals");
+    let layout = await this.deps.ocr.locateText({
       image: screenshot.png,
       mode
     });
+    const artifacts = [screenshot.artifact];
+    let recovery: string | undefined;
+    let recoveryAction: "hide_keyboard" | "back" | undefined;
+    if (isEmptyOcrLayout(layout) && input.step.params.inputVerificationKeyboardRecovery !== false) {
+      recoveryAction = await this.dismissKeyboardForInputVerification(input);
+      if (recoveryAction) {
+        const settleMs = nonNegativeNumberParam(input.step.params.inputVerificationRecoveryDelayMs, 300);
+        if (settleMs > 0) {
+          await this.wait(input, settleMs);
+        }
+        const retryScreenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, options.attempt + 1);
+        artifacts.push(retryScreenshot.artifact);
+        layout = await this.deps.ocr.locateText({
+          image: retryScreenshot.png,
+          mode
+        });
+        recovery = "keyboard_dismissed_after_empty_ocr";
+      }
+    }
     const candidate = findTextCandidate(layout, text, {
       mode,
       semanticArea: options.semanticArea,
       percentRegion: options.percentRegion,
       deviceSize: input.deviceSize
     });
-    const sensitiveResult = candidate ? undefined : verifySensitiveInputText(layout, text, {
-      params: input.step.params,
+    const identityResult = candidate ? undefined : findInputIdentityCandidate(layout, text, {
+      semanticArea: options.semanticArea,
       percentRegion: options.percentRegion,
       deviceSize: input.deviceSize
     });
+    const verifiedCandidate = candidate ?? identityResult?.candidate;
+    const targetRegionResult = verifiedCandidate ? undefined : verifyInputTargetRegion(layout, text, {
+      params: input.step.params,
+      percentRegion: options.percentRegion,
+      deviceSize: input.deviceSize,
+      allowUnreadableTargetRegion: options.allowUnreadableTargetRegion,
+      unreadableTargetRegionStrategy: options.unreadableTargetRegionStrategy
+    });
     return {
-      verified: Boolean(candidate) || sensitiveResult?.verified === true,
-      artifacts: [screenshot.artifact],
-      candidate,
+      verified: Boolean(verifiedCandidate) || targetRegionResult?.verified === true,
+      artifacts,
+      candidate: verifiedCandidate,
       actual: normalizeOcrText(layout.text) || "(empty OCR result)",
-      strategy: candidate ? "clear_text_target_region" : sensitiveResult?.strategy,
+      strategy: candidate ? "clear_text_target_region" : identityResult?.strategy ?? targetRegionResult?.strategy,
+      recovery,
+      recoveryAction,
       percentRegionSource: options.percentRegionSource
     };
+  }
+
+  private async dismissKeyboardForInputVerification(
+    input: { serial: string; signal?: AbortSignal }
+  ): Promise<"hide_keyboard" | "back" | undefined> {
+    try {
+      await this.performAction(input, { type: "hide_keyboard" });
+      return "hide_keyboard";
+    } catch {
+      // Harmony currently does not expose a separate hide-keyboard action; Back dismisses the keyboard.
+    }
+    try {
+      await this.performAction(input, { type: "back" });
+      return "back";
+    } catch {
+      return undefined;
+    }
   }
 
   private async resolveInputRegionFocusPoint(
@@ -5231,7 +5302,7 @@ function findScopedTextFieldFocusCandidate(
     "开始时间",
     "结束时间"
   ].filter(Boolean));
-  return candidates
+  const entries = candidates
     .filter((candidate) => candidate !== scope)
     .filter((candidate) => candidate.centerY >= scope.centerY)
     .map((candidate) => ({
@@ -5240,13 +5311,59 @@ function findScopedTextFieldFocusCandidate(
       horizontalBias: Math.abs(candidate.centerX - scope.centerX)
     }))
     .filter((entry) => entry.verticalGap >= 0 && entry.verticalGap <= maxGap)
-    .filter((entry) => !stableNonInputTexts.has(normalizeOcrText(entry.candidate.text)))
-    .sort((left, right) =>
-      left.candidate.y - right.candidate.y ||
-      left.candidate.x - right.candidate.x ||
-      left.horizontalBias - right.horizontalBias ||
-      candidateScore(right.candidate) - candidateScore(left.candidate)
-    )[ordinal - 1]?.candidate;
+    .filter((entry) => !stableNonInputTexts.has(normalizeOcrText(entry.candidate.text)));
+  const rows = groupScopedTextFieldRows(entries);
+  const row = rows[ordinal - 1];
+  if (!row) {
+    return undefined;
+  }
+  return row.entries.reduce<{ entry: { candidate: TextLocatorCandidate; verticalGap: number; horizontalBias: number }; score: number } | undefined>(
+    (best, entry) => {
+      const score = scopedTextFieldRowCandidateScore(entry.candidate, entry.horizontalBias);
+      if (!best || score > best.score || (score === best.score && entry.candidate.x < best.entry.candidate.x)) {
+        return { entry, score };
+      }
+      return best;
+    },
+    undefined
+  )?.entry.candidate;
+}
+
+function groupScopedTextFieldRows<T extends { candidate: TextLocatorCandidate }>(entries: T[]): Array<{ entries: T[] }> {
+  const rows: Array<{ entries: T[] }> = [];
+  for (const entry of entries.slice().sort((left, right) =>
+    left.candidate.y - right.candidate.y || left.candidate.x - right.candidate.x
+  )) {
+    const row = rows.find((candidateRow) =>
+      candidateRow.entries.some((rowEntry) => sameScopedTextFieldRow(rowEntry.candidate, entry.candidate))
+    );
+    if (row) {
+      row.entries.push(entry);
+    } else {
+      rows.push({ entries: [entry] });
+    }
+  }
+  return rows.sort((left, right) =>
+    Math.min(...left.entries.map((entry) => entry.candidate.y)) - Math.min(...right.entries.map((entry) => entry.candidate.y)) ||
+    Math.min(...left.entries.map((entry) => entry.candidate.x)) - Math.min(...right.entries.map((entry) => entry.candidate.x))
+  );
+}
+
+function sameScopedTextFieldRow(left: TextLocatorCandidate, right: TextLocatorCandidate): boolean {
+  const overlap = Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y);
+  const minHeight = Math.max(1, Math.min(left.height, right.height));
+  return overlap / minHeight >= 0.45 || Math.abs(left.centerY - right.centerY) <= Math.max(left.height, right.height);
+}
+
+function scopedTextFieldRowCandidateScore(candidate: TextLocatorCandidate, horizontalBias: number): number {
+  const compact = normalizeOcrText(candidate.text).replace(/\s+/g, "");
+  const widthScore = Math.min(candidate.width, 500) / 100;
+  const promptScore = isPromptLikeText(candidate.text) ? 1 : 0;
+  const lengthScore = Math.min(compact.length, 24) / 20;
+  const shortNumericPrefixPenalty = /^\+?\d{1,4}$/.test(compact) ? 1.5 : 0;
+  const confidenceScore = (candidate.confidence ?? 0) / 10;
+  const horizontalPenalty = Math.min(horizontalBias, 400) / 1000;
+  return widthScore + promptScore + lengthScore + confidenceScore - shortNumericPrefixPenalty - horizontalPenalty;
 }
 
 function findRelativeInputFocusCandidate(
@@ -5301,37 +5418,58 @@ function isScopedTextFieldStructure(params: Record<string, unknown>): boolean {
   return textParam(structuralLocator?.strategy).trim() === "scoped_text_field";
 }
 
+function findInputIdentityCandidate(
+  layout: OcrLayoutResult,
+  expected: string,
+  options: {
+    semanticArea?: VisualSemanticArea;
+    percentRegion?: { x: number; y: number; width: number; height: number };
+    deviceSize?: { width: number; height: number };
+  }
+): { candidate: TextLocatorCandidate; strategy: string } | undefined {
+  const expectedDigits = numericIdentityDigits(expected);
+  if (!expectedDigits || !options.percentRegion) {
+    return undefined;
+  }
+  const candidate = layout.boxes
+    .map((box) => toCandidate(box))
+    .filter((item) => item.text && candidateInsidePercentRegion(item, options.percentRegion!, layout, options.deviceSize))
+    .filter((item) => !options.semanticArea || options.semanticArea === "unknown" || textCandidateSemanticArea(item, layout, options.deviceSize) === options.semanticArea)
+    .filter((item) => numericIdentityCandidateMatches(item.text, expectedDigits))
+    .sort((left, right) => candidateScore(right) - candidateScore(left))[0];
+  return candidate ? { candidate, strategy: "input_identity_target_region" } : undefined;
+}
+
+function numericIdentityCandidateMatches(actual: string, expectedDigits: string): boolean {
+  const actualDigits = numericIdentityDigits(actual);
+  if (!actualDigits) {
+    return false;
+  }
+  return actualDigits === expectedDigits || actualDigits === `86${expectedDigits}` || actualDigits === `0086${expectedDigits}`;
+}
+
+function numericIdentityDigits(value: string): string | undefined {
+  const normalized = toAsciiDigits(normalizeOcrText(value));
+  if (!/^[+\d\s().-]+$/.test(normalized)) {
+    return undefined;
+  }
+  const digits = normalized.replace(/\D+/g, "");
+  return digits.length >= 6 && digits.length <= 18 ? digits : undefined;
+}
+
+function toAsciiDigits(value: string): string {
+  return value.replace(/[０-９]/g, (char) => String(char.charCodeAt(0) - 0xff10));
+}
+
 function inputFocusTextTargets(params: Record<string, unknown>): string[] {
-  const explicit = [
+  return Array.from(new Set([
     textParam(params.inputFocusText),
     textParam(params.placeholderText),
     textParam(params.targetText),
     textParam(params.elementLabel),
     textParam(params.pageTaskStepLabel),
     textParam(params.label)
-  ].map((value) => value.trim()).filter(Boolean);
-  const valueParamKey = textParam(params.valueParamKey).toLowerCase();
-  const labelText = explicit.join(" ").toLowerCase();
-  const inferred = new Set<string>();
-  if (valueParamKey.includes("password") || labelText.includes("密码") || labelText.includes("password")) {
-    inferred.add("请输入密码");
-    inferred.add("密码");
-    inferred.add("password");
-  }
-  if (
-    valueParamKey.includes("phone") ||
-    valueParamKey.includes("mobile") ||
-    labelText.includes("手机号") ||
-    labelText.includes("邮箱") ||
-    labelText.includes("phone") ||
-    labelText.includes("mobile")
-  ) {
-    inferred.add("请输入手机号");
-    inferred.add("手机号");
-    inferred.add("邮箱");
-    inferred.add("+86");
-  }
-  return Array.from(new Set([...explicit, ...inferred].map(normalizeOcrText).filter(Boolean)));
+  ].map((value) => normalizeOcrText(value).trim()).filter(Boolean)));
 }
 
 function inputFocusCandidateScore(candidate: TextLocatorCandidate, params: Record<string, unknown>): number {
@@ -5343,16 +5481,18 @@ function inputFocusCandidateScore(candidate: TextLocatorCandidate, params: Recor
   return candidateScore(candidate) + targetBonus + placeholderBonus + leftBias;
 }
 
-function verifySensitiveInputText(
+function verifyInputTargetRegion(
   layout: OcrLayoutResult,
   text: string,
   options: {
     params: Record<string, unknown>;
     percentRegion?: { x: number; y: number; width: number; height: number };
     deviceSize?: { width: number; height: number };
+    allowUnreadableTargetRegion?: boolean;
+    unreadableTargetRegionStrategy?: string;
   }
 ): { verified: boolean; strategy: string } | undefined {
-  if (!isSensitiveInput(options.params) || !options.percentRegion) {
+  if (!options.percentRegion) {
     return undefined;
   }
   const mode = tapTextMatchMode(options.params.inputVerificationMode ?? "contains");
@@ -5373,21 +5513,36 @@ function verifySensitiveInputText(
     candidate.text && candidateInsidePercentRegion(candidate, options.percentRegion!, layout, options.deviceSize)
   );
   if (!targetCandidates.length) {
-    return {
-      verified: true,
-      strategy: "sensitive_target_region_unreadable"
-    };
+    return (options.allowUnreadableTargetRegion === true || isSensitiveInput(options.params))
+      ? {
+          verified: true,
+          strategy: options.unreadableTargetRegionStrategy ?? "sensitive_target_region_unreadable"
+        }
+      : undefined;
   }
-  if (targetCandidates.some((candidate) => isLikelySensitivePlaceholder(candidate.text, options.params))) {
+  if (targetCandidates.some((candidate) => isLikelyInputPlaceholder(candidate.text, options.params))) {
     return {
       verified: false,
       strategy: "target_region_still_placeholder"
     };
   }
+  if (targetCandidates.some((candidate) => isMaskedInputText(candidate.text))) {
+    return {
+      verified: true,
+      strategy: "masked_target_region"
+    };
+  }
+  if (!isSensitiveInput(options.params)) {
+    return undefined;
+  }
   return {
     verified: true,
-    strategy: targetCandidates.some((candidate) => isMaskedInputText(candidate.text)) ? "masked_target_region" : "changed_target_region"
+    strategy: "changed_target_region"
   };
+}
+
+function isEmptyOcrLayout(layout: OcrLayoutResult): boolean {
+  return !normalizeOcrText(layout.text) && layout.boxes.length === 0;
 }
 
 function isSensitiveInput(params: Record<string, unknown>): boolean {
@@ -5405,7 +5560,7 @@ function isSensitiveInput(params: Record<string, unknown>): boolean {
   return values.includes("password") || values.includes("passwd") || values.includes("pwd") || values.includes("密码");
 }
 
-function isLikelySensitivePlaceholder(text: string, params: Record<string, unknown>): boolean {
+function isLikelyInputPlaceholder(text: string, params: Record<string, unknown>): boolean {
   const normalized = normalizeOcrText(text).toLowerCase();
   if (!normalized) {
     return false;
@@ -5413,7 +5568,7 @@ function isLikelySensitivePlaceholder(text: string, params: Record<string, unkno
   if (inputFocusTextTargets(params).some((target) => textMatchesLoosely(normalized, target))) {
     return true;
   }
-  return isPromptLikeText(normalized) && (normalized.includes("密码") || normalized.includes("password"));
+  return isPromptLikeText(normalized);
 }
 
 function isPromptLikeText(text: string): boolean {
@@ -5539,6 +5694,24 @@ function textParam(value: unknown): string {
 
 function canInputTextWithKeyEvents(text: string): boolean {
   return /^[0-9a-zA-Z .,\n-]+$/.test(text);
+}
+
+function isRetryableInputFocusResolver(resolvedBy: string): boolean {
+  return resolvedBy === "ocr_text_semantic" ||
+    resolvedBy === "ocr_relative_structure" ||
+    resolvedBy === "scoped_text_field" ||
+    resolvedBy === "ui_edit_text_structural";
+}
+
+function shouldAllowUnreadableTargetRegionAfterInput(
+  focus: {
+    resolvedBy: string;
+    candidate?: TextLocatorCandidate;
+  },
+  params: Record<string, unknown>
+): boolean {
+  return isRetryableInputFocusResolver(focus.resolvedBy) &&
+    Boolean(focus.candidate && isLikelyInputPlaceholder(focus.candidate.text, params));
 }
 
 function pageTaskSemanticMetadata(params: Record<string, unknown>): Record<string, unknown> {

@@ -156,6 +156,9 @@ export class AutomationRunner {
         this.artifactService.writeExpectationImageArtifact(runId, stepResultId, fileName, png),
       captureExpectationScreenshot: (runId, stepResultId, serial, expectationId, attempt) =>
         this.artifactService.captureExpectationScreenshot(runId, stepResultId, serial, expectationId, attempt),
+      performAction: async (serial, action) => {
+        await this.driver.performAction(serial, action);
+      },
       getForegroundApp: this.driver.getForegroundApp ? (serial) => this.driver.getForegroundApp!(serial) : undefined,
       dumpUiHierarchy: this.driver.dumpUiHierarchy ? (serial) => this.driver.dumpUiHierarchy!(serial) : undefined,
       verifyPageState: options.verifyPageState

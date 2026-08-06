@@ -149,6 +149,71 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("scrolls past ambiguous contains matches to find an exact text target", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "汇聚\n霍昌峰2号的在线课堂\n哭哭啼啼\n霍昌峰2号的在线课堂\n拖拖拉拉\n霍昌峰2号的在线课堂",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1200,
+          height: 2000,
+          boxes: [
+            { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 468, y: 581, width: 240, height: 32 },
+            { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 850, y: 581, width: 240, height: 32 },
+            { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 84, y: 981, width: 240, height: 32 }
+          ]
+        },
+        {
+          text: "2号\n霍昌峰2号的在线课堂",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1200,
+          height: 2000,
+          boxes: [
+            { text: "2号", confidence: 0.99, x: 84, y: 681, width: 50, height: 36 },
+            { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 84, y: 731, width: 240, height: 32 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-short-text",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: tapOnTextStep("2号", 0, 0, {
+        mode: "contains",
+        searchMode: "auto",
+        searchDirection: "down",
+        resetToTop: false,
+        maxSwipes: 2,
+        intervalMs: 0
+      })
+    });
+
+    expect(actions).toEqual([
+      expect.objectContaining({ type: "swipe" }),
+      { type: "tap", x: 109, y: 699 }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        actual: "2号",
+        matchStrategy: "equals",
+        search: expect.objectContaining({
+          scanSwipes: 1
+        })
+      })
+    }));
+  });
+
   it("grounds a semantic query to one unambiguous visible OCR candidate", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -1859,6 +1924,555 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("does not hide the soft keyboard implicitly after low-level input text", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "+86 请输入手机号/邮箱",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "+86 请输入手机号/邮箱", confidence: 0.98, x: 80, y: 395, width: 335, height: 30 }
+          ]
+        },
+        {
+          text: "+86 18743085313",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "18743085313", confidence: 0.98, x: 180, y: 395, width: 180, height: 30 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "hdc_input"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "18743085313",
+        clearFirst: true,
+        focusDelayMs: 0,
+        hideKeyboardSettleMs: 0,
+        inputVerificationDelayMs: 0,
+        locator: "runtime-locator:phone_or_email_input",
+        locatorKind: "structural_locator",
+        targetText: "请输入手机号/邮箱",
+        valueParamKey: "phone",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        structuralLocator: {
+          strategy: "ocr_or_edittext",
+          role: "phone_or_email_input",
+          preferredPlaceholderText: "请输入手机号/邮箱",
+          fallbackPolicy: "no_region_center_fallback"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 248, y: 410 },
+      { type: "clear_text" },
+      { type: "input_text", text: "18743085313" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          inputVerified: true,
+          verificationRegionSource: "runtime_focus_candidate"
+        })
+      })
+    );
+  });
+
+  it("resolves the login account field from scoped text field ordinal rows", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n+86\n12133333300\n请输入密码\n登录\n忘记密码\n验证码登录\nHUAWEI\n华为账号登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86", confidence: 0.98, x: 90, y: 560, width: 70, height: 42 },
+            { text: "12133333300", confidence: 0.98, x: 245, y: 560, width: 260, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 },
+            { text: "忘记密码", confidence: 0.99, x: 70, y: 1160, width: 170, height: 44 },
+            { text: "验证码登录", confidence: 0.99, x: 760, y: 1160, width: 180, height: 44 },
+            { text: "HUAWEI", confidence: 0.99, x: 130, y: 1410, width: 90, height: 28 },
+            { text: "华为账号登录", confidence: 0.99, x: 430, y: 1410, width: 220, height: 44 }
+          ]
+        },
+        {
+          text: "ClassIn\n+86\n18743085313\n请输入密码\n登录\n忘记密码\n验证码登录\nHUAWEI\n华为账号登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86", confidence: 0.98, x: 90, y: 560, width: 70, height: 42 },
+            { text: "18743085313", confidence: 0.98, x: 245, y: 560, width: 260, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 },
+            { text: "忘记密码", confidence: 0.99, x: 70, y: 1160, width: 170, height: 44 },
+            { text: "验证码登录", confidence: 0.99, x: 760, y: 1160, width: 180, height: 44 },
+            { text: "HUAWEI", confidence: 0.99, x: 130, y: 1410, width: 90, height: 28 },
+            { text: "华为账号登录", confidence: 0.99, x: 430, y: 1410, width: 220, height: 44 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "18743085313",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "ClassIn",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 375, y: 581 },
+      { type: "clear_text" },
+      { type: "input_text", text: "18743085313" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          focusResolvedBy: "scoped_text_field",
+          focusLocator: expect.objectContaining({
+            text: "12133333300"
+          }),
+          inputVerified: true
+        })
+      })
+    );
+  });
+
+  it("verifies a scoped account field when OCR keeps the country code in the same target text box", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n+86 18743085313\n请输入密码\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86 18743085313", confidence: 0.98, x: 90, y: 560, width: 415, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 }
+          ]
+        },
+        {
+          text: "ClassIn\n+86 12133333300\n请输入密码\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86 12133333300", confidence: 0.98, x: 90, y: 560, width: 415, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "12133333300",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "ClassIn",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 298, y: 581 },
+      { type: "clear_text" },
+      { type: "input_text", text: "12133333300" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          focusResolvedBy: "scoped_text_field",
+          inputVerified: true,
+          verificationStrategy: "input_identity_target_region",
+          verifiedBy: "+86 12133333300"
+        })
+      })
+    );
+  });
+
+  it("resolves the login password field from scoped text field ordinal rows", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n+86\n12133333300\n请输入密码\n登录\n忘记密码\n验证码登录\nHUAWEI\n华为账号登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86", confidence: 0.98, x: 90, y: 560, width: 70, height: 42 },
+            { text: "12133333300", confidence: 0.98, x: 245, y: 560, width: 260, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 },
+            { text: "忘记密码", confidence: 0.99, x: 70, y: 1160, width: 170, height: 44 },
+            { text: "验证码登录", confidence: 0.99, x: 760, y: 1160, width: 180, height: 44 },
+            { text: "HUAWEI", confidence: 0.99, x: 130, y: 1410, width: 90, height: 28 },
+            { text: "华为账号登录", confidence: 0.99, x: 430, y: 1410, width: 220, height: 44 }
+          ]
+        },
+        {
+          text: "ClassIn\n+86\n12133333300\n123qwe\n登录\n忘记密码\n验证码登录\nHUAWEI\n华为账号登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86", confidence: 0.98, x: 90, y: 560, width: 70, height: 42 },
+            { text: "12133333300", confidence: 0.98, x: 245, y: 560, width: 260, height: 42 },
+            { text: "123qwe", confidence: 0.99, x: 100, y: 715, width: 150, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 },
+            { text: "忘记密码", confidence: 0.99, x: 70, y: 1160, width: 170, height: 44 },
+            { text: "验证码登录", confidence: 0.99, x: 760, y: 1160, width: 180, height: 44 },
+            { text: "HUAWEI", confidence: 0.99, x: 130, y: 1410, width: 90, height: 28 },
+            { text: "华为账号登录", confidence: 0.99, x: 430, y: 1410, width: 220, height: 44 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "123qwe",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "ClassIn",
+          ordinal: 2,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 190, y: 736 },
+      { type: "clear_text" },
+      { type: "input_text", text: "123qwe" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          focusResolvedBy: "scoped_text_field",
+          focusLocator: expect.objectContaining({
+            text: "请输入密码"
+          }),
+          inputVerified: true
+        })
+      })
+    );
+  });
+
+  it("does not infer a password field from valueParamKey when the scripted target text disappeared", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n+86\n12133333300\neeo123\n登录\n忘记密码\n验证码登录\nHUAWEI\n华为账号登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86", confidence: 0.98, x: 90, y: 560, width: 70, height: 42 },
+            { text: "12133333300", confidence: 0.98, x: 245, y: 560, width: 260, height: 42 },
+            { text: "eeo123", confidence: 0.99, x: 100, y: 715, width: 150, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 },
+            { text: "忘记密码", confidence: 0.99, x: 70, y: 1160, width: 170, height: 44 },
+            { text: "验证码登录", confidence: 0.99, x: 760, y: 1160, width: 180, height: 44 },
+            { text: "HUAWEI", confidence: 0.99, x: 130, y: 1410, width: 90, height: 28 },
+            { text: "华为账号登录", confidence: 0.99, x: 430, y: 1410, width: 220, height: 44 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "123qwe",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locator: "runtime-locator:password_input",
+        locatorKind: "structural_locator",
+        targetText: "请输入密码",
+        valueParamKey: "password",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        structuralLocator: {
+          strategy: "ocr_or_edittext",
+          role: "password_input",
+          preferredPlaceholderText: "请输入密码",
+          fallbackPolicy: "no_region_center_fallback"
+        }
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: false,
+        metadata: expect.objectContaining({
+          reason: "runtime_relocation_required",
+          focusResolvedBy: "region_center_disabled"
+        })
+      })
+    );
+  });
+
+  it("does not infer an account field from valueParamKey when the scripted target text disappeared", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "+86 12133333300",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "+86", confidence: 0.98, x: 80, y: 395, width: 60, height: 30 },
+            { text: "12133333300", confidence: 0.98, x: 245, y: 395, width: 210, height: 30 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "18743085313",
+        clearFirst: true,
+        focusDelayMs: 1,
+        inputVerificationDelayMs: 1,
+        locator: "runtime-locator:phone_or_email_input",
+        locatorKind: "structural_locator",
+        targetText: "请输入手机号/邮箱",
+        valueParamKey: "phone",
+        semanticArea: "content",
+        coordinateSpace: "runtime",
+        structuralLocator: {
+          strategy: "ocr_or_edittext",
+          role: "phone_or_email_input",
+          preferredPlaceholderText: "请输入手机号/邮箱",
+          fallbackPolicy: "no_region_center_fallback"
+        }
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: false,
+        metadata: expect.objectContaining({
+          reason: "runtime_relocation_required",
+          focusResolvedBy: "region_center_disabled"
+        })
+      })
+    );
+  });
+
+  it("fails scoped text field verification when clear text leaves an appended old value", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n+86\n12133333300\n请输入密码",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86", confidence: 0.98, x: 90, y: 560, width: 70, height: 42 },
+            { text: "12133333300", confidence: 0.98, x: 245, y: 560, width: 260, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 }
+          ]
+        },
+        {
+          text: "ClassIn\n+86\n1213333330018743085313\n请输入密码",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86", confidence: 0.98, x: 90, y: 560, width: 70, height: 42 },
+            { text: "1213333330018743085313", confidence: 0.98, x: 245, y: 560, width: 390, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "18743085313",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "ClassIn",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 375, y: 581 },
+      { type: "clear_text" },
+      { type: "input_text", text: "18743085313" }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: false,
+      message: 'Input text "18743085313" was not verified by OCR after typing.',
+      metadata: expect.objectContaining({
+        reason: "input_text_not_verified",
+        actual: expect.stringContaining("1213333330018743085313")
+      })
+    }));
+  });
+
   it("clears a runtime structural input as one semantic action without typing a placeholder", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -2516,9 +3130,10 @@ describe("SemanticStepResolver", () => {
         focusDelayMs: 1,
         inputVerificationDelayMs: 1,
         region: { x: 6, y: 31, width: 88, height: 6 },
+        targetText: "请输入密码",
+        sensitiveInput: true,
         semanticArea: "content",
-        coordinateSpace: "screen",
-        valueParamKey: "password"
+        coordinateSpace: "screen"
       })
     });
 
@@ -2597,9 +3212,10 @@ describe("SemanticStepResolver", () => {
         inputVerificationDelayMs: 1,
         secureKeyboardKeyEventIntervalMs: 0,
         region: { x: 6, y: 31, width: 88, height: 6 },
+        targetText: "请输入密码",
+        sensitiveInput: true,
         semanticArea: "content",
-        coordinateSpace: "screen",
-        valueParamKey: "password"
+        coordinateSpace: "screen"
       })
     });
 
@@ -2617,9 +3233,374 @@ describe("SemanticStepResolver", () => {
         metadata: expect.objectContaining({
           inputVerified: true,
           sensitiveInput: true,
-          inputFallback: "secure_keyboard_keyevent_retry",
+          inputFallback: "keyevent_retry",
           initialVerificationStrategy: "target_region_still_placeholder",
           verificationStrategy: "masked_target_region"
+        })
+      })
+    );
+  });
+
+  it("retries a scoped text field through Android keyevents when normal input leaves the placeholder", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n+86 12133333300\n请输入密码\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86 12133333300", confidence: 0.98, x: 90, y: 560, width: 415, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 }
+          ]
+        },
+        {
+          text: "ClassIn\n+86 12133333300\n请输入密码\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86 12133333300", confidence: 0.98, x: 90, y: 560, width: 415, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 }
+          ]
+        },
+        {
+          text: "ClassIn\n+86 12133333300\n••••••\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86 12133333300", confidence: 0.98, x: 90, y: 560, width: 415, height: 42 },
+            { text: "••••••", confidence: 0.98, x: 100, y: 715, width: 140, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "123qwe",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        secureKeyboardKeyEventIntervalMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "ClassIn",
+          ordinal: 2,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 190, y: 736 },
+      { type: "clear_text" },
+      { type: "input_text", text: "123qwe" },
+      { type: "input_keyevents", text: "123qwe", intervalMs: 0 }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        action: { type: "input_keyevents", text: "123qwe", intervalMs: 0 },
+        metadata: expect.objectContaining({
+          focusResolvedBy: "scoped_text_field",
+          inputVerified: true,
+          sensitiveInput: false,
+          inputFallback: "keyevent_retry",
+          initialVerificationStrategy: "target_region_still_placeholder",
+          verificationStrategy: "masked_target_region"
+        })
+      })
+    );
+  });
+
+  it("accepts an unreadable scoped text field region after keyevent retry removes the placeholder", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n+86 12133333300\n请输入密码\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86 12133333300", confidence: 0.98, x: 90, y: 560, width: 415, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 }
+          ]
+        },
+        {
+          text: "ClassIn\n+86 12133333300\n请输入密码\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86 12133333300", confidence: 0.98, x: 90, y: 560, width: 415, height: 42 },
+            { text: "请输入密码", confidence: 0.99, x: 100, y: 715, width: 180, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 }
+          ]
+        },
+        {
+          text: "ClassIn\n+86 12133333300\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "+86 12133333300", confidence: 0.98, x: 90, y: 560, width: 415, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "123qwe",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        secureKeyboardKeyEventIntervalMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "ClassIn",
+          ordinal: 2,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 190, y: 736 },
+      { type: "clear_text" },
+      { type: "input_text", text: "123qwe" },
+      { type: "input_keyevents", text: "123qwe", intervalMs: 0 }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          inputVerified: true,
+          inputFallback: "keyevent_retry",
+          verificationStrategy: "target_region_unreadable_after_keyevent_retry"
+        })
+      })
+    );
+  });
+
+  it("accepts an unreadable scoped text field region after ordinary text input removes the placeholder", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n+86 18743085313\n请输入密码\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1200,
+          height: 1920,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 48, y: 190, width: 190, height: 56 },
+            { text: "+86 18743085313", confidence: 0.99, x: 79, y: 395, width: 278, height: 30 },
+            { text: "请输入密码", confidence: 0.99, x: 79, y: 521, width: 143, height: 34 },
+            { text: "登录", confidence: 0.99, x: 570, y: 732, width: 60, height: 42 }
+          ]
+        },
+        {
+          text: "ClassIn\n+86 18743085313\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1200,
+          height: 1920,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 48, y: 190, width: 190, height: 56 },
+            { text: "+86 18743085313", confidence: 0.99, x: 79, y: 395, width: 278, height: 30 },
+            { text: "登录", confidence: 0.99, x: 570, y: 732, width: 60, height: 42 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 1920 },
+      step: semanticStep("input_text_to_element", {
+        text: "eeo123",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        secureKeyboardKeyEventIntervalMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "ClassIn",
+          ordinal: 2,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 151, y: 538 },
+      { type: "clear_text" },
+      { type: "input_text", text: "eeo123" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          focusResolvedBy: "scoped_text_field",
+          inputVerified: true,
+          sensitiveInput: false,
+          verificationStrategy: "target_region_unreadable_after_input"
+        })
+      })
+    );
+  });
+
+  it("dismisses the keyboard and retries verification when input screenshot is protected", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n+86 12133333300\n123qwe\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1256,
+          height: 2760,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 60, y: 500, width: 250, height: 80 },
+            { text: "+86 12133333300", confidence: 0.99, x: 200, y: 780, width: 450, height: 56 },
+            { text: "123qwe", confidence: 0.99, x: 120, y: 960, width: 160, height: 56 },
+            { text: "登录", confidence: 0.99, x: 570, y: 1240, width: 80, height: 56 }
+          ]
+        },
+        {
+          text: "",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1256,
+          height: 2760,
+          boxes: []
+        },
+        {
+          text: "ClassIn\n+86 18743085313\n123qwe\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1256,
+          height: 2760,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 60, y: 500, width: 250, height: 80 },
+            { text: "+86 18743085313", confidence: 0.99, x: 200, y: 780, width: 450, height: 56 },
+            { text: "123qwe", confidence: 0.99, x: 120, y: 960, width: 160, height: 56 },
+            { text: "登录", confidence: 0.99, x: 570, y: 1240, width: 80, height: 56 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        if (action.type === "hide_keyboard") {
+          throw new Error("HarmonyOS action is not supported yet: hide_keyboard");
+        }
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1256, height: 2760 },
+      step: semanticStep("input_text_to_element", {
+        text: "18743085313",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "ClassIn",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 425, y: 808 },
+      { type: "clear_text" },
+      { type: "input_text", text: "18743085313" },
+      { type: "hide_keyboard" },
+      { type: "back" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          inputVerified: true,
+          verificationRecovery: "keyboard_dismissed_after_empty_ocr",
+          verificationRecoveryAction: "back",
+          verificationStrategy: "input_identity_target_region",
+          verifiedBy: "+86 18743085313"
         })
       })
     );

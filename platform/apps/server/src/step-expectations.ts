@@ -7,6 +7,7 @@ import {
   nowIso,
   type ActionStep,
   type ArtifactRef,
+  type DeviceActionRequest,
   type MetricSample,
   type StepExpectation,
   type StepExpectationResult
@@ -60,6 +61,7 @@ type StepExpectationEvaluatorDeps = {
     expectationId: string,
     attempt: number
   ) => Promise<ScreenshotCapture>;
+  performAction?: (serial: string, action: DeviceActionRequest) => Promise<void>;
   dumpUiHierarchy?: (serial: string) => Promise<string>;
   verifyPageState?: PageStateExpectationVerifier;
 };
@@ -148,7 +150,7 @@ export class StepExpectationEvaluator {
       }
 
       if (expectation.type === "state_is") {
-        results.push(await this.evaluateStateExpectation(expectation, input.serial, input.afterScreenshot));
+        results.push(await this.evaluateStateExpectation(expectation, input.serial, input.afterScreenshot, input.runId, input.stepResultId));
         continue;
       }
 
@@ -500,7 +502,9 @@ export class StepExpectationEvaluator {
   private async evaluateStateExpectation(
     expectation: StepExpectation,
     serial: string,
-    screenshot: ScreenshotCapture | undefined
+    screenshot: ScreenshotCapture | undefined,
+    runId: string,
+    stepResultId: string
   ): Promise<StepExpectationResult> {
     const appId = stringParam(expectation.params.appId);
     const pageId = stringParam(expectation.params.pageId ?? expectation.params.nodeId);
@@ -514,14 +518,37 @@ export class StepExpectationEvaluator {
         evidenceArtifactIds: screenshot ? [screenshot.artifact.id] : []
       });
     }
-    const outcome = await this.deps.verifyPageState({
+    let activeScreenshot = screenshot;
+    let outcome = await this.deps.verifyPageState({
       serial,
       appId,
       platform,
       pageId,
       timeoutMs: expectationTimeoutMs(expectation, 8_000),
-      screenshot: screenshot?.png
+      screenshot: activeScreenshot?.png
     });
+    const evidenceArtifactIds = activeScreenshot ? [activeScreenshot.artifact.id] : [];
+    let recoveredFromProtectedScreenshot = false;
+    if (!isMatchedPageState(outcome) && shouldRecoverStateExpectationFromProtectedScreenshot(expectation, outcome, activeScreenshot)) {
+      const recoveryAction = await this.dismissKeyboardForStateExpectation(serial);
+      if (recoveryAction) {
+        const settleMs = positiveNumberParam(expectation.params.stateRecoveryDelayMs, 300);
+        if (settleMs > 0) {
+          await sleep(settleMs);
+        }
+        activeScreenshot = await this.deps.captureExpectationScreenshot(runId, stepResultId, serial, expectation.id, 2);
+        evidenceArtifactIds.push(activeScreenshot.artifact.id);
+        outcome = await this.deps.verifyPageState({
+          serial,
+          appId,
+          platform,
+          pageId,
+          timeoutMs: expectationTimeoutMs(expectation, 8_000),
+          screenshot: activeScreenshot.png
+        });
+        recoveredFromProtectedScreenshot = true;
+      }
+    }
     const passed = outcome.status === "matched";
     const actual = outcome.pageName
       ?? (outcome.status === "multiple_candidates" ? outcome.candidateNames?.join(", ") : outcome.observedText)
@@ -532,9 +559,29 @@ export class StepExpectationEvaluator {
       status: passed ? "passed" : "failed",
       expected: `Page ${pageId}`,
       actual,
-      reason: passed ? undefined : outcome.reason ?? outcome.status,
-      evidenceArtifactIds: screenshot ? [screenshot.artifact.id] : []
+      reason: passed
+        ? recoveredFromProtectedScreenshot ? "Recovered after keyboard dismissal from a protected or empty screenshot." : undefined
+        : outcome.reason ?? outcome.status,
+      evidenceArtifactIds
     });
+  }
+
+  private async dismissKeyboardForStateExpectation(serial: string): Promise<"hide_keyboard" | "back" | undefined> {
+    if (!this.deps.performAction) {
+      return undefined;
+    }
+    try {
+      await this.deps.performAction(serial, { type: "hide_keyboard" });
+      return "hide_keyboard";
+    } catch {
+      // Harmony currently does not expose hide_keyboard separately; Back dismisses the keyboard.
+    }
+    try {
+      await this.deps.performAction(serial, { type: "back" });
+      return "back";
+    } catch {
+      return undefined;
+    }
   }
 
   private async evaluateLogNotContains(expectation: StepExpectation, runId: string, serial: string, stepResultId: string): Promise<StepExpectationResult> {
@@ -701,6 +748,46 @@ export class StepExpectationEvaluator {
       checkedAt: nowIso()
     };
   }
+}
+
+function isMatchedPageState(outcome: PageStateExpectationOutcome): boolean {
+  return outcome.status === "matched";
+}
+
+function shouldRecoverStateExpectationFromProtectedScreenshot(
+  expectation: StepExpectation,
+  outcome: PageStateExpectationOutcome,
+  screenshot: ScreenshotCapture | undefined
+): boolean {
+  if (expectation.params.stateScreenshotKeyboardRecovery === false || !screenshot) {
+    return false;
+  }
+  const retryableOutcome = outcome.status === "unknown" ||
+    outcome.status === "capture_failed" ||
+    outcome.reason === "page_not_matched";
+  return retryableOutcome && isProbablyProtectedScreenshot(screenshot.png);
+}
+
+function isProbablyProtectedScreenshot(buffer: Buffer): boolean {
+  const dimensions = readPngDimensions(buffer);
+  if (!dimensions) {
+    return false;
+  }
+  const pixels = dimensions.width * dimensions.height;
+  if (pixels < 500_000) {
+    return false;
+  }
+  return buffer.byteLength / pixels < 0.035;
+}
+
+function readPngDimensions(buffer: Buffer): { width: number; height: number } | undefined {
+  const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (buffer.byteLength < 24 || !pngSignature.every((byte, index) => buffer[index] === byte)) {
+    return undefined;
+  }
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  return width > 0 && height > 0 ? { width, height } : undefined;
 }
 
 export async function tryRecognizeTextFromScreenshot(ocr: OcrService, screenshot: ScreenshotCapture, params: Record<string, unknown>): Promise<string> {

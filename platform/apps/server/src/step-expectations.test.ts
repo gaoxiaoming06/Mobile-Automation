@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ActionStep, ArtifactRef, MetricSample, StepExpectation } from "@mobile-automation/shared";
+import type { ActionStep, ArtifactRef, DeviceActionRequest, MetricSample, StepExpectation } from "@mobile-automation/shared";
 import type { OcrInput, OcrLayoutResult, OcrResult, OcrService } from "./ocr.js";
 import {
   StepExpectationEvaluator,
@@ -177,6 +177,57 @@ describe("StepExpectationEvaluator", () => {
       status: "failed",
       actual: "搜索、请输入搜索内容、全部、班级、联系人",
       reason: "page_not_matched"
+    }));
+  });
+
+  it("dismisses the keyboard and retries state_is when the first screenshot is protected", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const verifierScreenshots: Buffer[] = [];
+    const evaluator = new StepExpectationEvaluator({
+      ocr: new FakeOcrService(""),
+      collectLogs: async () => "",
+      writeLog: async () => artifact("artifact-log", "log"),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        if (action.type === "hide_keyboard") {
+          throw new Error("HarmonyOS action is not supported yet: hide_keyboard");
+        }
+      },
+      captureExpectationScreenshot: async () => screenshot("artifact-retry", "normal"),
+      verifyPageState: async (input) => {
+        verifierScreenshots.push(input.screenshot ?? Buffer.alloc(0));
+        return verifierScreenshots.length === 1
+          ? { status: "unknown", observedText: "", reason: "page_not_matched" }
+          : { status: "matched", pageName: "登录" };
+      }
+    });
+
+    const results = await evaluator.evaluate({
+      runId: "run-1",
+      serial: "device-1",
+      stepResultId: "step-result-1",
+      step: actionStep([expectation("state_is", {
+        appId: "classin",
+        platform: "harmony",
+        pageId: "classin.teacher.login"
+      })]),
+      afterScreenshot: {
+        artifact: artifact("artifact-protected", "screenshot"),
+        png: protectedPng(1256, 2760, 73020)
+      },
+      runtimeFailure: false
+    });
+
+    expect(actions).toEqual([
+      { type: "hide_keyboard" },
+      { type: "back" }
+    ]);
+    expect(verifierScreenshots).toHaveLength(2);
+    expect(results[0]).toEqual(expect.objectContaining({
+      status: "passed",
+      actual: "登录",
+      evidenceArtifactIds: ["artifact-protected", "artifact-retry"],
+      reason: "Recovered after keyboard dismissal from a protected or empty screenshot."
     }));
   });
 
@@ -641,6 +692,14 @@ function screenshot(artifactId: string, content: string): ScreenshotCapture {
     artifact: artifact(artifactId, "screenshot"),
     png: Buffer.from(content)
   };
+}
+
+function protectedPng(width: number, height: number, sizeBytes: number): Buffer {
+  const buffer = Buffer.alloc(sizeBytes);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer, 0);
+  buffer.writeUInt32BE(width, 16);
+  buffer.writeUInt32BE(height, 20);
+  return buffer;
 }
 
 function artifact(id: string, type: ArtifactRef["type"]): ArtifactRef {

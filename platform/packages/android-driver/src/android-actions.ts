@@ -28,6 +28,7 @@ type AndroidActionExecutorOptions = {
 };
 
 const adbKeyboardIme = "com.android.adbkeyboard/.AdbIME";
+const CLEAR_TEXT_DELETE_KEYEVENT_COUNT = 40;
 
 export type AndroidActionBackend = {
   channel: Extract<DriverChannel, "uiautomator2" | "appium">;
@@ -234,10 +235,10 @@ export class AndroidActionExecutor {
     }
     if (action.type === "clear_text") {
       if (await this.clearTextWithAdbKeyboard(serial)) {
+        await this.clearTextWithSelectAllDelete(serial);
         return adbInputResult();
       }
-      await this.shell(serial, ["input", "keyevent", "KEYCODE_CTRL_A"]).catch(() => undefined);
-      await this.shell(serial, ["input", "keyevent", "KEYCODE_DEL"]);
+      await this.clearTextWithSelectAllDelete(serial);
       return adbInputResult();
     }
     if (action.type === "launch_app") {
@@ -398,6 +399,15 @@ export class AndroidActionExecutor {
       if (shouldRestoreIme) {
         await this.shell(serial, ["ime", "set", originalIme], { timeoutMs: 5000 }).catch(() => undefined);
       }
+    }
+  }
+
+  private async clearTextWithSelectAllDelete(serial: string): Promise<void> {
+    await this.shell(serial, ["input", "keyevent", "KEYCODE_MOVE_END"]).catch(() => undefined);
+    await this.shell(serial, ["input", "keyevent", "KEYCODE_CTRL_A"]).catch(() => undefined);
+    await this.shell(serial, ["input", "keyevent", "KEYCODE_DEL"]);
+    for (let index = 0; index < CLEAR_TEXT_DELETE_KEYEVENT_COUNT; index += 1) {
+      await this.shell(serial, ["input", "keyevent", "KEYCODE_DEL"]);
     }
   }
 

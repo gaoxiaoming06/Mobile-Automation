@@ -138,7 +138,7 @@ describe("AndroidActionExecutor", () => {
     ]);
   });
 
-  it("clears focused text through ADB Keyboard when available", async () => {
+  it("clears focused text with redundant delete fallbacks when ADB Keyboard is available", async () => {
     const calls: string[][] = [];
     const actions = new AndroidActionExecutor({
       shell: vi.fn(async (_serial, args) => {
@@ -156,13 +156,19 @@ describe("AndroidActionExecutor", () => {
 
     await actions.performAction("device-1", { type: "clear_text" });
 
-    expect(calls).toEqual([
+    expect(calls.slice(0, 5)).toEqual([
       ["ime", "list", "-s"],
       ["settings", "get", "secure", "default_input_method"],
       ["ime", "set", "com.android.adbkeyboard/.AdbIME"],
       ["am", "broadcast", "-a", "ADB_CLEAR_TEXT"],
       ["ime", "set", "com.demo/.Ime"]
     ]);
+    expect(calls.slice(5, 8)).toEqual([
+      ["input", "keyevent", "KEYCODE_MOVE_END"],
+      ["input", "keyevent", "KEYCODE_CTRL_A"],
+      ["input", "keyevent", "KEYCODE_DEL"]
+    ]);
+    expect(calls.filter((args) => args.join(" ") === "input keyevent KEYCODE_DEL")).toHaveLength(41);
   });
 
   it("inputs text through Android keyevents when requested", async () => {
