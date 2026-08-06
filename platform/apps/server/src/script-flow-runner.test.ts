@@ -285,6 +285,7 @@ describe("ScriptFlowRunner", () => {
       title: "打开指定班级",
       params: expect.objectContaining({
         text: "班级四十二号",
+        mode: "equals",
         scriptFlowId: "flow-1",
         scriptStepId: "open-class",
         locatorStrategy: "semantic_text"

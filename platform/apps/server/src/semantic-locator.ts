@@ -3037,6 +3037,7 @@ export class SemanticStepResolver {
     const semanticMatch = input.step.params.mode === "semantic";
     const fallbackSemanticQuery = textParam(input.step.params.fallbackSemanticQuery).trim();
     const mode = tapTextMatchMode(input.step.params.mode);
+    const exactFirst = !semanticMatch && mode === "contains";
     const timeoutMs = positiveNumberParam(input.step.params.timeoutMs, 3000);
     const intervalMs = positiveNumberParam(input.step.params.intervalMs, 500);
     const searchMode = readTextSearchMode(input.step.params.searchMode);
@@ -3086,7 +3087,13 @@ export class SemanticStepResolver {
     }
     const locateText = this.deps.ocr.locateText.bind(this.deps.ocr);
 
-    const inspectViewport = async (): Promise<{ layout: OcrLayoutResult; candidate?: TextLocatorCandidate; ambiguous: boolean; signature: string }> => {
+    const inspectViewport = async (): Promise<{
+      layout: OcrLayoutResult;
+      candidate?: TextLocatorCandidate;
+      ambiguous: boolean;
+      canScrollPastAmbiguous: boolean;
+      signature: string;
+    }> => {
       attempt += 1;
       const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
       artifacts.push(screenshot.artifact);
@@ -3103,6 +3110,36 @@ export class SemanticStepResolver {
           });
         latestAmbiguous = false;
         latestCandidateCount = latestCandidate ? 1 : 0;
+      } else if (exactFirst) {
+        const exactSelection = findTextCandidateSelectionFromTargets(latestLayout, expectedTargets, {
+            mode: "equals",
+            preferredPoint: recordedPoint(input.step, input.deviceSize),
+            semanticArea,
+            deviceSize: input.deviceSize
+          });
+        if (exactSelection.candidate || exactSelection.ambiguous) {
+          latestCandidate = exactSelection.candidate;
+          latestAmbiguous = exactSelection.ambiguous;
+          latestCandidateCount = exactSelection.candidateCount;
+          latestMatchStrategy = "equals";
+          return {
+            layout: latestLayout,
+            candidate: latestCandidate,
+            ambiguous: latestAmbiguous,
+            canScrollPastAmbiguous: false,
+            signature: textSearchLayoutSignature(latestLayout, semanticArea, input.deviceSize)
+          };
+        }
+        const selection = findTextCandidateSelectionFromTargets(latestLayout, expectedTargets, {
+            mode,
+            preferredPoint: recordedPoint(input.step, input.deviceSize),
+            semanticArea,
+            deviceSize: input.deviceSize
+          });
+        latestCandidate = selection.candidate;
+        latestAmbiguous = selection.ambiguous;
+        latestCandidateCount = selection.candidateCount;
+        latestMatchStrategy = mode;
       } else {
         const selection = findTextCandidateSelectionFromTargets(latestLayout, expectedTargets, {
             mode,
@@ -3113,8 +3150,11 @@ export class SemanticStepResolver {
         latestCandidate = selection.candidate;
         latestAmbiguous = selection.ambiguous;
         latestCandidateCount = selection.candidateCount;
+        latestMatchStrategy = mode;
       }
-      latestMatchStrategy = semanticMatch ? "semantic" : mode;
+      if (semanticMatch) {
+        latestMatchStrategy = "semantic";
+      }
       if (!latestCandidate && !latestAmbiguous && fallbackSemanticQuery) {
         latestCandidate = findSemanticTextCandidate(latestLayout, fallbackSemanticQuery, {
           preferredPoint: recordedPoint(input.step, input.deviceSize),
@@ -3127,6 +3167,7 @@ export class SemanticStepResolver {
         layout: latestLayout,
         candidate: latestCandidate,
         ambiguous: latestAmbiguous,
+        canScrollPastAmbiguous: exactFirst && latestAmbiguous,
         signature: textSearchLayoutSignature(latestLayout, semanticArea, input.deviceSize)
       };
     };
@@ -3180,7 +3221,7 @@ export class SemanticStepResolver {
         if (current.candidate) {
           return tapCandidate(current.candidate, current.layout);
         }
-        if (current.ambiguous) {
+        if (current.ambiguous && !current.canScrollPastAmbiguous) {
           break;
         }
 
@@ -3195,7 +3236,7 @@ export class SemanticStepResolver {
       if (current.candidate) {
         return tapCandidate(current.candidate, current.layout);
       }
-      if (current.ambiguous) {
+      if (current.ambiguous && !current.canScrollPastAmbiguous) {
         return textTargetFailure();
       }
       let previousSignature = current.signature;
@@ -3209,7 +3250,7 @@ export class SemanticStepResolver {
           if (current.candidate) {
             return tapCandidate(current.candidate, current.layout);
           }
-          if (current.ambiguous) {
+          if (current.ambiguous && !current.canScrollPastAmbiguous) {
             return textTargetFailure();
           }
           if (current.signature === previousSignature) {
@@ -3230,7 +3271,7 @@ export class SemanticStepResolver {
         if (current.candidate) {
           return tapCandidate(current.candidate, current.layout);
         }
-        if (current.ambiguous) {
+        if (current.ambiguous && !current.canScrollPastAmbiguous) {
           return textTargetFailure();
         }
         if (current.signature === previousSignature) {

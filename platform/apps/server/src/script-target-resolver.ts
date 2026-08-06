@@ -380,9 +380,10 @@ function searchParams(target: ScriptTarget, policy: ScriptSearchPolicy | undefin
 }
 
 function runtimeTextMatchMode(match: ScriptTarget["match"]): "contains" | "equals" | "semantic" {
+  if (match === "contains") return "contains";
   if (match === "exact") return "equals";
   if (match === "semantic") return "semantic";
-  return "contains";
+  return "equals";
 }
 
 function semanticAreaParam(area: ScriptTarget["area"]): "top" | "content" | "bottom" | undefined {
