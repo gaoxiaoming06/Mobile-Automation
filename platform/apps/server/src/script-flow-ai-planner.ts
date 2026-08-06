@@ -36,10 +36,10 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确说点击某个入口时，禁止擅自补“点击修改”或其他桥接动作；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification 询问准确字段位置或完整操作路径。",
   "text 目标默认不要猜测 topBar/bottomBar。只有用户明确说顶部、底部、左上角、右上角等位置，或目录中的已验证导航入口/原用例已经给出同一目标位置时，才可增加窄区域约束；否则省略 area，让执行器在当前屏幕查找。",
   "发布、提交、删除、支付等操作按钮可能位于顶部、内容区或底部；用户或已验证知识未提供位置时必须省略 area，禁止根据动作名称猜测区域。",
-  "icon 的 area 和 position 是可选范围提示。用户明确说顶部、底部、左上角、右上角、左侧或右侧时才填写对应 area/position；无法确定时省略，让执行器按标准视觉 role 在当前可见范围定位。内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
-  "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象，例如 { visual: { kind: icon, query: \"排序图标\", area: content } } 或 { visual: { kind: image, query: \"封面图片\" } }。area、position、nearText 只是范围提示；执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
+  "icon 和 visual 都是非 OCR 视觉目标；非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal。用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定；用户未提供任何限定且标准视觉 role 足够明确时才可省略。内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
+  "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象，例如 { visual: { kind: icon, query: \"课堂报告右侧箭头图标\", area: content, position: trailing, nearText: \"课堂报告\" } } 或 { visual: { kind: image, query: \"封面图片\", area: content } }。执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
   "用户明确说‘点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复、reachPage 或重启。",
-  "control 当前支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content、scopeText 和 ordinal，用于预填输入框没有稳定标签的场景。",
+  "control 当前支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content、scopeText 和 ordinal，用于预填输入框没有稳定标签的场景；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text。",
   "执行器能力合同：visual 仅支持 tap；selectText 和 scrollUntilVisible 必须使用 text；inputText 和 clearText 必须使用 text 或 control: textField。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
   "用户明确操作是硬约束：点击、输入、清空、滑动或启动等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。用户明确要求启动时生成唯一一个 role: setup 的 launchApp；没有要求启动时不要添加。",
@@ -285,6 +285,16 @@ export async function generateScriptFlowDraft(input: {
   if (parsed.status === "needs_clarification") {
     return { ...parsed, channel, model: input.config.model };
   }
+  parsed = await reviewAndRepairNonOcrGrounding({
+    parsed,
+    plannerPrompt,
+    requestConfig,
+    parseInput,
+    fetchImpl: input.fetchImpl ?? fetch,
+    channel,
+    model: input.config.model,
+    timingContext: input.timingContext
+  });
   const verification = assessScriptFlowVerification({
     document: parsed.document,
     sourceYaml: parsed.sourceYaml
@@ -411,7 +421,7 @@ export function buildScriptFlowPlannerPrompt(
     "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
     "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
-    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon，且 area/position 只是可选范围提示；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。control 支持 checkbox、switch 与 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content、scopeText 和 ordinal；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
+    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal；用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 与 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content、scopeText 和 ordinal；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
     screenContext
       ? [
           "当前屏幕理解上下文由用户显式开启看屏后生成。它只能帮助理解用户对当前页面的描述，不能覆盖已验证资产。",
@@ -499,6 +509,124 @@ function buildScriptFlowClarificationReviewPrompt(plannerPrompt: string, clarifi
   ].join("\n\n");
 }
 
+type ScriptFlowGroundingReview = {
+  status: "ok" | "needs_repair";
+  summary: string;
+  issues: Array<{ stepId?: string; reason: string }>;
+  repairInstructions?: string;
+};
+
+async function reviewAndRepairNonOcrGrounding(input: {
+  parsed: Omit<ScriptFlowAiGeneratedDraft, "status" | "channel" | "model" | "verification"> & { status: "ready" };
+  plannerPrompt: string;
+  requestConfig: { baseURL: string; apiKey?: string; model: string; timeoutMs: number };
+  parseInput: Parameters<typeof parseScriptFlowAiResponse>[1];
+  fetchImpl: AiClientFetch;
+  channel: "codex" | "openai-compatible";
+  model: string;
+  timingContext?: ScriptFlowAiTimingContext;
+}): Promise<Omit<ScriptFlowAiGeneratedDraft, "status" | "channel" | "model" | "verification"> & { status: "ready" }> {
+  if (!hasNonOcrTapTargets(input.parsed.document)) return input.parsed;
+  const review = await timedScriptFlowAiStage(input.timingContext, "grounding_review_request", () => runAiJsonRequest(input.requestConfig, {
+    developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
+    userContent: buildScriptFlowGroundingReviewPrompt(input.parseInput.prompt ?? "", input.parsed),
+    effort: "low"
+  }, input.fetchImpl), { channel: input.channel, model: input.model });
+  const assessment = parseScriptFlowGroundingReview(review.content);
+  if (assessment.status === "ok") return input.parsed;
+
+  const repaired = await timedScriptFlowAiStage(input.timingContext, "grounding_repair_request", () => runAiJsonRequest(input.requestConfig, {
+    developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
+    userContent: buildScriptFlowGroundingRepairPrompt(input.plannerPrompt, input.parsed, assessment),
+    effort: "low"
+  }, input.fetchImpl), { channel: input.channel, model: input.model });
+  const repairedParsed = parseScriptFlowAiResponse(repaired.content, input.parseInput);
+  if (repairedParsed.status === "needs_clarification") {
+    throw new Error(`grounding repair 返回了追问信息：${repairedParsed.clarification}`);
+  }
+  const repairedReview = await timedScriptFlowAiStage(input.timingContext, "grounding_review_request", () => runAiJsonRequest(input.requestConfig, {
+    developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
+    userContent: buildScriptFlowGroundingReviewPrompt(input.parseInput.prompt ?? "", repairedParsed),
+    effort: "low"
+  }, input.fetchImpl), { channel: input.channel, model: input.model });
+  const repairedAssessment = parseScriptFlowGroundingReview(repairedReview.content);
+  if (repairedAssessment.status === "needs_repair") {
+    throw new Error(`AI 修复后仍未通过非 OCR 目标 grounding review：${repairedAssessment.summary}`);
+  }
+  return repairedParsed;
+}
+
+function buildScriptFlowGroundingReviewPrompt(
+  prompt: string,
+  parsed: Pick<ScriptFlowAiGeneratedDraft, "sourceYaml" | "summary" | "assumptions">
+): string {
+  return [
+    "请对下面 ScriptFlow 草稿做 grounding review。",
+    "只审查 icon/visual 这类非 OCR 视觉目标是否充分保留了用户原始描述中的跨平台定位线索，例如位置、顺序、附近文字、所属区域或范围。",
+    "由你根据自然语言灵活判断用户是否提供了这些线索；不要依赖固定词表，也不要因为脚本合法就直接通过。",
+    "如果脚本丢失了重要线索，返回 needs_repair 并给出可操作的 repairInstructions；否则返回 ok。",
+    "只返回唯一 JSON 对象，格式：",
+    JSON.stringify({
+      status: "ok | needs_repair",
+      summary: "审查摘要",
+      issues: [{ stepId: "可选步骤 id", reason: "问题原因" }],
+      repairInstructions: "needs_repair 时填写"
+    }, null, 2),
+    "用户原始描述：",
+    prompt || "未提供",
+    "草稿摘要：",
+    parsed.summary,
+    "草稿 assumptions：",
+    JSON.stringify(parsed.assumptions, null, 2),
+    "草稿 YAML：",
+    parsed.sourceYaml
+  ].join("\n\n");
+}
+
+function buildScriptFlowGroundingRepairPrompt(
+  plannerPrompt: string,
+  parsed: Pick<ScriptFlowAiGeneratedDraft, "sourceYaml">,
+  review: ScriptFlowGroundingReview
+): string {
+  return [
+    plannerPrompt,
+    "上一稿未通过非 OCR 目标 grounding review。请只根据 review 指令修复脚本中缺失的跨平台限定，不要引入坐标、resourceId、accessibilityId 或平台私有 selector。",
+    "review 结果：",
+    JSON.stringify(review, null, 2),
+    "上一稿 YAML：",
+    parsed.sourceYaml
+  ].join("\n\n");
+}
+
+function parseScriptFlowGroundingReview(raw: string): ScriptFlowGroundingReview {
+  const root = recordValue(parseAiJsonObject(raw));
+  const status = stringValue(root.status);
+  if (status === "ready" && root.document) {
+    return { status: "ok", summary: "grounding review did not return an assessment", issues: [] };
+  }
+  if (status !== "ok" && status !== "needs_repair") {
+    throw new Error("grounding review 返回了未知状态");
+  }
+  const issues = Array.isArray(root.issues)
+    ? root.issues.flatMap((item) => {
+      const issue = recordValue(item);
+      const reason = stringValue(issue.reason);
+      if (!reason) return [];
+      return [{ ...(stringValue(issue.stepId) ? { stepId: stringValue(issue.stepId) } : {}), reason }];
+    })
+    : [];
+  return {
+    status,
+    summary: stringValue(root.summary) ?? (status === "ok" ? "grounding review passed" : "grounding review requested repair"),
+    issues,
+    ...(stringValue(root.repairInstructions) ? { repairInstructions: stringValue(root.repairInstructions) } : {})
+  };
+}
+
+function hasNonOcrTapTargets(document: ScriptFlowDocument): boolean {
+  return flattenSteps(document.steps).some((step) => "tap" in step && Boolean(step.tap.target.icon || step.tap.target.visual));
+}
+
 function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Record<string, unknown>[] {
   const page = catalog.pages[0];
   const pageReference = page?.key ?? page?.id ?? "<目录中的 page key>";
@@ -526,7 +654,7 @@ function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Re
       id: "tap-visual-icon",
       role: "business",
       onPage: pageReference,
-      tap: { target: { visual: { kind: "icon", query: "排序图标", area: "content" } }, search: { mode: "visibleOnly" } }
+      tap: { target: { visual: { kind: "icon", query: "课堂报告右侧箭头图标", area: "content", position: "trailing", nearText: "课堂报告" } }, search: { mode: "visibleOnly" } }
     },
     {
       id: "tap-floating-add",

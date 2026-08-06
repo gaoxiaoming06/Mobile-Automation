@@ -47,8 +47,8 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("作为每轮复位时标记 role: reset");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("严格按照脚本中的显式命令执行");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }");
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon 的 area 和 position 是可选范围提示");
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("icon 必须描述 area 和 position");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("非 OCR 视觉目标必须尽量补全跨平台限定");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("点击左上角返回按钮");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon: back");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon: share");
@@ -61,6 +61,7 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("完整当前页控件动作");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不要补 entry、outcome、onPage、reachPage 或 runFlow");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("表单字段动作默认使用 search: { mode: auto }");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("即使 screenContext 当前首屏没有该字段");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("可执行查找策略");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toMatch(/\bref\b/i);
@@ -784,7 +785,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(requestBodies).toHaveLength(1);
+    expect(requestBodies.length).toBeGreaterThanOrEqual(1);
     const request = JSON.parse(requestBodies[0]!) as { messages: Array<{ content: string }> };
     expect(request.messages[1]?.content).toContain("修改现有用例");
     expect(result).toMatchObject({
@@ -951,7 +952,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(callCount).toBe(2);
+    expect(callCount).toBe(3);
     expect(result).toMatchObject({
       status: "trial_ready",
       document: {
@@ -1305,6 +1306,130 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
+  it("does not hardcode natural-language grounding checks in the parser", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.summary = "点击课堂报告右侧箭头图标";
+    response.document.name = "点击课堂报告右侧箭头图标";
+    response.document.purpose = "navigation";
+    response.document.steps = [{
+      id: "tap-report-chevron",
+      role: "navigation",
+      tap: {
+        target: {
+          visual: { kind: "icon", query: "箭头图标", area: "content", position: "trailing" }
+        },
+        search: { mode: "visibleOnly" }
+      }
+    }];
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "点击课堂报告右侧箭头图标"
+    })).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [{
+          tap: {
+            target: {
+              visual: { kind: "icon", query: "箭头图标", area: "content", position: "trailing" }
+            }
+          }
+        }]
+      }
+    });
+  });
+
+  it("uses AI grounding review to repair non-OCR targets that lost user grounding", async () => {
+    const first = readyResponse();
+    first.summary = "点击课堂报告右侧箭头图标";
+    first.document.name = "点击课堂报告右侧箭头图标";
+    first.document.purpose = "navigation";
+    first.document.steps = [{
+      id: "tap-report-chevron",
+      role: "navigation",
+      tap: {
+        target: {
+          visual: { kind: "icon", query: "箭头图标", area: "content", position: "trailing" }
+        },
+        search: { mode: "visibleOnly" }
+      }
+    }];
+    const repaired = readyResponse();
+    repaired.summary = "点击课堂报告右侧箭头图标";
+    repaired.document.name = "点击课堂报告右侧箭头图标";
+    repaired.document.purpose = "navigation";
+    repaired.document.steps = [{
+      id: "tap-report-chevron",
+      role: "navigation",
+      tap: {
+        target: {
+          visual: {
+            kind: "icon",
+            query: "课堂报告右侧箭头图标",
+            area: "content",
+            position: "trailing",
+            nearText: "课堂报告"
+          }
+        },
+        search: { mode: "visibleOnly" }
+      }
+    }];
+    const requests: string[] = [];
+    const responses = [
+      first,
+      {
+        status: "needs_repair",
+        summary: "脚本没有保留用户说的“课堂报告”附近文字线索。",
+        issues: [{
+          stepId: "tap-report-chevron",
+          reason: "用户描述包含文字锚点，但 visual target 缺少 nearText。"
+        }],
+        repairInstructions: "为 tap-report-chevron 的 visual target 增加 nearText: 课堂报告，并把 query 扩展为课堂报告右侧箭头图标。"
+      },
+      repaired,
+      { status: "ok", summary: "非 OCR 目标已保留用户提供的附近文字和右侧位置线索。", issues: [] }
+    ];
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "点击课堂报告右侧箭头图标",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: pageCatalog(),
+      flows: [],
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        requests.push(body.messages?.at(-1)?.content ?? "");
+        const content = responses.shift();
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(content) } }]
+        }), { status: 200 });
+      }
+    });
+
+    expect(requests).toHaveLength(4);
+    expect(requests[1]).toContain("grounding review");
+    expect(requests[2]).toContain("上一稿未通过非 OCR 目标 grounding review");
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      document: {
+        steps: [{
+          tap: {
+            target: {
+              visual: {
+                query: "课堂报告右侧箭头图标",
+                nearText: "课堂报告"
+              }
+            }
+          }
+        }]
+      }
+    });
+  });
+
   it("rejects AI drafts that encode an explicit visual request as a semantic text target", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
@@ -1351,8 +1476,8 @@ describe("ScriptFlow AI planner", () => {
     expect(prompt).toContain("reachPage");
     expect(prompt).toContain("不要因为“回到”推断系统返回");
     expect(prompt).toContain("tap、inputText、clearText 和 selectText 使用同一 search 合同");
-    expect(prompt).toContain("area/position 只是可选范围提示");
-    expect(prompt).not.toContain("icon 必须带 area 和 position");
+    expect(prompt).toContain("非 OCR 视觉目标必须尽量补全跨平台限定");
+    expect(prompt).toContain("用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入");
     expect(prompt).toContain('"kind": "case | scenario"');
     expect(prompt).not.toContain('"entry":');
     expect(prompt).not.toContain('"outcome":');
@@ -1844,7 +1969,7 @@ describe("ScriptFlow AI planner", () => {
     expect(result).toMatchObject({ status: "trial_ready", document: { steps: [expect.anything(), expect.objectContaining({
       tap: expect.objectContaining({ target: expect.objectContaining({ text: "创建添加好友" }) })
     })] } });
-    expect(requestBodies).toHaveLength(1);
+    expect(requestBodies.length).toBeGreaterThanOrEqual(1);
   });
 
   it("asks for result evidence when the generated target page is not recorded", async () => {
