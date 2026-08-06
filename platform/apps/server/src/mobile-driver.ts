@@ -119,10 +119,11 @@ export class MobileDriver implements AutomationDeviceDriver {
 
   async dumpUiHierarchy(serial: string): Promise<string> {
     const platform = await this.resolvePlatform(serial);
-    if (platform !== "android") {
+    const driver = await this.driverFor(serial);
+    if (!driver.dumpUiHierarchy) {
       throw new Error(`${platform} UI hierarchy locator is not supported yet`);
     }
-    return this.android.dumpUiHierarchy(serial);
+    return driver.dumpUiHierarchy(serial);
   }
 
   async performAction(serial: string, action: DeviceActionRequest): Promise<DeviceActionResult | void> {

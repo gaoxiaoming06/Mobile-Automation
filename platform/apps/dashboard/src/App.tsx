@@ -17,6 +17,7 @@ import {
   type FlowStartStrategy,
   type Platform,
   type SemanticDeviceActionRequest,
+  type ScriptFlow,
   type TestRun,
   type ToolStatus
 } from "@mobile-automation/shared";
@@ -581,6 +582,7 @@ export function App() {
   const [pendingCaseRevision, setPendingCaseRevision] = useState<CaseRevision>();
   const [pendingCaseDraft, setPendingCaseDraft] = useState<GeneratedDraft>();
   const [pendingCaseSelection, setPendingCaseSelection] = useState("");
+  const [pendingSavedCaseFlow, setPendingSavedCaseFlow] = useState<ScriptFlow>();
   const [newCaseWorkspaceVersion, setNewCaseWorkspaceVersion] = useState(0);
   const [retainedNavItems, setRetainedNavItems] = useState<Set<NavItemId>>(() => new Set(["devices"]));
   const [assetRecordingPreviewWidth, setAssetRecordingPreviewWidth] = useState(560);
@@ -1544,6 +1546,7 @@ export function App() {
               devices={selectableDevices}
               selectedSerial={selectedSerial}
               initialSelectedFlowId={pendingCaseSelection || undefined}
+              externallySavedFlow={pendingSavedCaseFlow}
               setMessage={setMessage}
               onCreateCase={openNewAiScriptFlow}
               onModifyCase={(flow, verification) => {
@@ -1593,6 +1596,7 @@ export function App() {
               )}
               onSaved={(flow) => {
                 setPendingCaseSelection(flow.id);
+                setPendingSavedCaseFlow(flow);
                 setPendingCaseRevision(undefined);
                 setPendingCaseDraft(undefined);
                 openScriptFlows();

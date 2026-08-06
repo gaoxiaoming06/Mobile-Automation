@@ -13,7 +13,7 @@ import {
 import { HarmonyActionExecutor } from "./harmony-actions.js";
 import { HarmonyDeviceDiscovery } from "./harmony-discovery.js";
 import { commandVersion, hdcFileRecv, hdcShell, hdcText } from "./hdc.js";
-import { parseBundleVersion, parseForegroundBundle, parsePngSize } from "./harmony-parsers.js";
+import { harmonyDumpLayoutToUiHierarchyXml, parseBundleVersion, parseForegroundBundle, parsePngSize } from "./harmony-parsers.js";
 
 type HarmonyDriverOptions = {
   abilityName?: (bundleName: string) => string | undefined;
@@ -69,6 +69,21 @@ export class HarmonyDriver {
   async getForegroundApp(serial: string): Promise<{ bundleId?: string; abilityName?: string; packageName?: string }> {
     const output = await this.shell(serial, ["aa", "dump", "-a"], { timeoutMs: 8000 }).catch(() => "");
     return parseForegroundBundle(output);
+  }
+
+  async dumpUiHierarchy(serial: string): Promise<string> {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "mobile-automation-harmony-layout-"));
+    const localPath = path.join(tmpDir, `${serial}.json`);
+    const remotePath = `/data/local/tmp/mobile_automation_layout_${Date.now()}.json`;
+    try {
+      await this.shell(serial, ["uitest", "dumpLayout", "-p", remotePath, "-a", "-m", "true"], { timeoutMs: 15000 });
+      await hdcFileRecv(serial, remotePath, localPath, { timeoutMs: 15000, maxBuffer: 16 * 1024 * 1024 });
+      const layout = await readFile(localPath, "utf8");
+      return harmonyDumpLayoutToUiHierarchyXml(layout);
+    } finally {
+      await this.shell(serial, ["rm", "-f", remotePath], { timeoutMs: 5000 }).catch(() => undefined);
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   async getInstalledAppInfo(serial: string, bundleName: string): Promise<InstalledAppInfo> {
@@ -128,4 +143,4 @@ export class HarmonyDriver {
 
 export { HarmonyActionExecutor } from "./harmony-actions.js";
 export { HarmonyDeviceDiscovery } from "./harmony-discovery.js";
-export { parseForegroundBundle, parseHdcTargets, parseLaunchAbility, parsePngSize } from "./harmony-parsers.js";
+export { harmonyDumpLayoutToUiHierarchyXml, parseForegroundBundle, parseHdcTargets, parseLaunchAbility, parsePngSize } from "./harmony-parsers.js";

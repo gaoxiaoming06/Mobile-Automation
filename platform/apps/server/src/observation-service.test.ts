@@ -157,7 +157,7 @@ describe("ObservationService", () => {
     ]);
   });
 
-  it("collects HarmonyOS bundle id without requiring Android UI hierarchy", async () => {
+  it("collects HarmonyOS bundle id and UI hierarchy when the driver exposes one", async () => {
     const service = new ObservationService(new HarmonyDriver(), new TextOcrService("登录"));
 
     const observation = await service.collect("HARMONY", { includeUiTree: true, includeOcr: true });
@@ -165,7 +165,15 @@ describe("ObservationService", () => {
     expect(observation.platform).toBe("harmony");
     expect(observation.bundleId).toBe("com.eeo.classin.harmony");
     expect(observation.activityName).toBe("EntryAbility");
-    expect(observation.uiElements).toEqual([]);
+    expect(observation.uiElements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accessibilityId: "请输入手机号/邮箱",
+          className: "harmony.widget.TextInput",
+          focusable: true
+        })
+      ])
+    );
     expect(observation.ocrTexts.map((item) => item.text)).toEqual(["登录"]);
   });
 });
@@ -280,7 +288,12 @@ class HarmonyDriver extends FakeDriver {
   }
 
   override async dumpUiHierarchy(): Promise<string> {
-    throw new Error("HarmonyOS should not collect Android UI hierarchy");
+    return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="harmony.widget.Root" package="cn.eeo.hos.classin.mobile" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2400]">
+    <node index="0" text="" resource-id="" class="harmony.widget.TextInput" package="cn.eeo.hos.classin.mobile" content-desc="请输入手机号/邮箱" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[120,500][960,620]" />
+  </node>
+</hierarchy>`;
   }
 }
 

@@ -15,6 +15,8 @@ import {
 it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("text、icon、visual 或 control");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("文本语义匹配使用 text + match: semantic");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("可点击 text 目标默认按完整控件文字匹配");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("参数化名称不要写 match: contains");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止擅自增加");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("未录入页面");
@@ -1483,6 +1485,25 @@ describe("ScriptFlow AI planner", () => {
     expect(prompt).not.toContain('"outcome":');
     expect(prompt).toContain("直接理解用户的完整意图和操作顺序");
     expect(prompt).not.toContain("用户明确操作契约");
+  });
+
+  it("instructs the planner to choose text match mode from screen evidence and natural language", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "harmony");
+    const prompt = buildScriptFlowPlannerPrompt(
+      "点击确定",
+      "cn.eeo.classin",
+      "harmony",
+      catalog,
+      undefined,
+      {
+        ...lessonCreateScreenContext(),
+        visibleStableTexts: ["选择联席教师", "确定(1/6)"]
+      }
+    );
+
+    expect(prompt).toContain("screenContext 原文是“确定(1/6)”而用户只说“确定”时，必须生成 target: { text: \"确定\", match: \"contains\" }");
+    expect(prompt).toContain("未启用当前屏幕上下文时，根据自然语言语义选择 match");
+    expect(prompt).toContain("执行器会严格按脚本 match 执行，equals 不会自动退化为 contains");
   });
 
   it("includes external code context as non-authoritative planning hints", () => {

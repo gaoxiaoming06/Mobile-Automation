@@ -66,6 +66,119 @@ describe("semantic locator helpers", () => {
     }));
   });
 
+  it("does not treat OCR icon noise around a text label as an exact candidate", () => {
+    const candidate = findTextCandidate(
+      {
+        text: "8+添加好友\n28加入班级\n加入公开课\n扫一扫",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1200,
+        height: 2000,
+        boxes: [
+          { text: "8+添加好友", confidence: 0.98, x: 900, y: 232, width: 160, height: 44 },
+          { text: "28加入班级", confidence: 0.98, x: 896, y: 300, width: 168, height: 44 },
+          { text: "加入公开课", confidence: 0.98, x: 945, y: 374, width: 144, height: 44 },
+          { text: "扫一扫", confidence: 0.98, x: 896, y: 440, width: 139, height: 44 }
+        ]
+      },
+      "添加好友",
+      { mode: "equals", semanticArea: "content", deviceSize: { width: 1200, height: 2000 } }
+    );
+
+    expect(candidate).toBeUndefined();
+  });
+
+  it("allows contains mode to match OCR icon noise around a text label", () => {
+    const candidate = findTextCandidate(
+      {
+        text: "8+添加好友\n28加入班级\n加入公开课\n扫一扫",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1200,
+        height: 2000,
+        boxes: [
+          { text: "8+添加好友", confidence: 0.98, x: 900, y: 232, width: 160, height: 44 },
+          { text: "28加入班级", confidence: 0.98, x: 896, y: 300, width: 168, height: 44 },
+          { text: "加入公开课", confidence: 0.98, x: 945, y: 374, width: 144, height: 44 },
+          { text: "扫一扫", confidence: 0.98, x: 896, y: 440, width: 139, height: 44 }
+        ]
+      },
+      "添加好友",
+      { mode: "contains", semanticArea: "content", deviceSize: { width: 1200, height: 2000 } }
+    );
+
+    expect(candidate).toEqual(expect.objectContaining({
+      text: "8+添加好友",
+      centerX: 980,
+      centerY: 254
+    }));
+  });
+
+  it("does not treat a longer readable text label as an exact candidate", () => {
+    const candidate = findTextCandidate(
+      {
+        text: "添加好友设置",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1200,
+        height: 2000,
+        boxes: [
+          { text: "添加好友设置", confidence: 0.98, x: 900, y: 232, width: 220, height: 44 }
+        ]
+      },
+      "添加好友",
+      { mode: "equals" }
+    );
+
+    expect(candidate).toBeUndefined();
+  });
+
+  it("does not treat a compact selection-count suffix as an exact action label", () => {
+    const candidate = findTextCandidate(
+      {
+        text: "选择联席教师\n海外55\n确定(1/6)",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1256,
+        height: 2760,
+        boxes: [
+          { text: "选择联席教师", confidence: 0.99, x: 188, y: 198, width: 240, height: 60 },
+          { text: "海外55", confidence: 0.99, x: 320, y: 1030, width: 160, height: 60 },
+          { text: "确定(1/6)", confidence: 0.99, x: 836, y: 2528, width: 288, height: 72 }
+        ]
+      },
+      "确定",
+      { mode: "equals", deviceSize: { width: 1256, height: 2760 } }
+    );
+
+    expect(candidate).toBeUndefined();
+  });
+
+  it("allows contains mode to match a compact selection-count suffix", () => {
+    const candidate = findTextCandidate(
+      {
+        text: "选择联席教师\n海外55\n确定(1/6)",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1256,
+        height: 2760,
+        boxes: [
+          { text: "选择联席教师", confidence: 0.99, x: 188, y: 198, width: 240, height: 60 },
+          { text: "海外55", confidence: 0.99, x: 320, y: 1030, width: 160, height: 60 },
+          { text: "确定(1/6)", confidence: 0.99, x: 836, y: 2528, width: 288, height: 72 }
+        ]
+      },
+      "确定",
+      { mode: "contains", deviceSize: { width: 1256, height: 2760 } }
+    );
+
+    expect(candidate).toEqual(expect.objectContaining({
+      text: "确定(1/6)",
+      centerX: 980,
+      centerY: 2564
+    }));
+  });
+
   it("finds text near a clicked point for recording-time locator suggestions", () => {
     const candidate = findNearestTextCandidate(layout("首页", "进入课堂"), { x: 200, y: 225 });
 
@@ -74,6 +187,315 @@ describe("semantic locator helpers", () => {
 });
 
 describe("SemanticStepResolver", () => {
+  it("resolves tap_on_text from UI hierarchy before OCR", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const locateText = vi.fn(async () => {
+      throw new Error("OCR should not be used when hierarchy resolves the text");
+    });
+    const captureLocatorScreenshot = vi.fn(async () => {
+      throw new Error("screenshot should not be captured when hierarchy resolves the text");
+    });
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("添加好友"),
+        locateText
+      },
+      dumpUiHierarchy: async () => addFriendMenuHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-tree-text",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: tapOnTextStep("添加好友", 0, 0, {
+        mode: "equals",
+        searchMode: "visibleOnly"
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 992, y: 253 }]);
+    expect(locateText).not.toHaveBeenCalled();
+    expect(captureLocatorScreenshot).not.toHaveBeenCalled();
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        actual: "添加好友",
+        matchStrategy: "ui_hierarchy_equals",
+        tapPointSource: "ui_text_center",
+        evidenceArtifactIds: []
+      })
+    }));
+  });
+
+  it("does not resolve a UI hierarchy action label with a compact selection-count suffix in equals mode", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const locateText = vi.fn(async () => layout("确定(1/6)"));
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("确定(1/6)"),
+        locateText
+      },
+      dumpUiHierarchy: async () => hierarchyWithText("确定(1/6)", {
+        className: "harmony.widget.Button",
+        bounds: "[706,2493][1178,2622]",
+        clickable: true
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-decorated-confirm-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-decorated-confirm",
+      serial: "device-1",
+      deviceSize: { width: 1256, height: 2760 },
+      step: tapOnTextStep("确定", 0, 0, {
+        mode: "equals",
+        searchMode: "visibleOnly",
+        timeoutMs: 1,
+        intervalMs: 1
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(locateText).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: false,
+      metadata: expect.objectContaining({
+        reason: "target_not_found"
+      })
+    }));
+  });
+
+  it("resolves a UI hierarchy action label with a compact selection-count suffix in contains mode", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const locateText = vi.fn(async () => {
+      throw new Error("OCR should not be used when hierarchy resolves the decorated action text in contains mode");
+    });
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("确定(1/6)"),
+        locateText
+      },
+      dumpUiHierarchy: async () => hierarchyWithText("确定(1/6)", {
+        className: "harmony.widget.Button",
+        bounds: "[706,2493][1178,2622]",
+        clickable: true
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async () => {
+        throw new Error("screenshot should not be captured when hierarchy resolves the decorated action text in contains mode");
+      }
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-decorated-confirm-contains",
+      serial: "device-1",
+      deviceSize: { width: 1256, height: 2760 },
+      step: tapOnTextStep("确定", 0, 0, {
+        mode: "contains",
+        searchMode: "visibleOnly"
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 942, y: 2558 }]);
+    expect(locateText).not.toHaveBeenCalled();
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        actual: "确定(1/6)",
+        matchStrategy: "ui_hierarchy_contains"
+      })
+    }));
+  });
+
+  it("taps the visible text center for text exposed inside a large Compose clickable container", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("修改"),
+        locateText: vi.fn(async () => {
+          throw new Error("OCR should not be used for exposed Compose text");
+        })
+      },
+      dumpUiHierarchy: async () => composeLessonInfoHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async () => {
+        throw new Error("screenshot should not be captured for exposed Compose text");
+      }
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-compose-text",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: tapOnTextStep("修改", 0, 0, {
+        mode: "equals",
+        searchMode: "visibleOnly"
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 1076, y: 701 }]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        actual: "修改",
+        tapPointSource: "ui_text_center",
+        uiActionableCandidate: expect.objectContaining({
+          selector: "id=cn.eeo.classin:id/lesson_info"
+        })
+      })
+    }));
+  });
+
+  it("falls back to OCR when UI hierarchy does not expose the text", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const locateText = vi.fn(async () => layout("进入课堂"));
+    const captureLocatorScreenshot = vi.fn(async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-fallback-${attempt}`));
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("进入课堂"),
+        locateText
+      },
+      dumpUiHierarchy: async () => emptyHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-tree-miss",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: tapOnTextStep("进入课堂", 0, 0, {
+        mode: "equals",
+        searchMode: "visibleOnly"
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 730, y: 1615 }]);
+    expect(locateText).toHaveBeenCalledTimes(1);
+    expect(captureLocatorScreenshot).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        matchStrategy: "equals",
+        tapPointSource: "ocr_text_center",
+        evidenceArtifactIds: ["artifact-fallback-1"]
+      })
+    }));
+  });
+
+  it("scrolls with UI hierarchy snapshots before using OCR", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const hierarchies = [emptyHierarchy(), addFriendMenuHierarchy()];
+    const locateText = vi.fn(async () => {
+      throw new Error("OCR should not be used when scrolling hierarchy finds the text");
+    });
+    const captureLocatorScreenshot = vi.fn(async () => {
+      throw new Error("screenshot should not be captured when hierarchy scrolling finds the text");
+    });
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("添加好友"),
+        locateText
+      },
+      dumpUiHierarchy: async () => hierarchies.shift() ?? addFriendMenuHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-tree-scroll",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: tapOnTextStep("添加好友", 0, 0, {
+        mode: "equals",
+        searchMode: "scroll",
+        searchDirection: "down",
+        resetToTop: false,
+        maxSwipes: 2,
+        intervalMs: 0
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "swipe", startX: 600, startY: 1500, endX: 600, endY: 500, durationMs: 450 },
+      { type: "tap", x: 992, y: 253 }
+    ]);
+    expect(locateText).not.toHaveBeenCalled();
+    expect(captureLocatorScreenshot).not.toHaveBeenCalled();
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        matchStrategy: "ui_hierarchy_equals",
+        search: expect.objectContaining({
+          scanSwipes: 1
+        })
+      })
+    }));
+  });
+
+  it("resolves a decorated OCR label only when the script asks for contains mode", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const dumpUiHierarchy = vi.fn(async () => decoratedAddFriendMenuHierarchy());
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "8+添加好友",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1200,
+        height: 2000,
+        boxes: [
+          { text: "8+添加好友", confidence: 0.98, x: 900, y: 232, width: 184, height: 44 }
+        ]
+      }),
+      dumpUiHierarchy,
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-decorated-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-reuse-hierarchy",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: tapOnTextStep("添加好友", 0, 0, {
+        mode: "contains",
+        searchMode: "visibleOnly"
+      })
+    });
+
+    expect(dumpUiHierarchy).toHaveBeenCalledTimes(1);
+    expect(actions).toEqual([{ type: "tap", x: 992, y: 253 }]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        matchStrategy: "ui_hierarchy_contains"
+      })
+    }));
+  });
+
   it("resolves tap_on_text into a concrete tap action", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -2894,6 +3316,98 @@ describe("SemanticStepResolver", () => {
         })
       })
     );
+  });
+
+  it("resolves a masked scoped text field row from structural TextInput candidates", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n立即注册\n+86\n12133333300\n已阅读并同意\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "立即注册", confidence: 0.99, x: 760, y: 300, width: 140, height: 44 },
+            { text: "+86", confidence: 0.98, x: 100, y: 560, width: 60, height: 42 },
+            { text: "12133333300", confidence: 0.99, x: 190, y: 560, width: 250, height: 42 },
+            { text: "已阅读并同意", confidence: 0.98, x: 120, y: 860, width: 260, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 }
+          ]
+        },
+        {
+          text: "ClassIn\n立即注册\n+86\n12133333300\n已阅读并同意\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 70, y: 300, width: 220, height: 56 },
+            { text: "立即注册", confidence: 0.99, x: 760, y: 300, width: 140, height: 44 },
+            { text: "+86", confidence: 0.98, x: 100, y: 560, width: 60, height: 42 },
+            { text: "12133333300", confidence: 0.99, x: 190, y: 560, width: 250, height: 42 },
+            { text: "已阅读并同意", confidence: 0.98, x: 120, y: 860, width: 260, height: 42 },
+            { text: "登录", confidence: 0.99, x: 455, y: 1010, width: 90, height: 48 }
+          ]
+        }
+      ]),
+      dumpUiHierarchy: async () => harmonyTextInputHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-masked-scoped-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-masked-scoped",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "123qwe",
+        clearFirst: true,
+        valueParamKey: "secret",
+        sensitiveInput: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        pageTaskStepLabel: "输入表单内容",
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "立即注册下方",
+          ordinal: 2,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 500, y: 720 },
+      { type: "clear_text" },
+      { type: "input_text", text: "123qwe" }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: true,
+      metadata: expect.objectContaining({
+        focusResolvedBy: "ui_edit_text_structural",
+        focusUiCandidate: expect.objectContaining({
+          className: "harmony.widget.TextInput",
+          contentDesc: "请输入密码",
+          bounds: expect.objectContaining({
+            centerX: 500,
+            centerY: 720
+          })
+        }),
+        verificationStrategy: "sensitive_target_region_unreadable"
+      })
+    }));
   });
 
   it("does not input text into a marked image region when the input focus cannot be relocated", async () => {
@@ -6833,6 +7347,18 @@ function hierarchy(resourceId: string): string {
 </hierarchy>`;
 }
 
+function hierarchyWithText(
+  text: string,
+  options: { className?: string; bounds?: string; clickable?: boolean } = {}
+): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="harmony.widget.Root" package="cn.eeo.hos.classin.mobile" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1256,2760]">
+    <node index="0" text="${text}" resource-id="" class="${options.className ?? "harmony.widget.Text"}" package="cn.eeo.hos.classin.mobile" content-desc="" clickable="${options.clickable ?? false}" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="${options.bounds ?? "[100,100][300,180]"}" />
+  </node>
+</hierarchy>`;
+}
+
 function cardTextHierarchy(): string {
   return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
@@ -6844,6 +7370,45 @@ function cardTextHierarchy(): string {
 </hierarchy>`;
 }
 
+function addFriendMenuHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1200,2000]">
+    <node index="0" text="" resource-id="cn.eeo.classin:id/menu_item" class="android.view.ViewGroup" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[884,220][1100,286]">
+      <node index="0" text="添加好友" resource-id="cn.eeo.classin:id/menu_text" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[934,231][1050,275]" />
+    </node>
+  </node>
+</hierarchy>`;
+}
+
+function decoratedAddFriendMenuHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1200,2000]">
+    <node index="0" text="8+添加好友" resource-id="cn.eeo.classin:id/menu_item" class="android.view.ViewGroup" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[884,220][1100,286]" />
+  </node>
+</hierarchy>`;
+}
+
+function composeLessonInfoHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1200,2000]">
+    <node index="0" text="" resource-id="cn.eeo.classin:id/lesson_info" class="androidx.compose.ui.platform.ComposeView" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[0,656][1200,794]">
+      <node index="0" text="课堂信息" resource-id="" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[64,682][192,720]" />
+      <node index="1" text="修改" resource-id="" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[1050,686][1102,716]" />
+    </node>
+  </node>
+</hierarchy>`;
+}
+
+function emptyHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2400]" />
+</hierarchy>`;
+}
+
 function inputHierarchy(): string {
   return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
@@ -6851,6 +7416,16 @@ function inputHierarchy(): string {
     <node index="0" text="登录" resource-id="com.demo:id/login_title" class="android.widget.TextView" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[120,120][240,176]" />
     <node index="1" text="" resource-id="com.demo:id/phone_input" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[100,500][900,620]" />
     <node index="2" text="" resource-id="com.demo:id/password_input" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[100,660][900,780]" />
+  </node>
+</hierarchy>`;
+}
+
+function harmonyTextInputHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="harmony.widget.Root" package="cn.eeo.hos.classin.mobile" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1000,2000]">
+    <node index="0" text="" resource-id="" class="harmony.widget.TextInput" package="cn.eeo.hos.classin.mobile" content-desc="请输入手机号/邮箱" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[100,500][900,620]" />
+    <node index="1" text="" resource-id="" class="harmony.widget.TextInput" package="cn.eeo.hos.classin.mobile" content-desc="请输入密码" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[100,660][900,780]" />
   </node>
 </hierarchy>`;
 }

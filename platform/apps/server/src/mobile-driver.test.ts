@@ -46,6 +46,33 @@ describe("MobileDriver app monitor", () => {
     expect(ios.performedActions).toEqual([]);
   });
 
+  it("routes HarmonyOS UI hierarchy dumps to the harmony driver", async () => {
+    const android = fakeDriver("android");
+    const ios = fakeDriver("ios");
+    const harmony = fakeDriver("harmony");
+    harmony.listDevices = async () => [
+      {
+        id: "HARMONY",
+        serial: "HARMONY",
+        platform: "harmony",
+        status: "online",
+        capabilities: defaultHarmonyCapabilities(),
+        lastSeenAt: nowIso()
+      }
+    ];
+    harmony.dumpUiHierarchy = vi.fn(async () => "<hierarchy><node bounds=\"[0,0][1,1]\" /></hierarchy>");
+    const driver = new MobileDriver(
+      android as unknown as AndroidDriver,
+      ios as unknown as IosDriver,
+      harmony as unknown as HarmonyDriver
+    );
+
+    await driver.listDevices();
+    await expect(driver.dumpUiHierarchy("HARMONY")).resolves.toContain("<hierarchy>");
+
+    expect(harmony.dumpUiHierarchy).toHaveBeenCalledWith("HARMONY");
+  });
+
   it("keeps Android and iOS devices visible when HarmonyOS discovery is unavailable", async () => {
     const android = fakeDriver("android");
     android.listDevices = async () => [androidDevice()];

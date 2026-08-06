@@ -82,6 +82,16 @@ type WheelPickerColumnResult<T extends PickerColumnValue> = {
   stalledAt?: string;
 };
 
+type UiHierarchyTextResolution = {
+  action: Extract<DeviceActionRequest, { type: "tap" }>;
+  actual: string;
+  textCandidate: UiElementCandidate;
+  actionableCandidate?: UiElementCandidate;
+  tapPointSource: "ui_text_center" | "ui_clickable_ancestor";
+  matchStrategy: "ui_hierarchy_equals" | "ui_hierarchy_contains";
+  candidateCount: number;
+};
+
 type SemanticStepResolverDeps = {
   ocr: OcrService;
   performAction: (serial: string, action: DeviceActionRequest) => Promise<DeviceActionResult | void>;
@@ -3053,7 +3063,8 @@ export class SemanticStepResolver {
     let reachedBoundary = false;
     let latestAmbiguous = false;
     let latestCandidateCount = 0;
-    let latestMatchStrategy = semanticMatch ? "semantic" : mode;
+    let latestMatchStrategy: string = semanticMatch ? "semantic" : mode;
+    let latestVisibleText = "";
     const artifacts: ArtifactRef[] = [];
 
     if (!expectedTargets.length) {
@@ -3071,30 +3082,89 @@ export class SemanticStepResolver {
       };
     }
 
-    if (!this.deps.ocr.locateText) {
+    const locateText = this.deps.ocr.locateText?.bind(this.deps.ocr);
+    if (!this.deps.dumpUiHierarchy && !locateText) {
       return {
         supported: false,
         resolved: false,
-        message: "OCR layout locator is unavailable.",
+        message: "No text locator is available.",
         artifacts,
         metadata: {
           type: "text",
           expected: expectedTargets,
           action: "unsupported",
-          reason: "ocr_layout_unavailable"
+          reason: "text_locator_unavailable"
         }
       };
     }
-    const locateText = this.deps.ocr.locateText.bind(this.deps.ocr);
 
-    const inspectViewport = async (): Promise<{
-      layout: OcrLayoutResult;
+    const inspectViewport = async (options: { allowOcrFallback?: boolean } = {}): Promise<{
+      layout?: OcrLayoutResult;
+      hierarchyXml?: string;
+      uiCandidate?: UiHierarchyTextResolution;
       candidate?: TextLocatorCandidate;
       ambiguous: boolean;
       canScrollPastAmbiguous: boolean;
       signature: string;
     }> => {
       attempt += 1;
+      let hierarchyXml: string | undefined;
+      let hierarchySignature = "";
+      if (this.deps.dumpUiHierarchy && !semanticMatch) {
+        try {
+          hierarchyXml = await this.deps.dumpUiHierarchy(input.serial);
+          const hierarchySelection = findUiHierarchyTextSelection(hierarchyXml, expectedTargets, {
+            mode,
+            exactFirst,
+            preferredPoint: recordedPoint(input.step, input.deviceSize),
+            semanticArea,
+            deviceSize: input.deviceSize
+          });
+          hierarchySignature = hierarchySelection.signature;
+          latestVisibleText = hierarchySignature;
+          latestAmbiguous = hierarchySelection.ambiguous;
+          latestCandidateCount = hierarchySelection.candidateCount;
+          if (hierarchySelection.candidate || hierarchySelection.ambiguous) {
+            if (hierarchySelection.candidate) {
+              latestMatchStrategy = hierarchySelection.candidate.matchStrategy;
+            }
+            return {
+              hierarchyXml,
+              uiCandidate: hierarchySelection.candidate,
+              ambiguous: hierarchySelection.ambiguous,
+              canScrollPastAmbiguous: hierarchySelection.canScrollPastAmbiguous,
+              signature: hierarchySignature
+            };
+          }
+        } catch {
+          hierarchyXml = undefined;
+        }
+      }
+
+      if (hierarchyXml && options.allowOcrFallback === false) {
+        latestCandidate = undefined;
+        latestAmbiguous = false;
+        latestCandidateCount = 0;
+        return {
+          hierarchyXml,
+          ambiguous: false,
+          canScrollPastAmbiguous: false,
+          signature: hierarchySignature
+        };
+      }
+
+      if (!locateText) {
+        latestCandidate = undefined;
+        latestAmbiguous = false;
+        latestCandidateCount = 0;
+        return {
+          hierarchyXml,
+          ambiguous: false,
+          canScrollPastAmbiguous: false,
+          signature: hierarchySignature
+        };
+      }
+
       const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
       artifacts.push(screenshot.artifact);
       latestLayout = await locateText({
@@ -3102,6 +3172,7 @@ export class SemanticStepResolver {
         lang: textParam(input.step.params.lang) || undefined,
         mode
       });
+      latestVisibleText = normalizeOcrText(latestLayout.text);
       if (semanticMatch) {
         latestCandidate = findSemanticTextCandidate(latestLayout, expectedTargets[0] ?? "", {
             preferredPoint: recordedPoint(input.step, input.deviceSize),
@@ -3165,6 +3236,7 @@ export class SemanticStepResolver {
       }
       return {
         layout: latestLayout,
+        hierarchyXml,
         candidate: latestCandidate,
         ambiguous: latestAmbiguous,
         canScrollPastAmbiguous: exactFirst && latestAmbiguous,
@@ -3172,13 +3244,51 @@ export class SemanticStepResolver {
       };
     };
 
-    const tapCandidate = async (candidate: TextLocatorCandidate, layout: OcrLayoutResult): Promise<SemanticResolutionOutcome> => {
+    const tapUiCandidate = async (candidate: UiHierarchyTextResolution): Promise<SemanticResolutionOutcome> => {
+      const actionResult = (await this.performAction(input, candidate.action)) ?? undefined;
+      return {
+        supported: true,
+        resolved: true,
+        action: candidate.action,
+        actionResult,
+        message: `Resolved UI text "${candidate.actual}" for "${expectedTargets.join(" / ")}" after ${attempt} viewport attempt(s).`,
+        artifacts,
+        metadata: {
+          type: "text",
+          expected: expectedTargets,
+          actual: candidate.actual,
+          action: "tap",
+          matchStrategy: candidate.matchStrategy,
+          attempts: attempt,
+          locator: candidate.textCandidate,
+          tapPointSource: candidate.tapPointSource,
+          uiCandidate: candidate.tapPointSource === "ui_clickable_ancestor" && candidate.actionableCandidate
+            ? candidate.actionableCandidate
+            : candidate.textCandidate,
+          uiTextCandidate: candidate.textCandidate,
+          ...(candidate.actionableCandidate ? { uiActionableCandidate: candidate.actionableCandidate } : {}),
+          candidateCount: candidate.candidateCount,
+          search: {
+            mode: searchMode,
+            direction: searchDirection,
+            resetToTop,
+            maxSwipes,
+            resetSwipes,
+            scanSwipes,
+            reachedBoundary
+          },
+          evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
+        }
+      };
+    };
+
+    const tapCandidate = async (candidate: TextLocatorCandidate, layout: OcrLayoutResult, hierarchyXml?: string): Promise<SemanticResolutionOutcome> => {
       const ocrAction = {
         type: "tap",
         x: scaleCoordinate(candidate.centerX, layout.width, input.deviceSize?.width),
         y: scaleCoordinate(candidate.centerY, layout.height, input.deviceSize?.height)
       } satisfies DeviceActionRequest;
-      const hierarchyTap = await this.resolveTextTapClickableContainer(input, candidate, mode, ocrAction);
+      const hierarchyTap = await this.resolveTextTapClickableContainer(input, candidate, mode, ocrAction, hierarchyXml);
       const action = hierarchyTap?.action ?? ocrAction;
       const actionResult = (await this.performAction(input, action)) ?? undefined;
       return {
@@ -3218,8 +3328,11 @@ export class SemanticStepResolver {
       const started = Date.now();
       while (Date.now() - started <= timeoutMs) {
         const current = await inspectViewport();
-        if (current.candidate) {
-          return tapCandidate(current.candidate, current.layout);
+        if (current.uiCandidate) {
+          return tapUiCandidate(current.uiCandidate);
+        }
+        if (current.candidate && current.layout) {
+          return tapCandidate(current.candidate, current.layout, current.hierarchyXml);
         }
         if (current.ambiguous && !current.canScrollPastAmbiguous) {
           break;
@@ -3232,9 +3345,13 @@ export class SemanticStepResolver {
         await this.wait(input, Math.min(intervalMs, timeoutMs - elapsed));
       }
     } else {
-      let current = await inspectViewport();
-      if (current.candidate) {
-        return tapCandidate(current.candidate, current.layout);
+      const allowOcrFallback = searchMode !== "scroll";
+      let current = await inspectViewport({ allowOcrFallback });
+      if (current.uiCandidate) {
+        return tapUiCandidate(current.uiCandidate);
+      }
+      if (current.candidate && current.layout) {
+        return tapCandidate(current.candidate, current.layout, current.hierarchyXml);
       }
       if (current.ambiguous && !current.canScrollPastAmbiguous) {
         return textTargetFailure();
@@ -3246,9 +3363,12 @@ export class SemanticStepResolver {
           await this.performAction(input, scrollSwipeAction("up", input.deviceSize));
           resetSwipes += 1;
           await this.wait(input, intervalMs);
-          current = await inspectViewport();
-          if (current.candidate) {
-            return tapCandidate(current.candidate, current.layout);
+          current = await inspectViewport({ allowOcrFallback });
+          if (current.uiCandidate) {
+            return tapUiCandidate(current.uiCandidate);
+          }
+          if (current.candidate && current.layout) {
+            return tapCandidate(current.candidate, current.layout, current.hierarchyXml);
           }
           if (current.ambiguous && !current.canScrollPastAmbiguous) {
             return textTargetFailure();
@@ -3267,9 +3387,12 @@ export class SemanticStepResolver {
         await this.performAction(input, scrollSwipeAction(direction, input.deviceSize));
         scanSwipes += 1;
         await this.wait(input, intervalMs);
-        current = await inspectViewport();
-        if (current.candidate) {
-          return tapCandidate(current.candidate, current.layout);
+        current = await inspectViewport({ allowOcrFallback });
+        if (current.uiCandidate) {
+          return tapUiCandidate(current.uiCandidate);
+        }
+        if (current.candidate && current.layout) {
+          return tapCandidate(current.candidate, current.layout, current.hierarchyXml);
         }
         if (current.ambiguous && !current.canScrollPastAmbiguous) {
           return textTargetFailure();
@@ -3296,7 +3419,7 @@ export class SemanticStepResolver {
       metadata: {
         type: "text",
         expected: expectedTargets,
-        actual: normalizeOcrText(latestLayout?.text ?? "") || "(empty OCR result)",
+        actual: latestVisibleText || normalizeOcrText(latestLayout?.text ?? "") || "(empty text result)",
         action: "fail",
         reason,
         attempts: attempt,
@@ -3326,15 +3449,16 @@ export class SemanticStepResolver {
     },
     candidate: TextLocatorCandidate,
     mode: "contains" | "equals",
-    ocrAction: Extract<DeviceActionRequest, { type: "tap" }>
+    ocrAction: Extract<DeviceActionRequest, { type: "tap" }>,
+    hierarchyXml?: string
   ): Promise<{ action: Extract<DeviceActionRequest, { type: "tap" }>; candidate: UiElementCandidate } | undefined> {
     if (!this.deps.dumpUiHierarchy) return undefined;
     const targetTexts = [...new Set([candidate.text, ...tapTextTargets(input.step.params)].map((item) => item.trim()).filter(Boolean))];
     if (!targetTexts.length) return undefined;
 
-    let xml: string;
+    let xml = hierarchyXml;
     try {
-      xml = await this.deps.dumpUiHierarchy(input.serial);
+      xml ??= await this.deps.dumpUiHierarchy(input.serial);
     } catch {
       return undefined;
     }
@@ -4627,6 +4751,309 @@ export class SemanticStepResolver {
   }
 }
 
+function findUiHierarchyTextSelection(
+  xml: string,
+  expectedTargets: string[],
+  options: {
+    mode: "contains" | "equals";
+    exactFirst: boolean;
+    preferredPoint?: { x: number; y: number };
+    semanticArea?: VisualSemanticArea;
+    deviceSize?: { width: number; height: number };
+  }
+): {
+  candidate?: UiHierarchyTextResolution;
+  ambiguous: boolean;
+  canScrollPastAmbiguous: boolean;
+  candidateCount: number;
+  signature: string;
+} {
+  const candidates = parseAndroidUiHierarchy(xml);
+  const deviceSize = options.deviceSize ?? hierarchySize(candidates);
+  const signature = uiHierarchyTextSignature(candidates, options.semanticArea, deviceSize);
+  if (!expectedTargets.length) {
+    return { ambiguous: false, canScrollPastAmbiguous: false, candidateCount: 0, signature };
+  }
+
+  if (options.exactFirst) {
+    const exactSelection = selectUiHierarchyTextCandidate(candidates, expectedTargets, {
+      mode: "equals",
+      preferredPoint: options.preferredPoint,
+      semanticArea: options.semanticArea,
+      deviceSize
+    });
+    if (exactSelection.candidate || exactSelection.ambiguous) {
+      return {
+        ...exactSelection,
+        candidate: exactSelection.candidate
+          ? { ...exactSelection.candidate, matchStrategy: "ui_hierarchy_equals", candidateCount: exactSelection.candidateCount }
+          : undefined,
+        canScrollPastAmbiguous: false,
+        signature
+      };
+    }
+    const containsSelection = selectUiHierarchyTextCandidate(candidates, expectedTargets, {
+      mode: "contains",
+      preferredPoint: options.preferredPoint,
+      semanticArea: options.semanticArea,
+      deviceSize
+    });
+    return {
+      ...containsSelection,
+      candidate: containsSelection.candidate
+        ? { ...containsSelection.candidate, matchStrategy: "ui_hierarchy_contains", candidateCount: containsSelection.candidateCount }
+        : undefined,
+      canScrollPastAmbiguous: containsSelection.ambiguous,
+      signature
+    };
+  }
+
+  const selection = selectUiHierarchyTextCandidate(candidates, expectedTargets, {
+    mode: options.mode,
+    preferredPoint: options.preferredPoint,
+    semanticArea: options.semanticArea,
+    deviceSize
+  });
+  return {
+    ...selection,
+    candidate: selection.candidate
+      ? {
+        ...selection.candidate,
+        matchStrategy: options.mode === "equals" ? "ui_hierarchy_equals" : "ui_hierarchy_contains",
+        candidateCount: selection.candidateCount
+      }
+      : undefined,
+    canScrollPastAmbiguous: false,
+    signature
+  };
+}
+
+function selectUiHierarchyTextCandidate(
+  candidates: UiElementCandidate[],
+  expectedTargets: string[],
+  options: {
+    mode: "contains" | "equals";
+    preferredPoint?: { x: number; y: number };
+    semanticArea?: VisualSemanticArea;
+    deviceSize?: { width: number; height: number };
+  }
+): {
+  candidate?: UiHierarchyTextResolution;
+  ambiguous: boolean;
+  candidateCount: number;
+} {
+  const normalizedTargets = expectedTargets.map((target) => normalizeOcrText(target)).filter(Boolean);
+  if (!normalizedTargets.length) {
+    return { ambiguous: false, candidateCount: 0 };
+  }
+  const matches = candidates
+    .filter((candidate) => candidate.text)
+    .filter((candidate) => uiHierarchyTextMatches(candidate.text ?? "", normalizedTargets, options.mode))
+    .filter((candidate) => uiCandidateMatchesSemanticArea(candidate, options.semanticArea, options.deviceSize))
+    .map((candidate) => buildUiHierarchyTextResolution(candidate, candidates, options))
+    .sort(compareUiHierarchyTextResolution);
+
+  if (matches.length <= 1) {
+    return { candidate: matches[0], ambiguous: false, candidateCount: matches.length };
+  }
+
+  const hasMeaningfulPoint = Boolean(options.preferredPoint && options.preferredPoint.x > 0 && options.preferredPoint.y > 0);
+  if (hasMeaningfulPoint) {
+    const [best, second] = matches;
+    const bestDistance = uiCandidateDistanceToPoint(best.textCandidate, options.preferredPoint) ?? Number.POSITIVE_INFINITY;
+    const secondDistance = uiCandidateDistanceToPoint(second.textCandidate, options.preferredPoint) ?? Number.POSITIVE_INFINITY;
+    if (secondDistance - bestDistance >= 48) {
+      return { candidate: best, ambiguous: false, candidateCount: matches.length };
+    }
+  }
+
+  return { ambiguous: true, candidateCount: matches.length };
+}
+
+function buildUiHierarchyTextResolution(
+  textCandidate: UiElementCandidate,
+  candidates: UiElementCandidate[],
+  options: {
+    preferredPoint?: { x: number; y: number };
+    deviceSize?: { width: number; height: number };
+  }
+): UiHierarchyTextResolution {
+  const textPoint = {
+    x: textCandidate.bounds.centerX,
+    y: textCandidate.bounds.centerY
+  };
+  const actionableCandidate = findUiActionableTextCandidate(candidates, textCandidate, options.deviceSize);
+  const shouldUseActionableCenter = Boolean(
+    actionableCandidate &&
+    actionableCandidate.nodeId !== textCandidate.nodeId &&
+    shouldTapUiClickableAncestorCenter(candidates, textCandidate, actionableCandidate, textPoint, options.deviceSize)
+  );
+  const action = shouldUseActionableCenter && actionableCandidate
+    ? {
+      type: "tap" as const,
+      x: actionableCandidate.bounds.centerX,
+      y: actionableCandidate.bounds.centerY
+    }
+    : {
+      type: "tap" as const,
+      x: textPoint.x,
+      y: textPoint.y
+    };
+  return {
+    action,
+    actual: textCandidate.text ?? "",
+    textCandidate: {
+      ...textCandidate,
+      distanceToPoint: uiCandidateDistanceToPoint(textCandidate, options.preferredPoint)
+    },
+    actionableCandidate,
+    tapPointSource: shouldUseActionableCenter ? "ui_clickable_ancestor" : "ui_text_center",
+    matchStrategy: "ui_hierarchy_contains",
+    candidateCount: 1
+  };
+}
+
+function uiHierarchyTextMatches(actual: string, normalizedTargets: string[], mode: "contains" | "equals"): boolean {
+  const normalizedActual = normalizeOcrText(actual);
+  if (!normalizedActual) {
+    return false;
+  }
+  return normalizedTargets.some((target) => {
+    if (mode === "contains") {
+      return matchTextExpectation(normalizedActual, target, "contains");
+    }
+    return normalizedActual === target;
+  });
+}
+
+function uiCandidateMatchesSemanticArea(
+  candidate: UiElementCandidate,
+  semanticArea: VisualSemanticArea | undefined,
+  deviceSize: { width: number; height: number } | undefined
+): boolean {
+  if (!semanticArea || semanticArea === "unknown") {
+    return true;
+  }
+  return uiCandidateSemanticArea(candidate, deviceSize) === semanticArea;
+}
+
+function uiHierarchyTextSignature(
+  candidates: UiElementCandidate[],
+  semanticArea: VisualSemanticArea | undefined,
+  deviceSize: { width: number; height: number } | undefined
+): string {
+  return candidates
+    .filter((candidate) => candidate.text)
+    .filter((candidate) => uiCandidateMatchesSemanticArea(candidate, semanticArea, deviceSize))
+    .map((candidate) => normalizeOcrText(candidate.text ?? ""))
+    .filter(Boolean)
+    .sort()
+    .join("|");
+}
+
+function uiCandidateSemanticArea(
+  candidate: UiElementCandidate,
+  deviceSize: { width: number; height: number } | undefined
+): VisualSemanticArea {
+  const height = deviceSize?.height;
+  if (!height) {
+    return "unknown";
+  }
+  const centerY = (candidate.bounds.centerY / height) * 100;
+  if (centerY <= 14) {
+    return "top";
+  }
+  if (centerY >= 88) {
+    return "bottom";
+  }
+  return "content";
+}
+
+function findUiActionableTextCandidate(
+  candidates: UiElementCandidate[],
+  candidate: UiElementCandidate,
+  deviceSize?: { width: number; height: number }
+): UiElementCandidate | undefined {
+  if (candidate.enabled && candidate.clickable) {
+    return candidate;
+  }
+  const byId = new Map(candidates.map((item) => [item.nodeId, item]));
+  let currentParentId = candidate.parentNodeId;
+  const textPoint = {
+    x: candidate.bounds.centerX,
+    y: candidate.bounds.centerY
+  };
+  while (currentParentId !== undefined) {
+    const parent = byId.get(currentParentId);
+    if (!parent) {
+      return undefined;
+    }
+    if (parent.enabled && parent.clickable && isReasonableClickableTextContainer(parent, textPoint, deviceSize)) {
+      return parent;
+    }
+    currentParentId = parent.parentNodeId;
+  }
+  return undefined;
+}
+
+function shouldTapUiClickableAncestorCenter(
+  candidates: UiElementCandidate[],
+  textCandidate: UiElementCandidate,
+  actionableCandidate: UiElementCandidate,
+  textPoint: { x: number; y: number },
+  deviceSize?: { width: number; height: number }
+): boolean {
+  if (!isReasonableClickableTextContainer(actionableCandidate, textPoint, deviceSize)) {
+    return false;
+  }
+  const textArea = Math.max(1, textCandidate.area);
+  const areaRatio = actionableCandidate.area / textArea;
+  const descendantTextCount = countUiTextDescendants(candidates, actionableCandidate);
+  return descendantTextCount <= 1 && areaRatio >= 4;
+}
+
+function countUiTextDescendants(candidates: UiElementCandidate[], ancestor: UiElementCandidate): number {
+  const byId = new Map(candidates.map((item) => [item.nodeId, item]));
+  return candidates.filter((candidate) => {
+    if (!candidate.text || candidate.nodeId === ancestor.nodeId) {
+      return false;
+    }
+    let parentId = candidate.parentNodeId;
+    while (parentId !== undefined) {
+      if (parentId === ancestor.nodeId) {
+        return true;
+      }
+      parentId = byId.get(parentId)?.parentNodeId;
+    }
+    return false;
+  }).length;
+}
+
+function compareUiHierarchyTextResolution(left: UiHierarchyTextResolution, right: UiHierarchyTextResolution): number {
+  const leftActionable = left.actionableCandidate ? 0 : 1;
+  const rightActionable = right.actionableCandidate ? 0 : 1;
+  if (leftActionable !== rightActionable) {
+    return leftActionable - rightActionable;
+  }
+  const leftDistance = left.textCandidate.distanceToPoint ?? Number.POSITIVE_INFINITY;
+  const rightDistance = right.textCandidate.distanceToPoint ?? Number.POSITIVE_INFINITY;
+  if (leftDistance !== rightDistance) {
+    return leftDistance - rightDistance;
+  }
+  return left.textCandidate.bounds.top - right.textCandidate.bounds.top ||
+    left.textCandidate.bounds.left - right.textCandidate.bounds.left ||
+    left.textCandidate.nodeId - right.textCandidate.nodeId;
+}
+
+function uiCandidateDistanceToPoint(candidate: UiElementCandidate, point?: { x: number; y: number }): number | undefined {
+  if (!point) {
+    return undefined;
+  }
+  const dx = Math.max(candidate.bounds.left - point.x, 0, point.x - candidate.bounds.right);
+  const dy = Math.max(candidate.bounds.top - point.y, 0, point.y - candidate.bounds.bottom);
+  return Math.round(Math.hypot(dx, dy));
+}
+
 export function findTextCandidate(
   layout: OcrLayoutResult,
   expected: string,
@@ -4690,11 +5117,15 @@ function findTextCandidates(
 ): TextLocatorCandidate[] {
   const expectedText = normalizeOcrText(expected);
   const mode = options.mode ?? "contains";
-  const matches = layout.boxes
-    .map((box) => toCandidate(box, options.preferredPoint))
-    .filter((candidate) => candidate.text && matchTextExpectation(normalizeOcrText(candidate.text), expectedText, mode))
+  const allCandidates = layout.boxes.map((box) => toCandidate(box, options.preferredPoint));
+  const textMatches = allCandidates
+    .filter((candidate) => candidate.text && matchTextCandidateExpectation(normalizeOcrText(candidate.text), expectedText, mode));
+  const scopedMatches = textMatches
     .filter((candidate) => !options.semanticArea || options.semanticArea === "unknown" || textCandidateSemanticArea(candidate, layout, options.deviceSize) === options.semanticArea)
     .filter((candidate) => !options.percentRegion || candidateInsidePercentRegion(candidate, options.percentRegion, layout, options.deviceSize));
+  const matches = scopedMatches.length || options.semanticArea !== "content" || options.percentRegion
+    ? scopedMatches
+    : textMatches.filter((candidate) => isLikelyFloatingMenuTextCandidate(candidate, allCandidates, layout, options.deviceSize));
   if (!matches.length) {
     return [];
   }
@@ -4705,6 +5136,37 @@ function findTextCandidates(
   return candidates
     .filter((candidate) => maxDistance === undefined || candidate.distanceToPoint === undefined || candidate.distanceToPoint <= maxDistance)
     .sort((left, right) => candidateScore(right) - candidateScore(left));
+}
+
+function matchTextCandidateExpectation(actual: string, expected: string, mode: "contains" | "equals"): boolean {
+  if (mode !== "equals") {
+    return matchTextExpectation(actual, expected, mode);
+  }
+  return actual === expected;
+}
+
+function isLikelyFloatingMenuTextCandidate(
+  candidate: TextLocatorCandidate,
+  candidates: TextLocatorCandidate[],
+  layout: OcrLayoutResult,
+  deviceSize?: { width: number; height: number }
+): boolean {
+  const height = deviceSize?.height ?? layout.height;
+  if (!height) {
+    return false;
+  }
+  const centerYPercent = (candidate.centerY / height) * 100;
+  if (centerYPercent <= 10 || centerYPercent > 18) {
+    return false;
+  }
+  const columnTolerance = Math.max(80, candidate.width * 1.5);
+  const verticalWindow = Math.max(240, candidate.height * 8);
+  const sameColumnNeighbors = candidates.filter((other) =>
+    other !== candidate &&
+    Math.abs(other.centerX - candidate.centerX) <= columnTolerance &&
+    Math.abs(other.centerY - candidate.centerY) <= verticalWindow
+  );
+  return sameColumnNeighbors.length >= 2;
 }
 
 function findSemanticTextCandidate(
@@ -6155,7 +6617,7 @@ function paddedPercentRegion(
 
 function isInputUiElementCandidate(candidate: UiElementCandidate): boolean {
   const className = candidate.className?.toLowerCase() ?? "";
-  return className.includes("edittext") || (candidate.focusable && candidate.enabled && (candidate.clickable || candidate.longClickable));
+  return isTextInputUiClass(className) || (candidate.focusable && candidate.enabled && (candidate.clickable || candidate.longClickable));
 }
 
 function inputUiCandidateScore(
@@ -6169,7 +6631,7 @@ function inputUiCandidateScore(
   const targetBonus = targets.some((target) => textMatchesLoosely(text, target)) ? 4 : 0;
   const nearbyTargetBonus = inputNearbyTargetScore(candidate, allCandidates, targets);
   const orderBonus = inputOrderEvidenceScore(candidate, inputCandidates, params);
-  const classBonus = candidate.className?.toLowerCase().includes("edittext") ? 3 : 0;
+  const classBonus = isTextInputUiClass(candidate.className?.toLowerCase() ?? "") ? 3 : 0;
   const focusBonus = candidate.focusable ? 1 : 0;
   const clickBonus = candidate.clickable || candidate.longClickable ? 0.5 : 0;
   const areaPenalty = Math.min(candidate.area / 1_000_000, 1);
@@ -6246,6 +6708,11 @@ function inputOrderEvidenceScore(
 }
 
 function inputOrderHint(params: Record<string, unknown>): number | undefined {
+  const structuralLocator = readRecord(params.structuralLocator);
+  const structuralOrdinal = structuralTextFieldOrderHint(structuralLocator);
+  if (structuralOrdinal !== undefined) {
+    return structuralOrdinal;
+  }
   const valueParamKey = textParam(params.valueParamKey).toLowerCase();
   const labelText = [
     textParam(params.inputFocusText),
@@ -6269,6 +6736,22 @@ function inputOrderHint(params: Record<string, unknown>): number | undefined {
     return 0;
   }
   return undefined;
+}
+
+function structuralTextFieldOrderHint(structuralLocator: Record<string, unknown> | undefined): number | undefined {
+  const strategy = textParam(structuralLocator?.strategy).trim();
+  const ordinal = numberParam(structuralLocator?.ordinal);
+  if (strategy !== "scoped_text_field" || ordinal === undefined || ordinal < 1) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(ordinal) - 1);
+}
+
+function isTextInputUiClass(className: string): boolean {
+  return className.includes("edittext") ||
+    className.includes("textinput") ||
+    className.includes("textarea") ||
+    className.includes("searchinput");
 }
 
 function candidateGridCell(

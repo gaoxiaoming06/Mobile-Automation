@@ -17,7 +17,7 @@ import type { Observation } from "@mobile-automation/graph-core";
 import type { AutomationDeviceDriver, DeviceEventWatcher, ObservedDeviceEvent } from "./mobile-driver.js";
 import { createDefaultOcrService, type OcrService } from "./ocr.js";
 import { ObservationService } from "./observation-service.js";
-import { RuntimeInterceptor, type RuntimeInterceptorRecord, type RuntimeInterceptorRule } from "./runtime-interceptor.js";
+import { RuntimeInterceptor, type RuntimeInterceptorObservationOptions, type RuntimeInterceptorRecord, type RuntimeInterceptorRule } from "./runtime-interceptor.js";
 import { RunArtifactService, type RunArtifactStorage } from "./run-artifact-service.js";
 import { artifactUrl, runArtifactPath } from "./artifacts.js";
 import { DeviceExecutionBusyError, DeviceExecutionLease } from "./device-execution-lease.js";
@@ -489,11 +489,15 @@ export class StabilityExplorer {
     return true;
   }
 
-  private async collectObservation(deviceSerial: string, recentEvents: ObservedDeviceEvent[]): Promise<Observation> {
+  private async collectObservation(
+    deviceSerial: string,
+    recentEvents: ObservedDeviceEvent[],
+    options: RuntimeInterceptorObservationOptions = {}
+  ): Promise<Observation> {
     return this.observationService.collect(deviceSerial, {
-      includeScreenshot: true,
-      includeOcr: true,
-      includeUiTree: true,
+      includeScreenshot: options.includeScreenshot ?? true,
+      includeOcr: options.includeOcr ?? true,
+      includeUiTree: options.includeUiTree ?? true,
       recentEvents
     });
   }
@@ -540,13 +544,13 @@ export class StabilityExplorer {
     initialObservation: Observation;
   }): Promise<{ observation: Observation; records: RuntimeInterceptorRecord[] }> {
     let firstObservation: Observation | undefined = input.initialObservation;
-    const observe = async () => {
+    const observe = async (options?: RuntimeInterceptorObservationOptions) => {
       if (firstObservation) {
         const observation = firstObservation;
         firstObservation = undefined;
         return observation;
       }
-      return this.collectObservation(input.deviceSerial, []);
+      return this.collectObservation(input.deviceSerial, [], options);
     };
     const rules = this.storage.listRuntimeInterceptorRules?.({
       enabledOnly: true,

@@ -903,11 +903,11 @@ export class AutomationRunner {
     try {
       const rules = this.storage.listRuntimeInterceptorRules?.({ enabledOnly: true }) ?? [];
       const interceptor = new RuntimeInterceptor({
-        observe: () =>
+        observe: (options) =>
           this.observationService.collect(input.serial, {
-            includeScreenshot: true,
-            includeUiTree: true,
-            includeOcr: true
+            includeScreenshot: options?.includeScreenshot ?? true,
+            includeUiTree: options?.includeUiTree ?? true,
+            includeOcr: options?.includeOcr ?? true
           }),
         performAction: async (actionStep) => {
           await this.driver.performAction(input.serial, runtimeInterceptorStepToAction(actionStep, input.deviceSize));

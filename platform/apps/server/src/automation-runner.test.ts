@@ -711,7 +711,7 @@ describe("AutomationRunner regression flow", () => {
 
   it("scrolls until a semantic target is visible during replay", async () => {
     const storage = new MemoryRunnerStorage();
-    const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/other"), hierarchy("com.demo:id/other"), hierarchy("com.demo:id/target")]);
+    const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/other"), hierarchy("com.demo:id/target")]);
     driver.device.capabilities.recordVideo = false;
     const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
@@ -743,7 +743,7 @@ describe("AutomationRunner regression flow", () => {
 
   it("waits for semantic state before continuing replay", async () => {
     const storage = new MemoryRunnerStorage();
-    const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/loading"), hierarchy("com.demo:id/loading"), hierarchy("com.demo:id/ready")]);
+    const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/loading"), hierarchy("com.demo:id/ready")]);
     driver.device.capabilities.recordVideo = false;
     const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
@@ -1916,9 +1916,13 @@ describe("AutomationRunner regression flow", () => {
 
   it("handles common blocking popups before resolving the structured step action", async () => {
     const storage = new MemoryRunnerStorage();
-    const driver = new SequenceUiHierarchyMockDriver([permissionHierarchy("允许"), hierarchy("com.demo:id/join_class")]);
+    const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/join_class")]);
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
+    const ocr = new SequenceLayoutOcrService([
+      ["允许"],
+      ["首页"]
+    ]);
+    const runner = new AutomationRunner(storage, driver, ocr);
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -1931,7 +1935,7 @@ describe("AutomationRunner regression flow", () => {
 
     expect(run.status).toBe("passed");
     expect(driver.actions).toEqual([
-      { type: "tap", x: 540, y: 1820 },
+      { type: "tap", x: 160, y: 225 },
       { type: "tap", x: 240, y: 240 }
     ]);
     expect(run.stepResults[0]?.metadata).toEqual(
@@ -1963,9 +1967,13 @@ describe("AutomationRunner regression flow", () => {
       createdAt: nowIso(),
       updatedAt: nowIso()
     });
-    const driver = new SequenceUiHierarchyMockDriver([subjectPickerHierarchy(), hierarchy("com.demo:id/join_class")]);
+    const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/join_class")]);
     driver.device.capabilities.recordVideo = false;
-    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
+    const ocr = new SequenceLayoutOcrService([
+      ["选择学科", "数学", "关闭"],
+      ["班级详情"]
+    ]);
+    const runner = new AutomationRunner(storage, driver, ocr);
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
@@ -1978,7 +1986,7 @@ describe("AutomationRunner regression flow", () => {
 
     expect(run.status).toBe("passed");
     expect(driver.actions).toEqual([
-      { type: "tap", x: 960, y: 160 },
+      { type: "tap", x: 160, y: 385 },
       { type: "tap", x: 240, y: 240 }
     ]);
     expect(run.stepResults[0]?.metadata).toEqual(
@@ -2019,6 +2027,7 @@ describe("AutomationRunner regression flow", () => {
       { type: "back" },
       { type: "tap", x: 120, y: 240 }
     ]);
+    expect(driver.dumpUiHierarchyCount).toBe(0);
     expect(run.stepResults[0]?.metadata).toEqual(
       expect.objectContaining({
         runtimeInterceptors: [
@@ -2858,6 +2867,8 @@ class SequenceScreenshotMockDriver extends MockDriver {
 }
 
 class HarmonyRuntimeInterceptorMockDriver extends MockDriver {
+  dumpUiHierarchyCount = 0;
+
   constructor() {
     super();
     this.device.id = "mock-harmony-1";
@@ -2880,6 +2891,12 @@ class HarmonyRuntimeInterceptorMockDriver extends MockDriver {
       bundleId: "cn.eeo.hos.classin.mobile",
       abilityName: "EntryAbility"
     };
+  }
+
+  async dumpUiHierarchy(serial: string): Promise<string> {
+    await this.getDeviceInfo(serial);
+    this.dumpUiHierarchyCount += 1;
+    return hierarchy("com.demo:id/join_class");
   }
 }
 

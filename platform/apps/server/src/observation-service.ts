@@ -39,7 +39,7 @@ export class ObservationService {
     const screenshotPromise = includeScreenshot
       ? Promise.resolve(options.screenshotOverride ?? this.driver.screenshot(serial))
       : Promise.resolve(undefined);
-    const uiTreePromise = includeUiTree && device.platform === "android"
+    const uiTreePromise = includeUiTree && this.driver.dumpUiHierarchy
       ? this.collectUiTree(serial)
       : Promise.resolve(emptyUiTree());
     const screenshot = await screenshotPromise;

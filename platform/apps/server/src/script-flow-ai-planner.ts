@@ -29,6 +29,7 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "页面目录只负责页面身份。动作目标必须且只能使用 text、icon、visual 或 control：已知屏幕原文用 text；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual；通用表单控件用 control。禁止生成 semantic 目标字段。",
   "页面 key、页面 id、ScriptFlow id 和类似 classin.teacher.xxx 的内部引用不能作为 tap、inputText、clearText、selectText 或 scrollUntilVisible 的动作目标。",
   "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。需要表达‘进入教学方案的入口’这类文本语义目标时，使用 text + match: semantic，不能伪装成屏幕原文。",
+  "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 目标默认按完整控件文字匹配：按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和 ${parameterName} 这类参数化名称不要写 match: contains；用户明确表达‘包含、带有、关键字、模糊匹配’，或受控 screenContext/读屏证据显示实际控件原文包含目标基础词但额外带动态数量、状态、后缀或前缀时，才可写 match: contains，且必须尽量补充 area、nearText、scopeText、ordinal 或容器语义。",
   "text、icon、visual 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
   "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、onPage、reachPage 或 runFlow，也不要把页面目录当成动作前置条件。",
   "表单字段动作默认使用 search: { mode: auto }。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或受控 screenContext 明确给出当前可见候选时，才使用 visibleOnly。",
@@ -422,6 +423,7 @@ export function buildScriptFlowPlannerPrompt(
     "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
     "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal；用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 与 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content、scopeText 和 ordinal；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
+    "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 默认按完整控件文字匹配，按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和参数化名称不要写 match: contains。使用 screenContext 或读屏证据时，根据当前可见原文选择 match：实际原文与目标完全一致时用 exact/省略 match；screenContext 原文是“确定(1/6)”而用户只说“确定”时，必须生成 target: { text: \"确定\", match: \"contains\" }；类似“完成 2/6”“保存(已选3项)”这类动态数量或状态后缀也用 contains，并尽量补充 area、nearText、scopeText、ordinal 或容器语义。未启用当前屏幕上下文时，根据自然语言语义选择 match：用户明确表达‘包含、带有、关键字、模糊匹配’或明显只给动态状态控件的基础动作词时，才写 match: contains。",
     screenContext
       ? [
           "当前屏幕理解上下文由用户显式开启看屏后生成。它只能帮助理解用户对当前页面的描述，不能覆盖已验证资产。",
@@ -636,7 +638,7 @@ function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Re
       id: "tap-content-text",
       role: "business",
       onPage: pageReference,
-      tap: { target: { text: "内容文字", area: "content" }, search: { mode: "auto", direction: "down", maxSwipes: 6 } }
+      tap: { target: { text: "内容文字", match: "exact", area: "content" }, search: { mode: "auto", direction: "down", maxSwipes: 6 } }
     },
     {
       id: "tap-semantic-entry",

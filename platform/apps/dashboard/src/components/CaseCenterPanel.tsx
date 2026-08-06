@@ -34,6 +34,7 @@ type CaseCenterPanelProps = {
   selectedSerial: string;
   initialFlows?: ScriptFlow[];
   initialSelectedFlowId?: string;
+  externallySavedFlow?: ScriptFlow;
   setMessage: (message: string) => void;
   onOpenRun: (runId: string) => void;
   onModifyCase: (flow: ScriptFlow, verification?: ScriptFlowVerificationAssessment) => void;
@@ -51,11 +52,23 @@ export function selectedCaseIdAfterExternalSelection(currentId: string, selected
   return selectedId || currentId;
 }
 
+export function mergeExternallySavedCaseFlow(flows: ScriptFlow[], savedFlow: ScriptFlow): ScriptFlow[] {
+  const existingIndex = flows.findIndex((flow) => flow.id === savedFlow.id);
+  if (existingIndex === 0) {
+    return [savedFlow, ...flows.slice(1)];
+  }
+  if (existingIndex > 0) {
+    return [savedFlow, ...flows.slice(0, existingIndex), ...flows.slice(existingIndex + 1)];
+  }
+  return [savedFlow, ...flows];
+}
+
 export function CaseCenterPanel({
   devices,
   selectedSerial,
   initialFlows,
   initialSelectedFlowId,
+  externallySavedFlow,
   setMessage,
   onOpenRun,
   onModifyCase,
@@ -87,6 +100,12 @@ export function CaseCenterPanel({
   useEffect(() => {
     setSelectedId((current) => selectedCaseIdAfterExternalSelection(current, initialSelectedFlowId));
   }, [initialSelectedFlowId]);
+
+  useEffect(() => {
+    if (!externallySavedFlow) return;
+    setFlows((current) => mergeExternallySavedCaseFlow(current, externallySavedFlow));
+    selectCase(externallySavedFlow);
+  }, [externallySavedFlow?.id, externallySavedFlow?.version]);
 
   useEffect(() => {
     if (!selected) return;

@@ -393,7 +393,7 @@ describe("AndroidDriver actions", () => {
     await expect(driver.performAction("device-1", { type: "launch_app", packageName: "com.example" })).rejects.toThrow("does not exist");
   });
 
-  it("clears text through select-all and delete", async () => {
+  it("clears text through select-all and repeated delete fallback", async () => {
     const calls: string[][] = [];
     const driver = new AndroidDriver({
       shell: vi.fn(async (_serial, args) => {
@@ -404,11 +404,13 @@ describe("AndroidDriver actions", () => {
 
     await driver.performAction("device-1", { type: "clear_text" });
 
-    expect(calls).toEqual([
+    expect(calls.slice(0, 4)).toEqual([
       ["ime", "list", "-s"],
+      ["input", "keyevent", "KEYCODE_MOVE_END"],
       ["input", "keyevent", "KEYCODE_CTRL_A"],
       ["input", "keyevent", "KEYCODE_DEL"]
     ]);
+    expect(calls.filter((args) => args.join(" ") === "input keyevent KEYCODE_DEL")).toHaveLength(41);
   });
 
   it("inputs ascii text with Android input command first", async () => {

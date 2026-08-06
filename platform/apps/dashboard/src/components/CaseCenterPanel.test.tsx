@@ -7,6 +7,7 @@ import {
   buildCaseRunRequest,
   caseRunEndpoint,
   caseTrialCompletionMessage,
+  mergeExternallySavedCaseFlow,
   runOptionsForExecutionMode,
   selectedCaseIdAfterExternalSelection
 } from "./CaseCenterPanel.js";
@@ -82,6 +83,31 @@ describe("CaseCenterPanel", () => {
   it("selects a newly saved case when a retained case center becomes visible again", () => {
     expect(selectedCaseIdAfterExternalSelection("old-flow", "new-flow")).toBe("new-flow");
     expect(selectedCaseIdAfterExternalSelection("old-flow", undefined)).toBe("old-flow");
+  });
+
+  it("merges an externally saved case into a retained case list", () => {
+    const existing = flow();
+    const saved = {
+      ...flow(),
+      id: "new-flow",
+      name: "创建公开课并发布",
+      version: 1,
+      updatedAt: "2026-08-06T12:00:00.000Z"
+    };
+
+    expect(mergeExternallySavedCaseFlow([existing], saved).map((item) => item.id)).toEqual(["new-flow", "flow-1"]);
+  });
+
+  it("replaces an externally updated case instead of duplicating it", () => {
+    const existing = flow();
+    const saved = {
+      ...existing,
+      name: "创建课堂但不发布（已更新）",
+      version: 2,
+      updatedAt: "2026-08-06T12:00:00.000Z"
+    };
+
+    expect(mergeExternallySavedCaseFlow([existing, scenario()], saved)).toEqual([saved, scenario()]);
   });
 
   it("requires business outcome confirmation before calling a persisted trial verified", () => {

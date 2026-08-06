@@ -92,6 +92,140 @@ describe("RuntimeInterceptor", () => {
     ]);
   });
 
+  it("can match back actions from OCR text without coordinates", async () => {
+    const actions: ActionStep[] = [];
+    const observationWithoutRegions = observation({ texts: ["版本6.1.0", "了解更新详情", "立即更新"], elements: [] });
+    observationWithoutRegions.ocrTexts = observationWithoutRegions.ocrTexts.map(({ region: _region, ...text }) => text);
+    const interceptor = new RuntimeInterceptor({
+      observe: async () => observationWithoutRegions,
+      performAction: async (action) => {
+        actions.push(action);
+      }
+    });
+
+    await interceptor.handle({ phase: "precondition", maxPasses: 1 });
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        type: "back",
+        params: expect.objectContaining({ source: "runtime_interceptor" })
+      })
+    ]);
+  });
+
+  it("uses lightweight observations for text-only rules", async () => {
+    const observeOptions: unknown[] = [];
+    const observations = [
+      observation({ texts: ["发现新版本"] }),
+      observation({ texts: ["主页"] })
+    ];
+    const rule: RuntimeInterceptorRule = {
+      id: "rule-upgrade",
+      name: "升级提示",
+      enabled: true,
+      platformScope: "mobile-both",
+      matchers: [{ type: "text", value: "发现新版本" }],
+      action: { type: "back" }
+    };
+    const interceptor = new RuntimeInterceptor(
+      {
+        observe: async (options) => {
+          observeOptions.push(options);
+          return observations.shift() ?? observation({ texts: ["主页"] });
+        },
+        performAction: async () => undefined
+      },
+      [rule]
+    );
+
+    await interceptor.handle({ phase: "state_transition", maxPasses: 1 });
+
+    expect(observeOptions).toEqual([
+      expect.objectContaining({ includeScreenshot: true, includeOcr: true, includeUiTree: false }),
+      expect.objectContaining({ includeScreenshot: true, includeOcr: true, includeUiTree: false })
+    ]);
+  });
+
+  it("falls back to a UI-tree observation only when a relevant rule needs structural matchers", async () => {
+    const observeOptions: unknown[] = [];
+    const observations = [
+      observation({ packageName: "cn.eeo.classin", texts: ["ClassIn服务协议"] }),
+      observation({
+        packageName: "cn.eeo.classin",
+        texts: [],
+        elements: [
+          { resourceId: "cn.eeo.classin:id/title_bar", text: "ClassIn服务协议", bounds: { x: 0, y: 160, width: 1080, height: 120 } },
+          { resourceId: "cn.eeo.classin:id/btn_agree", text: "同意", bounds: { x: 630, y: 2100, width: 360, height: 96 } }
+        ]
+      }),
+      observation({ packageName: "cn.eeo.classin", texts: ["登录"] })
+    ];
+    const actions: ActionStep[] = [];
+    const interceptor = new RuntimeInterceptor({
+      observe: async (options) => {
+        observeOptions.push(options);
+        return observations.shift() ?? observation({ packageName: "cn.eeo.classin", texts: ["登录"] });
+      },
+      performAction: async (action) => {
+        actions.push(action);
+      }
+    });
+
+    await interceptor.handle({ phase: "precondition", maxPasses: 1 });
+
+    expect(observeOptions).toEqual([
+      expect.objectContaining({ includeScreenshot: true, includeOcr: true, includeUiTree: false }),
+      expect.objectContaining({ includeScreenshot: false, includeOcr: false, includeUiTree: true }),
+      expect.objectContaining({ includeScreenshot: true, includeOcr: true, includeUiTree: false })
+    ]);
+    expect(actions).toEqual([
+      expect.objectContaining({
+        type: "tap_on_element",
+        coordinate: { x: 810, y: 2148 }
+      })
+    ]);
+  });
+
+  it("falls back to a UI-tree observation for structural rules when OCR has no text evidence", async () => {
+    const observeOptions: unknown[] = [];
+    const observations = [
+      observation({ packageName: "cn.eeo.classin", texts: [] }),
+      observation({
+        packageName: "cn.eeo.classin",
+        texts: [],
+        elements: [
+          { resourceId: "cn.eeo.classin:id/title_bar", text: "ClassIn服务协议", bounds: { x: 0, y: 160, width: 1080, height: 120 } },
+          { resourceId: "cn.eeo.classin:id/btn_agree", text: "同意", bounds: { x: 630, y: 2100, width: 360, height: 96 } }
+        ]
+      }),
+      observation({ packageName: "cn.eeo.classin", texts: ["登录"] })
+    ];
+    const actions: ActionStep[] = [];
+    const interceptor = new RuntimeInterceptor({
+      observe: async (options) => {
+        observeOptions.push(options);
+        return observations.shift() ?? observation({ packageName: "cn.eeo.classin", texts: ["登录"] });
+      },
+      performAction: async (action) => {
+        actions.push(action);
+      }
+    });
+
+    await interceptor.handle({ phase: "precondition", maxPasses: 1 });
+
+    expect(observeOptions).toEqual([
+      expect.objectContaining({ includeScreenshot: true, includeOcr: true, includeUiTree: false }),
+      expect.objectContaining({ includeScreenshot: false, includeOcr: false, includeUiTree: true }),
+      expect.objectContaining({ includeScreenshot: true, includeOcr: true, includeUiTree: false })
+    ]);
+    expect(actions).toEqual([
+      expect.objectContaining({
+        type: "tap_on_element",
+        coordinate: { x: 810, y: 2148 }
+      })
+    ]);
+  });
+
   it("does not dismiss confirmation dialogs by tapping the built-in cancel text", async () => {
     const actions: ActionStep[] = [];
     const interceptor = new RuntimeInterceptor({
