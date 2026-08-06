@@ -126,6 +126,7 @@ registerTrialLearningRoutes(app, { storage });
 registerPageAssetLibraryRoutes(app, { storage });
 registerScriptFlowAiRoutes(app, {
   getFlow: (id) => storage.getScriptFlow(id),
+  getRun: (id) => storage.getRun(id),
   generateDraft: async ({ prompt, appId, platform, existingFlow, screenAssist, externalContext }) => {
     const timingContext = createScriptFlowAiTimingContext(prompt);
     return timedScriptFlowAiStage(timingContext, "total", async () => {

@@ -124,6 +124,11 @@ type ClarificationDraft = {
 
 type AiDraft = GeneratedDraft | ClarificationDraft;
 type CreationMode = "generate" | "import";
+type RepairHistoryEntry = {
+  runId: string;
+  mode: "manual" | "auto";
+  summary: string;
+};
 
 type LearningSummaryResponse = {
   session: LearningSession;
@@ -273,8 +278,11 @@ export function AiScriptFlowsPanel({
   const [plan, setPlan] = useState<CasePlanView>();
   const [lastRun, setLastRun] = useState<TestRun | undefined>(() => activeStepTrialRun(activeRunForDevice));
   const [learning, setLearning] = useState<LearningSummaryResponse>();
-  const [busyAction, setBusyAction] = useState<"generate" | "import" | "save" | "run" | "review" | "select" | "stepRun" | "runControl">();
+  const [busyAction, setBusyAction] = useState<"generate" | "import" | "save" | "run" | "review" | "select" | "stepRun" | "runControl" | "repair">();
   const [useCurrentScreen, setUseCurrentScreen] = useState(false);
+  const [autoRepairEnabled, setAutoRepairEnabled] = useState(false);
+  const [repairHistory, setRepairHistory] = useState<RepairHistoryEntry[]>([]);
+  const [repairAttemptRunIds, setRepairAttemptRunIds] = useState<Set<string>>(() => new Set());
   const [executionMode, setExecutionMode] = useState<ScriptRunExecutionMode>("once");
   const [newStepAction, setNewStepAction] = useState<EditableStepAction>("tap");
   const [scriptItemPickerOpen, setScriptItemPickerOpen] = useState(false);
@@ -327,7 +335,21 @@ export function AiScriptFlowsPanel({
           if (["pending", "running", "paused"].includes(run.status) || run.sourceSnapshot?.executionPurpose !== "trial") return;
           const summary = await loadLearningSummary(run.id);
           setLearning(summary);
-          if (run.status !== "passed" || draft?.status !== "trial_ready") return;
+          if (run.status !== "passed") {
+            const terminalFailure = publicExecutionFailureFromRun(run);
+            if (
+              autoRepairEnabled
+              && draft?.status === "trial_ready"
+              && terminalFailure
+              && repairablePanelFailure(terminalFailure)
+              && !repairAttemptRunIds.has(run.id)
+            ) {
+              setRepairAttemptRunIds((current) => new Set(current).add(run.id));
+              void repairDraftFromRun(run, "auto", draft);
+            }
+            return;
+          }
+          if (draft?.status !== "trial_ready") return;
           if (summary.session.status === "needs_outcome_review") {
             setMessage("执行操作已完成，请确认当前业务结果是否符合预期");
             return;
@@ -339,7 +361,7 @@ export function AiScriptFlowsPanel({
         .catch(() => undefined);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [lastRun?.id, lastRun?.status, draft?.status]);
+  }, [lastRun?.id, lastRun?.status, draft?.status, autoRepairEnabled, repairAttemptRunIds]);
 
   async function generate() {
     if (!prompt.trim() || (!revision && !appId.trim())) return;
@@ -352,6 +374,8 @@ export function AiScriptFlowsPanel({
       setLearning(undefined);
       setPlan(undefined);
       setSelectedHistoryId(undefined);
+      setRepairHistory([]);
+      setRepairAttemptRunIds(new Set());
       setConfirmedStepKeys(new Set());
       setExpandedStepKeys(new Set());
       setStepReviewRequired(false);
@@ -402,6 +426,8 @@ export function AiScriptFlowsPanel({
       setLearning(undefined);
       setPlan(undefined);
       setSelectedHistoryId(undefined);
+      setRepairHistory([]);
+      setRepairAttemptRunIds(new Set());
       setConfirmedStepKeys(new Set());
       setExpandedStepKeys(new Set());
       setStepReviewRequired(false);
@@ -472,6 +498,73 @@ export function AiScriptFlowsPanel({
     await executeDraft(generatedDraft, parameterValues, prompt.trim() || generatedDraft.document.description || generatedDraft.document.name);
   }
 
+  async function repairDraftFromRun(
+    run: TestRun,
+    mode: "manual" | "auto",
+    baseDraft: GeneratedDraft | undefined = generatedDraft
+  ) {
+    const failure = publicExecutionFailureFromRun(run);
+    if (!baseDraft || !failure) return;
+    if (!repairablePanelFailure(failure)) {
+      setMessage("当前失败属于 App、设备或环境问题，不应通过修改脚本掩盖。");
+      return;
+    }
+    try {
+      setBusyAction("repair");
+      const response = await apiFetchJson<{ draft: AiDraft; repair?: { runId?: string } }>("/api/script-flow-drafts/repair", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildRepairDraftRequestBody({
+          sourceYaml: baseDraft.sourceYaml,
+          runId: run.id,
+          prompt: prompt.trim() || baseDraft.document.description || baseDraft.document.name,
+          appId: baseDraft.document.app.id,
+          useCurrentScreen,
+          deviceSerial,
+          scriptPlatform: run.sourceSnapshot?.executionPlatform
+        }))
+      });
+      const nextDraft = response.draft.status === "trial_ready"
+        ? await reconcileDraftVerification(response.draft)
+        : response.draft;
+      setDraft(nextDraft);
+      setPlan(undefined);
+      setLearning(undefined);
+      if (nextDraft.status === "needs_clarification") {
+        setStepReviewRequired(false);
+        setMessage(nextDraft.clarification);
+        return;
+      }
+      const nextValues = {
+        ...defaultCaseParameterValues(nextDraft.document),
+        ...(baseDraft.parameterValues ?? {}),
+        ...parameterValues
+      };
+      setParameterValues(nextValues);
+      setConfirmedStepKeys(confirmedKeysForDraft(nextDraft));
+      setExpandedStepKeys(new Set());
+      setStepReviewRequired(mode === "manual");
+      setRepairHistory((current) => [
+        ...current,
+        {
+          runId: run.id,
+          mode,
+          summary: nextDraft.summary || "已生成修复草稿"
+        }
+      ]);
+      if (mode === "auto") {
+        setMessage("已生成修复草稿，正在重新执行。");
+        await executeDraft(nextDraft, nextValues, prompt.trim() || nextDraft.document.description || nextDraft.document.name);
+      } else {
+        setMessage("已生成修复草稿，请确认步骤后重新执行。");
+      }
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setBusyAction(undefined);
+    }
+  }
+
   async function executeDraft(
     targetDraft: GeneratedDraft,
     values: Record<string, ScriptParameterValue>,
@@ -540,6 +633,8 @@ export function AiScriptFlowsPanel({
       setLearning(undefined);
       setPlan(undefined);
       setSelectedHistoryId(item.id);
+      setRepairHistory([]);
+      setRepairAttemptRunIds(new Set());
       setConfirmedStepKeys(confirmedKeysForDraft(nextDraft));
       setExpandedStepKeys(new Set());
       setStepReviewRequired(false);
@@ -1020,6 +1115,22 @@ export function AiScriptFlowsPanel({
             {caseCenterEligible(generatedDraft.document) ? <div className="ai-case-actions">
               <button className="workspace-action-button secondary" type="button" onClick={() => void saveDraft()} disabled={busy || reviewBlocked}><Save size={16} /><span>{revision ? "保存修改" : generatedDraft.sourceFlow ? "更新用例中心" : "保存到用例中心"}</span></button>
             </div> : <p className="navigation-flow-note">{generatedDraft.document.testLevel === "probe" ? "临时验证默认只保留在最近测试，不进入用例中心。" : "导航流程执行成功后会作为系统内部导航能力复用。"}</p>}
+            {generatedDraft.status === "trial_ready" ? <label className="auto-repair-toggle">
+              <input
+                type="checkbox"
+                checked={autoRepairEnabled}
+                disabled={busy}
+                onChange={(event) => setAutoRepairEnabled(event.target.checked)}
+              />
+              <span>失败后自动修复重试</span>
+              <small>仅处理定位、页面识别和结果验证类失败。</small>
+            </label> : null}
+            {repairHistory.length ? <section className="repair-history" aria-label="修复历史">
+              <strong>AI 修复记录</strong>
+              {repairHistory.map((item, index) => (
+                <p key={`${item.runId}-${index}`}>{item.mode === "auto" ? "自动" : "手动"}修复 run {item.runId}：{item.summary}</p>
+              ))}
+            </section> : null}
             <ScriptRunForm
               parameters={generatedDraft.document.parameters}
               values={parameterValues}
@@ -1047,7 +1158,12 @@ export function AiScriptFlowsPanel({
               {lastRun.config.mode === "loop_until_stop"
                 ? <p>第 {currentRunIteration(lastRun.stepResults) || 1} 轮 · 累计执行 {lastRun.stepResults.length} 个步骤</p>
                 : <p>{lastRun.stepResults.length}/{lastRun.steps.length} 个步骤</p>}
-              {lastRunFailure ? <ExecutionFailureNotice failure={lastRunFailure} onOpenReport={() => onOpenRun(lastRun.id)} /> : <button type="button" onClick={() => onOpenRun(lastRun.id)}>查看执行结果</button>}
+              {lastRunFailure ? <ExecutionFailureNotice
+                failure={lastRunFailure}
+                onOpenReport={() => onOpenRun(lastRun.id)}
+                onRepair={generatedDraft && repairablePanelFailure(lastRunFailure) ? () => void repairDraftFromRun(lastRun, "manual") : undefined}
+                repairBusy={busyAction === "repair"}
+              /> : <button type="button" onClick={() => onOpenRun(lastRun.id)}>查看执行结果</button>}
             </section> : null}
             {learning ? <TrialOutcomeReview
               session={learning.session}
@@ -1664,10 +1780,14 @@ function stepActionMatch(step: CaseSourceStep): string {
 
 export function ExecutionFailureNotice({
   failure,
-  onOpenReport
+  onOpenReport,
+  onRepair,
+  repairBusy
 }: {
   failure: PublicExecutionFailure;
   onOpenReport: () => void;
+  onRepair?: () => void;
+  repairBusy?: boolean;
 }) {
   return (
     <div className="execution-failure-notice">
@@ -1683,13 +1803,22 @@ export function ExecutionFailureNotice({
           ))}
         </dl>
       )}
-      <button type="button" onClick={onOpenReport}>查看执行结果</button>
+      <div className="execution-failure-actions">
+        {onRepair ? <button type="button" onClick={onRepair} disabled={repairBusy}>
+          <Sparkles size={14} /><span>{repairBusy ? "修复中" : "AI 诊断修复"}</span>
+        </button> : null}
+        <button type="button" onClick={onOpenReport}>查看执行结果</button>
+      </div>
     </div>
   );
 }
 
 export function caseCenterEligible(document: Pick<CaseDocumentView, "purpose" | "testLevel"> | undefined): boolean {
   return document?.purpose !== "navigation" && document?.testLevel !== "probe";
+}
+
+function repairablePanelFailure(failure: PublicExecutionFailure): boolean {
+  return failure.kind !== "app_failure" && failure.kind !== "infrastructure_failure" && failure.kind !== "left_target_app";
 }
 
 type StepTrialStatus = "running" | "passed" | "paused" | "failed" | "stopped";
@@ -1987,6 +2116,27 @@ export function buildAiGenerateRequestBody(input: {
         appId: input.appId,
         ...screenAssist
       };
+}
+
+export function buildRepairDraftRequestBody(input: {
+  sourceYaml: string;
+  runId: string;
+  prompt: string;
+  appId: string;
+  useCurrentScreen: boolean;
+  deviceSerial: string;
+  scriptPlatform?: "android" | "ios" | "harmony" | "flutter" | "mobile";
+}): Record<string, unknown> {
+  return {
+    sourceYaml: input.sourceYaml,
+    runId: input.runId,
+    instruction: input.prompt,
+    appId: input.appId,
+    ...(input.scriptPlatform ? { scriptPlatform: input.scriptPlatform } : {}),
+    ...(input.useCurrentScreen && input.deviceSerial
+      ? { screenAssist: { mode: "current" as const, deviceSerial: input.deviceSerial } }
+      : {})
+  };
 }
 
 export function buildStepRunRequestBody(input: {

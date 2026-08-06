@@ -14,6 +14,7 @@ describe("mobile automation MCP tools", () => {
       "get_script_flow",
       "generate_script_flow",
       "generate_script_flow_draft",
+      "repair_script_flow_draft",
       "validate_script_flow",
       "preview_script_flow_draft",
       "run_script_flow_draft",
@@ -24,6 +25,7 @@ describe("mobile automation MCP tools", () => {
       "get_run_report",
       "get_report",
       "generate_and_run_script_flow",
+      "generate_repair_and_run_script_flow",
       "run_previous_script_flow",
       "review_trial_outcome"
     ]);
@@ -33,7 +35,31 @@ describe("mobile automation MCP tools", () => {
     expect(JSON.stringify(mobileAutomationMcpTools)).toContain("planDigest");
     expect(JSON.stringify(mobileAutomationMcpTools.find((tool) => tool.name === "get_run_report")?.inputSchema)).toContain("responseMode");
     expect(JSON.stringify(mobileAutomationMcpTools.find((tool) => tool.name === "generate_and_run_script_flow")?.inputSchema)).toContain("responseMode");
+    expect(JSON.stringify(mobileAutomationMcpTools.find((tool) => tool.name === "generate_repair_and_run_script_flow")?.inputSchema)).toContain("repairPolicy");
     expect(JSON.stringify(mobileAutomationMcpTools)).not.toContain("confirmedRisks");
+  });
+
+  it("maps repair handlers to ScriptFlow repair endpoints", async () => {
+    const requests: string[] = [];
+    const handlers = createMobileAutomationMcpToolHandlers({
+      serverUrl: "http://server.test",
+      fetch: fakeFetch(requests, {
+        "POST /api/script-flow-drafts/repair": {
+          draft: { status: "trial_ready", sourceYaml: "version: 1\nkind: case\nname: demo\napp: { id: classin }\nsteps: []" },
+          repair: { runId: "run-failed", failure: { kind: "target_not_found" } }
+        }
+      })
+    });
+
+    await expect(handlers.repair_script_flow_draft({
+      sourceYaml: "version: 1\nkind: case\nname: demo\napp: { id: classin }\nsteps: []",
+      runId: "run-failed",
+      instruction: "修复失败步骤",
+      scriptPlatform: "android"
+    })).resolves.toMatchObject({
+      repair: { runId: "run-failed", failure: { kind: "target_not_found" } }
+    });
+    expect(requests).toEqual(["POST /api/script-flow-drafts/repair"]);
   });
 
   it("maps handlers to ScriptFlow REST endpoints", async () => {

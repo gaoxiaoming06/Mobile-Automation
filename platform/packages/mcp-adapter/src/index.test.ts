@@ -488,6 +488,162 @@ describe("ScriptFlow MCP REST adapter", () => {
     ]);
   });
 
+  it("repairs and reruns a generated draft until it passes", async () => {
+    const requests: string[] = [];
+    const repairedYaml = sourceYaml.replace("班级四十二号", "班级四十二号 ");
+    const adapter = new MobileAutomationMcpAdapter({
+      serverUrl: "http://server.test",
+      fetch: fakeFetch(requests, {
+        "GET /api/devices": { devices: [device("device-1", "android", "online")] },
+        "POST /api/script-flow-drafts/generate": { draft: { status: "ready", sourceYaml } },
+        "POST /api/script-flow-drafts/preview": [
+          { planDigest: "a".repeat(64), plan: { steps: [] }, dependencies: [] },
+          { planDigest: "b".repeat(64), plan: { steps: [] }, dependencies: [] }
+        ],
+        "POST /api/script-flow-drafts/trial-runs": [
+          { run: { id: "run-failed", status: "running", sourceSnapshot: { kind: "script_flow" }, stepResults: [], artifacts: [] } },
+          { run: { id: "run-passed", status: "running", sourceSnapshot: { kind: "script_flow" }, stepResults: [], artifacts: [] } }
+        ],
+        "GET /api/runs/run-failed": {
+          run: {
+            id: "run-failed",
+            status: "failed",
+            sourceSnapshot: { kind: "script_flow" },
+            stepResults: [{ stepId: "open-class", status: "failed", errorMessage: "未找到目标" }],
+            artifacts: [],
+            events: []
+          }
+        },
+        "GET /api/script-flow-runs/run-failed": {
+          run: {
+            id: "run-failed",
+            status: "failed",
+            sourceSnapshot: { kind: "script_flow" },
+            stepResults: [{ stepId: "open-class", status: "failed", errorMessage: "未找到目标" }],
+            artifacts: [],
+            events: []
+          },
+          failure: { kind: "target_not_found", message: "未找到目标" }
+        },
+        "POST /api/script-flow-drafts/repair": {
+          draft: { status: "trial_ready", sourceYaml: repairedYaml, summary: "补充更准确的班级文字" },
+          repair: { runId: "run-failed", failure: { kind: "target_not_found", message: "未找到目标" } }
+        },
+        "GET /api/runs/run-passed": {
+          run: {
+            id: "run-passed",
+            status: "passed",
+            sourceSnapshot: { kind: "script_flow" },
+            stepResults: [],
+            artifacts: [{ id: "shot-final", type: "screenshot", name: "final.png", path: "final.png", url: "/artifacts/final.png", createdAt: "" }],
+            events: []
+          }
+        },
+        "GET /api/script-flow-runs/run-passed": {
+          run: {
+            id: "run-passed",
+            status: "passed",
+            sourceSnapshot: { kind: "script_flow" },
+            stepResults: [],
+            artifacts: [{ id: "shot-final", type: "screenshot", name: "final.png", path: "final.png", url: "/artifacts/final.png", createdAt: "" }],
+            events: []
+          }
+        },
+        "GET /api/trial-runs/run-failed/learning-summary": { session: { status: "completed" } },
+        "GET /api/trial-runs/run-passed/learning-summary": { session: { status: "completed" } }
+      })
+    });
+
+    await expect(adapter.generateRepairAndRunScriptFlow({
+      goal: "打开班级四十二号",
+      appId: "classin",
+      scriptPlatform: "android",
+      devicePlatform: "android",
+      deviceSerial: "device-1",
+      repairPolicy: { maxAttempts: 2 },
+      responseMode: "compact",
+      pollIntervalMs: 0
+    })).resolves.toMatchObject({
+      status: "passed",
+      runId: "run-passed",
+      attempts: 2,
+      finalSourceYaml: repairedYaml,
+      repairHistory: [{
+        attempt: 1,
+        failedRunId: "run-failed",
+        failureKind: "target_not_found",
+        nextSourceYaml: repairedYaml,
+        summary: "补充更准确的班级文字"
+      }]
+    });
+    expect(requests).toEqual([
+      "GET /api/devices",
+      "POST /api/script-flow-drafts/generate",
+      "POST /api/script-flow-drafts/preview",
+      "POST /api/script-flow-drafts/trial-runs",
+      "GET /api/runs/run-failed",
+      "GET /api/script-flow-runs/run-failed",
+      "GET /api/trial-runs/run-failed/learning-summary",
+      "POST /api/script-flow-drafts/repair",
+      "POST /api/script-flow-drafts/preview",
+      "POST /api/script-flow-drafts/trial-runs",
+      "GET /api/runs/run-passed",
+      "GET /api/script-flow-runs/run-passed",
+      "GET /api/trial-runs/run-passed/learning-summary"
+    ]);
+  });
+
+  it("stops repair loops for app failures", async () => {
+    const adapter = new MobileAutomationMcpAdapter({
+      serverUrl: "http://server.test",
+      fetch: fakeFetch([], {
+        "GET /api/devices": { devices: [device("device-1", "android", "online")] },
+        "POST /api/script-flow-drafts/generate": { draft: { status: "ready", sourceYaml } },
+        "POST /api/script-flow-drafts/preview": { planDigest: "a".repeat(64), plan: { steps: [] }, dependencies: [] },
+        "POST /api/script-flow-drafts/trial-runs": {
+          run: { id: "run-crash", status: "running", sourceSnapshot: { kind: "script_flow" }, stepResults: [], artifacts: [] }
+        },
+        "GET /api/runs/run-crash": {
+          run: {
+            id: "run-crash",
+            status: "failed",
+            sourceSnapshot: { kind: "script_flow" },
+            stepResults: [],
+            artifacts: [],
+            events: [{ id: "event-1", runId: "run-crash", deviceSerial: "device-1", type: "crash", severity: "error", occurredAt: "", summary: "crash" }]
+          }
+        },
+        "GET /api/script-flow-runs/run-crash": {
+          run: {
+            id: "run-crash",
+            status: "failed",
+            sourceSnapshot: { kind: "script_flow" },
+            stepResults: [],
+            artifacts: [],
+            events: [{ id: "event-1", runId: "run-crash", deviceSerial: "device-1", type: "crash", severity: "error", occurredAt: "", summary: "crash" }]
+          },
+          failure: { kind: "app_failure", message: "目标 App 崩溃" }
+        },
+        "GET /api/trial-runs/run-crash/learning-summary": { session: { status: "completed" } }
+      })
+    });
+
+    await expect(adapter.generateRepairAndRunScriptFlow({
+      goal: "打开班级",
+      appId: "classin",
+      scriptPlatform: "android",
+      devicePlatform: "android",
+      deviceSerial: "device-1",
+      repairPolicy: { maxAttempts: 2 },
+      pollIntervalMs: 0
+    })).resolves.toMatchObject({
+      status: "failed",
+      runId: "run-crash",
+      repairStoppedReason: "non_repairable_failure",
+      repairHistory: []
+    });
+  });
+
   it("passes compact response mode through one-call execution", async () => {
     const adapter = new MobileAutomationMcpAdapter({
       serverUrl: "http://server.test",

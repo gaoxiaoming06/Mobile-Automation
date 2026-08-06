@@ -99,6 +99,27 @@ export type PreviousScriptFlowRunResult = ScriptFlowReportResult & {
   planDigest: string;
 };
 
+export type ScriptFlowRepairPolicy = {
+  maxAttempts?: number;
+};
+
+export type ScriptFlowRepairHistoryItem = {
+  attempt: number;
+  failedRunId: string;
+  failureKind?: string;
+  message?: string;
+  nextSourceYaml?: string;
+  summary?: string;
+  reportUrl?: string;
+};
+
+export type ScriptFlowRepairRunResult = ScriptFlowReportResult & {
+  attempts: number;
+  finalSourceYaml?: string;
+  repairHistory: ScriptFlowRepairHistoryItem[];
+  repairStoppedReason?: "max_attempts" | "non_repairable_failure" | "needs_clarification";
+};
+
 const defaultServerUrl = "http://127.0.0.1:4010";
 const terminalRunStatuses = new Set<TestRun["status"]>(["passed", "failed", "stopped", "timeout", "device_lost"]);
 const requiredExecutionCapabilities = ["screenshot", "tap", "launchApp"] as const;
@@ -281,6 +302,28 @@ export class MobileAutomationMcpAdapter {
     return this.generateScriptFlow(input);
   }
 
+  async repairScriptFlowDraft(input: {
+    sourceYaml: string;
+    runId: string;
+    instruction?: string;
+    prompt?: string;
+    appId?: string;
+    platform?: ScriptPlatform;
+    scriptPlatform?: ScriptPlatform;
+    externalContext?: ScriptFlowExternalContext;
+    screenAssist?: { mode: "current"; deviceSerial: string };
+  }): Promise<unknown> {
+    return this.request("POST", "/api/script-flow-drafts/repair", compactObject({
+      sourceYaml: input.sourceYaml,
+      runId: input.runId,
+      instruction: input.instruction ?? input.prompt,
+      appId: input.appId,
+      platform: input.scriptPlatform ?? input.platform,
+      externalContext: input.externalContext,
+      screenAssist: input.screenAssist
+    }));
+  }
+
   async validateScriptFlow(input: { sourceYaml: string }): Promise<unknown> {
     return this.request("POST", "/api/script-flows/validate", { sourceYaml: input.sourceYaml });
   }
@@ -448,6 +491,108 @@ export class MobileAutomationMcpAdapter {
     return this.getRunReport({ runId: run.runId, responseMode: input.responseMode });
   }
 
+  async generateRepairAndRunScriptFlow(input: {
+    goal: string;
+    appId: string;
+    scriptPlatform: ScriptPlatform;
+    devicePlatform: DevicePlatform;
+    deviceSerial?: string;
+    parameters?: Record<string, string | number | boolean>;
+    externalContext?: ScriptFlowExternalContext;
+    screenAssist?: { mode: "current"; deviceSerial: string };
+    responseMode?: ScriptFlowResponseMode;
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+    repairPolicy?: ScriptFlowRepairPolicy;
+  }): Promise<unknown> {
+    const validation = await this.validateDevice({ devicePlatform: input.devicePlatform, appId: input.appId, deviceSerial: input.deviceSerial });
+    if (!validation.ok) return validation;
+    const draft = await this.generateScriptFlow({
+      prompt: input.goal,
+      appId: input.appId,
+      scriptPlatform: input.scriptPlatform,
+      externalContext: input.externalContext,
+      screenAssist: input.screenAssist
+    }) as Record<string, unknown>;
+    if (draft.status === "needs_clarification") return draft;
+
+    let sourceYaml = stringValue(draft.sourceYaml);
+    if (!sourceYaml) throw new Error("Generated draft did not include sourceYaml");
+
+    const maxAttempts = Math.max(1, input.repairPolicy?.maxAttempts ?? 2);
+    const repairHistory: ScriptFlowRepairHistoryItem[] = [];
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+      attempts += 1;
+      const report = await this.runDraftAndCollectReport({
+        sourceYaml,
+        deviceSerial: validation.selectedDevice.serial,
+        parameters: input.parameters,
+        responseMode: input.responseMode,
+        timeoutMs: input.timeoutMs,
+        pollIntervalMs: input.pollIntervalMs
+      });
+      if (report.status === "passed") {
+        return { ...report, attempts, finalSourceYaml: sourceYaml, repairHistory } satisfies ScriptFlowRepairRunResult;
+      }
+
+      const failureKind = failureKindFromReport(report);
+      if (!failureKind || !isRepairableFailureKind(failureKind)) {
+        return {
+          ...report,
+          attempts,
+          finalSourceYaml: sourceYaml,
+          repairHistory,
+          repairStoppedReason: "non_repairable_failure"
+        } satisfies ScriptFlowRepairRunResult;
+      }
+      if (attempts >= maxAttempts) {
+        return {
+          ...report,
+          attempts,
+          finalSourceYaml: sourceYaml,
+          repairHistory,
+          repairStoppedReason: "max_attempts"
+        } satisfies ScriptFlowRepairRunResult;
+      }
+
+      const repair = await this.repairScriptFlowDraft({
+        sourceYaml,
+        runId: report.runId,
+        instruction: input.goal,
+        appId: input.appId,
+        scriptPlatform: input.scriptPlatform,
+        externalContext: input.externalContext
+      }) as Record<string, unknown>;
+      const repairedDraft = readObject(repair.draft);
+      if (repairedDraft.status === "needs_clarification") {
+        return {
+          ...report,
+          attempts,
+          finalSourceYaml: sourceYaml,
+          repairHistory,
+          repairStoppedReason: "needs_clarification",
+          nextAction: "caller_review_required"
+        } satisfies ScriptFlowRepairRunResult;
+      }
+      const nextSourceYaml = stringValue(repairedDraft.sourceYaml);
+      if (!nextSourceYaml) throw new Error("Repair draft did not include sourceYaml");
+      repairHistory.push({
+        attempt: attempts,
+        failedRunId: report.runId,
+        ...(failureKind ? { failureKind } : {}),
+        ...optionalRepairMessage(report.failure),
+        nextSourceYaml,
+        ...(typeof repairedDraft.summary === "string" ? { summary: repairedDraft.summary } : {}),
+        ...(report.reportUrl ? { reportUrl: report.reportUrl } : {})
+      });
+      sourceYaml = nextSourceYaml;
+    }
+
+    throw new Error("Repair loop ended unexpectedly");
+  }
+
   async runPreviousScriptFlow(input: {
     sourceRunId: string;
     appId?: string;
@@ -513,6 +658,27 @@ export class MobileAutomationMcpAdapter {
       compactObject({ sourceYaml: input.sourceYaml, planDigest: input.planDigest, deviceSerial: input.deviceSerial, parameters: input.parameters })
     );
     return runResult(this.serverUrl, payload.run);
+  }
+
+  private async runDraftAndCollectReport(input: {
+    sourceYaml: string;
+    deviceSerial: string;
+    parameters?: Record<string, string | number | boolean>;
+    responseMode?: ScriptFlowResponseMode;
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+  }): Promise<ScriptFlowReportResult> {
+    const preview = await this.previewScriptFlowDraft({ sourceYaml: input.sourceYaml, parameters: input.parameters });
+    const run = await this.startScriptFlowDraftRun({
+      sourceYaml: input.sourceYaml,
+      planDigest: preview.planDigest,
+      deviceSerial: input.deviceSerial,
+      parameters: input.parameters,
+      executionPurpose: "trial"
+    });
+    const completed = await this.waitForRun({ runId: run.runId, timeoutMs: input.timeoutMs, pollIntervalMs: input.pollIntervalMs });
+    const responseMode = completed.status === "passed" ? input.responseMode : "evidence";
+    return this.getRunReport({ runId: run.runId, responseMode });
   }
 
   private async request<T>(method: "GET" | "POST", path: string, body?: Record<string, unknown>): Promise<T> {
@@ -613,6 +779,20 @@ function evidenceArtifactUrls(run: TestRun): string[] {
   const finalScreenshot = screenshotArtifacts(run).at(-1);
   if (finalScreenshot) evidence.push(finalScreenshot);
   return artifactUrls(evidence);
+}
+
+function failureKindFromReport(report: ScriptFlowReportResult): string | undefined {
+  const failure = readObject(report.failure);
+  return optionalString(failure.kind);
+}
+
+function isRepairableFailureKind(kind: string): boolean {
+  return kind !== "app_failure" && kind !== "infrastructure_failure" && kind !== "left_target_app";
+}
+
+function optionalRepairMessage(failure: unknown): { message?: string } {
+  const message = optionalString(readObject(failure).message);
+  return message ? { message } : {};
 }
 
 function uniqueStrings(values: string[]): string[] {

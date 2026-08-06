@@ -13,6 +13,7 @@ export type MobileAutomationMcpToolName =
   | "get_script_flow"
   | "generate_script_flow"
   | "generate_script_flow_draft"
+  | "repair_script_flow_draft"
   | "validate_script_flow"
   | "preview_script_flow_draft"
   | "run_script_flow_draft"
@@ -23,6 +24,7 @@ export type MobileAutomationMcpToolName =
   | "get_run_report"
   | "get_report"
   | "generate_and_run_script_flow"
+  | "generate_repair_and_run_script_flow"
   | "run_previous_script_flow"
   | "review_trial_outcome";
 
@@ -92,6 +94,21 @@ export const mobileAutomationMcpTools: MobileAutomationMcpToolDefinition[] = [
       externalContext: objectSchema({}, [], true),
       screenAssist: objectSchema({ mode: enumSchema(["current"]), deviceSerial: stringSchema() }, ["mode", "deviceSerial"])
     }, ["appId"])
+  },
+  {
+    name: "repair_script_flow_draft",
+    description: "Repair an unsaved ScriptFlow YAML draft from a failed run. Use for script-quality failures such as target not found, ambiguity, page mismatch, or result verification mismatch; do not use for app crashes or device infrastructure failures.",
+    inputSchema: objectSchema({
+      sourceYaml: stringSchema(),
+      runId: stringSchema(),
+      instruction: stringSchema(),
+      prompt: stringSchema(),
+      appId: stringSchema(),
+      scriptPlatform: scriptPlatformSchema,
+      platform: scriptPlatformSchema,
+      screenAssist: objectSchema({ mode: enumSchema(["current"]), deviceSerial: stringSchema() }, ["mode", "deviceSerial"]),
+      externalContext: objectSchema({}, [], true)
+    }, ["sourceYaml", "runId"])
   },
   {
     name: "validate_script_flow",
@@ -168,6 +185,24 @@ export const mobileAutomationMcpTools: MobileAutomationMcpToolDefinition[] = [
     }, ["goal", "appId", "scriptPlatform", "devicePlatform"])
   },
   {
+    name: "generate_repair_and_run_script_flow",
+    description: "One-call external AI validation job with bounded self-repair. It generates a draft, runs it, repairs script-quality failures with run evidence, reruns, and returns the final report.",
+    inputSchema: objectSchema({
+      goal: stringSchema(),
+      appId: stringSchema(),
+      scriptPlatform: scriptPlatformSchema,
+      devicePlatform: devicePlatformSchema,
+      deviceSerial: stringSchema(),
+      parameters: objectSchema({}, [], true),
+      externalContext: objectSchema({}, [], true),
+      screenAssist: objectSchema({ mode: enumSchema(["current"]), deviceSerial: stringSchema() }, ["mode", "deviceSerial"]),
+      repairPolicy: objectSchema({ maxAttempts: integerSchema() }),
+      responseMode: responseModeSchema,
+      timeoutMs: integerSchema(),
+      pollIntervalMs: integerSchema()
+    }, ["goal", "appId", "scriptPlatform", "devicePlatform"])
+  },
+  {
     name: "run_previous_script_flow",
     description: "Reuse the exact sourceYaml from a previous ScriptFlow run on another device. This does not regenerate the script; it previews the stored YAML, runs it, waits, and returns the report summary.",
     inputSchema: objectSchema({
@@ -222,6 +257,16 @@ export function createMobileAutomationMcpToolHandlers(config: McpAdapterConfig =
       externalContext: objectRecord(input.externalContext),
       screenAssist: screenAssist(input.screenAssist)
     }),
+    repair_script_flow_draft: (input) => adapter.repairScriptFlowDraft({
+      sourceYaml: requiredString(input.sourceYaml, "sourceYaml"),
+      runId: requiredString(input.runId, "runId"),
+      instruction: optionalString(input.instruction),
+      prompt: optionalString(input.prompt),
+      appId: optionalString(input.appId),
+      scriptPlatform: scriptPlatform(input.scriptPlatform ?? input.platform),
+      externalContext: objectRecord(input.externalContext),
+      screenAssist: screenAssist(input.screenAssist)
+    }),
     validate_script_flow: (input) => adapter.validateScriptFlow({ sourceYaml: requiredString(input.sourceYaml, "sourceYaml") }),
     preview_script_flow_draft: (input) => adapter.previewScriptFlowDraft({
       sourceYaml: requiredString(input.sourceYaml, "sourceYaml"),
@@ -269,6 +314,20 @@ export function createMobileAutomationMcpToolHandlers(config: McpAdapterConfig =
       parameters: scalarRecord(input.parameters),
       externalContext: objectRecord(input.externalContext),
       screenAssist: screenAssist(input.screenAssist),
+      responseMode: responseMode(input.responseMode),
+      timeoutMs: optionalPositiveInteger(input.timeoutMs, "timeoutMs"),
+      pollIntervalMs: optionalNonNegativeInteger(input.pollIntervalMs, "pollIntervalMs")
+    }),
+    generate_repair_and_run_script_flow: (input) => adapter.generateRepairAndRunScriptFlow({
+      goal: requiredString(input.goal, "goal"),
+      appId: requiredString(input.appId, "appId"),
+      scriptPlatform: requiredScriptPlatform(input.scriptPlatform ?? input.platform),
+      devicePlatform: requiredDevicePlatform(input.devicePlatform),
+      deviceSerial: optionalString(input.deviceSerial),
+      parameters: scalarRecord(input.parameters),
+      externalContext: objectRecord(input.externalContext),
+      screenAssist: screenAssist(input.screenAssist),
+      repairPolicy: repairPolicy(input.repairPolicy),
       responseMode: responseMode(input.responseMode),
       timeoutMs: optionalPositiveInteger(input.timeoutMs, "timeoutMs"),
       pollIntervalMs: optionalNonNegativeInteger(input.pollIntervalMs, "pollIntervalMs")
@@ -388,6 +447,12 @@ function screenAssist(value: unknown): { mode: "current"; deviceSerial: string }
   if (!record) return undefined;
   if (record.mode !== "current") throw new Error("screenAssist.mode must be current");
   return { mode: "current", deviceSerial: requiredString(record.deviceSerial, "screenAssist.deviceSerial") };
+}
+
+function repairPolicy(value: unknown): { maxAttempts?: number } | undefined {
+  const record = objectRecord(value);
+  if (!record) return undefined;
+  return { maxAttempts: optionalPositiveInteger(record.maxAttempts, "repairPolicy.maxAttempts") };
 }
 
 function optionalPositiveInteger(value: unknown, field: string): number | undefined {

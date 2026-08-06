@@ -5,6 +5,7 @@ import type { ScriptFlow, TestRun } from "@mobile-automation/shared";
 import {
   AiScriptFlowsPanel,
   buildAiGenerateRequestBody,
+  buildRepairDraftRequestBody,
   buildStepRunRequestBody,
   draftRunOptions,
   draftRunEndpoint,
@@ -813,6 +814,25 @@ steps:
     });
   });
 
+  it("builds repair draft request from the failed run and current draft", () => {
+    expect(buildRepairDraftRequestBody({
+      sourceYaml: "version: 1\nname: 打开搜索\n",
+      runId: "run-failed",
+      prompt: "点击搜索图标",
+      appId: "cn.eeo.classin",
+      useCurrentScreen: true,
+      deviceSerial: "device-1",
+      scriptPlatform: "android"
+    })).toEqual({
+      sourceYaml: "version: 1\nname: 打开搜索\n",
+      runId: "run-failed",
+      instruction: "点击搜索图标",
+      appId: "cn.eeo.classin",
+      scriptPlatform: "android",
+      screenAssist: { mode: "current", deviceSerial: "device-1" }
+    });
+  });
+
   it("disables current-screen generation when no device is selected", () => {
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel
       defaultAppId="cn.eeo.classin"
@@ -893,9 +913,12 @@ steps:
         nextAction: "supplement_process"
       }}
       onOpenReport={vi.fn()}
+      onRepair={vi.fn()}
+      repairBusy={false}
     />);
 
     expect(markup).toContain("未找到当前操作的目标");
+    expect(markup).toContain("AI 诊断修复");
     expect(markup).toContain("查看执行结果");
     expect(markup).not.toContain("SEMANTIC_TARGET_NOT_FOUND");
   });
