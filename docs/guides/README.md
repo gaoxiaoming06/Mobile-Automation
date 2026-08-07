@@ -16,6 +16,7 @@ Available guides:
 - [ScriptFlow REST / CLI / MCP](script-flow-tools.md)
 - [Deployment](deployment.md)
 - [iOS WebDriverAgent setup](ios-wda.md)
+- [HarmonyOS screen stream companion](harmony-screen-stream.md)
 
 Planned guides:
 

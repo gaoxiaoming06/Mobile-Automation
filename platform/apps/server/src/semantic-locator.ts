@@ -7,6 +7,7 @@ import {
 } from "@mobile-automation/shared";
 import type { OcrLayoutResult, OcrService, OcrTextBox } from "./ocr.js";
 import {
+  isProbablyProtectedScreenshot,
   matchTextExpectation,
   normalizeOcrText,
   positiveNumberParam,
@@ -4393,7 +4394,8 @@ export class SemanticStepResolver {
     const artifacts = [screenshot.artifact];
     let recovery: string | undefined;
     let recoveryAction: "hide_keyboard" | "back" | undefined;
-    if (isEmptyOcrLayout(layout) && input.step.params.inputVerificationKeyboardRecovery !== false) {
+    const protectedScreenshot = isProbablyProtectedScreenshot(screenshot.png);
+    if ((isEmptyOcrLayout(layout) || protectedScreenshot) && input.step.params.inputVerificationKeyboardRecovery !== false) {
       recoveryAction = await this.dismissKeyboardForInputVerification(input);
       if (recoveryAction) {
         const settleMs = nonNegativeNumberParam(input.step.params.inputVerificationRecoveryDelayMs, 300);
@@ -4406,7 +4408,9 @@ export class SemanticStepResolver {
           image: retryScreenshot.png,
           mode
         });
-        recovery = "keyboard_dismissed_after_empty_ocr";
+        recovery = protectedScreenshot
+          ? "keyboard_dismissed_after_protected_screenshot"
+          : "keyboard_dismissed_after_empty_ocr";
       }
     }
     const candidate = findTextCandidate(layout, text, {

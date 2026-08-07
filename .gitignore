@@ -39,6 +39,14 @@ yarn-error.log*
 .env.*
 !.env.example
 .venv*/
+.cert/
+
+# Harmony/DevEco build artifacts
+platform/tools/harmony-screen-streamer/.hvigor/
+platform/tools/harmony-screen-streamer/oh_modules/
+platform/tools/harmony-screen-streamer/entry/.cxx/
+platform/tools/harmony-screen-streamer/entry/build/
+platform/tools/harmony-screen-streamer/entry/oh_modules/
 
 # Python/cache artifacts
 __pycache__/

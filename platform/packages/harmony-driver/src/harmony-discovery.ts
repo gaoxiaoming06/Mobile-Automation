@@ -18,6 +18,8 @@ type HarmonyDeviceDiscoveryOptions = {
 };
 
 export class HarmonyDeviceDiscovery {
+  private readonly resolutionCache = new Map<string, { width: number; height: number } | undefined>();
+
   constructor(private readonly options: HarmonyDeviceDiscoveryOptions) {}
 
   async listDevices(): Promise<DeviceInfo[]> {
@@ -30,7 +32,7 @@ export class HarmonyDeviceDiscovery {
       this.shell(serial, ["param", "get", "const.product.model"]).catch(() => ""),
       this.shell(serial, ["param", "get", "const.product.manufacturer"]).catch(() => ""),
       this.shell(serial, ["param", "get", "const.ohos.apiversion"]).catch(() => ""),
-      this.options.resolution?.(serial).catch(() => undefined) ?? Promise.resolve(undefined)
+      this.resolutionFor(serial)
     ]);
     const normalizedModel = model.trim();
     return {
@@ -51,6 +53,15 @@ export class HarmonyDeviceDiscovery {
 
   private shell(serial: string, args: string[], options?: HarmonyShellOptions): Promise<string> {
     return this.options.shell(serial, args, options);
+  }
+
+  private async resolutionFor(serial: string): Promise<{ width: number; height: number } | undefined> {
+    if (this.resolutionCache.has(serial)) {
+      return this.resolutionCache.get(serial);
+    }
+    const resolution = await this.options.resolution?.(serial).catch(() => undefined);
+    this.resolutionCache.set(serial, resolution);
+    return resolution;
   }
 }
 

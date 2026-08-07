@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Mobile Automation Stream"
+    },
+    {
+      "name": "module_desc",
+      "value": "Mobile Automation screen stream companion"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Screen stream service"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Screen Stream"
+    }
+  ]
+}

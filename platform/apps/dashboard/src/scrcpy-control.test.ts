@@ -19,6 +19,26 @@ describe("buildScrcpyControlMessage", () => {
     });
   });
 
+  it("includes the active device lease when provided", () => {
+    const message = buildScrcpyControlMessage({
+      action: { type: "tap", x: 120, y: 240 },
+      platform: "android",
+      previewMode: "scrcpy",
+      socketOpen: true,
+      videoSize: { width: 1080, height: 2340 },
+      controlLease: { id: "lease-1", ownerId: "browser-a" }
+    });
+
+    expect(message).toEqual({
+      type: "control",
+      action: { type: "tap", x: 120, y: 240 },
+      videoWidth: 1080,
+      videoHeight: 2340,
+      leaseId: "lease-1",
+      ownerId: "browser-a"
+    });
+  });
+
   it("keeps toolbar actions on the scrcpy control channel", () => {
     const message = buildScrcpyControlMessage({
       action: { type: "back" },

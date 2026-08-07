@@ -21,7 +21,7 @@ import {
 } from "@mobile-automation/shared";
 import { AutomationRunner, type RunnerStorage } from "./automation-runner.js";
 import { DeviceExecutionBusyError, DeviceExecutionLease } from "./device-execution-lease.js";
-import type { DeviceEventWatcher, MobileAppMonitorSession, ObservedDeviceEvent } from "./mobile-driver.js";
+import type { DeviceEventWatcher, MobileAppMonitorSession, ObservedDeviceEvent } from "./device-driver.js";
 import type { OcrInput, OcrResult, OcrService } from "./ocr.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 import type { PageStateService } from "./page-state-service.js";

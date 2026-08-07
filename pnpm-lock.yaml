@@ -64,6 +64,43 @@ importers:
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.16)
 
+  platform/apps/device-agent:
+    dependencies:
+      '@mobile-automation/android-driver':
+        specifier: workspace:*
+        version: link:../../packages/android-driver
+      '@mobile-automation/harmony-driver':
+        specifier: workspace:*
+        version: link:../../packages/harmony-driver
+      '@mobile-automation/ios-driver':
+        specifier: workspace:*
+        version: link:../../packages/ios-driver
+      '@mobile-automation/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@yume-chan/adb':
+        specifier: ^2.6.0
+        version: 2.6.0
+      '@yume-chan/adb-scrcpy':
+        specifier: ^2.3.2
+        version: 2.3.2
+      '@yume-chan/adb-server-node-tcp':
+        specifier: ^2.5.2
+        version: 2.5.2
+      '@yume-chan/scrcpy':
+        specifier: ^2.3.0
+        version: 2.3.0
+      '@yume-chan/stream-extra':
+        specifier: ^2.6.1
+        version: 2.6.1
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+
   platform/apps/server:
     dependencies:
       '@mobile-automation/android-driver':

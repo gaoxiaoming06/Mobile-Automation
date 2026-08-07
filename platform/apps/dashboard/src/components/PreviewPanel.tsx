@@ -2,6 +2,7 @@ import { Check, ChevronDown, Home, Keyboard, ListRestart, RotateCcw, Smartphone,
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, RefObject, SetStateAction } from "react";
 import type { DeviceActionRequest, DeviceInfo } from "@mobile-automation/shared";
+import { currentDeviceLease, isAgentDevice, isDeviceLockedByOtherOwner } from "../device-availability";
 
 type PreviewMode = "scrcpy" | "scrcpy_connecting" | "screenshot";
 type PreviewRenderer = "canvas" | "video";
@@ -23,6 +24,9 @@ type PreviewPanelProps = {
   scrcpyAvailable: boolean;
   scrcpyRunning: boolean;
   busy: boolean;
+  controlOwnerId?: string;
+  controlLocked?: boolean;
+  controlLockedReason?: string;
   inputText: string;
   setInputText: Dispatch<SetStateAction<string>>;
   setMessage: (message: string) => void;
@@ -54,6 +58,9 @@ export function PreviewPanel({
   scrcpyAvailable,
   scrcpyRunning,
   busy,
+  controlOwnerId = "",
+  controlLocked = false,
+  controlLockedReason,
   inputText,
   setInputText,
   setMessage,
@@ -84,6 +91,8 @@ export function PreviewPanel({
   }, [deviceMenuOpen]);
 
   const previewStatus = formatPreviewStatus(previewMode, scrcpyStreamStatus, selectedDevice);
+  const scrcpyDebugAvailable = Boolean(selectedSerial && scrcpyAvailable && selectedDevice?.platform === "android" && !isAgentDevice(selectedDevice));
+  const controlDisabled = busy || controlLocked;
   const selectedDeviceMeta = selectedDevice
     ? `${devicePlatformLabel(selectedDevice.platform)}${selectedDevice.osVersion ? ` ${selectedDevice.osVersion}` : ""}${
         selectedDevice.resolution ? ` · ${selectedDevice.resolution.width} x ${selectedDevice.resolution.height}` : ""
@@ -108,53 +117,62 @@ export function PreviewPanel({
             </button>
             {deviceMenuOpen && (
               <div className="device-switch-menu" role="menu">
-                {devices.map((device) => (
-                  <button
-                    className={device.serial === selectedSerial ? "device-switch-item active" : "device-switch-item"}
-                    key={device.serial}
-                    type="button"
-                    onClick={() => {
-                      onSelectDevice(device);
-                      setDeviceMenuOpen(false);
-                    }}
-                    role="menuitem"
-                  >
-                    <div>
-                      <strong>{device.name || device.serial}</strong>
-                      <span>{formatDeviceSwitchMeta(device)}</span>
-                    </div>
-                    {device.serial === selectedSerial && <Check size={16} />}
-                  </button>
-                ))}
+                {devices.map((device) => {
+                  const disabled = isDeviceSwitchDisabled(device, controlOwnerId);
+                  const disabledReason = deviceSwitchDisabledReason(device, controlOwnerId);
+                  return (
+                    <button
+                      className={deviceSwitchItemClass(device, selectedSerial, controlOwnerId)}
+                      disabled={disabled}
+                      key={device.serial}
+                      type="button"
+                      onClick={() => {
+                        if (disabled) {
+                          return;
+                        }
+                        onSelectDevice(device);
+                        setDeviceMenuOpen(false);
+                      }}
+                      role="menuitem"
+                      title={disabledReason ?? "切换设备"}
+                    >
+                      <div>
+                        <strong>{device.name || device.serial}</strong>
+                        <span>{formatDeviceSwitchMeta(device)}{disabledReason ? ` · ${disabledReason}` : ""}</span>
+                      </div>
+                      {device.serial === selectedSerial && <Check size={16} />}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
-          <span>{selectedDeviceMeta} · {previewStatus}</span>
+          <span>{selectedDeviceMeta} · {previewStatus}{controlLockedReason ? ` · ${controlLockedReason}` : ""}</span>
         </div>
         <div className="toolbar-actions">
           <button
             className="icon-button"
-            disabled={!selectedSerial || busy || !selectedDevice?.capabilities.back}
+            disabled={!selectedSerial || controlDisabled || !selectedDevice?.capabilities.back}
             onClick={() => void runAction({ type: "back" })}
-            title="返回"
+            title={controlLockedReason ?? "返回"}
           >
             <RotateCcw size={18} />
             返回
           </button>
           <button
             className="icon-button"
-            disabled={!selectedSerial || busy || !selectedDevice?.capabilities.home}
+            disabled={!selectedSerial || controlDisabled || !selectedDevice?.capabilities.home}
             onClick={() => void runAction({ type: "home" })}
-            title="Home"
+            title={controlLockedReason ?? "Home"}
           >
             <Home size={18} />
             Home
           </button>
           <button
             className="icon-button"
-            disabled={!selectedSerial || busy || !selectedDevice?.capabilities.recentApps}
+            disabled={!selectedSerial || controlDisabled || !selectedDevice?.capabilities.recentApps}
             onClick={() => void runAction({ type: "recent_apps" })}
-            title={selectedDevice?.platform === "ios" ? "iOS 暂不支持最近任务" : "最近任务"}
+            title={controlLockedReason ?? (selectedDevice?.platform === "ios" ? "iOS 暂不支持最近任务" : "最近任务")}
           >
             <ListRestart size={18} />
             最近任务
@@ -162,9 +180,9 @@ export function PreviewPanel({
           {!compact && (
             <button
               className="icon-button debug-action"
-              disabled={!selectedSerial || !scrcpyAvailable || selectedDevice?.platform !== "android"}
+              disabled={!scrcpyDebugAvailable}
               onClick={() => (scrcpyRunning ? void stopScrcpy() : void startScrcpy())}
-              title={scrcpyRunning ? "关闭原生 scrcpy 调试窗口" : "打开原生 scrcpy 调试窗口"}
+              title={isAgentDevice(selectedDevice) ? "Agent 设备使用内嵌实时预览" : scrcpyRunning ? "关闭原生 scrcpy 调试窗口" : "打开原生 scrcpy 调试窗口"}
             >
               <Square size={16} />
               {scrcpyRunning ? "关闭调试" : "调试窗口"}
@@ -200,7 +218,7 @@ export function PreviewPanel({
             {previewMode === "screenshot" && !selectedDevice?.capabilities.screenshot && (
               <div className="preview-empty">{selectedDevice?.platform === "ios" ? "iOS 设备离线或未授权，无法截图预览" : "当前设备无法截图预览"}</div>
             )}
-            {previewMode !== "scrcpy_connecting" && (selectedDevice?.capabilities.tap || selectedDevice?.capabilities.swipe) && (
+            {previewMode !== "scrcpy_connecting" && !controlLocked && (selectedDevice?.capabilities.tap || selectedDevice?.capabilities.swipe) && (
               <div
                 className="preview-hit-layer"
                 aria-label="设备预览控制区"
@@ -220,9 +238,9 @@ export function PreviewPanel({
           <input value={inputText} onChange={(event) => setInputText(event.target.value)} placeholder="要发送到设备的文本" />
           <button
             className="icon-button"
-            disabled={!inputText || !selectedSerial || busy || !selectedDevice?.capabilities.textInput}
+            disabled={!inputText || !selectedSerial || controlDisabled || !selectedDevice?.capabilities.textInput}
             onClick={() => void runAction({ type: "input_text", text: inputText })}
-            title="发送到设备当前焦点"
+            title={controlLockedReason ?? "发送到设备当前焦点"}
           >
             <Keyboard size={18} />
             发送
@@ -237,7 +255,7 @@ export function PreviewPanel({
   );
 }
 
-function formatPreviewStatus(previewMode: PreviewMode, rawStatus: string, selectedDevice?: DeviceInfo): string {
+export function formatPreviewStatus(previewMode: PreviewMode, rawStatus: string, selectedDevice?: DeviceInfo): string {
   if (!selectedDevice) {
     return "等待预览";
   }
@@ -250,10 +268,17 @@ function formatPreviewStatus(previewMode: PreviewMode, rawStatus: string, select
   if (selectedDevice.platform === "ios") {
     return selectedDevice.status === "online" ? "截图预览" : "设备离线";
   }
-  if (rawStatus.includes("WebCodecs")) {
+  if (selectedDevice.platform === "harmony") {
     return "截图预览";
   }
+  if (isRealtimePreviewStatus(rawStatus)) {
+    return rawStatus;
+  }
   return "截图预览";
+}
+
+function isRealtimePreviewStatus(status: string): boolean {
+  return status.includes("实时预览") || status.includes("WebCodecs");
 }
 
 function formatDeviceSwitchMeta(device: DeviceInfo): string {
@@ -261,6 +286,26 @@ function formatDeviceSwitchMeta(device: DeviceInfo): string {
   const version = device.osVersion ? ` ${device.osVersion}` : "";
   const status = device.status === "online" ? "在线" : device.status;
   return `${platform}${version} · ${status} · ${device.serial}`;
+}
+
+export function isDeviceSwitchDisabled(device: DeviceInfo, ownerId = ""): boolean {
+  return isDeviceLockedByOtherOwner(device, ownerId);
+}
+
+export function deviceSwitchDisabledReason(device: DeviceInfo, ownerId = ""): string | undefined {
+  if (!isDeviceSwitchDisabled(device, ownerId)) {
+    return undefined;
+  }
+  const lease = currentDeviceLease(device);
+  return lease ? `被 ${lease.ownerId} 占用` : "被其他客户端占用";
+}
+
+function deviceSwitchItemClass(device: DeviceInfo, selectedSerial: string, ownerId: string): string {
+  return [
+    "device-switch-item",
+    device.serial === selectedSerial ? "active" : "",
+    isDeviceSwitchDisabled(device, ownerId) ? "disabled" : ""
+  ].filter(Boolean).join(" ");
 }
 
 export function devicePlatformLabel(platform: DeviceInfo["platform"]): string {

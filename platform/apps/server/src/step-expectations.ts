@@ -768,7 +768,7 @@ function shouldRecoverStateExpectationFromProtectedScreenshot(
   return retryableOutcome && isProbablyProtectedScreenshot(screenshot.png);
 }
 
-function isProbablyProtectedScreenshot(buffer: Buffer): boolean {
+export function isProbablyProtectedScreenshot(buffer: Buffer): boolean {
   const dimensions = readPngDimensions(buffer);
   if (!dimensions) {
     return false;

@@ -1,0 +1,11 @@
+{
+  "modelVersion": "5.0.0",
+  "dependencies": {},
+  "execution": {
+    // Keep this project small and deterministic when invoked from scripts.
+    "parallel": false
+  },
+  "logging": {},
+  "debugging": {},
+  "nodeOptions": {}
+}

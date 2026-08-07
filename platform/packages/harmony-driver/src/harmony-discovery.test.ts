@@ -62,4 +62,21 @@ describe("HarmonyDeviceDiscovery", () => {
       }
     ]);
   });
+
+  it("caches resolution lookups across repeated discovery snapshots", async () => {
+    let resolutionLookups = 0;
+    const discovery = new HarmonyDeviceDiscovery({
+      listTargets: async () => "ABC123\n",
+      shell: async () => "",
+      resolution: async () => {
+        resolutionLookups += 1;
+        return { width: 1440, height: 3120 };
+      }
+    });
+
+    await discovery.listDevices();
+    await discovery.listDevices();
+
+    expect(resolutionLookups).toBe(1);
+  });
 });
