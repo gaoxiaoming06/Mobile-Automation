@@ -80,7 +80,11 @@ DEVICE_AGENT_MAX_CONCURRENT_RUNS=3 \
 pnpm agent
 ```
 
-Private local devices should omit `DEVICE_AGENT_SHARED=1` and use a short-lived pairing code from `/api/local-sessions/pairing-codes`.
+Private local devices should omit `DEVICE_AGENT_SHARED=1`. Generate a short-lived code from the dashboard `配对 Agent` button, then start the packaged Agent with:
+
+```bash
+NODE_BIN=/opt/homebrew/bin/node ./start-private-agent.sh --agent-id agent-package-local --pairing-code <code>
+```
 
 ## Process Management
 

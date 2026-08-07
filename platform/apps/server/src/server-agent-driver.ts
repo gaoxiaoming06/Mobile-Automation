@@ -34,11 +34,11 @@ export class ServerAgentDeviceDriver implements AutomationDeviceDriver {
   async getToolStatus(): Promise<ToolStatus[]> {
     const localTools = this.local ? await this.local.getToolStatus() : [];
     const agentTools = this.agents.listAgents().flatMap((agent) =>
-      agent.toolStatus.map((tool) => ({
+      agent.status === "online" ? agent.toolStatus.map((tool) => ({
         ...tool,
         name: `agent:${agent.agentId}:${tool.name}`,
-        available: agent.status === "online" && tool.available
-      }))
+        available: tool.available
+      })) : []
     );
     return [...localTools, ...agentTools];
   }

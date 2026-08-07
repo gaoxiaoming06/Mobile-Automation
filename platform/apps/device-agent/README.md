@@ -23,4 +23,10 @@ That script connects to `https://127.0.0.1:4010`, sets `DEVICE_AGENT_SHARED=1`, 
 
 HarmonyOS dashboard preview currently uses screenshots. To test the experimental HarmonyOS stream bridge directly, start the Agent with `HARMONY_STREAM_ENABLED=1`.
 
-For private local use, omit `DEVICE_AGENT_SHARED=1` and pass `DEVICE_AGENT_PAIRING_CODE=<code>` from `/api/local-sessions/pairing-codes`.
+For private local use, open the dashboard, click `配对 Agent`, then start the packaged Agent with the generated code:
+
+```bash
+NODE_BIN=/opt/homebrew/bin/node ./start-private-agent.sh --agent-id agent-package-local --pairing-code <code>
+```
+
+Source runs can use the same code through `DEVICE_AGENT_PAIRING_CODE=<code>` while omitting `DEVICE_AGENT_SHARED=1`.

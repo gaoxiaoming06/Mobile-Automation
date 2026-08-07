@@ -138,6 +138,50 @@ describe("ServerAgentRegistry", () => {
     ]);
   });
 
+  it("hides agent devices after their heartbeat expires", () => {
+    let currentTime = now;
+    const registry = new ServerAgentRegistry({
+      now: () => currentTime,
+      agentHeartbeatTimeoutMs: 15_000,
+      leaseIdGenerator: sequentialIds("lease-1")
+    });
+    registry.registerAgent({
+      agentId: "agent-a",
+      shared: true,
+      devices: [
+        {
+          serial: "pixel-1",
+          platform: "android",
+          status: "online",
+          capabilities: defaultAndroidCapabilities()
+        }
+      ]
+    });
+    registry.acquireDeviceLease({
+      deviceKey: "agent-a:android:pixel-1",
+      type: "manual_control",
+      ownerId: "browser-a",
+      ttlMs: 60_000
+    });
+
+    currentTime = "2026-08-07T08:00:16.000Z";
+
+    expect(registry.listVisibleDevices()).toEqual([]);
+    expect(registry.listAgents()).toEqual([
+      expect.objectContaining({
+        agentId: "agent-a",
+        status: "offline"
+      })
+    ]);
+    expect(registry.listDeviceLeases("agent-a:android:pixel-1")).toEqual([]);
+    expect(registry.listVisibleDevices({ includeOffline: true })).toEqual([
+      expect.objectContaining({
+        serial: "agent-a:android:pixel-1",
+        status: "offline"
+      })
+    ]);
+  });
+
   it("returns pending commands from different devices in the same agent poll", () => {
     const registry = new ServerAgentRegistry({
       now: () => now,

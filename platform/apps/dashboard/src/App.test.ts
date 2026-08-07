@@ -8,6 +8,7 @@ import {
   DASHBOARD_ADVANCED_TOOLS_STORAGE_KEY,
   RetainedNavPanel,
   actionStrategyForWorkspace,
+  agentPairingCommand,
   aiModelSettingsRequestBody,
   androidAppMonitorDefaultEnabled,
   dashboardAdvancedToolsEnabled,
@@ -112,6 +113,10 @@ describe("App shell", () => {
       defaultName: "com.eeo.classin.harmony 页面资产"
     });
     expect(pageAssetLibraryInitialization("ios", {})).toBeUndefined();
+  });
+
+  it("builds a private agent pairing command for packaged agents", () => {
+    expect(agentPairingCommand("654321")).toBe("NODE_BIN=/opt/homebrew/bin/node ./start-private-agent.sh --agent-id agent-package-local --pairing-code 654321");
   });
 });
 

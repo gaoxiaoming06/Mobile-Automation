@@ -1,4 +1,6 @@
 import {
+  Copy,
+  KeyRound,
   PlayCircle,
   RefreshCw,
   Save,
@@ -73,6 +75,15 @@ type DashboardControlLease = {
 
 type ActiveDashboardControlLease = DashboardControlLease & {
   deviceSerial: string;
+};
+
+type AgentPairingCode = {
+  code: string;
+  sessionId: string;
+  createdAt: string;
+  expiresAt: string;
+  paired: boolean;
+  pairedAgentId?: string;
 };
 
 type NavItemId = AppNavItemId;
@@ -668,6 +679,8 @@ export function App() {
   const aiModelSettingsLoadedRef = useRef(false);
   const activeControlLeaseRef = useRef<ActiveDashboardControlLease | null>(null);
   const [controlOwnerId] = useState(() => loadDashboardControlOwnerId());
+  const [agentPairing, setAgentPairing] = useState<AgentPairingCode>();
+  const [creatingAgentPairing, setCreatingAgentPairing] = useState(false);
 
   const {
     devices,
@@ -757,6 +770,40 @@ export function App() {
       throw new Error(json.error ?? "加载临时阻断页规则失败");
     }
     setRuntimeInterceptorRules(json.rules);
+  }
+
+  async function createAgentPairingCode() {
+    setCreatingAgentPairing(true);
+    try {
+      const json = await apiFetchJson<{ pairing: AgentPairingCode }>("/api/local-sessions/pairing-codes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: controlOwnerId,
+          ttlMs: 5 * 60_000
+        })
+      });
+      setAgentPairing(json.pairing);
+      setMessage(`已生成 Agent 配对码：${json.pairing.code}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCreatingAgentPairing(false);
+    }
+  }
+
+  async function copyAgentPairingCommand(code: string) {
+    const command = agentPairingCommand(code);
+    if (typeof navigator === "undefined" || typeof navigator.clipboard?.writeText !== "function") {
+      setMessage("当前浏览器不允许自动复制，请手动复制配对命令");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(command);
+      setMessage("已复制 Agent 配对命令");
+    } catch {
+      setMessage("当前浏览器不允许自动复制，请手动复制配对命令");
+    }
   }
 
   async function loadAiModelSettings() {
@@ -1550,6 +1597,16 @@ export function App() {
     />
   );
 
+  useEffect(() => {
+    if (!agentPairing || agentPairing.paired || Date.parse(agentPairing.expiresAt) <= Date.now()) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      refreshDevices({ silent: true }).catch(() => undefined);
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [agentPairing, refreshDevices]);
+
   const devicePreviewPanel = (
     <PreviewPanel
       key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
@@ -1621,6 +1678,10 @@ export function App() {
             runs={runs}
             controlOwnerId={controlOwnerId}
             activeRunForSelectedDevice={activeRunForSelectedDevice}
+            agentPairing={agentPairing}
+            creatingAgentPairing={creatingAgentPairing}
+            onCreateAgentPairing={createAgentPairingCode}
+            onCopyAgentPairingCommand={copyAgentPairingCommand}
             onOpenRuns={openRuns}
             onRefreshDevices={() => refreshDevices().catch((error) => setMessage(error.message))}
           />
@@ -2335,6 +2396,10 @@ type DeviceManagementViewProps = {
   runs: TestRun[];
   controlOwnerId: string;
   activeRunForSelectedDevice?: TestRun;
+  agentPairing?: AgentPairingCode;
+  creatingAgentPairing: boolean;
+  onCreateAgentPairing: () => void;
+  onCopyAgentPairingCommand: (code: string) => void;
   onOpenRuns: () => void;
   onRefreshDevices: () => void;
 };
@@ -2348,6 +2413,10 @@ function DeviceManagementView({
   runs,
   controlOwnerId,
   activeRunForSelectedDevice,
+  agentPairing,
+  creatingAgentPairing,
+  onCreateAgentPairing,
+  onCopyAgentPairingCommand,
   onOpenRuns,
   onRefreshDevices
 }: DeviceManagementViewProps) {
@@ -2368,6 +2437,24 @@ function DeviceManagementView({
             <span className="module-eyebrow">设备管理</span>
             <h2>设备资产与可用状态</h2>
             <ToolStatusBar tools={tools} />
+            {agentPairing && (
+              <div className="agent-pairing-strip" role="status">
+                <div className="agent-pairing-code">
+                  <span>配对码</span>
+                  <strong>{agentPairing.code}</strong>
+                  <small>{agentPairing.paired ? "已配对" : `${formatDateTime(agentPairing.expiresAt)} 过期`}</small>
+                </div>
+                <code>{agentPairingCommand(agentPairing.code)}</code>
+                <button
+                  className="icon-button compact"
+                  onClick={() => onCopyAgentPairingCommand(agentPairing.code)}
+                  title="复制配对命令"
+                  type="button"
+                >
+                  <Copy size={15} />
+                </button>
+              </div>
+            )}
           </div>
           <div className="device-head-actions">
             <div className="module-stat-grid">
@@ -2388,6 +2475,10 @@ function DeviceManagementView({
                 <span>执行中</span>
               </div>
             </div>
+            <button className="icon-button" disabled={creatingAgentPairing} onClick={onCreateAgentPairing} title="配对私有 Agent" type="button">
+              <KeyRound size={18} />
+              {creatingAgentPairing ? "生成中" : "配对 Agent"}
+            </button>
             <button className="icon-button" onClick={onRefreshDevices} title="刷新设备" type="button">
               <RefreshCw size={18} />
               刷新设备
@@ -3370,6 +3461,28 @@ function buildCapabilityItems(device: DeviceInfo): Array<{ label: string; enable
     { label: "性能", enabled: device.capabilities.metrics.cpu || device.capabilities.metrics.memory || device.capabilities.metrics.battery },
     { label: "Crash/ANR", enabled: device.capabilities.events.crash || device.capabilities.events.anr }
   ];
+}
+
+export function agentPairingCommand(
+  pairingCode: string,
+  options: {
+    nodeBin?: string;
+    startScript?: string;
+    agentId?: string;
+  } = {}
+): string {
+  const nodeBin = options.nodeBin ?? "/opt/homebrew/bin/node";
+  const startScript = options.startScript ?? "./start-private-agent.sh";
+  const agentId = options.agentId ?? "agent-package-local";
+  return `NODE_BIN=${shellWord(nodeBin)} ${shellWord(startScript)} --agent-id ${shellWord(agentId)} --pairing-code ${shellWord(pairingCode)}`;
+}
+
+function shellWord(value: string): string {
+  const trimmed = value.trim();
+  if (/^[A-Za-z0-9_./:@=-]+$/.test(trimmed)) {
+    return trimmed;
+  }
+  return `'${trimmed.replace(/'/g, "'\\''")}'`;
 }
 
 const dashboardControlOwnerStorageKey = "mobile-automation.control-owner-id";

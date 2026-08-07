@@ -93,6 +93,33 @@ describe("ServerAgentDeviceDriver", () => {
     await expect(driver.screenshot("local-1")).rejects.toThrow("Server local device access is disabled");
   });
 
+  it("does not expose tools from stale agents", async () => {
+    let currentTime = now;
+    const registry = new ServerAgentRegistry({
+      now: () => currentTime,
+      agentHeartbeatTimeoutMs: 15_000
+    });
+    registry.registerAgent({
+      agentId: "agent-a",
+      shared: true,
+      toolStatus: [{ name: "adb", available: true, version: "1.0.41" }],
+      devices: [
+        {
+          serial: "pixel-1",
+          platform: "android",
+          status: "online",
+          capabilities: defaultAndroidCapabilities()
+        }
+      ]
+    });
+    const driver = ServerAgentDeviceDriver.agentOnly(registry);
+
+    currentTime = "2026-08-07T08:00:16.000Z";
+
+    await expect(driver.getToolStatus()).resolves.toEqual([]);
+    await expect(driver.listDevices()).resolves.toEqual([]);
+  });
+
   it("routes read-only agent operations through command envelopes", async () => {
     const registry = new ServerAgentRegistry({
       now: () => now,

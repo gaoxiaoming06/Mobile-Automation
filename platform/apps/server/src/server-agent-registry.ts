@@ -59,6 +59,7 @@ export type ServerAgentRegistryOptions = {
   leaseIdGenerator?: () => string;
   pairingCodeGenerator?: () => string;
   commandTimeoutMs?: number;
+  agentHeartbeatTimeoutMs?: number;
 };
 
 type PendingCommand = {
@@ -74,6 +75,8 @@ type AgentCommandSubscriber = () => void;
 type RegisteredDeviceLease = DeviceLease & {
   deviceKey: string;
 };
+
+const defaultAgentHeartbeatTimeoutMs = 15_000;
 
 export type AcquireDeviceLeaseInput = {
   deviceKey?: unknown;
@@ -149,11 +152,12 @@ export class ServerAgentRegistry {
   }
 
   listAgents(): AgentSession[] {
+    this.cleanupStaleAgents();
     return Array.from(this.agents.values(), (agent) => ({ ...agent, toolStatus: agent.toolStatus.map((tool) => ({ ...tool })) }));
   }
 
   listDeviceSessions(filter: { agentId?: string; includeOffline?: boolean } = {}): DeviceSession[] {
-    this.cleanupExpiredLeases();
+    this.cleanupRuntimeState();
     return Array.from(this.devices.values())
       .filter((device) => !filter.agentId || device.agentId === filter.agentId)
       .filter((device) => filter.includeOffline || this.effectiveDeviceStatus(device) !== "offline")
@@ -161,7 +165,7 @@ export class ServerAgentRegistry {
   }
 
   listVisibleDevices(options: { sessionId?: string; includeOffline?: boolean } = {}): AgentDeviceInfo[] {
-    this.cleanupExpiredLeases();
+    this.cleanupRuntimeState();
     const sessionId = options.sessionId?.trim();
     return Array.from(this.devices.values()).flatMap((device) => {
       const status = this.effectiveDeviceStatus(device);
@@ -177,7 +181,7 @@ export class ServerAgentRegistry {
   }
 
   getDeviceSession(deviceKey: string): DeviceSession | undefined {
-    this.cleanupExpiredLeases();
+    this.cleanupRuntimeState();
     const device = this.devices.get(deviceKey);
     return device ? this.cloneDeviceSession(device) : undefined;
   }
@@ -225,7 +229,7 @@ export class ServerAgentRegistry {
   }
 
   acquireDeviceLease(input: AcquireDeviceLeaseInput): DeviceLease {
-    this.cleanupExpiredLeases();
+    this.cleanupRuntimeState();
     const deviceKey = requiredTrimmedString(input.deviceKey, "deviceKey");
     const device = this.devices.get(deviceKey);
     if (!device) {
@@ -271,7 +275,7 @@ export class ServerAgentRegistry {
   }
 
   releaseDeviceLease(input: ReleaseDeviceLeaseInput): boolean {
-    this.cleanupExpiredLeases();
+    this.cleanupRuntimeState();
     const deviceKey = requiredTrimmedString(input.deviceKey, "deviceKey");
     const leaseId = requiredTrimmedString(input.leaseId, "leaseId");
     const ownerId = requiredTrimmedString(input.ownerId, "ownerId");
@@ -284,7 +288,7 @@ export class ServerAgentRegistry {
   }
 
   listDeviceLeases(deviceKeyValue?: unknown): DeviceLease[] {
-    this.cleanupExpiredLeases();
+    this.cleanupRuntimeState();
     const deviceKey = optionalTrimmedString(deviceKeyValue);
     return [...this.deviceLeases.values()]
       .filter((lease) => !deviceKey || lease.deviceKey === deviceKey)
@@ -292,6 +296,7 @@ export class ServerAgentRegistry {
   }
 
   sendCommand(deviceKey: string, command: AgentCommandName, payload?: Record<string, unknown>): Promise<AgentCommandResultEnvelope> {
+    this.cleanupRuntimeState();
     const device = this.devices.get(deviceKey);
     if (!device) {
       return Promise.reject(new Error(`Agent device not found: ${deviceKey}`));
@@ -409,12 +414,13 @@ export class ServerAgentRegistry {
   }
 
   deviceInfoForKey(deviceKey: string, visibility: AgentDeviceVisibility = "public"): AgentDeviceInfo | undefined {
+    this.cleanupRuntimeState();
     const device = this.devices.get(deviceKey);
     return device ? this.toDeviceInfo({ ...device, status: this.effectiveDeviceStatus(device) }, visibility) : undefined;
   }
 
   private replaceDeviceSnapshot(agent: AgentSession, devices: ServerAgentDeviceRegistration[]): DeviceSession[] {
-    this.cleanupExpiredLeases();
+    this.cleanupRuntimeState();
     const now = this.now();
     const seen = new Set<string>();
     const updated = devices.map((input) => {
@@ -467,6 +473,29 @@ export class ServerAgentRegistry {
 
   private currentRegisteredWriteLeaseForDevice(deviceKey: string): RegisteredDeviceLease | undefined {
     return [...this.deviceLeases.values()].find((item) => item.deviceKey === deviceKey && item.type !== "readonly_preview");
+  }
+
+  private cleanupRuntimeState(): void {
+    this.cleanupStaleAgents();
+    this.cleanupExpiredLeases();
+  }
+
+  private cleanupStaleAgents(): void {
+    const nowMs = Date.parse(this.now());
+    for (const agent of [...this.agents.values()]) {
+      if (agent.status === "online" && this.isAgentHeartbeatExpired(agent, nowMs)) {
+        this.markAgentOffline(agent.agentId);
+      }
+    }
+  }
+
+  private isAgentHeartbeatExpired(agent: AgentSession, nowMs: number): boolean {
+    const lastHeartbeatMs = Date.parse(agent.lastHeartbeatAt);
+    if (!Number.isFinite(lastHeartbeatMs) || !Number.isFinite(nowMs)) {
+      return false;
+    }
+    const timeoutMs = this.options.agentHeartbeatTimeoutMs ?? defaultAgentHeartbeatTimeoutMs;
+    return Number.isFinite(timeoutMs) && timeoutMs > 0 && nowMs - lastHeartbeatMs > timeoutMs;
   }
 
   private cleanupExpiredLeases(): void {

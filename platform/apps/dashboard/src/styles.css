@@ -368,6 +368,61 @@ button:disabled {
   overflow: visible;
 }
 
+.device-module .module-head-panel > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-pairing-strip {
+  width: min(100%, 720px);
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #d8e2ef;
+  border-radius: 7px;
+  background: #f8fbff;
+  padding: 8px;
+}
+
+.agent-pairing-code {
+  min-width: 72px;
+}
+
+.agent-pairing-code span,
+.agent-pairing-code strong,
+.agent-pairing-code small {
+  display: block;
+}
+
+.agent-pairing-code span,
+.agent-pairing-code small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.agent-pairing-code strong {
+  color: #17202a;
+  font-size: 20px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.agent-pairing-strip code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid #dce4ef;
+  border-radius: 6px;
+  background: #fff;
+  color: #334155;
+  padding: 7px 8px;
+  font-size: 12px;
+}
+
 .device-module .panel.device-runs-card {
   overflow: hidden;
 }
@@ -4777,6 +4832,15 @@ button:disabled {
   .module-stat-grid,
   .device-facts {
     grid-template-columns: 1fr;
+  }
+
+  .agent-pairing-strip {
+    grid-template-columns: 1fr auto;
+  }
+
+  .agent-pairing-strip code {
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
 
   .automation-tabs button {
