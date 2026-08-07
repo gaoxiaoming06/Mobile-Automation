@@ -431,6 +431,64 @@ steps:
     expect(markup).not.toContain("确认所有步骤后才能执行或保存");
   });
 
+  it("shows current parameter values in generated step summaries", () => {
+    const markup = renderToStaticMarkup(<AiScriptFlowsPanel
+      defaultAppId="cn.eeo.classin"
+      devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+      selectedSerial="device-1"
+      setMessage={vi.fn()}
+      onSaved={vi.fn()}
+      onOpenRun={vi.fn()}
+      initialDraft={{
+        status: "trial_ready",
+        sourceYaml: "version: 1\nname: 配置联席教师",
+        document: {
+          version: 1,
+          kind: "case",
+          purpose: "business",
+          testLevel: "business_smoke",
+          name: "配置联席教师",
+          app: { id: "cn.eeo.classin" },
+          parameters: {
+            lessonDuration: { type: "string", label: "课堂时长", required: true },
+            coTeacherName: { type: "string", label: "联席教师", required: true }
+          },
+          steps: [
+            {
+              id: "select-duration",
+              role: "business",
+              selectText: {
+                target: { text: "课堂时长", area: "content" },
+                value: "${lessonDuration}",
+                search: { mode: "auto" }
+              }
+            },
+            {
+              id: "select-co-teacher",
+              role: "business",
+              tap: {
+                target: { text: "${coTeacherName}" },
+                search: { mode: "auto" }
+              }
+            }
+          ],
+          tags: []
+        },
+        parameterValues: {
+          lessonDuration: "7小时20分钟",
+          coTeacherName: "海外55"
+        },
+        summary: "配置联席教师",
+        assumptions: [],
+        channel: "codex",
+        model: "planner"
+      } as never}
+    />);
+
+    expect(markup).toContain("确认步骤 1：将“课堂时长”选择为“7小时20分钟（参数：lessonDuration）”");
+    expect(markup).toContain("确认步骤 2：点击“海外55（参数：coTeacherName）”");
+  });
+
   it("does not show a duplicate legacy launch strategy beside an explicit launch step", () => {
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel
       defaultAppId="cn.eeo.classin"

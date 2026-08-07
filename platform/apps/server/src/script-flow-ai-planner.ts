@@ -55,7 +55,7 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "用户只说到达一个未录入页面、又没有提供操作路径时返回 needs_clarification，请用户补充从已知状态开始的完整点击过程或目标页独有稳定文字。不要要求用户先录制资产。",
   "目标型请求生成 reachPage；过程型请求按用户描述保留每个动作，不擅自扩展成创建、发布、提交或删除。场景编排命中完全匹配的启用用例时自动使用 runFlow，不要求用户再确认复用；用户明确描述具体操作过程时则保留该过程。",
   "runFlow 只复用子用例的业务步骤与结果验证，不继承子用例的前置准备和每轮复位。引用用于登录或环境准备时标记 role: setup，引用作为被测流程时标记 role: business，作为结果验证时标记 role: assertion，作为每轮复位时标记 role: reset；父测试必须显式维护自己的启动、环境准备和复位步骤。",
-  "动态业务值必须声明为 parameters 并在步骤中使用 ${parameterName}。用户已给出的值放入顶层 parameterValues，仅用于本次运行；未给出但执行必需的值设 required: true。",
+  "动态业务值必须声明为 parameters 并在步骤中使用 ${parameterName}。用户已给出的值放入顶层 parameterValues，仅用于本次运行；未给出但执行必需的值设 required: true。字段标签、按钮、Tab、菜单项和固定入口文案不是参数；输入值、选中值、搜索词以及班级、老师、学生、课程、文件、群、日期、时间、数量等业务实体才是参数。",
   "账号、密码等 sensitive 参数禁止写入 parameters.default、summary 或 assumptions，必须只放入顶层 parameterValues。",
   "runFlow 会自动继承父测试中的同名参数；规划器会把复用用例和 reachPage 导航路径所需参数汇总到运行配置。",
   "常用参数直接展示；低频可选参数标记 advanced: true。枚举只有在输入目录给出合法选项时才能使用 select/options。",
@@ -286,6 +286,16 @@ export async function generateScriptFlowDraft(input: {
   if (parsed.status === "needs_clarification") {
     return { ...parsed, channel, model: input.config.model };
   }
+  parsed = await reviewAndRepairParameterization({
+    parsed,
+    plannerPrompt,
+    requestConfig,
+    parseInput,
+    fetchImpl: input.fetchImpl ?? fetch,
+    channel,
+    model: input.config.model,
+    timingContext: input.timingContext
+  });
   parsed = await reviewAndRepairNonOcrGrounding({
     parsed,
     plannerPrompt,
@@ -511,15 +521,21 @@ function buildScriptFlowClarificationReviewPrompt(plannerPrompt: string, clarifi
   ].join("\n\n");
 }
 
-type ScriptFlowGroundingReview = {
+type ReadyParsedScriptFlowAiDraft =
+  Omit<ScriptFlowAiGeneratedDraft, "status" | "channel" | "model" | "verification"> & { status: "ready" };
+
+type ScriptFlowReviewAssessment = {
   status: "ok" | "needs_repair";
   summary: string;
   issues: Array<{ stepId?: string; reason: string }>;
   repairInstructions?: string;
 };
 
-async function reviewAndRepairNonOcrGrounding(input: {
-  parsed: Omit<ScriptFlowAiGeneratedDraft, "status" | "channel" | "model" | "verification"> & { status: "ready" };
+type ScriptFlowParameterizationReview = ScriptFlowReviewAssessment;
+type ScriptFlowGroundingReview = ScriptFlowReviewAssessment;
+
+async function reviewAndRepairParameterization(input: {
+  parsed: ReadyParsedScriptFlowAiDraft;
   plannerPrompt: string;
   requestConfig: { baseURL: string; apiKey?: string; model: string; timeoutMs: number };
   parseInput: Parameters<typeof parseScriptFlowAiResponse>[1];
@@ -527,7 +543,46 @@ async function reviewAndRepairNonOcrGrounding(input: {
   channel: "codex" | "openai-compatible";
   model: string;
   timingContext?: ScriptFlowAiTimingContext;
-}): Promise<Omit<ScriptFlowAiGeneratedDraft, "status" | "channel" | "model" | "verification"> & { status: "ready" }> {
+}): Promise<ReadyParsedScriptFlowAiDraft> {
+  const review = await timedScriptFlowAiStage(input.timingContext, "parameterization_review_request", () => runAiJsonRequest(input.requestConfig, {
+    developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
+    userContent: buildScriptFlowParameterizationReviewPrompt(input.parseInput.prompt ?? "", input.parsed),
+    effort: "low"
+  }, input.fetchImpl), { channel: input.channel, model: input.model });
+  const assessment = parseScriptFlowParameterizationReview(review.content);
+  if (assessment.status === "ok") return input.parsed;
+
+  const repaired = await timedScriptFlowAiStage(input.timingContext, "parameterization_repair_request", () => runAiJsonRequest(input.requestConfig, {
+    developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
+    userContent: buildScriptFlowParameterizationRepairPrompt(input.plannerPrompt, input.parsed, assessment),
+    effort: "low"
+  }, input.fetchImpl), { channel: input.channel, model: input.model });
+  const repairedParsed = parseScriptFlowAiResponse(repaired.content, input.parseInput);
+  if (repairedParsed.status === "needs_clarification") {
+    throw new Error(`parameterization repair 返回了追问信息：${repairedParsed.clarification}`);
+  }
+  const repairedReview = await timedScriptFlowAiStage(input.timingContext, "parameterization_review_request", () => runAiJsonRequest(input.requestConfig, {
+    developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
+    userContent: buildScriptFlowParameterizationReviewPrompt(input.parseInput.prompt ?? "", repairedParsed),
+    effort: "low"
+  }, input.fetchImpl), { channel: input.channel, model: input.model });
+  const repairedAssessment = parseScriptFlowParameterizationReview(repairedReview.content);
+  if (repairedAssessment.status === "needs_repair") {
+    throw new Error(`AI 修复后仍未通过参数化 review：${repairedAssessment.summary}`);
+  }
+  return repairedParsed;
+}
+
+async function reviewAndRepairNonOcrGrounding(input: {
+  parsed: ReadyParsedScriptFlowAiDraft;
+  plannerPrompt: string;
+  requestConfig: { baseURL: string; apiKey?: string; model: string; timeoutMs: number };
+  parseInput: Parameters<typeof parseScriptFlowAiResponse>[1];
+  fetchImpl: AiClientFetch;
+  channel: "codex" | "openai-compatible";
+  model: string;
+  timingContext?: ScriptFlowAiTimingContext;
+}): Promise<ReadyParsedScriptFlowAiDraft> {
   if (!hasNonOcrTapTargets(input.parsed.document)) return input.parsed;
   const review = await timedScriptFlowAiStage(input.timingContext, "grounding_review_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
@@ -556,6 +611,53 @@ async function reviewAndRepairNonOcrGrounding(input: {
     throw new Error(`AI 修复后仍未通过非 OCR 目标 grounding review：${repairedAssessment.summary}`);
   }
   return repairedParsed;
+}
+
+function buildScriptFlowParameterizationReviewPrompt(
+  prompt: string,
+  parsed: Pick<ScriptFlowAiGeneratedDraft, "sourceYaml" | "summary" | "assumptions" | "parameterValues">
+): string {
+  return [
+    "请对下面 ScriptFlow 草稿做参数化 review。",
+    "目标：判断用户原始描述中的运行时业务值是否被错误硬编码在脚本里。你需要理解自然语言和业务语义，不要依赖固定词表，也不要因为脚本合法就直接通过。",
+    "应该参数化：inputText.value、selectText.value、搜索词、账号、密码、课堂名、班级名、老师名、学生名、课程名、文件名、群名、日期、时间、数量，以及用户要选择的具体业务实体。tap.target.text 如果是用户要选中的具体业务对象，也应该参数化。",
+    "不应该参数化：固定 UI 控件、按钮、Tab、菜单项、字段标签、页面入口、确认/取消/发布/创建/课堂信息/联席教师等产品文案。字段标签本身不是参数，字段的值才是参数；开关名通常不是参数，除非用户明确要求开关状态运行时可变。",
+    "如果发现硬编码业务值，返回 needs_repair 并给出可操作的 repairInstructions；修复时必须在 document.parameters 声明参数，脚本中改用 ${parameterName}，用户本次给出的值放入顶层 parameterValues。sensitive 参数不得写入 default、summary 或 assumptions。",
+    "如果参数化已经合理，返回 ok。",
+    "只返回唯一 JSON 对象，格式：",
+    JSON.stringify({
+      status: "ok | needs_repair",
+      summary: "审查摘要",
+      issues: [{ stepId: "可选步骤 id", reason: "问题原因" }],
+      repairInstructions: "needs_repair 时填写"
+    }, null, 2),
+    "用户原始描述：",
+    prompt || "未提供",
+    "草稿摘要：",
+    parsed.summary,
+    "草稿 assumptions：",
+    JSON.stringify(parsed.assumptions, null, 2),
+    "草稿 parameterValues：",
+    JSON.stringify(parsed.parameterValues, null, 2),
+    "草稿 YAML：",
+    parsed.sourceYaml
+  ].join("\n\n");
+}
+
+function buildScriptFlowParameterizationRepairPrompt(
+  plannerPrompt: string,
+  parsed: Pick<ScriptFlowAiGeneratedDraft, "sourceYaml">,
+  review: ScriptFlowParameterizationReview
+): string {
+  return [
+    plannerPrompt,
+    "上一稿未通过参数化 review。请只根据 review 指令修复硬编码业务值的参数化，不要改变步骤顺序、动作语义、页面约束、match/search 策略或非参数相关目标定位。",
+    "修复要求：在 document.parameters 中声明缺失参数；步骤中用 ${parameterName} 引用；用户本次已经给出的值放入顶层 parameterValues；固定 UI 文案继续保留字面量；sensitive 参数不要写 default、summary 或 assumptions。",
+    "review 结果：",
+    JSON.stringify(review, null, 2),
+    "上一稿 YAML：",
+    parsed.sourceYaml
+  ].join("\n\n");
 }
 
 function buildScriptFlowGroundingReviewPrompt(
@@ -601,13 +703,21 @@ function buildScriptFlowGroundingRepairPrompt(
 }
 
 function parseScriptFlowGroundingReview(raw: string): ScriptFlowGroundingReview {
+  return parseScriptFlowReviewAssessment(raw, "grounding review");
+}
+
+function parseScriptFlowParameterizationReview(raw: string): ScriptFlowParameterizationReview {
+  return parseScriptFlowReviewAssessment(raw, "参数化 review");
+}
+
+function parseScriptFlowReviewAssessment(raw: string, label: string): ScriptFlowReviewAssessment {
   const root = recordValue(parseAiJsonObject(raw));
   const status = stringValue(root.status);
   if (status === "ready" && root.document) {
-    return { status: "ok", summary: "grounding review did not return an assessment", issues: [] };
+    return { status: "ok", summary: `${label} did not return an assessment`, issues: [] };
   }
   if (status !== "ok" && status !== "needs_repair") {
-    throw new Error("grounding review 返回了未知状态");
+    throw new Error(`${label} 返回了未知状态`);
   }
   const issues = Array.isArray(root.issues)
     ? root.issues.flatMap((item) => {
@@ -619,7 +729,7 @@ function parseScriptFlowGroundingReview(raw: string): ScriptFlowGroundingReview 
     : [];
   return {
     status,
-    summary: stringValue(root.summary) ?? (status === "ok" ? "grounding review passed" : "grounding review requested repair"),
+    summary: stringValue(root.summary) ?? (status === "ok" ? `${label} passed` : `${label} requested repair`),
     issues,
     ...(stringValue(root.repairInstructions) ? { repairInstructions: stringValue(root.repairInstructions) } : {})
   };

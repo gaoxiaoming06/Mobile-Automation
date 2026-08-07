@@ -676,8 +676,8 @@ export function AiScriptFlowsPanel({
     }
   }
 
-  const steps = caseStepViews(generatedDraft?.document);
-  const reviewSteps = stepReviewItems(generatedDraft?.document);
+  const steps = caseStepViews(generatedDraft?.document, undefined, { parameterValues });
+  const reviewSteps = stepReviewItems(generatedDraft?.document, parameterValues);
   const loopReset = loopBodyAvailability(generatedDraft?.document);
   const unconfirmedResetStep = reviewSteps.find((step) => step.phase === "reset" && !confirmedStepKeys.has(step.key));
   const loopBodyReady = loopReset.available && !unconfirmedResetStep;
@@ -1958,9 +1958,12 @@ export function draftRunOptions(executionMode: ScriptRunExecutionMode): ReturnTy
   return runOptionsForExecutionMode(executionMode);
 }
 
-export function stepReviewItems(document: CaseDocumentView | undefined): StepReviewItem[] {
+export function stepReviewItems(
+  document: CaseDocumentView | undefined,
+  parameterValues: Record<string, ScriptParameterValue> = {}
+): StepReviewItem[] {
   if (!document) return [];
-  const views = caseStepViews(document);
+  const views = caseStepViews(document, undefined, { parameterValues });
   return flattenStepEntries(document.steps).map((entry, index) => {
     const view = views[index];
     const action = sourceActionName(entry.step);

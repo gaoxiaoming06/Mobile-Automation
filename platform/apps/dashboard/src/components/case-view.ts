@@ -55,6 +55,10 @@ export type LoopBodyAvailability = {
   reason?: string;
 };
 
+export type CaseStepViewOptions = {
+  parameterValues?: Record<string, ScriptParameterValue>;
+};
+
 export function loopBodyAvailability(document: CaseDocumentView | undefined): LoopBodyAvailability {
   const resetStepCount = flattenSourceSteps(document?.steps ?? []).filter((step) => step.role === "reset").length;
   if (resetStepCount > 0 && document?.loop?.reset === "none") {
@@ -107,7 +111,7 @@ export function defaultCaseParameterValues(document: CaseDocumentView | undefine
   return Object.fromEntries(Object.entries(document.parameters).flatMap(([key, definition]) => definition.default === undefined ? [] : [[key, definition.default]]));
 }
 
-export function caseStepViews(document: CaseDocumentView | undefined, plan?: CasePlanView): CaseStepView[] {
+export function caseStepViews(document: CaseDocumentView | undefined, plan?: CasePlanView, options: CaseStepViewOptions = {}): CaseStepView[] {
   if (plan) {
     return plan.steps.map((step) => ({
       id: step.id,
@@ -118,14 +122,15 @@ export function caseStepViews(document: CaseDocumentView | undefined, plan?: Cas
       ...(step.phase ? { phase: step.phase } : {})
     }));
   }
+  const display = stepDisplayContext(document, options);
   return flattenSourceSteps(document?.steps ?? []).map((step, index) => {
     const action = sourceAction(step);
     return {
       id: step.id,
       order: index + 1,
-      name: sourceStepDisplayName(step, action),
+      name: sourceStepDisplayName(step, action, display),
       action,
-      context: sourceStepContext(step)
+      context: sourceStepContext(step, display)
     };
   });
 }
@@ -179,66 +184,66 @@ function planStepContext(step: CasePlanView["steps"][number]): string | undefine
   return pageContext(step.onPage, step.expectPage);
 }
 
-function sourceStepContext(step: CaseSourceStep): string | undefined {
+function sourceStepContext(step: CaseSourceStep, display: StepDisplayContext): string | undefined {
   const reachPage = recordValue(step.reachPage);
   if (typeof reachPage?.page === "string") {
     return `目标页面：${reachPage.page}`;
   }
   const assertText = recordValue(step.assertText);
   if (typeof assertText?.text === "string") {
-    return assertText.text;
+    return displayValue(assertText.text, display);
   }
   const tap = actionTargetRecord(step.tap);
-  if (tap) return targetContext(tap.target);
+  if (tap) return targetContext(tap.target, display);
   const inputText = actionTargetRecord(step.inputText);
   if (inputText) {
-    const label = targetLabel(inputText.target);
-    const value = stringValue(inputText.action.value);
+    const label = targetLabel(inputText.target, display);
+    const value = displayValue(inputText.action.value, display);
     return label && value ? `${label} = ${value}` : label;
   }
   const clearText = actionTargetRecord(step.clearText);
-  if (clearText) return targetLabel(clearText.target);
+  if (clearText) return targetLabel(clearText.target, display);
   const selectText = actionTargetRecord(step.selectText);
   if (selectText) {
-    const label = targetLabel(selectText.target);
-    const value = stringValue(selectText.action.value);
+    const label = targetLabel(selectText.target, display);
+    const value = displayValue(selectText.action.value, display);
     return label && value ? `${label} → ${value}` : label;
   }
   const scrollUntilVisible = actionTargetRecord(step.scrollUntilVisible);
-  if (scrollUntilVisible) return targetLabel(scrollUntilVisible.target);
+  if (scrollUntilVisible) return targetLabel(scrollUntilVisible.target, display);
   return pageContext(step.onPage, step.expectPage);
 }
 
-function sourceStepDisplayName(step: CaseSourceStep, action: string): string {
+function sourceStepDisplayName(step: CaseSourceStep, action: string, display: StepDisplayContext): string {
   const explicitName = stringValue(step.name);
   if (explicitName && !isGenericStepName(explicitName, action)) return explicitName;
-  return sourceActionSummary(step, action) ?? explicitName ?? caseActionLabel(action);
+  return sourceActionSummary(step, action, display) ?? explicitName ?? caseActionLabel(action);
 }
 
-function sourceActionSummary(step: CaseSourceStep, action: string): string | undefined {
+function sourceActionSummary(step: CaseSourceStep, action: string, display: StepDisplayContext): string | undefined {
   if (action === "tap") {
     const tap = actionTargetRecord(step.tap);
-    return tap ? tapSummary(tap.target) : undefined;
+    return tap ? tapSummary(tap.target, display) : undefined;
   }
   if (action === "inputText") {
     const input = actionTargetRecord(step.inputText);
     if (!input) return undefined;
-    const label = descriptiveTargetLabel(input.target);
-    const value = stringValue(input.action.value);
+    const label = descriptiveTargetLabel(input.target, display);
+    const value = displayValue(input.action.value, display);
     if (label && value) return `在“${label}”中输入“${value}”`;
     if (value) return `输入“${value}”`;
     return label ? `在“${label}”中输入文本` : undefined;
   }
   if (action === "clearText") {
     const clear = actionTargetRecord(step.clearText);
-    const label = clear ? descriptiveTargetLabel(clear.target) : undefined;
+    const label = clear ? descriptiveTargetLabel(clear.target, display) : undefined;
     return label ? `清空“${label}”` : undefined;
   }
   if (action === "selectText") {
     const select = actionTargetRecord(step.selectText);
     if (!select) return undefined;
-    const label = descriptiveTargetLabel(select.target);
-    const value = stringValue(select.action.value);
+    const label = descriptiveTargetLabel(select.target, display);
+    const value = displayValue(select.action.value, display);
     if (label && value) return `将“${label}”选择为“${value}”`;
     if (value) return `选择“${value}”`;
     return label ? `选择“${label}”` : undefined;
@@ -246,7 +251,7 @@ function sourceActionSummary(step: CaseSourceStep, action: string): string | und
   if (action === "scrollUntilVisible") {
     const scroll = actionTargetRecord(step.scrollUntilVisible);
     if (!scroll) return undefined;
-    const label = descriptiveTargetLabel(scroll.target);
+    const label = descriptiveTargetLabel(scroll.target, display);
     const direction = directionLabel(stringValue(scroll.action.direction));
     return label ? `${direction}滚动查找“${label}”` : `${direction}滚动查找内容`;
   }
@@ -267,15 +272,15 @@ function sourceActionSummary(step: CaseSourceStep, action: string): string | und
     return page ? `确认已进入页面“${page}”` : undefined;
   }
   if (action === "assertText") {
-    const text = stringValue(recordValue(step.assertText)?.text);
+    const text = displayValue(recordValue(step.assertText)?.text, display);
     return text ? `确认出现“${text}”` : undefined;
   }
   return undefined;
 }
 
-function tapSummary(target: Record<string, unknown>): string | undefined {
+function tapSummary(target: Record<string, unknown>, display: StepDisplayContext): string | undefined {
   const control = stringValue(target.control);
-  const label = descriptiveTargetLabel(target);
+  const label = descriptiveTargetLabel(target, display);
   const checked = typeof target.checked === "boolean" ? target.checked : undefined;
   if (control === "switch") {
     const subject = label ? `“${label}”开关` : "开关";
@@ -292,11 +297,11 @@ function tapSummary(target: Record<string, unknown>): string | undefined {
   return label ? `点击“${label}”` : control ? `点击${control}` : undefined;
 }
 
-function descriptiveTargetLabel(target: Record<string, unknown>): string | undefined {
-  return stringValue(target.text)
-    ?? stringValue(target.nearText)
-    ?? stringValue(target.scopeText)
-    ?? stringValue(target.semantic);
+function descriptiveTargetLabel(target: Record<string, unknown>, display: StepDisplayContext): string | undefined {
+  return displayValue(target.text, display)
+    ?? displayValue(target.nearText, display)
+    ?? displayValue(target.scopeText, display)
+    ?? displayValue(target.semantic, display);
 }
 
 function targetPositionLabel(target: Record<string, unknown>): string {
@@ -332,27 +337,27 @@ function actionTargetRecord(value: unknown): { action: Record<string, unknown>; 
   return action && target ? { action, target } : undefined;
 }
 
-function targetContext(target: Record<string, unknown>): string | undefined {
+function targetContext(target: Record<string, unknown>, display: StepDisplayContext): string | undefined {
   const control = stringValue(target.control);
   if (control === "switch") {
-    const label = targetLabel(target);
+    const label = targetLabel(target, display);
     const checked = typeof target.checked === "boolean" ? target.checked : undefined;
     if (!label) return checked === undefined ? "开关" : `开关：${checked ? "开启" : "关闭"}`;
     return checked === undefined ? `${label} 开关` : `${label} 开关：${checked ? "开启" : "关闭"}`;
   }
   if (control === "checkbox") {
-    const label = targetLabel(target);
+    const label = targetLabel(target, display);
     return label ? `${label} 复选框` : "复选框";
   }
-  if (control === "textField") return targetLabel(target) ?? "输入框";
-  return targetLabel(target);
+  if (control === "textField") return targetLabel(target, display) ?? "输入框";
+  return targetLabel(target, display);
 }
 
-function targetLabel(target: Record<string, unknown>): string | undefined {
-  return stringValue(target.text)
-    ?? stringValue(target.nearText)
-    ?? stringValue(target.scopeText)
-    ?? stringValue(target.semantic)
+function targetLabel(target: Record<string, unknown>, display: StepDisplayContext): string | undefined {
+  return displayValue(target.text, display)
+    ?? displayValue(target.nearText, display)
+    ?? displayValue(target.scopeText, display)
+    ?? displayValue(target.semantic, display)
     ?? iconLabel(stringValue(target.icon))
     ?? stringValue(target.control);
 }
@@ -373,6 +378,44 @@ function iconLabel(icon: string | undefined): string | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+type StepDisplayContext = {
+  parameters: Record<string, ScriptParameterDefinitionView>;
+  parameterValues: Record<string, ScriptParameterValue>;
+};
+
+function stepDisplayContext(document: CaseDocumentView | undefined, options: CaseStepViewOptions): StepDisplayContext {
+  return {
+    parameters: document?.parameters ?? {},
+    parameterValues: options.parameterValues ?? {}
+  };
+}
+
+function displayValue(value: unknown, context: StepDisplayContext): string | undefined {
+  const text = stringValue(value);
+  if (!text) return undefined;
+  const parameterName = parameterReferenceName(text);
+  if (!parameterName) return text;
+  const hasRuntimeValue = Object.prototype.hasOwnProperty.call(context.parameterValues, parameterName);
+  if (!hasRuntimeValue) return text;
+  const definition = context.parameters[parameterName];
+  const runtimeValue = hasRuntimeValue ? context.parameterValues[parameterName] : undefined;
+  const renderedValue = parameterRuntimeValueLabel(runtimeValue, definition);
+  return `${renderedValue}（参数：${parameterName}）`;
+}
+
+function parameterReferenceName(value: string): string | undefined {
+  return /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value)?.[1];
+}
+
+function parameterRuntimeValueLabel(
+  value: ScriptParameterValue | undefined,
+  definition: ScriptParameterDefinitionView | undefined
+): string {
+  if (definition?.sensitive) return "******";
+  if (value === undefined) return "未填写";
+  return String(value);
 }
 
 const GENERIC_STEP_NAMES = new Set([

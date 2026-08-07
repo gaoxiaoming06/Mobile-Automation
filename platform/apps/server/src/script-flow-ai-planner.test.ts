@@ -213,7 +213,7 @@ describe("ScriptFlow AI planner", () => {
       screenContext: lessonCreateScreenContext(),
       fetchImpl: async (_url, init) => {
         const request = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
-        plannerPrompt = request.messages[1]?.content ?? "";
+        plannerPrompt ||= request.messages[1]?.content ?? "";
         return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 });
       }
     });
@@ -375,7 +375,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(callCount).toBe(1);
+    expect(callCount).toBe(2);
     expect(result.status).toBe("trial_ready");
     if (result.status === "needs_clarification") throw new Error(result.clarification);
     expect(result.document).toMatchObject({
@@ -512,7 +512,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(aiCalls).toBe(1);
+    expect(aiCalls).toBe(2);
     expect(result).toMatchObject({
       status: "trial_ready",
       document: {
@@ -573,7 +573,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(aiCalls).toBe(1);
+    expect(aiCalls).toBe(2);
     expect(result.status).toBe("trial_ready");
     if (result.status === "needs_clarification") throw new Error(result.clarification);
     expect(result.document.steps).toEqual([
@@ -607,7 +607,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(aiCalls).toBe(1);
+    expect(aiCalls).toBe(2);
     expect(result).toMatchObject({
       status: "trial_ready",
       document: { testLevel: "full_regression" }
@@ -647,7 +647,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(aiCalls).toBe(1);
+    expect(aiCalls).toBe(2);
     expect(result).toMatchObject({
       status: "trial_ready",
       document: {
@@ -954,7 +954,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(callCount).toBe(3);
+    expect(callCount).toBe(4);
     expect(result).toMatchObject({
       status: "trial_ready",
       document: {
@@ -1218,7 +1218,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(callCount).toBe(2);
+    expect(callCount).toBe(3);
     expect(reviewRequest).toContain("可能已经给出了班级");
     expect(result).toMatchObject({
       status: "trial_ready",
@@ -1382,6 +1382,7 @@ describe("ScriptFlow AI planner", () => {
     const requests: string[] = [];
     const responses = [
       first,
+      { status: "ok", summary: "无硬编码业务值需要修复。", issues: [] },
       {
         status: "needs_repair",
         summary: "脚本没有保留用户说的“课堂报告”附近文字线索。",
@@ -1412,9 +1413,10 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(requests).toHaveLength(4);
-    expect(requests[1]).toContain("grounding review");
-    expect(requests[2]).toContain("上一稿未通过非 OCR 目标 grounding review");
+    expect(requests).toHaveLength(5);
+    expect(requests[1]).toContain("参数化 review");
+    expect(requests[2]).toContain("grounding review");
+    expect(requests[3]).toContain("上一稿未通过非 OCR 目标 grounding review");
     expect(result).toMatchObject({
       status: "trial_ready",
       document: {
@@ -1485,6 +1487,125 @@ describe("ScriptFlow AI planner", () => {
     expect(prompt).not.toContain('"outcome":');
     expect(prompt).toContain("直接理解用户的完整意图和操作顺序");
     expect(prompt).not.toContain("用户明确操作契约");
+  });
+
+  it("uses AI parameterization review to repair hardcoded business values", async () => {
+    const first = readyResponse();
+    first.summary = "创建公开课并配置联席教师";
+    first.document.name = "创建公开课并配置联席教师";
+    first.document.purpose = "business";
+    first.document.testLevel = "business_smoke";
+    first.document.parameters = {};
+    first.document.steps = [
+      {
+        id: "select-lesson-duration",
+        role: "business",
+        selectText: {
+          target: { text: "课堂时长", area: "content" },
+          value: "7小时20分钟",
+          search: { mode: "auto" }
+        }
+      },
+      {
+        id: "choose-co-teacher",
+        role: "business",
+        tap: {
+          target: { text: "海外55", area: "content" },
+          search: { mode: "auto" }
+        }
+      }
+    ];
+
+    const repaired = readyResponse();
+    repaired.summary = "创建公开课并配置联席教师";
+    repaired.document.name = "创建公开课并配置联席教师";
+    repaired.document.purpose = "business";
+    repaired.document.testLevel = "business_smoke";
+    repaired.document.parameters = {
+      lessonDuration: { type: "string", label: "课堂时长", required: true },
+      coTeacherName: { type: "string", label: "联席教师", required: true }
+    };
+    repaired.document.steps = [
+      {
+        id: "select-lesson-duration",
+        role: "business",
+        selectText: {
+          target: { text: "课堂时长", area: "content" },
+          value: "${lessonDuration}",
+          search: { mode: "auto" }
+        }
+      },
+      {
+        id: "choose-co-teacher",
+        role: "business",
+        tap: {
+          target: { text: "${coTeacherName}", area: "content" },
+          search: { mode: "auto" }
+        }
+      }
+    ];
+    repaired.parameterValues = {
+      lessonDuration: "7小时20分钟",
+      coTeacherName: "海外55"
+    };
+
+    const requests: string[] = [];
+    const responses = [
+      first,
+      {
+        status: "needs_repair",
+        summary: "课堂时长选中值和联席教师名称被硬编码在步骤里。",
+        issues: [
+          { stepId: "select-lesson-duration", reason: "selectText.value 是用户提供的运行时业务值。" },
+          { stepId: "choose-co-teacher", reason: "tap.target.text 是用户要选择的具体教师实体。" }
+        ],
+        repairInstructions: "声明 lessonDuration 和 coTeacherName 参数，步骤中改用 ${lessonDuration} 与 ${coTeacherName}，把本次值放到 parameterValues。"
+      },
+      repaired,
+      { status: "ok", summary: "业务值已参数化，固定 UI 文案保持字面量。", issues: [] }
+    ];
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "点击创建公开课，然后修改课堂时长为7小时20分钟，然后点击课堂信息，点击联席教师，选中海外55，点击确定",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: pageCatalog(),
+      flows: [],
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        requests.push(body.messages?.at(-1)?.content ?? "");
+        const content = responses.shift();
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(content) } }]
+        }), { status: 200 });
+      }
+    });
+
+    expect(requests).toHaveLength(4);
+    expect(requests[1]).toContain("参数化 review");
+    expect(requests[2]).toContain("上一稿未通过参数化 review");
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      parameterValues: {
+        lessonDuration: "7小时20分钟",
+        coTeacherName: "海外55"
+      },
+      document: {
+        parameters: {
+          lessonDuration: { label: "课堂时长" },
+          coTeacherName: { label: "联席教师" }
+        },
+        steps: [
+          { selectText: { value: "${lessonDuration}" } },
+          { tap: { target: { text: "${coTeacherName}" } } }
+        ]
+      }
+    });
+    if (result.status === "needs_clarification") throw new Error(result.clarification);
+    expect(result.sourceYaml).toContain("${lessonDuration}");
+    expect(result.sourceYaml).toContain("${coTeacherName}");
+    expect(result.sourceYaml).not.toContain('value: "7小时20分钟"');
   });
 
   it("instructs the planner to choose text match mode from screen evidence and natural language", () => {
@@ -1878,7 +1999,7 @@ describe("ScriptFlow AI planner", () => {
     });
 
     expect(result).toMatchObject({ status: "trial_ready", document: { name: "确认主页" } });
-    expect(requestBodies).toHaveLength(2);
+    expect(requestBodies).toHaveLength(3);
     const repairPrompt = JSON.parse(requestBodies[1]) as { messages: Array<{ content: string }> };
     expect(repairPrompt.messages[1]?.content).toContain("steps[0].action: Unknown field");
     expect(repairPrompt.messages[1]?.content).toContain('"assertPage": "classin.home"');
@@ -1912,7 +2033,7 @@ describe("ScriptFlow AI planner", () => {
 	      }
 	    });
 
-	    expect(calls).toBe(1);
+	    expect(calls).toBe(2);
 	    expect(result).toMatchObject({
 	      status: "trial_ready",
 	      document: {
@@ -1948,7 +2069,7 @@ describe("ScriptFlow AI planner", () => {
 	      }
 	    });
 
-	    expect(calls).toBe(1);
+	    expect(calls).toBe(2);
 	    expect(result).toMatchObject({
 	      status: "trial_ready",
 	      document: {
@@ -2292,7 +2413,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
     expect(result).toMatchObject({
       status: "trial_ready",
       document: {

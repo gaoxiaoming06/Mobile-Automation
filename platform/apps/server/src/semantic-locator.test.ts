@@ -1492,6 +1492,180 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("resolves a semantic content add icon from UI hierarchy before screenshot visuals", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const captureLocatorScreenshot = vi.fn(async () => {
+      throw new Error("screenshot should not be captured when hierarchy exposes the add icon");
+    });
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("班级详情")),
+      dumpUiHierarchy: async () => androidContentAddButtonHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-content-add-tree",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "add",
+        slot: "trailing",
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 875, y: 1600 }]);
+    expect(captureLocatorScreenshot).not.toHaveBeenCalled();
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      role: "add",
+      semanticArea: "content",
+      relocatedBy: "ui_hierarchy_icon",
+      hierarchy: expect.objectContaining({
+        matchReason: "semantic_accessibility"
+      })
+    }));
+  });
+
+  it("keeps a visually strong floating add icon when OCR recognizes the plus sign as text", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "+",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: [
+          { text: "+", confidence: 0.99, x: 850, y: 1575, width: 50, height: 50 }
+        ]
+      }),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-floating-add-ocr-${attempt}`),
+        png: floatingAddIconScreenshot(1000, 2000, { centerX: 875, centerY: 1600, radius: 70 })
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-floating-add-ocr-overlap",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "add",
+        slot: "trailing",
+        orderFromRight: 1,
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 876, y: 1601 }]);
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      role: "add",
+      semanticArea: "content",
+      relocatedBy: "content_current_visual",
+      currentVisual: expect.objectContaining({
+        ocrTextOverlappingComponentCount: 1,
+        componentCount: 1
+      })
+    }));
+  });
+
+  it("resolves a report or clipboard visual icon query from UI hierarchy semantics", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const captureLocatorScreenshot = vi.fn(async () => {
+      throw new Error("screenshot should not be captured when hierarchy exposes the report icon");
+    });
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("主课程")),
+      dumpUiHierarchy: async () => androidContentReportButtonHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-report-tree",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "visual_query_locator",
+        visualKind: "icon",
+        visualQuery: "右下角剪贴板图标",
+        semanticArea: "content",
+        slot: "trailing",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 875, y: 1410 }]);
+    expect(captureLocatorScreenshot).not.toHaveBeenCalled();
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      type: "visual_query_locator",
+      visualKind: "icon",
+      visualQuery: "右下角剪贴板图标",
+      role: "report",
+      relocatedBy: "ui_hierarchy_icon"
+    }));
+  });
+
+  it("visually resolves a report or clipboard content icon when hierarchy is generic", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("主课程")),
+      dumpUiHierarchy: async () => harmonyGenericContentReportButtonHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => ({
+        ...screenshot(`artifact-report-visual-${attempt}`),
+        png: contentReportIconScreenshot(1000, 2000, { centerX: 875, centerY: 1410 })
+      })
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-report-visual",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "visual_query_locator",
+        visualKind: "icon",
+        visualQuery: "右下角剪贴板图标",
+        semanticArea: "content",
+        slot: "trailing",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 876, y: 1411 }]);
+    expect(outcome?.metadata).toEqual(expect.objectContaining({
+      type: "visual_query_locator",
+      role: "report",
+      relocatedBy: "visible_icon_current_visual",
+      currentVisual: expect.objectContaining({
+        roleScore: expect.any(Number),
+        competingRole: expect.any(String)
+      })
+    }));
+  });
+
   it("searches the visible screen for a bare semantic icon instead of defaulting to the top bar", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -7390,6 +7564,35 @@ function decoratedAddFriendMenuHierarchy(): string {
 </hierarchy>`;
 }
 
+function androidContentAddButtonHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1000,2000]">
+    <node index="0" text="" resource-id="cn.eeo.classin:id/btn_add" class="androidx.compose.ui.platform.ComposeView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[795,1520][955,1680]">
+      <node index="0" text="" resource-id="" class="android.widget.ImageView" package="cn.eeo.classin" content-desc="add btn" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[795,1520][955,1680]" />
+    </node>
+  </node>
+</hierarchy>`;
+}
+
+function androidContentReportButtonHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1000,2000]">
+    <node index="0" text="" resource-id="cn.eeo.classin:id/iv_activity_lesson_report" class="android.widget.ImageView" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[755,1360][995,1460]" />
+  </node>
+</hierarchy>`;
+}
+
+function harmonyGenericContentReportButtonHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="harmony.widget.Root" package="cn.eeo.hos.classin.mobile" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1000,2000]">
+    <node index="0" text="" resource-id="" class="harmony.widget.Button" package="cn.eeo.hos.classin.mobile" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[755,1360][995,1460]" />
+  </node>
+</hierarchy>`;
+}
+
 function composeLessonInfoHierarchy(): string {
   return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
@@ -7636,6 +7839,28 @@ function floatingAddIconScreenshot(
   }
   drawLine(pixels, width, height, icon.centerX - 24, icon.centerY, icon.centerX + 24, icon.centerY, 10, 255);
   drawLine(pixels, width, height, icon.centerX, icon.centerY - 24, icon.centerX, icon.centerY + 24, 10, 255);
+  return pgm(width, height, pixels);
+}
+
+function contentReportIconScreenshot(
+  width: number,
+  height: number,
+  icon: { centerX: number; centerY: number }
+): Buffer {
+  const pixels = Array.from({ length: width * height }, () => 255);
+  const left = icon.centerX - 23;
+  const right = icon.centerX + 23;
+  const top = icon.centerY - 28;
+  const bottom = icon.centerY + 28;
+  drawLine(pixels, width, height, left, top + 8, left, bottom, 6, 20);
+  drawLine(pixels, width, height, left, bottom, right, bottom, 6, 20);
+  drawLine(pixels, width, height, right, bottom, right, top + 8, 6, 20);
+  drawLine(pixels, width, height, left, top + 8, right, top + 8, 6, 20);
+  drawLine(pixels, width, height, icon.centerX - 10, top, icon.centerX + 10, top, 6, 20);
+  drawLine(pixels, width, height, icon.centerX - 10, top, icon.centerX - 10, top + 11, 6, 20);
+  drawLine(pixels, width, height, icon.centerX + 10, top, icon.centerX + 10, top + 11, 6, 20);
+  drawLine(pixels, width, height, icon.centerX - 10, icon.centerY - 5, icon.centerX + 12, icon.centerY - 5, 4, 20);
+  drawLine(pixels, width, height, icon.centerX - 10, icon.centerY + 9, icon.centerX + 12, icon.centerY + 9, 4, 20);
   return pgm(width, height, pixels);
 }
 

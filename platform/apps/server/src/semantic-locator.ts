@@ -92,6 +92,16 @@ type UiHierarchyTextResolution = {
   candidateCount: number;
 };
 
+type UiHierarchyIconResolution = {
+  action: Extract<DeviceActionRequest, { type: "tap" }>;
+  candidate: UiElementCandidate;
+  resolvedLocator: UiElementLocator;
+  score: number;
+  semanticEvidence: number;
+  matchReason: "semantic_accessibility" | "semantic_identity";
+  candidateCount: number;
+};
+
 type SemanticStepResolverDeps = {
   ocr: OcrService;
   performAction: (serial: string, action: DeviceActionRequest) => Promise<DeviceActionResult | void>;
@@ -833,9 +843,46 @@ export class SemanticStepResolver {
   }): Promise<SemanticResolutionOutcome> {
     const params = input.step.params ?? {};
     const semanticArea = readSemanticArea(params.semanticArea) ?? "unknown";
+    const role = topBarIconRole(params).trim().toLowerCase();
+    const slot = readTopBarSlot(params.slot) ?? "trailing";
+    const hierarchyResolution = await this.resolveSemanticIconFromUiHierarchy(input, {
+      role,
+      semanticArea,
+      slot
+    });
+    if (hierarchyResolution) {
+      const actionResult = normalizeActionResult(await this.performAction(input, hierarchyResolution.action));
+      return {
+        supported: true,
+        resolved: true,
+        action: hierarchyResolution.action,
+        actionResult,
+        message: `Resolved semantic icon "${role || slot}" from UI hierarchy.`,
+        artifacts: [],
+        metadata: {
+          type: "semantic_icon_locator",
+          action: "tap",
+          ...pageTaskSemanticMetadata(params),
+          role,
+          slot,
+          semanticArea,
+          relocatedBy: "ui_hierarchy_icon",
+          recordedCandidateUsed: false,
+          center: hierarchyResolution.action,
+          hierarchy: {
+            candidate: hierarchyResolution.candidate,
+            resolvedLocator: hierarchyResolution.resolvedLocator,
+            score: roundPercent(hierarchyResolution.score),
+            semanticEvidence: roundPercent(hierarchyResolution.semanticEvidence),
+            matchReason: hierarchyResolution.matchReason,
+            candidateCount: hierarchyResolution.candidateCount
+          },
+          driverChannel: actionResult?.driverChannel
+        }
+      };
+    }
     if (semanticArea === "top") {
       const topBarOutcome = await this.resolveTopBarIconTap(input);
-      const role = topBarIconRole(params).trim().toLowerCase();
       const locatorKind = textParam(params.locatorKind).trim();
       const canFallbackToVisible = locatorKind === "semantic_icon_locator" && isKnownTopBarIconRole(role);
       if (topBarOutcome.resolved || !canFallbackToVisible) {
@@ -843,11 +890,73 @@ export class SemanticStepResolver {
       }
       return this.resolveVisibleSemanticIconTap(input, semanticArea);
     }
-    const role = topBarIconRole(params).trim().toLowerCase();
     if (semanticArea === "content" && role === "add") {
       return this.resolveContentIconTap(input, semanticArea);
     }
     return this.resolveVisibleSemanticIconTap(input, semanticArea);
+  }
+
+  private async resolveSemanticIconFromUiHierarchy(
+    input: {
+      step: ActionStep;
+      serial: string;
+      deviceSize?: { width: number; height: number };
+    },
+    options: {
+      role: string;
+      semanticArea: VisualSemanticArea;
+      slot: TopBarIconSlot;
+    }
+  ): Promise<UiHierarchyIconResolution | undefined> {
+    if (!this.deps.dumpUiHierarchy || !options.role || !input.deviceSize) {
+      return undefined;
+    }
+    let candidates: UiElementCandidate[];
+    try {
+      candidates = parseAndroidUiHierarchy(await this.deps.dumpUiHierarchy(input.serial));
+    } catch {
+      return undefined;
+    }
+    if (!candidates.length) {
+      return undefined;
+    }
+
+    const scored = candidates
+      .map((candidate) => {
+        const score = semanticIconUiCandidateScore(candidate, {
+          role: options.role,
+          semanticArea: options.semanticArea,
+          slot: options.slot,
+          deviceSize: input.deviceSize!
+        });
+        return { candidate, ...score };
+      })
+      .filter((item) => item.score >= 7 && item.semanticEvidence >= 4)
+      .sort((left, right) =>
+        right.score - left.score ||
+        right.semanticEvidence - left.semanticEvidence ||
+        (options.slot === "trailing"
+          ? right.candidate.bounds.centerX - left.candidate.bounds.centerX
+          : left.candidate.bounds.centerX - right.candidate.bounds.centerX)
+      );
+    const selected = scored[0];
+    if (!selected) {
+      return undefined;
+    }
+
+    return {
+      action: {
+        type: "tap",
+        x: selected.candidate.bounds.centerX,
+        y: selected.candidate.bounds.centerY
+      },
+      candidate: selected.candidate,
+      resolvedLocator: locatorFromCandidate(selected.candidate, candidates),
+      score: selected.score,
+      semanticEvidence: selected.semanticEvidence,
+      matchReason: selected.matchReason,
+      candidateCount: candidates.length
+    };
   }
 
   private async resolveVisibleSemanticIconTap(
@@ -7197,6 +7306,100 @@ function readTopBarSlot(value: unknown): TopBarIconSlot | undefined {
   return value === "leading" || value === "trailing" ? value : undefined;
 }
 
+function semanticIconUiCandidateScore(
+  candidate: UiElementCandidate,
+  input: {
+    role: string;
+    semanticArea: VisualSemanticArea;
+    slot: TopBarIconSlot;
+    deviceSize: { width: number; height: number };
+  }
+): { score: number; semanticEvidence: number; matchReason: UiHierarchyIconResolution["matchReason"] } {
+  const semanticEvidence = semanticIconUiEvidenceScore(candidate, input.role);
+  const enabledScore = candidate.enabled ? 1 : -4;
+  const interactivityScore = candidate.clickable ? 2.5 : candidate.longClickable ? 2 : candidate.focusable ? 1 : 0;
+  const areaScore = semanticIconAreaScore(candidate, input.semanticArea, input.deviceSize);
+  const slotScore = semanticIconSlotScore(candidate, input.slot, input.deviceSize);
+  const sizeScore = semanticIconUiSizeScore(candidate, input.deviceSize);
+  return {
+    score: semanticEvidence + enabledScore + interactivityScore + areaScore + slotScore + sizeScore,
+    semanticEvidence,
+    matchReason: semanticEvidence >= 5 ? "semantic_accessibility" : "semantic_identity"
+  };
+}
+
+function semanticIconUiEvidenceScore(candidate: UiElementCandidate, role: string): number {
+  const aliases = semanticIconRoleAliases(role);
+  if (!aliases.length) {
+    return 0;
+  }
+  const textLike = compactUiIdentity(candidate.text);
+  const accessibilityLike = compactUiIdentity(candidate.contentDesc);
+  const resourceLike = compactUiIdentity(candidate.resourceId);
+  const textScore = aliases.some((alias) => textLike.includes(alias) || accessibilityLike.includes(alias)) ? 5 : 0;
+  const resourceScore = aliases.some((alias) => resourceLike.includes(alias)) ? 4 : 0;
+  return Math.max(textScore, resourceScore);
+}
+
+function semanticIconRoleAliases(role: string): string[] {
+  const normalized = compactVisualQuery(normalizeSemanticIconRole(role));
+  const aliases = VISUAL_QUERY_ICON_ROLE_ALIASES
+    .filter((entry) => normalizeSemanticIconRole(entry.role) === normalizeSemanticIconRole(role))
+    .flatMap((entry) => entry.aliases)
+    .map(compactVisualQuery)
+    .filter(Boolean);
+  return [...new Set([normalized, ...aliases].filter(Boolean))];
+}
+
+function compactUiIdentity(value: string | undefined): string {
+  return compactVisualQuery(value ?? "");
+}
+
+function semanticIconAreaScore(
+  candidate: UiElementCandidate,
+  semanticArea: VisualSemanticArea,
+  deviceSize: { width: number; height: number }
+): number {
+  if (semanticArea === "unknown") {
+    return 0;
+  }
+  const yPercent = (candidate.bounds.centerY / deviceSize.height) * 100;
+  if (semanticArea === "top") {
+    return yPercent <= 22 ? 2 : -4;
+  }
+  if (semanticArea === "bottom") {
+    return yPercent >= 74 ? 2 : -3;
+  }
+  return yPercent >= 12 && yPercent <= 94 ? 2 : -4;
+}
+
+function semanticIconSlotScore(
+  candidate: UiElementCandidate,
+  slot: TopBarIconSlot,
+  deviceSize: { width: number; height: number }
+): number {
+  const xPercent = (candidate.bounds.centerX / deviceSize.width) * 100;
+  if (slot === "trailing") {
+    return xPercent >= 55 ? 1.5 : -1;
+  }
+  return xPercent <= 45 ? 1.5 : -1;
+}
+
+function semanticIconUiSizeScore(candidate: UiElementCandidate, deviceSize: { width: number; height: number }): number {
+  const viewportArea = Math.max(1, deviceSize.width * deviceSize.height);
+  const areaRatio = candidate.area / viewportArea;
+  if (areaRatio > 0.25) {
+    return -4;
+  }
+  if (areaRatio > 0.1) {
+    return -1;
+  }
+  if (areaRatio >= 0.0008 && areaRatio <= 0.04) {
+    return 0.8;
+  }
+  return 0;
+}
+
 function selectTopBarIconCandidate(
   candidates: VisualImageRegionCandidate[],
   options: {
@@ -7441,8 +7644,8 @@ async function locateCurrentContentAddIconInScreenshot(input: {
     return { diagnostic: { reason: "invalid_search_region", searchRegion } };
   }
   const rawComponents = findContentAddIconComponents(sample, pixelSearchRegion);
-  const textFiltered = excludeOcrTextOverlappingComponents(rawComponents, input.ocrLayout, sample);
-  const candidates = textFiltered.components
+  const ocrOverlap = ocrTextOverlapDiagnostics(rawComponents, input.ocrLayout, sample);
+  const candidates = rawComponents
     .map((component) => ({
       ...component,
       score: contentAddIconScore(component, sample, input.slot)
@@ -7458,7 +7661,7 @@ async function locateCurrentContentAddIconInScreenshot(input: {
     slot: input.slot,
     searchRegion,
     rawComponentCount: rawComponents.length,
-    ocrTextExcludedComponentCount: textFiltered.excludedCount,
+    ocrTextOverlappingComponentCount: ocrOverlap.overlappingCount,
     componentCount: candidates.length,
     bestScore: selected ? roundPercent(selected.score) : undefined,
     selectedBounds: selected?.bounds
@@ -7548,6 +7751,16 @@ async function locateCurrentVisibleSemanticIconInScreenshot(input: {
       rawComponentCount: phaseCandidates.rawComponentCount,
       ocrTextExcludedComponentCount: phaseCandidates.excludedCount,
       candidateCount: candidates.length,
+      rejectedBest: phaseCandidates.rejectedBest
+        ? {
+            score: roundPercent(phaseCandidates.rejectedBest.score),
+            roleScore: roundPercent(phaseCandidates.rejectedBest.roleScore),
+            roleMargin: roundPercent(phaseCandidates.rejectedBest.roleMargin),
+            competingRole: phaseCandidates.rejectedBest.competingRole,
+            competingRoleScore: phaseCandidates.rejectedBest.competingRoleScore === undefined ? undefined : roundPercent(phaseCandidates.rejectedBest.competingRoleScore),
+            bounds: phaseCandidates.rejectedBest.bounds
+          }
+        : undefined,
       selectedRegion: selected.candidate?.region,
       bestScore: selected.candidate ? roundPercent(selected.candidate.score) : undefined,
       roleScore: selected.candidate ? roundPercent(selected.candidate.roleScore) : undefined,
@@ -7614,20 +7827,33 @@ function findVisibleSemanticIconCandidates(
   role: string,
   deviceSize: { width: number; height: number },
   ocrLayout?: OcrLayoutResult
-): { candidates: VisibleSemanticIconCandidate[]; rawComponentCount: number; excludedCount: number } {
+): {
+  candidates: VisibleSemanticIconCandidate[];
+  rawComponentCount: number;
+  excludedCount: number;
+  rejectedBest?: {
+    score: number;
+    roleScore: number;
+    roleMargin: number;
+    competingRole?: string;
+    competingRoleScore?: number;
+    bounds: { x: number; y: number; width: number; height: number };
+  };
+} {
   const pixelSearchRegion = percentRegionToSampleRect(region, sample);
   if (!pixelSearchRegion) {
     return { candidates: [], rawComponentCount: 0, excludedCount: 0 };
   }
   const rawComponents = mergeNearbyTopBarIconComponents(findTopBarVisualComponents(sample, pixelSearchRegion), sample);
   const textFiltered = excludeOcrTextOverlappingComponents(rawComponents, ocrLayout, sample);
-  const candidates = textFiltered.components
+  const scoredComponents = textFiltered.components
     .map((component) => {
       const roleScores = semanticIconRoleScores(component, sample);
       const roleScore = roleScores.get(role) ?? 0;
       const competing = strongestCompetingSemanticIconRole(roleScores, role);
       const geometryScore = visibleSemanticIconGeometryScore(component, sample);
-      const score = roleScore * 0.82 + geometryScore * 0.18;
+      const roleSpecificBonus = semanticIconRoleSpecificVisualBonus(component, sample, role);
+      const score = roleScore * 0.82 + geometryScore * 0.18 + Math.min(roleSpecificBonus, 0.12);
       const componentRegion = sampleRectToPercent(component.bounds, sample);
       return {
         point: {
@@ -7638,19 +7864,33 @@ function findVisibleSemanticIconCandidates(
         bounds: component.bounds,
         score,
         roleScore,
-        roleMargin: roleScore - competing.score,
+        roleMargin: roleScore + roleSpecificBonus - competing.score,
         competingRole: competing.role,
         competingRoleScore: competing.score,
         polarity: component.polarity,
         semanticArea: semanticAreaForPercentRegion(componentRegion)
       };
-    })
+    });
+  const candidates = scoredComponents
     .filter((candidate) => candidate.roleScore >= 0.64 && candidate.score >= 0.64 && candidate.roleMargin >= 0.08)
     .sort((left, right) => right.score - left.score || right.roleScore - left.roleScore);
+  const rejectedBest = scoredComponents
+    .slice()
+    .sort((left, right) => right.score - left.score || right.roleScore - left.roleScore)[0];
   return {
     candidates,
     rawComponentCount: rawComponents.length,
-    excludedCount: textFiltered.excludedCount
+    excludedCount: textFiltered.excludedCount,
+    rejectedBest: rejectedBest
+      ? {
+          score: rejectedBest.score,
+          roleScore: rejectedBest.roleScore,
+          roleMargin: rejectedBest.roleMargin,
+          competingRole: rejectedBest.competingRole,
+          competingRoleScore: rejectedBest.competingRoleScore,
+          bounds: rejectedBest.bounds
+        }
+      : undefined
   };
 }
 
@@ -7702,6 +7942,68 @@ function visibleSemanticIconGeometryScore(component: TopBarIconVisualComponent, 
   const density = component.darkPixelCount / Math.max(1, component.bounds.width * component.bounds.height);
   const densityScore = density >= 0.025 && density <= 0.72 ? 1 : 0.3;
   return aspectScore * 0.34 + sizeScore * 0.33 + densityScore * 0.33;
+}
+
+function semanticIconRoleSpecificVisualBonus(component: TopBarIconVisualComponent, sample: ImageSample, role: string): number {
+  if (normalizeSemanticIconRole(role) === "report") {
+    return reportIconFrameScore(component, sample) * 0.22;
+  }
+  return 0;
+}
+
+function reportIconFrameScore(component: TopBarIconVisualComponent, sample: ImageSample): number {
+  const { bounds } = component;
+  const isForeground = component.polarity === "light" ? isTopBarIconLightPixel : isTopBarIconDarkPixel;
+  const leftX = Math.round(bounds.x + bounds.width * 0.08);
+  const rightX = Math.round(bounds.x + bounds.width * 0.92);
+  const topY = Math.round(bounds.y + bounds.height * 0.18);
+  const bottomY = Math.round(bounds.y + bounds.height * 0.88);
+  const leftCoverage = verticalLineCoverage(sample, isForeground, leftX, topY, bottomY);
+  const rightCoverage = verticalLineCoverage(sample, isForeground, rightX, topY, bottomY);
+  const topCoverage = horizontalLineCoverage(sample, isForeground, topY, leftX, rightX);
+  const bottomCoverage = horizontalLineCoverage(sample, isForeground, bottomY, leftX, rightX);
+  const frameScore = (leftCoverage + rightCoverage + topCoverage + bottomCoverage) / 4;
+  const aspect = bounds.width / Math.max(1, bounds.height);
+  const aspectScore = aspect >= 0.55 && aspect <= 1.2 ? 1 : 0.4;
+  return frameScore * 0.82 + aspectScore * 0.18;
+}
+
+function verticalLineCoverage(
+  sample: ImageSample,
+  isForeground: (value: number | undefined) => boolean,
+  x: number,
+  startY: number,
+  endY: number
+): number {
+  let foreground = 0;
+  let total = 0;
+  const clampedX = Math.max(0, Math.min(sample.width - 1, x));
+  for (let y = Math.max(0, startY); y <= Math.min(sample.height - 1, endY); y += 1) {
+    total += 1;
+    if (isForeground(sample.pixels[y * sample.width + clampedX])) {
+      foreground += 1;
+    }
+  }
+  return total ? foreground / total : 0;
+}
+
+function horizontalLineCoverage(
+  sample: ImageSample,
+  isForeground: (value: number | undefined) => boolean,
+  y: number,
+  startX: number,
+  endX: number
+): number {
+  let foreground = 0;
+  let total = 0;
+  const clampedY = Math.max(0, Math.min(sample.height - 1, y));
+  for (let x = Math.max(0, startX); x <= Math.min(sample.width - 1, endX); x += 1) {
+    total += 1;
+    if (isForeground(sample.pixels[clampedY * sample.width + x])) {
+      foreground += 1;
+    }
+  }
+  return total ? foreground / total : 0;
 }
 
 function ambiguousSemanticIconMessage(role: string, candidateCount: number, semanticArea: VisualSemanticArea): string {
@@ -8119,6 +8421,20 @@ function excludeOcrTextOverlappingComponents<T extends { bounds: { x: number; y:
   return { components: kept, excludedCount };
 }
 
+function ocrTextOverlapDiagnostics<T extends { bounds: { x: number; y: number; width: number; height: number }; center: { x: number; y: number } }>(
+  components: T[],
+  layout: OcrLayoutResult | undefined,
+  sample: ImageSample
+): { overlappingCount: number } {
+  const textRects = ocrTextRectsInSample(layout, sample);
+  if (!textRects.length || !components.length) {
+    return { overlappingCount: 0 };
+  }
+  return {
+    overlappingCount: components.filter((component) => componentOverlapsOcrText(component, textRects)).length
+  };
+}
+
 function locateLeadingAvatarByTopTitle(
   layout: OcrLayoutResult | undefined,
   sample: ImageSample,
@@ -8363,7 +8679,7 @@ function isTopBarIconLightPixel(value: number | undefined): boolean {
   return typeof value === "number" && value >= 205;
 }
 
-const KNOWN_TOP_BAR_ICON_ROLE_LIST = ["add", "arrow", "back", "chevron", "close", "filter", "menu", "more", "search", "share", "sort"] as const;
+const KNOWN_TOP_BAR_ICON_ROLE_LIST = ["add", "arrow", "back", "chevron", "close", "filter", "menu", "more", "report", "search", "share", "sort"] as const;
 const KNOWN_TOP_BAR_ICON_ROLES = new Set<string>(KNOWN_TOP_BAR_ICON_ROLE_LIST);
 
 const VISUAL_QUERY_ICON_ROLE_ALIASES: ReadonlyArray<{ role: string; aliases: readonly string[] }> = [
@@ -8376,6 +8692,7 @@ const VISUAL_QUERY_ICON_ROLE_ALIASES: ReadonlyArray<{ role: string; aliases: rea
   { role: "menu", aliases: ["菜单", "menu", "hamburger"] },
   { role: "filter", aliases: ["筛选", "过滤", "filter"] },
   { role: "sort", aliases: ["排序", "上下箭头", "升序", "降序", "sort"] },
+  { role: "report", aliases: ["报告", "课堂报告", "剪贴板", "看板", "report", "clipboard", "lessonreport", "lesson_report"] },
   { role: "chevron", aliases: ["箭头", "右箭头", "展开", "进入", "chevron", "arrow", "arrowright", "rightarrow"] }
 ];
 
@@ -8510,6 +8827,18 @@ function topBarIconRoleTemplates(role: string): Array<Array<{ x: number; y: numb
         drawMaskLine(mask, 32, 16, 20, 16, 3, 2);
         drawMaskLine(mask, 32, 16, 3, 9, 10, 2);
         drawMaskLine(mask, 32, 16, 3, 23, 10, 2);
+      })];
+    case "report":
+      return [create((mask) => {
+        drawMaskLine(mask, 32, 8, 9, 8, 29, 2);
+        drawMaskLine(mask, 32, 8, 29, 24, 29, 2);
+        drawMaskLine(mask, 32, 24, 29, 24, 9, 2);
+        drawMaskLine(mask, 32, 8, 9, 24, 9, 2);
+        drawMaskLine(mask, 32, 12, 4, 20, 4, 2);
+        drawMaskLine(mask, 32, 12, 4, 12, 11, 2);
+        drawMaskLine(mask, 32, 20, 4, 20, 11, 2);
+        drawMaskLine(mask, 32, 12, 16, 21, 16, 1);
+        drawMaskLine(mask, 32, 12, 22, 21, 22, 1);
       })];
     case "search":
       return [create((mask) => {

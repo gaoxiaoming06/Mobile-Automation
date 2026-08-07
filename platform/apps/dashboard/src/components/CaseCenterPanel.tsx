@@ -266,7 +266,7 @@ export function CaseCenterPanel({
     }
   }
 
-  const steps = caseStepViews(document, plan);
+  const steps = caseStepViews(document, plan, { parameterValues });
   const loopAvailability = loopBodyAvailability(document);
   const runActive = Boolean(lastRun && ["pending", "running", "paused"].includes(lastRun.status));
 

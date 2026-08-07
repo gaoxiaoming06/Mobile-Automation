@@ -99,6 +99,44 @@ describe("caseStepViews", () => {
     ]);
   });
 
+  it("renders current parameter values in step summaries while keeping the parameter identity visible", () => {
+    const document: CaseDocumentView = {
+      version: 1,
+      kind: "case",
+      purpose: "business",
+      name: "创建公开课并配置联席教师",
+      app: { id: "cn.eeo.classin" },
+      parameters: {
+        lessonDuration: { type: "string", label: "课堂时长", required: true },
+        coTeacherName: { type: "string", label: "联席教师", required: true }
+      },
+      steps: [
+        {
+          id: "select-duration",
+          selectText: {
+            target: { text: "课堂时长", area: "content" },
+            value: "${lessonDuration}"
+          }
+        },
+        {
+          id: "select-co-teacher",
+          tap: { target: { text: "${coTeacherName}" } }
+        }
+      ],
+      tags: []
+    };
+
+    expect(caseStepViews(document, undefined, {
+      parameterValues: {
+        lessonDuration: "7小时20分钟",
+        coTeacherName: "海外55"
+      }
+    }).map((step) => [step.name, step.context])).toEqual([
+      ["将“课堂时长”选择为“7小时20分钟（参数：lessonDuration）”", "课堂时长 → 7小时20分钟（参数：lessonDuration）"],
+      ["点击“海外55（参数：coTeacherName）”", "海外55（参数：coTeacherName）"]
+    ]);
+  });
+
   it("summarizes text and positioned icon taps while preserving custom names", () => {
     const document: CaseDocumentView = {
       version: 1,
