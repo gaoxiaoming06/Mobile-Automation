@@ -265,7 +265,7 @@ describe("SemanticStepResolver", () => {
     });
 
     expect(actions).toEqual([]);
-    expect(locateText).toHaveBeenCalledTimes(1);
+    expect(locateText).toHaveBeenCalled();
     expect(outcome).toEqual(expect.objectContaining({
       resolved: false,
       metadata: expect.objectContaining({

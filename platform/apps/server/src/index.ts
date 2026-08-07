@@ -56,6 +56,11 @@ import { registerScriptFlowRoutes } from "./script-flow-api.js";
 import { registerScriptFlowAiRoutes } from "./script-flow-ai-api.js";
 import { registerTrialLearningRoutes } from "./trial-learning-api.js";
 import { generateScriptFlowDraft } from "./script-flow-ai-planner.js";
+import {
+  classInCodeContextOptionsFromEnv,
+  createClassInCodeContextProvider,
+  mergeScriptFlowExternalContexts
+} from "./script-flow-code-context.js";
 import { createScriptFlowAiTimingContext, timedScriptFlowAiStage } from "./script-flow-ai-timing.js";
 import { understandScreenForScriptFlow } from "./script-flow-screen-understanding.js";
 import { pageStateExpectationVerifier, ScriptFlowRunner } from "./script-flow-runner.js";
@@ -81,6 +86,7 @@ const ocrSidecar = await ensureRapidOcrSidecar();
 const ocr = createDefaultOcrService();
 const observationService = new ObservationService(driver, ocr);
 const pageAssetCatalog = new StoragePageAssetCatalog(storage);
+const classInCodeContextProvider = createClassInCodeContextProvider(classInCodeContextOptionsFromEnv(process.env));
 const pageStateService = new DefaultPageStateService(pageAssetCatalog, observationService, readPageAssetBaselineArtifact);
 const deviceExecutionLease = new DeviceExecutionLease();
 const runner = new AutomationRunner(storage, driver, ocr, {
@@ -131,6 +137,11 @@ registerScriptFlowAiRoutes(app, {
     const timingContext = createScriptFlowAiTimingContext(prompt);
     return timedScriptFlowAiStage(timingContext, "total", async () => {
       const config = resolveAiModelConfig(process.env, storage.getAiModelSettings());
+      const automaticExternalContext = await timedScriptFlowAiStage(timingContext, "collect_code_context", () => classInCodeContextProvider({
+        prompt,
+        appId,
+        platform
+      }), { appId, platform, callerExternalContext: Boolean(externalContext) });
       const observation = screenAssist
         ? await timedScriptFlowAiStage(timingContext, "collect_observation", () => observationService.collect(screenAssist.deviceSerial, {
             includeScreenshot: true,
@@ -148,6 +159,7 @@ registerScriptFlowAiRoutes(app, {
             observation
           }), { deviceSerial: screenAssist?.deviceSerial })
         : undefined;
+      const plannerExternalContext = mergeScriptFlowExternalContexts(externalContext, automaticExternalContext);
       return generateScriptFlowDraft({
         config,
         prompt,
@@ -155,7 +167,7 @@ registerScriptFlowAiRoutes(app, {
         platform,
         existingFlow,
         ...(screenContext ? { screenContext } : {}),
-        ...(externalContext ? { externalContext } : {}),
+        ...(plannerExternalContext ? { externalContext: plannerExternalContext } : {}),
         timingContext,
         pageCatalog: pageAssetCatalog,
         flows: storage.listScriptFlows({ appId, platform }),

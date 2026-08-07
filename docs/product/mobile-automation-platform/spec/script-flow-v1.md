@@ -129,6 +129,8 @@ NavigationEntry 是试运行验证出的轻量页面跳转经验，保存 `fromP
 
 新建用例时，AI 默认输入包含自然语言、目标 App、平台、页面身份目录和可复用用例摘要，不读取实时设备页面，也不包含页面元素或其定位信息。修改用例时额外包含当前完整用例，未被用户提及的步骤、参数和约束应保持不变。AI 输出必须是可校验的 ScriptFlow v1 文档，不直接控制设备，也不能生成 schema 之外的目标字段。
 
+当 `CLASSIN_CODE_CONTEXT_ENABLED` 开启且目标 App 属于 ClassIn 时，服务端可以在生成前基于自然语言构造受控 classin-code 检索计划：先做语义召回，再对关键页面/文案/业务词做精确检索。检索结果必须压缩为 `externalContext` 中的摘要、候选文件、候选步骤和约束；不得把源码片段、底层控件 ID、选择器或坐标交给规划器。该上下文只帮助模型理解实现命名和业务顺序，不能覆盖用户明示步骤、已验证页面资产、NavigationEntry 或真机试运行结果；检索失败时生成链路继续按无代码上下文执行。
+
 当用户显式开启“结合当前屏幕生成”时，服务端可以采集当前设备 Observation 和截图，并先让 AI 输出 ScreenUnderstandingCandidate。该候选经过确定性校验、脱敏、去坐标、去平台私有字段和动态值标注后，才能作为 ScreenUnderstandingContext 进入 ScriptFlow 生成 prompt。实时屏幕上下文只用于理解“当前页、第一个输入框、预填课堂名”等用户描述，不是资产事实来源，不能覆盖已验证资产，不能写入 PageAsset、InteractionAsset、NavigationEntry 或 LearningCandidate。
 
 `full_regression` 草稿必须有明确字段覆盖来源：用户在输入中列出本次覆盖的字段/配置项，或系统正在修改一份已有的 `full_regression` 用例。当前阶段不从 PageAsset、页面名称或 AI 常识自动枚举表单字段；缺少覆盖来源时返回 `needs_clarification` 要求用户补充字段清单。后续如果沉淀字段覆盖摘要，也必须从已验证 ScriptFlow、InteractionAsset 和 FlowVerification 派生，不能把表单模型写回 PageAsset。
