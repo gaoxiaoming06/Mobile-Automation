@@ -68,6 +68,7 @@ type PageAssetsSnapshot = {
 type PageAssetsPanelProps = {
   libraries?: PageAssetLibrary[];
   assetsByVersionId?: Record<string, GraphAssetGovernanceSummary>;
+  advancedToolsEnabled?: boolean;
   onOpenAssetRecording: () => void;
   setMessage: (message: string) => void;
 };
@@ -77,6 +78,7 @@ type DecoratedPageAsset = PageAssetSummary & { graphName?: string; appId?: strin
 export function PageAssetsPanel({
   libraries: initialLibraries,
   assetsByVersionId: initialAssetsByVersionId,
+  advancedToolsEnabled = false,
   onOpenAssetRecording,
   setMessage
 }: PageAssetsPanelProps) {
@@ -139,14 +141,14 @@ export function PageAssetsPanel({
     }
   }
 
-  async function deletePageAsset(graphVersionId: string | undefined, assetId: string, assetName: string) {
+  async function deprecatePageAsset(graphVersionId: string | undefined, assetId: string, assetName: string) {
     if (!graphVersionId) {
-      setMessage("页面资产缺少资产库版本，无法删除");
+      setMessage("页面资产缺少资产库版本，无法停用");
       return;
     }
     try {
       setBusy(true);
-      const response = await apiFetchJson<GraphAssetsResponse>(`/api/page-assets/${encodeURIComponent(graphVersionId)}/assets/nodes/${encodeURIComponent(assetId)}`, {
+      const response = await apiFetchJson<GraphAssetsResponse>(`/api/page-assets/${encodeURIComponent(graphVersionId)}/assets/nodes/${encodeURIComponent(assetId)}?confirm=deprecate-page-asset`, {
         method: "DELETE"
       });
       setAssetsByVersionId((current) => ({
@@ -156,7 +158,7 @@ export function PageAssetsPanel({
       if (selectedAssetId === assetId) {
         setSelectedAssetId(undefined);
       }
-      setMessage(`已删除页面资产：${assetName}`);
+      setMessage(`已停用页面资产：${assetName}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -181,11 +183,12 @@ export function PageAssetsPanel({
           <PageAssetList
             assets={pageAssets}
             busy={busy}
-            emptyText="还没有保存过页面资产。请先进入资产录制页保存当前页面。"
+            emptyText="还没有保存过页面资产。请先进入资产校准页保存当前页面。"
             selectedAssetId={selectedLibraryAsset?.id}
             onSelectAsset={setSelectedAssetId}
-            onDeletePageAsset={deletePageAsset}
+            onDeprecatePageAsset={deprecatePageAsset}
             onOpenAssetRecording={onOpenAssetRecording}
+            advancedToolsEnabled={advancedToolsEnabled}
           />
           {selectedLibraryAsset ? <PageAssetDetailPanel asset={selectedLibraryAsset} /> : null}
         </div>
@@ -255,16 +258,18 @@ function PageAssetList({
   emptyText,
   selectedAssetId,
   onSelectAsset,
-  onDeletePageAsset,
-  onOpenAssetRecording
+  onDeprecatePageAsset,
+  onOpenAssetRecording,
+  advancedToolsEnabled
 }: {
   assets: DecoratedPageAsset[];
   busy: boolean;
   emptyText: string;
   selectedAssetId?: string;
   onSelectAsset: (assetId: string) => void;
-  onDeletePageAsset: (graphVersionId: string | undefined, assetId: string, assetName: string) => void | Promise<void>;
+  onDeprecatePageAsset: (graphVersionId: string | undefined, assetId: string, assetName: string) => void | Promise<void>;
   onOpenAssetRecording: () => void;
+  advancedToolsEnabled: boolean;
 }) {
   if (!assets.length) {
     return (
@@ -272,7 +277,7 @@ function PageAssetList({
         <div className="empty">{emptyText}</div>
         <button className="icon-button" type="button" onClick={onOpenAssetRecording}>
           <DatabaseZap size={16} />
-          去资产录制
+          去资产校准
         </button>
       </div>
     );
@@ -298,10 +303,12 @@ function PageAssetList({
               <Info size={14} />
               详情
             </button>
-            <button className="page-asset-action danger" type="button" disabled={busy} aria-label={`删除页面资产：${asset.name}`} onClick={() => void onDeletePageAsset(asset.graphVersionId, asset.id, asset.name)}>
-              <Trash2 size={14} />
-              删除
-            </button>
+            {advancedToolsEnabled ? (
+              <button className="page-asset-action danger" type="button" disabled={busy} aria-label={`停用页面资产：${asset.name}`} onClick={() => void onDeprecatePageAsset(asset.graphVersionId, asset.id, asset.name)}>
+                <Trash2 size={14} />
+                停用
+              </button>
+            ) : null}
           </div>
         </article>
       ))}
@@ -349,7 +356,7 @@ function PageAssetDetailPanel({ asset }: { asset: DecoratedPageAsset }) {
                 ))}
               </div>
             ) : (
-              <p>暂无已确认匹配依据；请在资产录制页确认 OCR 文字或截图重点区域。</p>
+              <p>暂无已确认匹配依据；请在资产校准页确认 OCR 文字或截图重点区域。</p>
             )}
           </div>
 

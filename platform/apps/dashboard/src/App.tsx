@@ -173,6 +173,7 @@ export const DEFAULT_ANDROID_APP_MONITOR_SETTINGS: AndroidAppMonitorSettingsDraf
   enableHeapDump: false
 };
 const STABILITY_DANGEROUS_TEXT_BY_PACKAGE_STORAGE_KEY = "mobile-automation.stabilityDangerousTextByPackage.v1";
+export const DASHBOARD_ADVANCED_TOOLS_STORAGE_KEY = "mobile-automation.advancedTools";
 type PreviewWorkspaceStyle = CSSProperties & {
   "--asset-recording-preview-width"?: string;
 };
@@ -458,6 +459,17 @@ export function saveStabilityDangerousTextForPackage(packageName: string, text: 
   storage.setItem(STABILITY_DANGEROUS_TEXT_BY_PACKAGE_STORAGE_KEY, JSON.stringify(byPackage));
 }
 
+export function dashboardAdvancedToolsEnabled(
+  storage: Pick<TextStorage, "getItem"> | undefined = browserTextStorage(),
+  envValue: string | undefined = readViteEnv("VITE_DASHBOARD_ADVANCED_TOOLS")
+): boolean {
+  const stored = storage?.getItem(DASHBOARD_ADVANCED_TOOLS_STORAGE_KEY);
+  if (stored !== undefined && stored !== null) {
+    return booleanFlag(stored);
+  }
+  return booleanFlag(envValue);
+}
+
 function browserTextStorage(): TextStorage | undefined {
   try {
     return typeof window === "undefined" ? undefined : window.localStorage;
@@ -474,6 +486,15 @@ function readDangerousTextByPackage(storage: TextStorage): Record<string, string
   } catch {
     return {};
   }
+}
+
+function readViteEnv(key: string): string | undefined {
+  const meta = import.meta as ImportMeta & { env?: Record<string, string | undefined> };
+  return meta.env?.[key];
+}
+
+function booleanFlag(value: string | undefined | null): boolean {
+  return ["1", "true", "yes", "on"].includes((value ?? "").trim().toLowerCase());
 }
 
 function dangerousTextPatternsFromText(text: string): string[] {
@@ -612,6 +633,7 @@ export function App() {
   const [aiModelDraft, setAiModelDraft] = useState<AiModelSettingsDraft>(aiModelDraftFromSettings(DEFAULT_AI_MODEL_SETTINGS));
   const [androidAppMonitorDraft, setAndroidAppMonitorDraft] = useState<AndroidAppMonitorSettingsDraft>(DEFAULT_ANDROID_APP_MONITOR_SETTINGS);
   const [androidAppMonitorExecutionOverrides, setAndroidAppMonitorExecutionOverrides] = useState<AndroidAppMonitorExecutionOverrides>({});
+  const advancedToolsEnabled = dashboardAdvancedToolsEnabled();
   const activePreviewWorkspaceKey = previewWorkspaceKey(activeNavItem);
 
   const workspaceRef = useRef<HTMLElement | null>(null);
@@ -735,6 +757,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!advancedToolsEnabled && (activeNavItem === "assetRecording" || activeNavItem === "pageAssets")) {
+      setActiveNavItem("devices");
+      return;
+    }
     if (!retainedWorkbenchNavItems.has(activeNavItem)) return;
     setRetainedNavItems((current) => {
       if (current.has(activeNavItem)) return current;
@@ -742,7 +768,7 @@ export function App() {
       next.add(activeNavItem);
       return next;
     });
-  }, [activeNavItem]);
+  }, [activeNavItem, advancedToolsEnabled]);
 
   useEffect(() => {
     if (activeNavItem !== "settings" || aiModelSettingsLoadedRef.current) {
@@ -975,10 +1001,18 @@ export function App() {
   }
 
   function openAssetRecording() {
+    if (!advancedToolsEnabled) {
+      setActiveNavItem("devices");
+      return;
+    }
     setActiveNavItem("assetRecording");
   }
 
   function openPageAssets() {
+    if (!advancedToolsEnabled) {
+      setActiveNavItem("devices");
+      return;
+    }
     setActiveNavItem("pageAssets");
   }
 
@@ -1455,6 +1489,7 @@ export function App() {
         <AppNav
           activeNavItem={activeNavItem}
           navCollapsed={navCollapsed}
+          advancedToolsEnabled={advancedToolsEnabled}
           setNavCollapsed={setNavCollapsed}
           openDevices={openDevices}
           openAssetRecording={openAssetRecording}
@@ -1480,7 +1515,7 @@ export function App() {
           />
         )}
 
-        {activeNavItem === "assetRecording" && (
+        {advancedToolsEnabled && activeNavItem === "assetRecording" && (
           <AssetRecordingPanel
             selectedSerial={selectedSerial}
             selectedDeviceName={selectedDevice?.name || selectedDevice?.serial}
@@ -1531,11 +1566,12 @@ export function App() {
           />
         )}
 
-        {(activeNavItem === "pageAssets" || retainedNavItems.has("pageAssets")) && (
+        {advancedToolsEnabled && (activeNavItem === "pageAssets" || retainedNavItems.has("pageAssets")) && (
           <RetainedNavPanel active={activeNavItem === "pageAssets"} panelId="pageAssets">
             <PageAssetsPanel
               onOpenAssetRecording={openAssetRecording}
               setMessage={setMessage}
+              advancedToolsEnabled={advancedToolsEnabled}
             />
           </RetainedNavPanel>
         )}

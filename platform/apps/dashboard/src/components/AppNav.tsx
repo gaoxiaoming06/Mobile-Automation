@@ -17,6 +17,7 @@ export type AppNavItemId = "devices" | "assetRecording" | "pageAssets" | "script
 type AppNavProps = {
   activeNavItem: AppNavItemId;
   navCollapsed: boolean;
+  advancedToolsEnabled?: boolean;
   setNavCollapsed: (updater: (value: boolean) => boolean) => void;
   openDevices: () => void;
   openAssetRecording: () => void;
@@ -31,6 +32,7 @@ type AppNavProps = {
 export function AppNav({
   activeNavItem,
   navCollapsed,
+  advancedToolsEnabled = false,
   setNavCollapsed,
   openDevices,
   openAssetRecording,
@@ -52,14 +54,18 @@ export function AppNav({
           <Smartphone size={18} />
           <span>设备管理</span>
         </button>
-        <button className={navButtonClass(activeNavItem, "assetRecording")} onClick={openAssetRecording} title="资产录制" type="button">
-          <DatabaseZap size={18} />
-          <span>资产录制</span>
-        </button>
-        <button className={navButtonClass(activeNavItem, "pageAssets")} onClick={openPageAssets} title="页面资产库" type="button">
-          <FileText size={18} />
-          <span>页面资产库</span>
-        </button>
+        {advancedToolsEnabled ? (
+          <>
+            <button className={navButtonClass(activeNavItem, "assetRecording")} onClick={openAssetRecording} title="资产校准" type="button">
+              <DatabaseZap size={18} />
+              <span>资产校准</span>
+            </button>
+            <button className={navButtonClass(activeNavItem, "pageAssets")} onClick={openPageAssets} title="页面资产库" type="button">
+              <FileText size={18} />
+              <span>页面资产库</span>
+            </button>
+          </>
+        ) : null}
         <button className={navButtonClass(activeNavItem, "scriptFlows")} onClick={openScriptFlows} title="用例中心" type="button">
           <Workflow size={18} />
           <span>用例中心</span>

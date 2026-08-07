@@ -54,9 +54,25 @@ describe("PageAssetsPanel", () => {
 
     expect(markup).toContain("已保存页面资产");
     expect(markup).toContain("页面身份");
+    expect(markup).not.toContain("停用");
     expect(markup).not.toContain("公共定位器");
     expect(markup).not.toContain("页面任务");
     expect(markup).not.toContain("连接边");
+  });
+
+  it("shows page asset deactivation only in advanced tools mode", () => {
+    const markup = renderToStaticMarkup(React.createElement(PageAssetsPanel, {
+      libraries: [library],
+      assetsByVersionId: {
+        "version-1": { graphVersionId: "version-1", pageAssets: [asset] }
+      },
+      onOpenAssetRecording: vi.fn(),
+      setMessage: vi.fn(),
+      advancedToolsEnabled: true
+    }));
+
+    expect(markup).toContain("停用");
+    expect(markup).not.toContain("删除");
   });
 
   it("summarizes confirmed identity evidence", () => {

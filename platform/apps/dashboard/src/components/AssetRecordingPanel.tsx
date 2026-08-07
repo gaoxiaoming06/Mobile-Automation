@@ -344,7 +344,7 @@ export function AssetRecordingPanel({
       <div className="asset-editor-column">
         <div className="panel asset-page-card asset-page-card-shell">
           {page.status === "idle" ? (
-            <div className="empty">切到资产录制页后会自动识别当前页面；也可以切换设备或操作页面后等待刷新。</div>
+            <div className="empty">切到资产校准页后会自动识别当前页面；也可以切换设备或操作页面后等待刷新。</div>
           ) : (
             <>
               <div className="asset-page-title">

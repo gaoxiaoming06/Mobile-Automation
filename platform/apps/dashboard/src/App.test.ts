@@ -5,10 +5,12 @@ import {
   App,
   DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
   DEFAULT_SCRIPT_APP_ID,
+  DASHBOARD_ADVANCED_TOOLS_STORAGE_KEY,
   RetainedNavPanel,
   actionStrategyForWorkspace,
   aiModelSettingsRequestBody,
   androidAppMonitorDefaultEnabled,
+  dashboardAdvancedToolsEnabled,
   pageAssetLibraryInitialization,
   previewWorkspaceKey,
   workspaceStyleForNav
@@ -19,6 +21,8 @@ describe("App shell", () => {
     const markup = renderToStaticMarkup(React.createElement(App));
     expect(markup).toContain("自动化测试平台");
     expect(markup).toContain("设备管理");
+    expect(markup).not.toContain("资产校准");
+    expect(markup).not.toContain("页面资产库");
     expect(markup).toContain("用例中心");
     expect(markup).not.toContain("脚本用例");
     expect(markup).toContain("AI 生成测试");
@@ -59,6 +63,14 @@ describe("App shell", () => {
 
   it("uses the cross-platform product id as the default ScriptFlow app id", () => {
     expect(DEFAULT_SCRIPT_APP_ID).toBe("classin");
+  });
+
+  it("keeps advanced tools disabled by default and lets local storage override env", () => {
+    const emptyStorage = { getItem: () => null };
+
+    expect(dashboardAdvancedToolsEnabled(emptyStorage, undefined)).toBe(false);
+    expect(dashboardAdvancedToolsEnabled(emptyStorage, "true")).toBe(true);
+    expect(dashboardAdvancedToolsEnabled({ getItem: (key) => (key === DASHBOARD_ADVANCED_TOOLS_STORAGE_KEY ? "false" : null) }, "true")).toBe(false);
   });
 
   it("only submits local Codex preferences from the settings page", () => {

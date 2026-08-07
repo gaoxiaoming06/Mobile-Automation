@@ -89,8 +89,40 @@ Start from `.env.example` and only override what is needed:
 - `SCRCPY_SERVER_PATH`: optional custom scrcpy-server v3.3.3 file. The default pinned server file is committed at `platform/tools/scrcpy-server-v3.3.3`.
 - `IOS_WDA_URL` or `IOS_WDA_URL_<UDID>`: optional iOS control endpoint.
 - `ARTIFACT_RETENTION_ENABLED`: keep disabled unless the team has agreed on report retention.
+- `VITE_DASHBOARD_ADVANCED_TOOLS`: optional dashboard switch for local asset calibration and page asset governance tools. This is an operator/debug convenience, not an authentication or permission boundary.
 
 The host `scrcpy` CLI is optional. Install it only when you need the native debug window or recording fallback; browser-embedded Android preview/control uses the pinned server file above.
+
+## Dashboard Advanced Tools
+
+The dashboard hides asset governance tools by default. Normal users should create, run, and review ScriptFlow tests without seeing page asset calibration screens.
+
+Advanced tools expose:
+
+- `资产校准`: manually confirm or correct page identity evidence.
+- `页面资产库`: inspect saved page assets and explicitly deactivate broken assets.
+
+Enable advanced tools for a local browser session from Chrome DevTools Console:
+
+```js
+localStorage.setItem("mobile-automation.advancedTools", "true");
+location.reload();
+```
+
+Disable the local override:
+
+```js
+localStorage.removeItem("mobile-automation.advancedTools");
+location.reload();
+```
+
+Operators can also enable the tools for a dev/build session with:
+
+```bash
+VITE_DASHBOARD_ADVANCED_TOOLS=true pnpm dev
+```
+
+The `localStorage` value overrides `VITE_DASHBOARD_ADVANCED_TOOLS` in that browser. This switch only changes local dashboard visibility; it is not an authentication, authorization, or audit boundary.
 
 ## Current Limits
 

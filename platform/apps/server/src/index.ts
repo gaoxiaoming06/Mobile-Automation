@@ -22,6 +22,7 @@ import { DeviceExecutionBusyError, DeviceExecutionLease } from "./device-executi
 import { artifactFilePath, artifactRoot, artifactSendFileOptions, artifactUrl } from "./artifacts.js";
 import { pageAssetLibraryTargetMismatchMessage } from "./page-asset-library-target.js";
 import { registerPageAssetLibraryRoutes } from "./page-asset-library-api.js";
+import { pageAssetDeprecationConfirmation } from "./page-asset-deprecation-guard.js";
 import { buildConfirmedPageAssetInput, identifyOrCreateCurrentPageDraft, readCurrentPageCollectionOptions } from "./current-page-asset.js";
 import { buildPageAssetLibrarySummary } from "./page-assets-summary.js";
 import { scaleLocatorCoordinate } from "./locator-coordinate.js";
@@ -659,6 +660,11 @@ app.post("/api/page-assets/:versionId/assets/nodes", async (req, res) => {
 
 app.delete("/api/page-assets/:versionId/assets/nodes/:nodeId", (req, res) => {
   try {
+    const confirmation = pageAssetDeprecationConfirmation(req.query);
+    if (!confirmation.ok) {
+      res.status(400).json({ error: confirmation.error });
+      return;
+    }
     const graphVersion = storage.getBusinessGraphVersion(req.params.versionId);
     if (!graphVersion) {
       res.status(404).json({ error: "Page asset library version not found" });
