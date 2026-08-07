@@ -368,6 +368,8 @@ export class ScriptFlowRunner {
         platform,
         parameters,
         value: stringInput(step.input, "value"),
+        valueParamKey: optionalStringInput(step.input, "valueParamKey"),
+        sensitiveInput: booleanInput(step.input, "sensitiveInput"),
         interactionAsset
       });
     }
@@ -754,6 +756,11 @@ function launchAppIdentifier(input: Record<string, unknown>, appId: string, runt
 
 function optionalStringInput(input: Record<string, unknown>, key: string): string | undefined {
   return stringInput(input, key) || undefined;
+}
+
+function booleanInput(input: Record<string, unknown>, key: string): boolean | undefined {
+  const value = input[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function numberInput(input: Record<string, unknown>, key: string): number | undefined {

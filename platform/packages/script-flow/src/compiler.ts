@@ -205,7 +205,7 @@ function compileExecutableStep(
   id: string,
   context: ExpansionContext
 ): CompiledBodyStep {
-  const { action, input } = executableAction(step, context.renderedParameters);
+  const { action, input } = executableAction(step, context);
   const onPage = step.onPage ? interpolateString(step.onPage, context.renderedParameters) : undefined;
   const expectPage = step.expectPage ? interpolateString(step.expectPage, context.renderedParameters) : undefined;
   return {
@@ -227,8 +227,9 @@ function compileExecutableStep(
 
 function executableAction(
   step: Exclude<ScriptStep, { repeat: unknown } | { when: unknown } | { runFlow: string }>,
-  parameters: Record<string, ScriptParameterValue>
+  context: ExpansionContext
 ): { action: ScriptExecutableAction; input: Record<string, unknown> } {
+  const parameters = context.renderedParameters;
   if ("launchApp" in step) {
     return { action: "launchApp", input: interpolateRecord(step.launchApp, parameters) };
   }
@@ -236,7 +237,10 @@ function executableAction(
     return { action: "tap", input: interpolateRecord(step.tap, parameters) };
   }
   if ("inputText" in step) {
-    return { action: "inputText", input: interpolateRecord(step.inputText, parameters) };
+    return {
+      action: "inputText",
+      input: annotateValueParameter(interpolateRecord(step.inputText, parameters), step.inputText.value, context.flow.parameters)
+    };
   }
   if ("clearText" in step) {
     return { action: "clearText", input: interpolateRecord(step.clearText, parameters) };
@@ -274,6 +278,23 @@ function executableAction(
   return {
     action: "assertPage",
     input: { pageId: interpolateString(step.assertPage, parameters) }
+  };
+}
+
+function annotateValueParameter(
+  input: Record<string, unknown>,
+  value: string,
+  definitions: Record<string, ScriptParameterDefinition>
+): Record<string, unknown> {
+  const keys = parameterReferenceKeys(value);
+  if (!keys.length) {
+    return input;
+  }
+  const exactKey = exactParameterKey(value);
+  return {
+    ...input,
+    ...(exactKey ? { valueParamKey: exactKey } : {}),
+    ...(keys.some((key) => definitions[key]?.sensitive === true) ? { sensitiveInput: true } : {})
   };
 }
 
@@ -357,6 +378,14 @@ function interpolateString(value: string, parameters: Record<string, ScriptParam
     }
     return String(replacement);
   });
+}
+
+function parameterReferenceKeys(value: string): string[] {
+  return [...value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((match) => match[1]!);
+}
+
+function exactParameterKey(value: string): string | undefined {
+  return /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value)?.[1];
 }
 
 function exactParameterValue(value: string, parameters: Record<string, ScriptParameterValue>): ScriptParameterValue {

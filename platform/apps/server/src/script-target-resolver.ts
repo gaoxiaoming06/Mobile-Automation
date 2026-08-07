@@ -15,6 +15,8 @@ export type ScriptTargetResolutionInput = {
   direction?: "up" | "down";
   maxSwipes?: number;
   search?: ScriptSearchPolicy;
+  valueParamKey?: string;
+  sensitiveInput?: boolean;
   parameters?: Record<string, ScriptParameterValue>;
   interactionAsset?: InteractionAsset;
 };
@@ -104,6 +106,7 @@ export class ScriptTargetResolver {
           text: input.value ?? "",
           targetText: text,
           clearFirst: true,
+          ...inputValueParams(input),
           ...(input.action === "clearText" ? { clearOnly: true } : {}),
           locatorKind: "structural_locator",
           structuralLocator: {
@@ -272,6 +275,7 @@ export class ScriptTargetResolver {
       params: {
         text: input.value ?? "",
         clearFirst: true,
+        ...inputValueParams(input),
         ...(input.action === "clearText" ? { clearOnly: true } : {}),
         locatorKind: "structural_locator",
         structuralLocator: {
@@ -404,6 +408,17 @@ function switchRevealParams(policy: ScriptSearchPolicy | undefined): Record<stri
     revealStrategy: "search_content",
     restoreMaxSwipes: maxSwipes,
     searchMaxSwipes: maxSwipes
+  };
+}
+
+function inputValueParams(input: ScriptTargetResolutionInput): Record<string, unknown> {
+  if (input.action !== "inputText") {
+    return {};
+  }
+  const valueParamKey = nonEmptyString(input.valueParamKey);
+  return {
+    ...(valueParamKey ? { valueParamKey } : {}),
+    ...(input.sensitiveInput === true ? { sensitiveInput: true } : {})
   };
 }
 

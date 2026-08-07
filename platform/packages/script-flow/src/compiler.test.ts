@@ -510,6 +510,41 @@ steps:
     expect(plan.steps.map((step) => step.input.value)).toEqual(["teacher@example.com", "secret"]);
   });
 
+  it("preserves sensitive value parameter metadata for runtime input execution", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: teacher login
+app: { id: cn.eeo.classin, platform: android }
+parameters:
+  account: { type: string, required: true, sensitive: true }
+  password: { type: string, required: true, sensitive: true }
+steps:
+  - id: input-account
+    inputText:
+      target: { control: textField, area: content, scopeText: 立即注册下方, ordinal: 1 }
+      value: "\${account}"
+  - id: input-password
+    inputText:
+      target: { control: textField, area: content, scopeText: 立即注册下方, ordinal: 2 }
+      value: "\${password}"
+`);
+
+    const plan = compileScriptFlow(flow, {
+      parameters: { account: "teacher@example.com", password: "secret" }
+    });
+
+    expect(plan.steps[0]?.input).toMatchObject({
+      value: "teacher@example.com",
+      valueParamKey: "account",
+      sensitiveInput: true
+    });
+    expect(plan.steps[1]?.input).toMatchObject({
+      value: "secret",
+      valueParamKey: "password",
+      sensitiveInput: true
+    });
+  });
+
   it("preserves number and boolean values in runFlow parameter bindings", () => {
     const child = parseScriptFlow(`
 version: 1

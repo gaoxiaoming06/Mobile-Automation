@@ -4342,6 +4342,109 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("dismisses the keyboard when a protected input screenshot contains OCR noise", async () => {
+    const actions: DeviceActionRequest[] = [];
+    let screenshotCount = 0;
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "ClassIn\n+86 12133333300\n123qwe\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1256,
+          height: 2760,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 60, y: 500, width: 250, height: 80 },
+            { text: "+86 12133333300", confidence: 0.99, x: 200, y: 780, width: 450, height: 56 },
+            { text: "123qwe", confidence: 0.99, x: 120, y: 960, width: 160, height: 56 },
+            { text: "登录", confidence: 0.99, x: 570, y: 1240, width: 80, height: 56 }
+          ]
+        },
+        {
+          text: "?",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1256,
+          height: 2760,
+          boxes: [
+            { text: "?", confidence: 0.57, x: 224, y: 57, width: 29, height: 32 }
+          ]
+        },
+        {
+          text: "ClassIn\n+86 18743085313\n123qwe\n登录",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1256,
+          height: 2760,
+          boxes: [
+            { text: "ClassIn", confidence: 0.98, x: 60, y: 500, width: 250, height: 80 },
+            { text: "+86 18743085313", confidence: 0.99, x: 200, y: 780, width: 450, height: 56 },
+            { text: "123qwe", confidence: 0.99, x: 120, y: 960, width: 160, height: 56 },
+            { text: "登录", confidence: 0.99, x: 570, y: 1240, width: 80, height: 56 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        if (action.type === "hide_keyboard") {
+          throw new Error("HarmonyOS action is not supported yet: hide_keyboard");
+        }
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => {
+        screenshotCount += 1;
+        return {
+          ...screenshot(`artifact-noisy-protected-${attempt}`),
+          png: screenshotCount === 2 ? protectedPng(1256, 2760, 80_193) : Buffer.from("screen")
+        };
+      }
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-1",
+      serial: "device-1",
+      deviceSize: { width: 1256, height: 2760 },
+      step: semanticStep("input_text_to_element", {
+        text: "18743085313",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "ClassIn",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 425, y: 808 },
+      { type: "clear_text" },
+      { type: "input_text", text: "18743085313" },
+      { type: "hide_keyboard" },
+      { type: "back" }
+    ]);
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        supported: true,
+        resolved: true,
+        metadata: expect.objectContaining({
+          inputVerified: true,
+          verificationRecovery: "keyboard_dismissed_after_protected_screenshot",
+          verificationRecoveryAction: "back",
+          verificationStrategy: "input_identity_target_region",
+          verifiedBy: "+86 18743085313"
+        })
+      })
+    );
+  });
+
   it("scrolls until the semantic target becomes visible", async () => {
     const actions: DeviceActionRequest[] = [];
     const hierarchySnapshots = [hierarchy("com.demo:id/other"), hierarchy("com.demo:id/target")];
@@ -7775,6 +7878,14 @@ function screenshot(id: string): ScreenshotCapture {
     artifact: artifact(id),
     png: Buffer.from("screen")
   };
+}
+
+function protectedPng(width: number, height: number, sizeBytes: number): Buffer {
+  const buffer = Buffer.alloc(sizeBytes);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer, 0);
+  buffer.writeUInt32BE(width, 16);
+  buffer.writeUInt32BE(height, 20);
+  return buffer;
 }
 
 function pgm(width: number, height: number, pixels: number[]): Buffer {

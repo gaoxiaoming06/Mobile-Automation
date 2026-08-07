@@ -659,7 +659,11 @@ describe("ScriptFlowRunner", () => {
     });
 
     expect(backend.input?.steps?.[0]?.params.text).toBe("top-secret");
+    expect(backend.input?.steps?.[0]?.params.valueParamKey).toBe("password");
+    expect(backend.input?.steps?.[0]?.params.sensitiveInput).toBe(true);
     expect(backend.input?.persistedSteps?.[0]?.params.text).toBe("[REDACTED]");
+    expect(backend.input?.persistedSteps?.[0]?.params.valueParamKey).toBe("password");
+    expect(backend.input?.persistedSteps?.[0]?.params.sensitiveInput).toBe(true);
     expect(JSON.stringify(backend.input?.persistedSteps)).not.toContain("top-secret");
   });
 

@@ -460,6 +460,30 @@ describe("ScriptTargetResolver", () => {
     });
   });
 
+  it("passes sensitive input metadata to scoped runtime text fields", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "inputText",
+      target: { control: "textField", area: "content", scopeText: "立即注册下方", ordinal: 2 },
+      value: "secret",
+      valueParamKey: "password",
+      sensitiveInput: true,
+      appId: "cn.eeo.classin",
+      platform: "harmony"
+    }).params).toMatchObject({
+      text: "secret",
+      valueParamKey: "password",
+      sensitiveInput: true,
+      structuralLocator: {
+        strategy: "scoped_text_field",
+        scopeText: "立即注册下方",
+        ordinal: 2,
+        role: "text_input"
+      }
+    });
+  });
+
   it("uses a frozen interaction asset locator without exposing coordinates", () => {
     const resolver = new ScriptTargetResolver();
     const result = resolver.resolve({
