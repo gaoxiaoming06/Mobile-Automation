@@ -11,12 +11,22 @@ describe("useDeviceList defaults", () => {
     expect(defaultSelectedDeviceSerial([unavailableDevice("ios-1", "ios"), device("android-1", "android")], "ios-1")).toBe("android-1");
   });
 
+  it("moves selection away from a device leased by another browser", () => {
+    expect(defaultSelectedDeviceSerial([leasedDevice("harmony-1", "harmony", "browser-a"), device("android-1", "android")], "harmony-1", "browser-b")).toBe(
+      "android-1"
+    );
+  });
+
   it("does not select a discovered device when none can be controlled", () => {
     expect(defaultSelectedDeviceSerial([unavailableDevice("ios-1", "ios")], "")).toBe("");
   });
 
-  it("selects an online Android device by default when there is no current selection", () => {
-    expect(defaultSelectedDeviceSerial([device("ios-1", "ios"), device("android-1", "android")], "")).toBe("android-1");
+  it("does not select a device when every controllable device is leased by another browser", () => {
+    expect(defaultSelectedDeviceSerial([leasedDevice("android-1", "android", "browser-a"), leasedDevice("harmony-1", "harmony", "browser-c")], "", "browser-b")).toBe("");
+  });
+
+  it("selects the first unleased controllable device by default when there is no current selection", () => {
+    expect(defaultSelectedDeviceSerial([device("ios-1", "ios"), device("android-1", "android")], "")).toBe("ios-1");
   });
 
   it("stores and restores the selected device serial across refreshes", () => {
@@ -80,4 +90,18 @@ function unavailableDevice(serial: string, platform: DeviceInfo["platform"]): De
       closeApp: false
     }
   };
+}
+
+function leasedDevice(serial: string, platform: DeviceInfo["platform"], ownerId: string): DeviceInfo {
+  return {
+    ...device(serial, platform),
+    currentLease: {
+      id: `lease-${serial}`,
+      type: "manual_control",
+      ownerId,
+      acquiredAt: "2026-08-07T08:00:00.000Z",
+      renewedAt: "2026-08-07T08:00:00.000Z",
+      expiresAt: "2026-08-07T08:01:00.000Z"
+    }
+  } as DeviceInfo;
 }

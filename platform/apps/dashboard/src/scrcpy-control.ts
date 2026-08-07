@@ -7,6 +7,8 @@ export type ScrcpyControlMessage = {
   action: DeviceActionRequest;
   videoWidth: number;
   videoHeight: number;
+  leaseId?: string;
+  ownerId?: string;
 };
 
 const scrcpyDirectActionTypes = new Set<DeviceActionRequest["type"]>(["tap", "long_press", "swipe", "back", "home", "recent_apps"]);
@@ -17,6 +19,7 @@ export function buildScrcpyControlMessage(options: {
   previewMode: ScrcpyPreviewMode;
   socketOpen: boolean;
   videoSize: { width: number; height: number };
+  controlLease?: { id: string; ownerId: string };
 }): ScrcpyControlMessage | null {
   if (
     options.platform !== "android" ||
@@ -31,7 +34,8 @@ export function buildScrcpyControlMessage(options: {
     type: "control",
     action: options.action,
     videoWidth: sanitizeSize(options.videoSize.width),
-    videoHeight: sanitizeSize(options.videoSize.height)
+    videoHeight: sanitizeSize(options.videoSize.height),
+    ...(options.controlLease ? { leaseId: options.controlLease.id, ownerId: options.controlLease.ownerId } : {})
   };
 }
 

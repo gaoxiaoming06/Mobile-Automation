@@ -26,7 +26,7 @@ import {
   type RuntimeFlow,
   type TestRun
 } from "@mobile-automation/shared";
-import type { AutomationDeviceDriver, DeviceEventWatcher, MobileVideoRecording, ObservedDeviceEvent } from "./mobile-driver.js";
+import type { AutomationDeviceDriver, DeviceEventWatcher, MobileVideoRecording, ObservedDeviceEvent } from "./device-driver.js";
 import { createDefaultOcrService, type OcrService } from "./ocr.js";
 import type { Storage } from "./storage.js";
 import {

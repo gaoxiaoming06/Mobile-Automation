@@ -2973,10 +2973,23 @@ button:disabled {
   text-align: left;
 }
 
-.device-switch-item:hover,
+.device-switch-item:hover:not(:disabled),
 .device-switch-item.active {
   border-color: #bfd4f5;
   background: #f4f8ff;
+}
+
+.device-switch-item:disabled,
+.device-switch-item.disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  background: #f5f7fa;
+}
+
+.device-switch-item:disabled:hover,
+.device-switch-item.disabled:hover {
+  border-color: transparent;
+  background: #f5f7fa;
 }
 
 .device-switch-item > div {

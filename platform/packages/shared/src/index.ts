@@ -14,6 +14,7 @@ export type DeviceCapabilities = {
   recentApps: boolean;
   textInput: boolean;
   screenshot: boolean;
+  harmonyScreenStream?: boolean;
   launchApp: boolean;
   closeApp: boolean;
   recordVideo: boolean;
@@ -813,6 +814,120 @@ export type ToolStatus = {
   path?: string;
 };
 
+export const AGENT_PROTOCOL_VERSION = "server-agent-v1" as const;
+
+export type AgentSessionStatus = "online" | "offline";
+
+export type DeviceLeaseType = "readonly_preview" | "manual_control" | "automation_run" | "maintenance";
+
+export type DeviceLease = {
+  id: string;
+  type: DeviceLeaseType;
+  ownerId: string;
+  acquiredAt: string;
+  renewedAt: string;
+  expiresAt: string;
+  runId?: string;
+};
+
+export type AgentSession = {
+  agentId: string;
+  version?: string;
+  status: AgentSessionStatus;
+  connectedAt: string;
+  lastHeartbeatAt: string;
+  shared: boolean;
+  toolStatus: ToolStatus[];
+  maxConcurrentRuns: number;
+  currentRunCount: number;
+  pairedSessionId?: string;
+};
+
+export type DeviceSession = {
+  deviceKey: string;
+  agentId: string;
+  serial: string;
+  platform: Platform;
+  name?: string;
+  model?: string;
+  manufacturer?: string;
+  osVersion?: string;
+  resolution?: {
+    width: number;
+    height: number;
+  };
+  orientation?: "portrait" | "landscape";
+  status: DeviceStatus;
+  capabilities: DeviceCapabilities;
+  shared: boolean;
+  currentLease?: DeviceLease;
+  pairedSessionId?: string;
+  lastSeenAt: string;
+};
+
+export type AgentDeviceVisibility = "public" | "paired";
+
+export type AgentDeviceInfo = DeviceInfo & {
+  currentLease?: DeviceLease;
+  agent: {
+    agentId: string;
+    deviceKey: string;
+    serial: string;
+    shared: boolean;
+    visibility: AgentDeviceVisibility;
+  };
+};
+
+export type AgentCommandName =
+  | "getDeviceInfo"
+  | "getForegroundApp"
+  | "screenshot"
+  | "dumpUiHierarchy"
+  | "performAction"
+  | "performSemanticAction"
+  | "clearAppData"
+  | "collectLogs"
+  | "samplePerformance"
+  | "startScrcpyStream"
+  | "startHarmonyStream";
+
+export type AgentCommandEnvelope = {
+  type: "command";
+  protocolVersion: typeof AGENT_PROTOCOL_VERSION;
+  requestId: string;
+  agentId: string;
+  deviceKey: string;
+  platform: Platform;
+  timestamp: string;
+  command: AgentCommandName;
+  payload?: Record<string, unknown>;
+};
+
+export type AgentCommandResultEnvelope = {
+  type?: "command_result";
+  protocolVersion?: typeof AGENT_PROTOCOL_VERSION;
+  requestId?: string;
+  agentId?: string;
+  deviceKey?: string;
+  platform?: Platform;
+  timestamp?: string;
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+  dataBase64?: string;
+  contentType?: string;
+};
+
+export type AgentCommandChannelMessage =
+  | {
+      type: "commands";
+      commands: AgentCommandEnvelope[];
+    }
+  | {
+      type: "error";
+      error: string;
+    };
+
 export type DeviceActionRequest =
   | { type: "tap"; x: number; y: number }
   | { type: "long_press"; x: number; y: number; durationMs?: number }
@@ -914,6 +1029,7 @@ export function defaultAndroidCapabilities(): DeviceCapabilities {
     recentApps: true,
     textInput: true,
     screenshot: true,
+    harmonyScreenStream: false,
     launchApp: true,
     closeApp: true,
     recordVideo: false,
@@ -945,6 +1061,7 @@ export function defaultIosCapabilities(options: { screenshot?: boolean; control?
     recentApps: false,
     textInput: control,
     screenshot: options.screenshot ?? true,
+    harmonyScreenStream: false,
     launchApp: control,
     closeApp: control,
     recordVideo: options.recordVideo ?? false,
@@ -975,6 +1092,7 @@ export function defaultHarmonyCapabilities(): DeviceCapabilities {
     recentApps: false,
     textInput: true,
     screenshot: true,
+    harmonyScreenStream: false,
     launchApp: true,
     closeApp: true,
     recordVideo: false,

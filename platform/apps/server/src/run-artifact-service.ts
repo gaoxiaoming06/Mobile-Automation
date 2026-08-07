@@ -11,7 +11,7 @@ import {
   type TestRun
 } from "@mobile-automation/shared";
 import { artifactRoot, artifactUrl, runArtifactPath } from "./artifacts.js";
-import type { AutomationDeviceDriver, MobileVideoRecording } from "./mobile-driver.js";
+import type { AutomationDeviceDriver, MobileVideoRecording } from "./device-driver.js";
 import type { ScreenshotCapture } from "./step-expectations.js";
 
 export type RunArtifactStorage = {

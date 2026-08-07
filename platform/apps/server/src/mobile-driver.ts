@@ -1,8 +1,5 @@
 import {
   AndroidDriver,
-  type AndroidAppMonitorCallbacks,
-  type AndroidAppMonitorSession,
-  type AndroidAppMonitorSessionOptions,
   type VideoRecording
 } from "@mobile-automation/android-driver";
 import { HarmonyDriver } from "@mobile-automation/harmony-driver";
@@ -12,57 +9,24 @@ import type {
   AndroidAppMonitorSummary,
   DeviceActionRequest,
   DeviceActionResult,
-  DeviceEvent,
   DeviceInfo,
   InstalledAppInfo,
   MetricSample,
   SemanticDeviceActionRequest,
   ToolStatus
 } from "@mobile-automation/shared";
+import type {
+  AppMonitorCallbacks,
+  AppMonitorTextArtifactWriter,
+  AutomationDeviceDriver,
+  DeviceEventWatcher,
+  MobileAppMonitorSession,
+  MobileVideoRecording,
+  ObservedDeviceEvent
+} from "./device-driver.js";
 import { resolveHarmonyAbilityName } from "./target-app-runtime.js";
 
-export type MobileVideoRecording = VideoRecording | IosVideoRecording;
-export type MobileAppMonitorSession = Pick<AndroidAppMonitorSession, "start" | "stop" | "getSummary">;
-
-export type ObservedDeviceEvent = Pick<DeviceEvent, "type" | "severity" | "summary"> & {
-  occurredAt?: string;
-  detail?: string;
-  processName?: string;
-  pid?: number;
-};
-
-export type DeviceEventWatcher = {
-  stop(): Promise<void>;
-};
-
-export interface AutomationDeviceDriver {
-  getToolStatus(): Promise<ToolStatus[]>;
-  listDevices(): Promise<DeviceInfo[]>;
-  getDeviceInfo(serial: string): Promise<DeviceInfo>;
-  getInstalledAppInfo?(serial: string, appIdentifier: string): Promise<InstalledAppInfo>;
-  screenshot(serial: string): Promise<Buffer>;
-  getForegroundApp?(serial: string): Promise<{ packageName?: string; bundleId?: string; activityName?: string; abilityName?: string; componentName?: string }>;
-  dumpUiHierarchy?(serial: string): Promise<string>;
-  performAction(serial: string, action: DeviceActionRequest): Promise<DeviceActionResult | void>;
-  performSemanticAction?(serial: string, action: SemanticDeviceActionRequest): Promise<DeviceActionResult | void>;
-  clearAppData?(serial: string, packageName: string): Promise<void>;
-  collectLogs(serial: string, lines?: number): Promise<string>;
-  watchDeviceEvents?(
-    serial: string,
-    onEvent: (event: ObservedDeviceEvent) => void,
-    options?: { since?: Date; packageName?: string }
-  ): Promise<DeviceEventWatcher>;
-  samplePerformance(serial: string, runId: string, stepResultId?: string): Promise<MetricSample>;
-  startAppMonitor?(
-    serial: string,
-    runId: string,
-    config: AndroidAppMonitorConfig,
-    writeTextArtifact: AndroidAppMonitorSessionOptions["writeTextArtifact"],
-    callbacks?: AndroidAppMonitorCallbacks
-  ): Promise<MobileAppMonitorSession>;
-  startVideoRecording(serial: string, runId: string, localDir: string): Promise<MobileVideoRecording>;
-  stopVideoRecording(recording: MobileVideoRecording, keep: boolean): Promise<string | undefined>;
-}
+type LocalMobileVideoRecording = VideoRecording | IosVideoRecording;
 
 export class MobileDriver implements AutomationDeviceDriver {
   private readonly platformCache = new Map<string, DeviceInfo["platform"]>();
@@ -176,8 +140,8 @@ export class MobileDriver implements AutomationDeviceDriver {
     serial: string,
     runId: string,
     config: AndroidAppMonitorConfig,
-    writeTextArtifact: AndroidAppMonitorSessionOptions["writeTextArtifact"],
-    callbacks: AndroidAppMonitorCallbacks = {}
+    writeTextArtifact: AppMonitorTextArtifactWriter,
+    callbacks: AppMonitorCallbacks = {}
   ): Promise<MobileAppMonitorSession> {
     const platform = await this.resolvePlatform(serial);
     if (platform !== "android") {
@@ -194,7 +158,8 @@ export class MobileDriver implements AutomationDeviceDriver {
   }
 
   async stopVideoRecording(recording: MobileVideoRecording, keep: boolean): Promise<string | undefined> {
-    return "kind" in recording ? this.android.stopVideoRecording(recording, keep) : this.ios.stopVideoRecording(recording, keep);
+    const localRecording = recording as LocalMobileVideoRecording;
+    return "kind" in localRecording ? this.android.stopVideoRecording(localRecording, keep) : this.ios.stopVideoRecording(localRecording, keep);
   }
 
   listScrcpyControlSessions() {

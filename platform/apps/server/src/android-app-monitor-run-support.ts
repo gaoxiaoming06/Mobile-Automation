@@ -8,7 +8,7 @@ import {
   type AndroidProcessMetricSample,
   type DeviceEvent
 } from "@mobile-automation/shared";
-import type { AutomationDeviceDriver, MobileAppMonitorSession } from "./mobile-driver.js";
+import type { AutomationDeviceDriver, MobileAppMonitorSession } from "./device-driver.js";
 import { RunArtifactService } from "./run-artifact-service.js";
 
 type AndroidAppMonitorRunSupportOptions = {

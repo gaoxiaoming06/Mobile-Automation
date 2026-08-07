@@ -22,7 +22,7 @@ import {
   type TestRun,
   type Platform
 } from "@mobile-automation/shared";
-import type { AutomationDeviceDriver } from "./mobile-driver.js";
+import type { AutomationDeviceDriver } from "./device-driver.js";
 import type { PageAssetCatalog, PageAssetPlatform } from "./page-asset-catalog.js";
 import type { PageNavigationEdge, PageNavigationSegmentSnapshot } from "./page-navigation.js";
 import type { PageStateService } from "./page-state-service.js";

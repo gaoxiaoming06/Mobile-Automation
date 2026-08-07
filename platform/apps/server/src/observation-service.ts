@@ -1,6 +1,6 @@
 import { createId } from "@mobile-automation/shared";
 import type { Observation, ObservationText, ObservationUiElement } from "@mobile-automation/graph-core";
-import type { AutomationDeviceDriver, ObservedDeviceEvent } from "./mobile-driver.js";
+import type { AutomationDeviceDriver, ObservedDeviceEvent } from "./device-driver.js";
 import type { OcrService } from "./ocr.js";
 import { hierarchySize, parseAndroidUiHierarchy, type UiElementCandidate } from "./ui-hierarchy-locator.js";
 

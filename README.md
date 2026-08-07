@@ -12,6 +12,7 @@ Mobile-Automation/
     apps/
       dashboard/      # React Web dashboard
       server/         # Node.js API, WebSocket, orchestration
+      device-agent/   # Local device node that registers USB devices with server
     packages/
       shared/         # Shared schemas and utilities
       android-driver/ # Android ADB/scrcpy driver
@@ -108,6 +109,38 @@ export IOS_WDA_URL_00008020_000260113E04002E=http://localhost:8100
 
 Runtime DB and artifacts default to `~/.local/share/mobile-automation`. Override with `DATA_DIR=/path/to/mobile-automation-data` when needed.
 
+### Device Agent
+
+The server can also use devices attached to another machine through a local Device Agent. Start the central server first, then start the agent on the machine that has USB-connected devices:
+
+```bash
+# Terminal 1: central server + dashboard
+pnpm dev
+
+# Terminal 2: local device node, shared into the public device pool
+DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 \
+DEVICE_AGENT_ID=my-macbook \
+DEVICE_AGENT_SHARED=1 \
+pnpm agent
+```
+
+Agent devices appear in `/api/devices` and the Dashboard with serials like `my-macbook:android:<local-serial>`. The agent polls server commands and executes device info, screenshot, UI hierarchy, foreground app, tap/input/swipe/app launch, clear data, logs, semantic Android actions, and performance sampling through the existing platform drivers.
+
+For private local use, create a pairing code from the server and start the agent with it:
+
+```bash
+curl -X POST http://127.0.0.1:4010/api/local-sessions/pairing-codes \
+  -H 'content-type: application/json' \
+  -d '{"sessionId":"my-browser","ttlMs":300000}'
+
+DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 \
+DEVICE_AGENT_ID=my-private-agent \
+DEVICE_AGENT_PAIRING_CODE=<code> \
+pnpm agent
+
+curl 'http://127.0.0.1:4010/api/devices?sessionId=my-browser'
+```
+
 ### OCR Engines
 
 The server uses pluggable local OCR engines. `OCR_ENGINE=auto` now tries RapidOCR first, then PaddleOCR, then Tesseract, then macOS Vision. RapidOCR is started automatically as a local sidecar when the server starts, unless `OCR_SIDECAR_ENABLED=0` or `RAPID_OCR_AUTOSTART=0` is set. PaddleOCR remains an optional local HTTP service.
@@ -167,5 +200,7 @@ CLEANUP_INTERVAL_HOURS=6
 The dashboard uses an embedded scrcpy stream in the browser through WebCodecs. The embedded stream uses the pinned `platform/tools/scrcpy-server-v3.3.3` file because the current Tango client targets scrcpy protocol 3.3.3. This server file is intentionally committed to git as a small, version-locked runtime dependency. You can verify it with `pnpm check:tools`, refresh it with `pnpm install:scrcpy-server`, or override it with `SCRCPY_SERVER_PATH`.
 
 The local `scrcpy` CLI command is optional. It is only used for the native debug window and as a recording fallback when Android `screenrecord` is unavailable. Browser-embedded preview/control and the core automation flow must not require a locally installed `scrcpy` CLI.
+
+HarmonyOS realtime preview uses a small companion HAP on the device. The device-agent starts the configured bundle, opens an `hdc fport` tunnel to the companion TCP port, and relays the H.264 packet stream through the same browser WebCodecs preview path. If the companion is missing, authorization is denied, or the stream fails, the dashboard falls back to HarmonyOS screenshot preview. See [HarmonyOS screen stream companion](docs/guides/harmony-screen-stream.md).
 
 For an initial team deployment path, see [Deployment Guide](docs/guides/deployment.md).

@@ -1,5 +1,6 @@
 import express from "express";
-import { createServer } from "node:http";
+import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import type { Socket } from "node:net";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -26,9 +27,13 @@ import { pageAssetDeprecationConfirmation } from "./page-asset-deprecation-guard
 import { buildConfirmedPageAssetInput, identifyOrCreateCurrentPageDraft, readCurrentPageCollectionOptions } from "./current-page-asset.js";
 import { buildPageAssetLibrarySummary } from "./page-assets-summary.js";
 import { scaleLocatorCoordinate } from "./locator-coordinate.js";
-import { MobileDriver } from "./mobile-driver.js";
-import { ScrcpyStreamBridge } from "./scrcpy-stream.js";
-import { resolveServerHost } from "./server-network.js";
+import { registerServerAgentRoutes } from "./server-agent-api.js";
+import { AgentHarmonyStreamBroker } from "./agent-harmony-stream-broker.js";
+import { AgentScrcpyBroker } from "./agent-scrcpy-broker.js";
+import { attachAgentCommandSocket } from "./server-agent-command-channel.js";
+import { ServerAgentDeviceDriver } from "./server-agent-driver.js";
+import { ServerAgentRegistry } from "./server-agent-registry.js";
+import { loadHttpsServerOptions, resolveServerNetworkConfig, serverListenUrl } from "./server-network.js";
 import { Storage } from "./storage.js";
 import {
   previewAiModelSettingsUpdate,
@@ -82,7 +87,8 @@ const dashboardDist = path.resolve(moduleDir, "../../dashboard/dist");
 const dashboardIndex = path.join(dashboardDist, "index.html");
 const app = express();
 const storage = new Storage();
-const driver = new MobileDriver();
+const agentRegistry = new ServerAgentRegistry();
+const driver = ServerAgentDeviceDriver.agentOnly(agentRegistry);
 const ocrSidecar = await ensureRapidOcrSidecar();
 const ocr = createDefaultOcrService();
 const observationService = new ObservationService(driver, ocr);
@@ -102,7 +108,8 @@ const scriptFlowRunner = new ScriptFlowRunner({
   pageCatalog: pageAssetCatalog
 });
 const stabilityExplorer = new StabilityExplorer(storage, driver, ocr, deviceExecutionLease);
-const scrcpyStreamBridge = new ScrcpyStreamBridge();
+const agentScrcpyBroker = new AgentScrcpyBroker(agentRegistry);
+const agentHarmonyStreamBroker = new AgentHarmonyStreamBroker(agentRegistry);
 const artifactCleanupScheduler = new ArtifactCleanupScheduler(storage);
 const automaticAssetLearningService = createAutomaticAssetLearningService({
   storage,
@@ -131,6 +138,7 @@ app.get("/api/health", (_req, res) => {
 registerScriptFlowRoutes(app, { storage, runner: scriptFlowRunner });
 registerTrialLearningRoutes(app, { storage });
 registerPageAssetLibraryRoutes(app, { storage });
+registerServerAgentRoutes(app, { registry: agentRegistry });
 registerScriptFlowAiRoutes(app, {
   getFlow: (id) => storage.getScriptFlow(id),
   getRun: (id) => storage.getRun(id),
@@ -206,10 +214,10 @@ app.get("/api/system/tools", async (_req, res) => {
   }
 });
 
-app.get("/api/devices", async (_req, res) => {
+app.get("/api/devices", async (req, res) => {
   try {
-    const devices = await driver.listDevices();
-    res.json({ devices });
+    const sessionId = typeof req.query.sessionId === "string" && req.query.sessionId.trim() ? req.query.sessionId.trim() : undefined;
+    res.json({ devices: driver.listVisibleAgentDevices({ sessionId }) });
   } catch (error) {
     sendError(res, error);
   }
@@ -218,8 +226,8 @@ app.get("/api/devices", async (_req, res) => {
 app.get("/api/devices/:serial/screenshot", async (req, res) => {
   try {
     const force = parseBooleanQuery(req.query.force, false);
-    if (!force && scrcpyStreamBridge.isSerialStreaming(req.params.serial)) {
-      res.status(409).json({ error: "Embedded scrcpy stream is active; screenshot polling is paused." });
+    if (!force && (agentScrcpyBroker.isDeviceStreaming(req.params.serial) || agentHarmonyStreamBroker.isDeviceStreaming(req.params.serial))) {
+      res.status(409).json({ error: "Embedded realtime stream is active; screenshot polling is paused." });
       return;
     }
     const png = await driver.screenshot(req.params.serial);
@@ -250,30 +258,23 @@ app.get("/api/devices/:serial/apps/:packageName", async (req, res) => {
 });
 
 app.get("/api/scrcpy/sessions", (_req, res) => {
-  res.json({ sessions: driver.listScrcpyControlSessions() });
+  res.json({ sessions: [] });
 });
 
-app.post("/api/devices/:serial/scrcpy", async (req, res) => {
-  try {
-    const session = await driver.startScrcpyControl(req.params.serial);
-    res.status(201).json({ session });
-  } catch (error) {
-    sendError(res, error);
-  }
+app.post("/api/devices/:serial/scrcpy", (_req, res) => {
+  res.status(501).json({ error: "Native scrcpy debug windows run on device agents, not on the server." });
 });
 
-app.delete("/api/devices/:serial/scrcpy", async (req, res) => {
-  try {
-    const stopped = await driver.stopScrcpyControl(req.params.serial);
-    res.json({ stopped });
-  } catch (error) {
-    sendError(res, error);
-  }
+app.delete("/api/devices/:serial/scrcpy", (_req, res) => {
+  res.json({ stopped: false });
 });
 
 app.post("/api/devices/:serial/actions", async (req, res) => {
   try {
-    const action = req.body as DeviceActionRequest;
+    if (!verifyAgentWriteLease(req.params.serial, req.body, res)) {
+      return;
+    }
+    const action = actionRequestFromBody(req.body);
     await driver.performAction(req.params.serial, action);
     res.json({ ok: true });
   } catch (error) {
@@ -879,31 +880,48 @@ app.use(async (req, res, next) => {
   res.sendFile(dashboardIndex);
 });
 
-const server = createServer(app);
+const networkConfig = resolveServerNetworkConfig(process.env);
+const httpsOptions = await loadHttpsServerOptions(networkConfig);
+const server = httpsOptions ? createHttpsServer(httpsOptions, app) : createHttpServer(app);
 const webSocketServer = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (request, socket, head) => {
   const url = new URL(request.url ?? "", `http://${request.headers.host ?? "localhost"}`);
-  const match = url.pathname.match(/^\/api\/devices\/([^/]+)\/scrcpy\/ws$/);
-  if (!match) {
+  const deviceMatch = url.pathname.match(/^\/api\/devices\/([^/]+)\/scrcpy\/ws$/);
+  const harmonyDeviceMatch = url.pathname.match(/^\/api\/devices\/([^/]+)\/harmony-stream\/ws$/);
+  const agentCommandMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/commands\/ws$/);
+  const agentMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/scrcpy-streams\/([^/]+)$/);
+  const harmonyAgentMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/harmony-streams\/([^/]+)$/);
+  if (!deviceMatch && !harmonyDeviceMatch && !agentCommandMatch && !agentMatch && !harmonyAgentMatch) {
     socket.destroy();
     return;
   }
 
-  const serial = decodeURIComponent(match[1]);
   (socket as Socket).setNoDelay(true);
   webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
-    void scrcpyStreamBridge.attach(serial, webSocket).catch((error) => {
-      if (webSocket.readyState === webSocket.OPEN) {
-        webSocket.send(
-          JSON.stringify({
-            type: "error",
-            message: error instanceof Error ? error.message : String(error)
-          })
-        );
-        webSocket.close();
-      }
-    });
+    if (deviceMatch) {
+      agentScrcpyBroker.attachBrowser(decodeURIComponent(deviceMatch[1]), webSocket);
+      return;
+    }
+    if (harmonyDeviceMatch) {
+      agentHarmonyStreamBroker.attachBrowser(decodeURIComponent(harmonyDeviceMatch[1]), webSocket);
+      return;
+    }
+    if (agentCommandMatch) {
+      attachAgentCommandSocket({
+        registry: agentRegistry,
+        agentId: decodeURIComponent(agentCommandMatch[1]),
+        socket: webSocket
+      });
+      return;
+    }
+    if (agentMatch) {
+      agentScrcpyBroker.attachAgent(decodeURIComponent(agentMatch[1]), decodeURIComponent(agentMatch[2]), webSocket);
+      return;
+    }
+    if (harmonyAgentMatch) {
+      agentHarmonyStreamBroker.attachAgent(decodeURIComponent(harmonyAgentMatch[1]), decodeURIComponent(harmonyAgentMatch[2]), webSocket);
+    }
   });
 });
 
@@ -915,20 +933,43 @@ process.once("SIGTERM", () => {
   void shutdown().finally(() => process.exit(0));
 });
 
-const host = resolveServerHost(process.env);
-server.listen(port, host, () => {
-  console.log(`Mobile Automation server listening on http://${host}:${port}`);
+server.listen(port, networkConfig.host, () => {
+  console.log(`Mobile Automation server listening on ${serverListenUrl(networkConfig, port)}`);
 });
 
 async function shutdown(): Promise<void> {
   artifactCleanupScheduler.stop();
   automaticAssetLearningService.stop();
-  await Promise.all([runner.stopAll(), stabilityExplorer.stopAll(), scrcpyStreamBridge.closeAll(), ocrSidecar.stop()]);
+  await Promise.all([runner.stopAll(), stabilityExplorer.stopAll(), agentScrcpyBroker.closeAll(), agentHarmonyStreamBroker.closeAll(), ocrSidecar.stop()]);
 }
 
 function sendError(res: express.Response, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   res.status(500).json({ error: message });
+}
+
+function verifyAgentWriteLease(serial: string, body: unknown, res: express.Response): boolean {
+  const currentLease = agentRegistry.getDeviceSession(serial)?.currentLease;
+  if (!currentLease) {
+    return true;
+  }
+  const record = recordBody(body);
+  const leaseId = typeof record?.leaseId === "string" ? record.leaseId : undefined;
+  const ownerId = typeof record?.ownerId === "string" ? record.ownerId : undefined;
+  if (leaseId === currentLease.id && ownerId === currentLease.ownerId) {
+    return true;
+  }
+  res.status(423).json({ error: `设备已被 ${currentLease.ownerId} 占用` });
+  return false;
+}
+
+function actionRequestFromBody(body: unknown): DeviceActionRequest {
+  const record = recordBody(body);
+  return (record?.action && recordBody(record.action) ? record.action : body) as DeviceActionRequest;
+}
+
+function recordBody(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 function sendPageAssetLibraryTargetMismatch(res: express.Response, graphVersion: BusinessGraphVersion, observation: Observation): boolean {

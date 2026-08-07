@@ -6,7 +6,7 @@ import {
   Smartphone
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent, ReactNode } from "react";
+import type { CSSProperties, MutableRefObject, PointerEvent, ReactNode } from "react";
 import {
   viewportPointToDevicePoint,
   nowIso,
@@ -14,6 +14,7 @@ import {
   type AndroidAppMonitorConfig,
   type DeviceActionRequest,
   type DeviceInfo,
+  type DeviceLeaseType,
   type FlowStartStrategy,
   type Platform,
   type SemanticDeviceActionRequest,
@@ -39,7 +40,7 @@ import type { RuntimeInterceptorRule } from "./components/RuntimeInterceptorPane
 import { RunResultsPanel } from "./components/RunResultsPanel";
 import { ToolStatusBar } from "./components/ToolStatusBar";
 import { useDeviceList } from "./hooks/useDeviceList";
-import { controllableDevices, isControllableDevice } from "./device-availability";
+import { controllableDevices, currentDeviceLease, isAgentDevice, isControllableDevice, isDeviceLockedByOtherOwner, selectableDevicesForOwner } from "./device-availability";
 import { buildAndroidAppMonitorRequest, useRunExecution, type AndroidAppMonitorRequestState } from "./hooks/useRunExecution";
 import { useScrcpyStream } from "./hooks/useScrcpyStream";
 import { classifyPreviewGesture } from "./preview-gesture";
@@ -63,6 +64,15 @@ type PointerStart = {
 type ResizeStart = {
   startX: number;
   startWidth: number;
+};
+
+type DashboardControlLease = {
+  id: string;
+  ownerId: string;
+};
+
+type ActiveDashboardControlLease = DashboardControlLease & {
+  deviceSerial: string;
 };
 
 type NavItemId = AppNavItemId;
@@ -356,6 +366,19 @@ export function previewWorkspaceKey(navItem: AppNavItemId): "deviceDetails" | "a
   return "inactive";
 }
 
+export function shouldHoldDashboardControlLease(_navItem: AppNavItemId, selectedDevice: DeviceInfo | undefined, selectedSerial: string): boolean {
+  return Boolean(
+    selectedSerial
+      && selectedDevice?.serial === selectedSerial
+      && isAgentDevice(selectedDevice)
+      && selectedDevice.status === "online"
+  );
+}
+
+export function dashboardControlLeaseDeviceSerial(navItem: AppNavItemId, selectedDevice: DeviceInfo | undefined, selectedSerial: string): string {
+  return shouldHoldDashboardControlLease(navItem, selectedDevice, selectedSerial) ? selectedSerial : "";
+}
+
 export function workspaceStyleForNav(navItem: AppNavItemId, _devicePreviewWidth: number, assetRecordingPreviewWidth: number): PreviewWorkspaceStyle {
   if (navItem === "assetRecording") {
     return {
@@ -643,6 +666,8 @@ export function App() {
   const semanticSnapshotsRef = useRef<SemanticSnapshots>({});
   const assetRecordingIdentificationInFlightRef = useRef(0);
   const aiModelSettingsLoadedRef = useRef(false);
+  const activeControlLeaseRef = useRef<ActiveDashboardControlLease | null>(null);
+  const [controlOwnerId] = useState(() => loadDashboardControlOwnerId());
 
   const {
     devices,
@@ -654,8 +679,19 @@ export function App() {
     setScrcpyRunning,
     refreshDevices,
     selectDevice
-  } = useDeviceList({ setMessage });
-  const selectableDevices = controllableDevices(devices);
+  } = useDeviceList({ setMessage, controlOwnerId });
+  const controllableDeviceList = controllableDevices(devices);
+  const selectableDevices = selectableDevicesForOwner(devices, controlOwnerId);
+  const selectedDeviceLease = currentDeviceLease(selectedDevice);
+  const selectedDeviceIsAgent = isAgentDevice(selectedDevice);
+  const controlLeaseDeviceSerial = dashboardControlLeaseDeviceSerial(activeNavItem, selectedDevice, selectedSerial);
+  const selectedOwnControlLease = selectedDeviceLease?.ownerId === controlOwnerId
+    ? { id: selectedDeviceLease.id, ownerId: selectedDeviceLease.ownerId }
+    : undefined;
+  const selectedDeviceControlLocked = isDeviceLockedByOtherOwner(selectedDevice, controlOwnerId);
+  const selectedDeviceControlLockedReason = selectedDeviceControlLocked && selectedDeviceLease
+    ? `被 ${selectedDeviceLease.ownerId} 占用`
+    : undefined;
   const {
     imageRef,
     canvasRef,
@@ -669,7 +705,8 @@ export function App() {
     scrcpyStreamStatus,
     isScrcpyPreviewActive,
     closeScrcpyStream,
-    refreshScreenshot,
+    pauseScreenshotPollingForAction,
+    refreshScreenshotAfterAction,
     sendScrcpyDirectAction,
     handleScreenshotLoaded
   } = useScrcpyStream({
@@ -818,6 +855,50 @@ export function App() {
     };
   }, [activeNavItem, navCollapsed]);
 
+  useEffect(() => {
+    if (!controlLeaseDeviceSerial) {
+      releaseActiveControlLease(activeControlLeaseRef, controlOwnerId, refreshDevices);
+      return undefined;
+    }
+
+    let disposed = false;
+    const deviceSerial = controlLeaseDeviceSerial;
+    const acquireOrRenew = async () => {
+      try {
+        const lease = await acquireDeviceControlLease(deviceSerial, controlOwnerId, 30_000);
+        if (disposed) {
+          void releaseDeviceControlLease(deviceSerial, lease.id, controlOwnerId);
+          return;
+        }
+        activeControlLeaseRef.current = { deviceSerial, id: lease.id, ownerId: lease.ownerId };
+        await refreshDevices({ silent: true });
+      } catch {
+        if (!disposed && activeControlLeaseRef.current?.deviceSerial === deviceSerial) {
+          activeControlLeaseRef.current = null;
+        }
+        if (!disposed) {
+          await refreshDevices({ silent: true }).catch(() => undefined);
+        }
+      }
+    };
+
+    void acquireOrRenew();
+    const renewTimer = window.setInterval(() => {
+      void acquireOrRenew();
+    }, 10_000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(renewTimer);
+      const lease = activeControlLeaseRef.current;
+      if (lease?.deviceSerial === deviceSerial && lease.ownerId === controlOwnerId) {
+        activeControlLeaseRef.current = null;
+        void releaseDeviceControlLease(deviceSerial, lease.id, controlOwnerId)
+          .finally(() => refreshDevices({ silent: true }).catch(() => undefined));
+      }
+    };
+  }, [controlLeaseDeviceSerial, controlOwnerId, refreshDevices]);
+
   async function runAction(action: DeviceActionRequest) {
     if (!selectedSerial) {
       setMessage("请先选择设备");
@@ -827,6 +908,10 @@ export function App() {
       setMessage(selectedDevice.platform === "ios" ? `iOS 设备暂不支持 ${action.type}，需要设备在线并配置 WDA` : `当前设备暂不支持 ${action.type}`);
       return;
     }
+    if (selectedDeviceControlLocked) {
+      setMessage(selectedDeviceControlLockedReason ?? "设备正在被其他客户端占用");
+      return;
+    }
     const actionStrategy = actionStrategyForWorkspace(activeNavItem, {
       identifying: assetRecordingIdentifying || assetRecordingIdentificationInFlightRef.current > 0
     });
@@ -834,28 +919,46 @@ export function App() {
       setMessage("正在识别当前页面，请稍候");
       return;
     }
-    if (sendScrcpyDirectAction(action)) {
-      semanticSnapshotsRef.current = {};
-      setMessage(`已通过 scrcpy 执行 ${action.type}`);
-      return;
-    }
+    pauseScreenshotPollingForAction();
     setBusy(true);
+    let lease: DashboardControlLease | undefined;
+    let releaseLeaseAfterAction = false;
     try {
+      if (selectedDevice && selectedDeviceIsAgent && isDeviceWriteAction(action)) {
+        const activeLease = activeControlLeaseRef.current;
+        lease = selectedOwnControlLease
+          ?? (activeLease?.deviceSerial === selectedSerial && activeLease.ownerId === controlOwnerId
+            ? { id: activeLease.id, ownerId: activeLease.ownerId }
+            : undefined);
+        if (!lease) {
+          lease = await acquireDeviceControlLease(selectedSerial, controlOwnerId);
+          releaseLeaseAfterAction = true;
+        }
+      }
+      if (sendScrcpyDirectAction(action, lease)) {
+        semanticSnapshotsRef.current = {};
+        setMessage(`已通过 scrcpy 执行 ${action.type}`);
+        return;
+      }
       const response = await fetch(`/api/devices/${encodeURIComponent(selectedSerial)}/actions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(action)
+        body: JSON.stringify(lease ? { action, leaseId: lease.id, ownerId: lease.ownerId } : action)
       });
       const json = (await response.json()) as { error?: string };
       if (!response.ok) {
         throw new Error(json.error ?? "动作执行失败");
       }
       semanticSnapshotsRef.current = {};
-      refreshScreenshot();
+      refreshScreenshotAfterAction();
       setMessage(`已执行 ${action.type}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
+      if (lease && releaseLeaseAfterAction) {
+        void releaseDeviceControlLease(selectedSerial, lease.id, lease.ownerId)
+          .finally(() => refreshDevices({ silent: true }).catch(() => undefined));
+      }
       setBusy(false);
     }
   }
@@ -863,6 +966,10 @@ export function App() {
   async function startScrcpy() {
     if (!selectedSerial) {
       setMessage("请先选择设备");
+      return;
+    }
+    if (isAgentDevice(selectedDevice)) {
+      setMessage("Agent 设备使用内嵌实时预览，暂不支持打开本机 scrcpy 调试窗口");
       return;
     }
     const response = await fetch(`/api/devices/${encodeURIComponent(selectedSerial)}/scrcpy`, { method: "POST" });
@@ -1446,9 +1553,10 @@ export function App() {
   const devicePreviewPanel = (
     <PreviewPanel
       key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
-      devices={selectableDevices}
+      devices={controllableDeviceList}
       selectedSerial={selectedSerial}
       selectedDevice={selectedDevice}
+      controlOwnerId={controlOwnerId}
       previewRef={previewRef}
       imageRef={imageRef}
       canvasRef={canvasRef}
@@ -1462,6 +1570,8 @@ export function App() {
       scrcpyAvailable={scrcpyAvailable}
       scrcpyRunning={scrcpyRunning}
       busy={busy}
+      controlLocked={selectedDeviceControlLocked}
+      controlLockedReason={selectedDeviceControlLockedReason}
       inputText={inputText}
       setInputText={setInputText}
       setMessage={setMessage}
@@ -1509,6 +1619,7 @@ export function App() {
             previewPanel={devicePreviewPanel}
             tools={tools}
             runs={runs}
+            controlOwnerId={controlOwnerId}
             activeRunForSelectedDevice={activeRunForSelectedDevice}
             onOpenRuns={openRuns}
             onRefreshDevices={() => refreshDevices().catch((error) => setMessage(error.message))}
@@ -1533,9 +1644,10 @@ export function App() {
             previewSlot={
               <PreviewPanel
                 key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
-                devices={selectableDevices}
+                devices={controllableDeviceList}
                 selectedSerial={selectedSerial}
                 selectedDevice={selectedDevice}
+                controlOwnerId={controlOwnerId}
                 previewRef={previewRef}
                 imageRef={imageRef}
                 canvasRef={canvasRef}
@@ -1549,6 +1661,8 @@ export function App() {
                 scrcpyAvailable={scrcpyAvailable}
                 scrcpyRunning={scrcpyRunning}
                 busy={busy || assetRecordingIdentifying}
+                controlLocked={selectedDeviceControlLocked}
+                controlLockedReason={selectedDeviceControlLockedReason}
                 inputText={inputText}
                 setInputText={setInputText}
                 setMessage={setMessage}
@@ -2219,6 +2333,7 @@ type DeviceManagementViewProps = {
   previewPanel: ReactNode;
   tools: ToolStatus[];
   runs: TestRun[];
+  controlOwnerId: string;
   activeRunForSelectedDevice?: TestRun;
   onOpenRuns: () => void;
   onRefreshDevices: () => void;
@@ -2231,6 +2346,7 @@ function DeviceManagementView({
   previewPanel,
   tools,
   runs,
+  controlOwnerId,
   activeRunForSelectedDevice,
   onOpenRuns,
   onRefreshDevices
@@ -2240,6 +2356,7 @@ function DeviceManagementView({
   const onlineCount = devices.filter((device) => device.status === "online").length;
   const unavailableCount = devices.length - selectableDeviceCount;
   const activeRunsCount = runs.filter(isActiveRunStatus).length;
+  const selectedLease = currentDeviceLease(selectedDevice);
 
   return (
     <section className="module-page device-module">
@@ -2318,6 +2435,10 @@ function DeviceManagementView({
                 <div>
                   <span>最后发现</span>
                   <strong>{formatDateTime(selectedDevice.lastSeenAt)}</strong>
+                </div>
+                <div>
+                  <span>占用</span>
+                  <strong>{selectedLease ? `${deviceLeaseTypeLabel(selectedLease.type)} · ${deviceLeaseOwnerLabel(selectedLease.ownerId, controlOwnerId)}` : "空闲"}</strong>
                 </div>
               </div>
 
@@ -3249,6 +3370,83 @@ function buildCapabilityItems(device: DeviceInfo): Array<{ label: string; enable
     { label: "性能", enabled: device.capabilities.metrics.cpu || device.capabilities.metrics.memory || device.capabilities.metrics.battery },
     { label: "Crash/ANR", enabled: device.capabilities.events.crash || device.capabilities.events.anr }
   ];
+}
+
+const dashboardControlOwnerStorageKey = "mobile-automation.control-owner-id";
+
+function loadDashboardControlOwnerId(storage: Pick<Storage, "getItem" | "setItem"> | undefined = browserControlOwnerStorage()): string {
+  try {
+    const existing = storage?.getItem(dashboardControlOwnerStorageKey)?.trim();
+    if (existing) {
+      return existing;
+    }
+    const next = `browser-${randomClientId()}`;
+    storage?.setItem(dashboardControlOwnerStorageKey, next);
+    return next;
+  } catch {
+    return `browser-${randomClientId()}`;
+  }
+}
+
+function browserControlOwnerStorage(): Pick<Storage, "getItem" | "setItem"> | undefined {
+  return typeof window === "undefined" ? undefined : window.sessionStorage;
+}
+
+function randomClientId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function acquireDeviceControlLease(deviceSerial: string, ownerId: string, ttlMs = 15_000): Promise<DashboardControlLease> {
+  const json = await apiFetchJson<{ lease: DashboardControlLease }>(`/api/agent-devices/${encodeURIComponent(deviceSerial)}/leases`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "manual_control",
+      ownerId,
+      ttlMs
+    })
+  });
+  return json.lease;
+}
+
+async function releaseDeviceControlLease(deviceSerial: string, leaseId: string, ownerId: string): Promise<void> {
+  await apiFetchJson(`/api/agent-devices/${encodeURIComponent(deviceSerial)}/leases/${encodeURIComponent(leaseId)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ownerId })
+  });
+}
+
+function isDeviceWriteAction(action: DeviceActionRequest): boolean {
+  return action.type !== "wait" && action.type !== "screenshot";
+}
+
+function releaseActiveControlLease(
+  activeControlLeaseRef: MutableRefObject<ActiveDashboardControlLease | null>,
+  ownerId: string,
+  refreshDevices: (options?: { silent?: boolean }) => Promise<void>
+): void {
+  const lease = activeControlLeaseRef.current;
+  if (!lease || lease.ownerId !== ownerId) {
+    return;
+  }
+  activeControlLeaseRef.current = null;
+  void releaseDeviceControlLease(lease.deviceSerial, lease.id, ownerId)
+    .finally(() => refreshDevices({ silent: true }).catch(() => undefined));
+}
+
+function deviceLeaseTypeLabel(type: DeviceLeaseType): string {
+  if (type === "manual_control") return "远控";
+  if (type === "automation_run") return "执行";
+  if (type === "maintenance") return "维护";
+  return "预览";
+}
+
+function deviceLeaseOwnerLabel(ownerId: string, currentOwnerId: string): string {
+  return ownerId === currentOwnerId ? "当前窗口" : ownerId;
 }
 
 function isActiveRunStatus(run: TestRun): boolean {

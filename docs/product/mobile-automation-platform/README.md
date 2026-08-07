@@ -113,6 +113,19 @@ iOS Agent 增强：
 - WDA 生命周期与设备租约绑定：设备释放、Agent 退出、WDA 健康检查失败或端口冲突时，Agent 需要清理对应进程并上报诊断事件。
 - iOS 预览可以先维持截图轮询；若启用 WDA/MJPEG 或其他低延迟流，也必须通过中心服务中转并遵守预览流默认不落盘的策略。
 
+HarmonyOS 低延迟视频流：
+
+- HarmonyOS 当前 `hdc` + `uitest screenCap` 只能提供截图式预览，单帧截图、文件回传和轮询会与 `uitest uiInput` 控制命令竞争设备侧资源；因此截图轮询只作为兼容 fallback，不再作为低延迟远控体验的优化方向。
+- HarmonyOS 视频流目标能力需要由 Device Agent 侧提供：Agent 负责启动/连接 HarmonyOS 端采集组件，采集组件基于系统屏幕采集能力输出 H.264 或其他浏览器可解码视频流，中心服务只做 WebSocket 中转，Dashboard 复用 WebCodecs 解码和预览渲染链路。
+- HarmonyOS 端采集组件优先按最小可用 HAP/Ability 设计，不承载自动化业务逻辑；它只负责屏幕采集、编码、授权状态上报和生命周期退出。点击、滑动、输入、返回、Home、App 启停和 UI dump 仍通过 Agent 侧现有 HDC driver 执行。
+- MVP 不采集音频，不要求绕过系统隐私授权弹窗，不依赖服务端本机 HDC 能力；若设备系统版本、权限、签名或用户授权不满足条件，Dashboard 必须明确展示“实时预览不可用”并自动回退到截图预览。
+- 协议上新增 HarmonyOS stream capability，例如 `harmonyScreenStream` 或同等能力字段。Server 只有在 Agent 上报该能力时才尝试启动实时流；否则继续使用截图 fallback。
+- 流生命周期纳入 `StreamSession`：同一物理设备默认只允许一个实际采集流，多个浏览器预览由中心服务 fan-out；设备释放、Agent 离线、浏览器断开、租约切换或采集组件异常时必须清理流资源。
+- 视频流不能阻塞控制命令和运行状态回传。Agent 需要把 HarmonyOS screen stream、HDC control command、日志/性能事件放在独立通道或独立调度队列中，避免预览流退化为新的控制延迟来源。
+- 默认只中转预览帧，不落盘。运行报告仍通过显式截图、视频录制或失败证据配置保存产物；实时预览帧不自动进入报告、资产或审计存储。
+- 推荐 MVP 指标：预览帧率达到 10-15 fps 以上；常规远控动作到画面可见反馈小于 1 秒；断流后 3 秒内回退或提示；低码率/分辨率可配置，避免 Agent 机器和 USB/HDC 链路过载。
+- 验收需要覆盖：采集组件缺失、用户拒绝授权、采集启动失败、浏览器断开、Agent 断线重连、同设备多预览 fan-out、控制命令与视频流并行执行、截图 fallback 与实时流切换、ScriptFlow 执行不依赖实时预览。
+
 分阶段落地：
 
 0. 兼容边界与协议骨架：先定义 `AgentSession`、`DeviceSession`、租约类型、command/event/stream 消息 envelope 和设备路由接口；用 mock Agent 或本地 adapter 验证协议，不改现有 Android/HarmonyOS Runner 主流程。
@@ -120,15 +133,16 @@ iOS Agent 增强：
 2. 设备控制与租约：把手工操作、ScriptFlow 执行、稳定性探索和 App monitor 接到统一设备租约；完成 `performAction`、`collectLogs`、`samplePerformance`、App 启停和异常释放，确保 Android/HarmonyOS 既能走本地路径也能走 Agent 路径。
 3. 本机会话体验：Dashboard 增加“连接本机 Agent”入口、一次性 pairing code、会话内设备列表、会话断开/超时清理和运行证据保存开关，验证个人电脑设备不进入公共设备池。
 4. 预览与事件流：把 Android scrcpy 视频/控制流、iOS 截图轮询、logcat/hilog 事件、App monitor 和视频录制改为 Agent 侧采集、中心服务转发，并约束本机会话预览流默认只中转不落盘。
-5. 公共设备池调度：支持共享设备标签、自动选设备、Agent 并发上限、任务排队、租约可视化、异常释放和多用户冲突提示。
-6. 运维与安全：支持 Agent token、TLS 或内网 mTLS、Agent 版本上报、工具健康检查、权限控制、审计日志和数据保留策略。
+5. HarmonyOS 低延迟视频流：新增 HarmonyOS 端采集组件、Agent 侧 stream bridge、Server fan-out broker 和 Dashboard 实时预览接入；保留截图 fallback，并确保视频流与 HDC 控制命令互不阻塞。
+6. 公共设备池调度：支持共享设备标签、自动选设备、Agent 并发上限、任务排队、租约可视化、异常释放和多用户冲突提示。
+7. 运维与安全：支持 Agent token、TLS 或内网 mTLS、Agent 版本上报、工具健康检查、权限控制、审计日志和数据保留策略。
 
 回归与验收门槛：
 
 - 每个阶段完成前必须通过现有单机模式的 `pnpm test`，确保 Android 和 HarmonyOS 已实现测试流程没有回归。
 - 涉及设备路由、租约或 Agent Relay 的改动，需要新增本地 adapter 和 mock Agent 双路径测试；同一个 ScriptFlow run 在本地路径和 Agent 路径下应产生等价的步骤结果、截图证据和失败语义。
 - Android 验收至少覆盖设备发现、scrcpy 预览/控制、截图 fallback、UI dump、点击/滑动/输入、App monitor、性能采样和 ScriptFlow 执行。
-- HarmonyOS 验收至少覆盖设备发现、截图、UI dump、点击/滑动/输入和 ScriptFlow 执行。
+- HarmonyOS 验收至少覆盖设备发现、截图、UI dump、点击/滑动/输入和 ScriptFlow 执行；低延迟视频流阶段还需要覆盖采集组件授权、实时流启动/停止、断流回退、同设备多预览 fan-out、动作与视频流并行时延和截图 fallback。
 - iOS 增强只在对应 capability 开启时参与验收；iOS WDA 不可用不能影响 Android/HarmonyOS 设备列表、运行入口或回归结果。
 
 详细契约见 [ScriptFlow v1](./spec/script-flow-v1.md)。

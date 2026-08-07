@@ -14,7 +14,7 @@ import {
   type Platform
 } from "@mobile-automation/shared";
 import type { Observation } from "@mobile-automation/graph-core";
-import type { AutomationDeviceDriver, DeviceEventWatcher, ObservedDeviceEvent } from "./mobile-driver.js";
+import type { AutomationDeviceDriver, DeviceEventWatcher, ObservedDeviceEvent } from "./device-driver.js";
 import { createDefaultOcrService, type OcrService } from "./ocr.js";
 import { ObservationService } from "./observation-service.js";
 import { RuntimeInterceptor, type RuntimeInterceptorObservationOptions, type RuntimeInterceptorRecord, type RuntimeInterceptorRule } from "./runtime-interceptor.js";

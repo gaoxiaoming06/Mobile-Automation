@@ -5,7 +5,7 @@ import {
   StabilityExplorer,
   type StabilityExplorerStorage
 } from "./stability-explorer.js";
-import type { AutomationDeviceDriver, DeviceEventWatcher, MobileVideoRecording, ObservedDeviceEvent } from "./mobile-driver.js";
+import type { AutomationDeviceDriver, DeviceEventWatcher, MobileVideoRecording, ObservedDeviceEvent } from "./device-driver.js";
 import type { OcrLayoutResult, OcrService } from "./ocr.js";
 import type { RuntimeInterceptorRule } from "./runtime-interceptor.js";
 import {

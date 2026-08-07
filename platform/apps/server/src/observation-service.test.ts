@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultAndroidCapabilities, nowIso, type DeviceActionRequest, type DeviceActionResult, type DeviceInfo, type MetricSample, type ToolStatus } from "@mobile-automation/shared";
-import type { AutomationDeviceDriver, MobileVideoRecording } from "./mobile-driver.js";
+import type { AutomationDeviceDriver, MobileVideoRecording } from "./device-driver.js";
 import type { OcrInput, OcrLayoutResult, OcrResult, OcrService } from "./ocr.js";
 import { ObservationService } from "./observation-service.js";
 

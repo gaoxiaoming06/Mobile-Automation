@@ -13,8 +13,10 @@ import {
   dashboardAdvancedToolsEnabled,
   pageAssetLibraryInitialization,
   previewWorkspaceKey,
+  shouldHoldDashboardControlLease,
   workspaceStyleForNav
 } from "./App.js";
+import { defaultAndroidCapabilities, type DeviceInfo } from "@mobile-automation/shared";
 
 describe("App shell", () => {
   it("renders the application shell", () => {
@@ -29,7 +31,7 @@ describe("App shell", () => {
     expect(markup).not.toContain("资产用例");
   });
 
-  it("only enables preview workspaces that own device control", () => {
+  it("only enables live preview rendering on preview workspaces", () => {
     expect(previewWorkspaceKey("devices")).toBe("deviceDetails");
     expect(previewWorkspaceKey("assetRecording")).toBe("assetRecording");
     expect(previewWorkspaceKey("scriptFlows")).toBe("inactive");
@@ -48,6 +50,21 @@ describe("App shell", () => {
     expect(markup).toContain('data-retained-nav-panel="aiScriptFlows"');
     expect(markup).toContain("hidden");
     expect(markup).toContain('value="临时草稿"');
+  });
+
+  it("holds the selected agent device lease across non-preview tabs", () => {
+    const selectedDevice = agentDevice("agent-local:android:ERLDU20115007395");
+
+    expect(shouldHoldDashboardControlLease("devices", selectedDevice, selectedDevice.serial)).toBe(true);
+    expect(shouldHoldDashboardControlLease("scriptFlows", selectedDevice, selectedDevice.serial)).toBe(true);
+    expect(shouldHoldDashboardControlLease("runs", selectedDevice, selectedDevice.serial)).toBe(true);
+    expect(shouldHoldDashboardControlLease("settings", selectedDevice, selectedDevice.serial)).toBe(true);
+  });
+
+  it("does not hold a control lease without an online selected agent device", () => {
+    expect(shouldHoldDashboardControlLease("scriptFlows", undefined, "")).toBe(false);
+    expect(shouldHoldDashboardControlLease("scriptFlows", { ...agentDevice("agent-local:android:ERLDU20115007395"), status: "offline" }, "agent-local:android:ERLDU20115007395")).toBe(false);
+    expect(shouldHoldDashboardControlLease("scriptFlows", regularDevice("ERLDU20115007395"), "ERLDU20115007395")).toBe(false);
   });
 
   it("blocks preview interaction while page identification is running", () => {
@@ -97,3 +114,31 @@ describe("App shell", () => {
     expect(pageAssetLibraryInitialization("ios", {})).toBeUndefined();
   });
 });
+
+function agentDevice(serial: string): DeviceInfo {
+  return {
+    ...regularDevice(serial),
+    agent: {
+      agentId: "agent-local",
+      name: "本机 Agent",
+      endpoint: "https://127.0.0.1:4010",
+      connectedAt: "2026-08-07T08:00:00.000Z",
+      lastHeartbeatAt: "2026-08-07T08:00:00.000Z",
+      visibility: "public"
+    }
+  } as DeviceInfo;
+}
+
+function regularDevice(serial: string): DeviceInfo {
+  return {
+    id: serial,
+    serial,
+    platform: "android",
+    name: "YAL-AL10",
+    status: "online",
+    resolution: { width: 1080, height: 2340 },
+    orientation: "portrait",
+    capabilities: defaultAndroidCapabilities(),
+    lastSeenAt: "2026-08-07T08:00:00.000Z"
+  };
+}

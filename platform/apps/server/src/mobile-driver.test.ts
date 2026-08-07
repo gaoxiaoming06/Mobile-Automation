@@ -10,7 +10,8 @@ import {
   type DeviceActionRequest,
   type DeviceInfo
 } from "@mobile-automation/shared";
-import { MobileDriver, type AutomationDeviceDriver } from "./mobile-driver.js";
+import type { AutomationDeviceDriver } from "./device-driver.js";
+import { MobileDriver } from "./mobile-driver.js";
 
 const monitorConfig: AndroidAppMonitorConfig = {
   enabled: true,

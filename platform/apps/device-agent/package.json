@@ -1,0 +1,28 @@
+{
+  "name": "@mobile-automation/device-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mobile-automation-device-agent": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mobile-automation/android-driver": "workspace:*",
+    "@mobile-automation/harmony-driver": "workspace:*",
+    "@mobile-automation/ios-driver": "workspace:*",
+    "@mobile-automation/shared": "workspace:*",
+    "@yume-chan/adb": "^2.6.0",
+    "@yume-chan/adb-scrcpy": "^2.3.2",
+    "@yume-chan/adb-server-node-tcp": "^2.5.2",
+    "@yume-chan/scrcpy": "^2.3.0",
+    "@yume-chan/stream-extra": "^2.6.1",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}
