@@ -1,14 +1,17 @@
 # Android Driver
 
-Android-specific implementation hidden behind the shared driver contract.
+Android-specific implementation behind the shared driver and Device Agent contracts.
 
-MVP:
+Current scope:
 
 - ADB discovery.
-- scrcpy preview.
+- Native scrcpy debug-window control when the optional host `scrcpy` CLI is installed.
 - ADB screenshot fallback.
 - tap, long press, swipe, back, home, input, screenshot, launch app, close app.
-- Basic metrics and logcat evidence.
+- UIAutomator hierarchy dump and Android semantic action candidates.
+- Basic metrics, process/app monitor sampling, logcat crash/ANR/native-crash/process-death evidence, and video recording through Android `screenrecord` or host `scrcpy` fallback.
+
+Browser-embedded realtime preview/control is brokered by the server and Device Agent using the pinned scrcpy server file under `platform/tools`; it is separate from the optional native `scrcpy` debug window.
 
 Notes:
 

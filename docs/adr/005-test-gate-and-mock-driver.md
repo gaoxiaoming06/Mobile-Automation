@@ -3,9 +3,9 @@ title: Test Gate and Mock Driver
 doc_type: adr
 status: accepted
 created_at: 2026-06-04
-updated_at: 2026-06-04
+updated_at: 2026-08-07
 related_repos: ["Mobile-Automation"]
-related_modules: ["test-support", "shared", "runner-core", "report-core", "android-driver"]
+related_modules: ["test-support", "shared", "runner-core", "report-core", "android-driver", "harmony-driver", "ios-driver", "device-agent"]
 platform_scope: mobile-shared
 ---
 
@@ -14,7 +14,9 @@ platform_scope: mobile-shared
 - Status: accepted
 - Date: 2026-06-04
 - Deciders: project owner + Codex
-- Related Spec: [requirements.md](../product/mobile-automation-platform/spec/requirements.md#req-025测试保障与回归防护)
+- Related Spec: [mobile automation platform](../product/mobile-automation-platform/README.md)
+
+Current note: the test gate now covers ScriptFlow/PageAsset behavior, server-agent registry and relay, Device Agent runtime, Android/iOS/HarmonyOS driver contracts, dashboard flows, and report artifacts. Mock Driver remains the baseline for deterministic regression tests.
 
 ## Context
 
@@ -27,7 +29,7 @@ Create a `test-support` package in the first engineering skeleton. It provides M
 Required test layers:
 
 - Unit tests for schemas, coordinate conversion, runner state machine, and report generation.
-- Integration tests for Recorder, Runner, Metrics, Events, and Report using Mock Driver.
+- Integration tests for ScriptFlow preview/run, Runner, metrics, events, Agent relay, Device Agent command handling, and Report using Mock Driver or mock Agent fixtures.
 - Component tests for Dashboard views.
 - E2E tests using Mock Driver for the record/save/run/report flow.
 
@@ -46,7 +48,7 @@ Required test layers:
 
 ### Neutral
 
-- Real Android smoke tests remain necessary for preview and input validation.
+- Real-device smoke tests remain necessary for Android scrcpy, iOS WDA, platform-specific input validation, and the experimental HarmonyOS companion stream bridge when that bridge is explicitly enabled.
 
 ## Alternatives Considered
 

@@ -4,11 +4,11 @@ doc_type: index
 status: draft
 owner: TODO(confirm): owner team unknown
 created_at: 2026-06-04
-updated_at: 2026-06-06
+updated_at: 2026-08-07
 related_repos: ["Mobile-Automation"]
 related_modules: []
-platform_scope: mobile-both
-related_platforms: ["Android", "iOS", "Web Dashboard"]
+platform_scope: mobile
+related_platforms: ["Android", "iOS", "HarmonyOS", "Web Dashboard", "Device Agent"]
 ---
 
 # 自动化测试平台文档
@@ -19,7 +19,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 
 | Feature | Status | Platform | Spec |
 |---|---|---|---|
-| 自动化测试平台 | draft | Android + iOS + Web Dashboard | [docs/product/mobile-automation-platform](product/mobile-automation-platform/README.md) |
+| 自动化测试平台 | draft | Android + iOS + HarmonyOS + Web Dashboard + Device Agent | [docs/product/mobile-automation-platform](product/mobile-automation-platform/README.md) |
 
 ## Structure
 
@@ -33,6 +33,7 @@ related_platforms: ["Android", "iOS", "Web Dashboard"]
 | [test/](test/) | 测试计划、测试报告、截图证据、测试脚本和 fixtures |
 | [reference/](reference/) | 外部资料、竞品/方案参考、协议和工具链背景 |
 | [changelog/](changelog/) | 跨功能的重要结构调整、评审结论和阶段性变更记录 |
+| [skills/](skills/) | 可导入到 AI 客户端的项目技能/说明，例如 Mobile Automation MCP 真机验证 workflow |
 
 ## AI 推荐阅读顺序
 

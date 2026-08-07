@@ -2,7 +2,7 @@
 
 Mobile visual automation testing platform.
 
-The current product uses ScriptFlow YAML as the test-case source of truth and PageAsset as the page-identity source of truth. It includes Android device discovery, browser-embedded scrcpy preview, visual/OCR execution, AI-assisted ScriptFlow generation, performance/event capture, and HTML reports. iOS support remains an incremental device-driver layer.
+The current product uses ScriptFlow YAML as the test-case source of truth and PageAsset as the page-identity source of truth. It includes Device Agent based Android, iOS, and HarmonyOS device access, Android browser-embedded realtime preview, HarmonyOS screenshot preview, visual/OCR execution, AI-assisted ScriptFlow generation and repair, trial learning, performance/event capture, MCP integration, and HTML reports.
 
 ## Project Structure
 
@@ -17,9 +17,13 @@ Mobile-Automation/
       shared/         # Shared schemas and utilities
       android-driver/ # Android ADB/scrcpy driver
       ios-driver/     # iOS libimobiledevice/xcrun/WDA driver
+      harmony-driver/ # HarmonyOS HDC/uitest driver
+      script-flow/    # ScriptFlow YAML parser, validator, compiler, serializer
       runner-core/    # Test execution engine
       report-core/    # HTML report generation
       test-support/   # Mock Driver, fixtures, builders, assertions
+      mcp-adapter/    # Mobile Automation MCP server/client adapter
+      cli/            # REST-backed ScriptFlow command-line helper
     tools/            # Tool-managed binaries, such as scrcpy-server
     data/             # Legacy marker only; runtime data is external by default
   docs/
@@ -40,13 +44,16 @@ Runtime databases, screenshots, videos, logs, and reports default to
 
 ## Current Decisions
 
-- MVP: Android end-to-end, with incremental iOS support.
+- Device access: central server plus one or more Device Agents.
+- Android: ADB actions, UIAutomator hierarchy, browser scrcpy stream/control, screenshot fallback, logcat, metrics, app monitor, and video recording where supported.
+- iOS: libimobiledevice/xcrun discovery and screenshots, WDA-backed control when configured.
+- HarmonyOS: HDC discovery, screenshot preview, `uitest` actions/UI hierarchy, hilog, and an opt-in experimental companion HAP stream bridge that is not the dashboard default.
 - Dashboard: React + TypeScript + Vite.
 - Server: Node.js + TypeScript.
 - Storage: SQLite + filesystem artifacts.
 - Android preview: browser-embedded scrcpy stream first, ADB screenshot polling fallback.
-- iOS preview: `idevicescreenshot` screenshot polling for trusted online physical devices.
-- iOS control: WebDriverAgent required, configured through `IOS_WDA_URL` or `IOS_WDA_URL_<UDID>`.
+- iOS preview: `idevicescreenshot` or WDA screenshot for trusted online physical devices.
+- iOS control: WebDriverAgent required, configured on the Agent host through `IOS_WDA_URL` or `IOS_WDA_URL_<UDID>`.
 - Report: Web detail + HTML export.
 - Tests: Mock Driver and regression gate are required.
 
@@ -58,7 +65,8 @@ Start here:
 
 - [Product README](docs/product/mobile-automation-platform/README.md)
 - [ScriptFlow v1 contract](docs/product/mobile-automation-platform/spec/script-flow-v1.md)
-- [Implementation plan](docs/superpowers/plans/2026-07-28-script-flow-v1-clean-cut.md)
+- [ScriptFlow REST / CLI / MCP guide](docs/guides/script-flow-tools.md)
+- [Historical ScriptFlow v1 implementation plan](docs/superpowers/plans/2026-07-28-script-flow-v1-clean-cut.md)
 
 ## AI Read Order
 
@@ -71,15 +79,14 @@ For future implementation sessions:
 5. Relevant ADRs in [docs/adr](docs/adr/)
 6. Relevant local skill in [skills/skills](skills/skills/)
 
-## First Implementation Direction
+## Current Implementation Shape
 
-1. Create workspace/package tooling.
-2. Implement shared schemas.
-3. Implement Mock Driver and tests.
-4. Implement Android driver foundation.
-5. Implement server device/session APIs.
-6. Implement dashboard device list and preview.
-7. Implement PageAsset identity, ScriptFlow execution, and report loop.
+1. `pnpm dev` starts the central server and dashboard.
+2. `pnpm agent` starts a local Device Agent that registers Android, iOS, and HarmonyOS devices with the server.
+3. Dashboard reads devices through `/api/devices`, then routes screenshots, actions, UI hierarchy, streams, logs, and performance sampling through the server-to-agent command channel.
+4. ScriptFlow v1 YAML is parsed, validated, previewed into an immutable plan digest, and executed through the shared runner.
+5. Runs persist screenshots, logs, metrics, trial-learning summaries, HTML reports, and videos when enabled/supported under `DATA_DIR`.
+6. External AI clients can use the MCP adapter to generate, repair, run, and report ScriptFlow validations without direct database or driver access.
 
 ## Local Development
 
@@ -93,14 +100,37 @@ pnpm dev
 - Dashboard: http://localhost:5173
 - Server health: http://localhost:4010/api/health
 
-Connect Android devices with USB debugging enabled before opening the dashboard. For iOS physical devices, install libimobiledevice tools and trust/unlock the device first:
+For another computer on the same LAN, use the HTTPS dev shape so browser WebCodecs remains available for Android realtime preview:
+
+```bash
+# Terminal 1
+pnpm dev:https
+
+# Terminal 2
+pnpm agent:https
+```
+
+- LAN Dashboard: `https://<server-lan-ip>:5173/`
+- LAN Server health: `https://<server-lan-ip>:4010/api/health`
+- First visit may require accepting the local self-signed certificate.
+
+Start at least one Device Agent on the machine that has USB-connected devices:
+
+```bash
+DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 \
+DEVICE_AGENT_ID=my-macbook \
+DEVICE_AGENT_SHARED=1 \
+pnpm agent
+```
+
+Connect Android devices with USB debugging enabled before starting the agent. For iOS physical devices, install libimobiledevice tools and trust/unlock the device first:
 
 ```bash
 brew install libimobiledevice
 idevice_id --list
 ```
 
-To enable iOS remote control, run WebDriverAgent for the target device and configure one of:
+To enable iOS remote control, run WebDriverAgent for the target device on the Agent host and configure one of:
 
 ```bash
 export IOS_WDA_URL=http://localhost:8100
@@ -111,7 +141,7 @@ Runtime DB and artifacts default to `~/.local/share/mobile-automation`. Override
 
 ### Device Agent
 
-The server can also use devices attached to another machine through a local Device Agent. Start the central server first, then start the agent on the machine that has USB-connected devices:
+The server uses Device Agents as its device access layer. Start the central server first, then start an agent on each machine that has USB-connected devices:
 
 ```bash
 # Terminal 1: central server + dashboard
@@ -124,7 +154,7 @@ DEVICE_AGENT_SHARED=1 \
 pnpm agent
 ```
 
-Agent devices appear in `/api/devices` and the Dashboard with serials like `my-macbook:android:<local-serial>`. The agent polls server commands and executes device info, screenshot, UI hierarchy, foreground app, tap/input/swipe/app launch, clear data, logs, semantic Android actions, and performance sampling through the existing platform drivers.
+Agent devices appear in `/api/devices` and the Dashboard with serials like `my-macbook:android:<local-serial>`. The agent uses the command WebSocket with HTTP polling fallback, and executes device info, screenshot, UI hierarchy, foreground app, tap/input/swipe/app launch, clear data, logs, semantic Android actions, stream startup, and performance sampling through the platform drivers.
 
 For private local use, create a pairing code from the server and start the agent with it:
 
@@ -201,6 +231,6 @@ The dashboard uses an embedded scrcpy stream in the browser through WebCodecs. T
 
 The local `scrcpy` CLI command is optional. It is only used for the native debug window and as a recording fallback when Android `screenrecord` is unavailable. Browser-embedded preview/control and the core automation flow must not require a locally installed `scrcpy` CLI.
 
-HarmonyOS realtime preview uses a small companion HAP on the device. The device-agent starts the configured bundle, opens an `hdc fport` tunnel to the companion TCP port, and relays the H.264 packet stream through the same browser WebCodecs preview path. If the companion is missing, authorization is denied, or the stream fails, the dashboard falls back to HarmonyOS screenshot preview. See [HarmonyOS screen stream companion](docs/guides/harmony-screen-stream.md).
+HarmonyOS dashboard preview currently uses screenshot polling. An opt-in experimental stream bridge exists: the device-agent can start a companion HAP, open an `hdc fport` tunnel to its TCP port, and relay H.264 packets through the server, but that path is not the dashboard default. See [HarmonyOS screen stream companion](docs/guides/harmony-screen-stream.md).
 
 For an initial team deployment path, see [Deployment Guide](docs/guides/deployment.md).

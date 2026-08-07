@@ -126,7 +126,7 @@ describe("AgentHarmonyStreamBroker", () => {
     broker.attachBrowser("agent-a:harmony:harmony-1", browser);
 
     expect(browser.sent).toEqual([{
-      data: JSON.stringify({ type: "error", message: "HarmonyOS realtime preview requires a registered HarmonyOS agent device with harmonyScreenStream capability." }),
+      data: JSON.stringify({ type: "error", message: "HarmonyOS stream bridge requires a registered HarmonyOS agent device with harmonyScreenStream capability." }),
       options: undefined
     }]);
     expect(browser.closed).toBe(true);

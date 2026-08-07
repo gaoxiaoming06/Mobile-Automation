@@ -12,7 +12,7 @@
     "dev": "concurrently -n server,dashboard -c cyan,green \"pnpm --filter @mobile-automation/server dev\" \"pnpm --filter @mobile-automation/dashboard dev\"",
     "dev:https": "node scripts/ensure-lan-https-cert.mjs && HOST=0.0.0.0 HTTPS=1 HTTPS_KEY=$PWD/.cert/mobile-automation-lan-key.pem HTTPS_CERT=$PWD/.cert/mobile-automation-lan-cert.pem pnpm dev",
     "agent": "pnpm --filter @mobile-automation/device-agent start",
-    "agent:https": "NODE_TLS_REJECT_UNAUTHORIZED=0 HARMONY_STREAM_ENABLED=1 DEVICE_AGENT_SHARED=1 DEVICE_AGENT_SERVER_URL=https://127.0.0.1:4010 pnpm agent",
+    "agent:https": "NODE_TLS_REJECT_UNAUTHORIZED=0 DEVICE_AGENT_SHARED=1 DEVICE_AGENT_SERVER_URL=https://127.0.0.1:4010 pnpm agent",
     "https:cert": "node scripts/ensure-lan-https-cert.mjs",
     "build": "pnpm -r typecheck && pnpm --filter @mobile-automation/dashboard build",
     "check:tools": "node scripts/check-scrcpy-server.mjs",

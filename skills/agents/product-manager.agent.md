@@ -15,16 +15,19 @@ Focus on user-visible behavior and acceptance.
 
 ## Current MVP Boundaries
 
-- Android end-to-end is the first release priority.
-- iOS discovery, screenshot preview, battery sampling, and WDA-backed basic control are included as incremental MVP capabilities.
+- Android, iOS, and HarmonyOS devices are exposed through Device Agent.
+- Android has the richest current path: ADB actions, scrcpy realtime preview/control, UI hierarchy, app monitor, logs, metrics, and video where supported.
+- iOS discovery, screenshot preview, battery sampling, and WDA-backed basic control are incremental capabilities.
+- HarmonyOS discovery, screenshot preview, HDC/uitest actions, UI hierarchy, and hilog are included. The companion stream bridge is experimental and not the dashboard default.
 - HTML report.
-- Every run records and keeps execution video as test evidence.
-- Current product mainline is `PageStateFlow`: page assets, page elements, page transitions, page tasks, semantic execution, repair, and evidence.
-- A concrete replay step is valid only when it can express beforeState, semantic action, afterExpectations, systemGuards, dynamic wait, and evidence.
+- Runs keep screenshots, logs, metrics, events, and HTML reports as evidence; execution video is kept when enabled and supported by the selected device.
+- Current product mainline is ScriptFlow v1: YAML cases, typed parameters, explicit steps, preview/plan digest, trial runs, outcome review, reusable `runFlow`, and report evidence.
+- PageAsset is the page identity source, not an executable page-transition or PageTask model.
+- A concrete execution step is valid when it can be deterministically compiled, checked against device capability, executed, and reported with evidence.
 - Step-level expected/actual verification is in scope: OCR text, app alive, no crash, screen changed, metric/log checks, and future image baseline.
 - Optional UI branches are in scope through `tap_if_text`.
-- Semantic locator planning is in scope: element, OCR text, image/region, and coordinate fallback.
-- Old source-code global graph expansion and auto-promotion are experimental. Route planning remains in scope only as the graph layer behind PageStateFlow assets.
+- Semantic target resolution is in scope: visible text, icon/visual target, control, area/position, scope text, platform hierarchy/OCR evidence, and coordinate fallback.
+- Old source-code global graph expansion, PageTask/PageTransition, graph path execution, and auto-promotion are out of current scope unless reopened explicitly.
 - No login, role, permission, or audit in first release.
 - iOS crash logs, video recording, richer performance metrics, and parity with Android remain follow-up scope.
 

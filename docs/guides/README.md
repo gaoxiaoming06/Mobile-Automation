@@ -3,12 +3,12 @@ title: Guides
 doc_type: guide-index
 status: draft
 created_at: 2026-06-04
-updated_at: 2026-06-05
+updated_at: 2026-08-07
 ---
 
 # Guides
 
-This directory will hold practical development, debugging, deployment, and operations guides.
+This directory holds practical development, debugging, deployment, and operations guides.
 
 Available guides:
 
@@ -18,7 +18,7 @@ Available guides:
 - [iOS WebDriverAgent setup](ios-wda.md)
 - [HarmonyOS screen stream companion](harmony-screen-stream.md)
 
-Planned guides:
+Useful follow-up guides:
 
 - Android device setup and ADB authorization
 - scrcpy setup and preview troubleshooting

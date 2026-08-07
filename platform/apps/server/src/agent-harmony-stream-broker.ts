@@ -39,7 +39,7 @@ export class AgentHarmonyStreamBroker {
   attachBrowser(deviceKey: string, browser: RelaySocket): void {
     const device = this.registry.deviceInfoForKey(deviceKey);
     if (!isHarmonyStreamDevice(device)) {
-      sendErrorAndClose(browser, "HarmonyOS realtime preview requires a registered HarmonyOS agent device with harmonyScreenStream capability.");
+      sendErrorAndClose(browser, "HarmonyOS stream bridge requires a registered HarmonyOS agent device with harmonyScreenStream capability.");
       return;
     }
 

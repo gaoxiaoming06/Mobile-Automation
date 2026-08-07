@@ -3,9 +3,9 @@ title: Android Preview Strategy
 doc_type: adr
 status: accepted
 created_at: 2026-06-04
-updated_at: 2026-06-04
+updated_at: 2026-08-07
 related_repos: ["Mobile-Automation"]
-related_modules: ["android-driver", "dashboard", "server"]
+related_modules: ["android-driver", "dashboard", "server", "device-agent"]
 platform_scope: android
 ---
 
@@ -14,7 +14,9 @@ platform_scope: android
 - Status: accepted
 - Date: 2026-06-04
 - Deciders: project owner + Codex
-- Related Spec: [design.md](../product/mobile-automation-platform/spec/design.md)
+- Related Spec: [mobile automation platform](../product/mobile-automation-platform/README.md)
+
+Current note: this ADR still governs Android preview, but the scrcpy process and device-specific work now run through the Device Agent. The server brokers the stream to the dashboard and screenshot polling remains the fallback.
 
 ## Context
 

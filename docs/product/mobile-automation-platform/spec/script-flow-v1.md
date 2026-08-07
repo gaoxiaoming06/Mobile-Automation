@@ -177,4 +177,4 @@ AI 输出必须经过与人工导入相同的 ScriptFlow schema、参数引用�
 - `onPage` / `expectPage` 使用统一页面身份服务。
 - REST、CLI 和 MCP 只暴露页面资产、ScriptFlow、Run 和报告能力。
 - REST、CLI 和 MCP 均使用 `preview -> planDigest -> run` 契约；子流程变化后旧摘要立即失效。
-- Android 先完整落地；iOS、Harmony 和 Flutter 复用视觉页面样本扩展字段，不引入平台专属定位为主路径。
+- Android、iOS 和 HarmonyOS 通过统一 Device Agent / driver 能力运行 ScriptFlow；Flutter 作为脚本和页面资产平台范围保留。跨平台能力复用视觉/OCR/语义目标，不把平台私有定位器作为主路径。

@@ -3,9 +3,9 @@ title: Incremental iOS Support
 doc_type: adr
 status: accepted
 created_at: 2026-06-05
-updated_at: 2026-06-05
+updated_at: 2026-08-07
 related_repos: ["Mobile-Automation"]
-related_modules: ["ios-driver", "server", "dashboard", "runner-core"]
+related_modules: ["ios-driver", "server", "dashboard", "runner-core", "device-agent"]
 platform_scope: ios
 ---
 
@@ -15,6 +15,8 @@ platform_scope: ios
 - Date: 2026-06-05
 - Deciders: project owner + Codex
 - Related Spec: [mobile automation platform](../product/mobile-automation-platform/README.md)
+
+Current note: iOS support now runs through the same Device Agent device-access model as Android and HarmonyOS. WDA is still explicitly configured on the Agent host through `IOS_WDA_URL` or `IOS_WDA_URL_<UDID>`.
 
 ## Context
 

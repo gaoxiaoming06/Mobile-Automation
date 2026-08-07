@@ -22,7 +22,8 @@ title: ScriptFlow REST / CLI / MCP 使用指南
 
 ```bash
 pnpm cli -- flows
-pnpm cli -- run-flow --flow flow_xxx --device SERIAL --params '{"className":"班级四十二号"}'
+pnpm cli -- preview-flow --flow flow_xxx --version 1 --params '{"className":"班级四十二号"}'
+pnpm cli -- run-flow --flow flow_xxx --version 1 --plan PLAN_DIGEST --device SERIAL --params '{"className":"班级四十二号"}'
 pnpm cli -- runs
 pnpm cli -- report --run run_xxx
 ```
@@ -30,6 +31,22 @@ pnpm cli -- report --run run_xxx
 ## MCP
 
 MCP server 通过 `@mobile-automation/mcp-adapter` 暴露，只调用平台 REST API，不直接访问数据库或设备驱动。
+
+### MCP Server 配置信息
+
+前置条件：
+
+1. 已在仓库根目录执行 `pnpm install`。
+2. Mobile Automation REST server 正在运行，默认 `http://127.0.0.1:4010`。
+3. 真机执行时，至少一个 Device Agent 已连接到同一个 REST server。
+
+Server 信息：
+
+- name: `mobile-automation`
+- transport: `stdio`
+- command: `pnpm`
+- args: `--dir /Users/eeo/StudioProjects/Mobile-Automation --filter @mobile-automation/mcp-adapter start`
+- env: `MOBILE_AUTOMATION_SERVER_URL=http://127.0.0.1:4010`
 
 ```json
 {
@@ -44,6 +61,10 @@ MCP server 通过 `@mobile-automation/mcp-adapter` 暴露，只调用平台 REST
   }
 }
 ```
+
+MCP adapter 通过 stdio 启动，只依赖 REST API；如果 REST server 未启动，工具会存在但调用会失败。不同 AI 客户端的导入方式不同，按各自客户端要求填入上面的 server 信息即可。
+
+配套工作流说明在 `docs/skills/mobile-automation-test/SKILL.md`，用于告诉 AI 如何安全使用这些 MCP tools。需要导入 skill 的客户端可以直接引用该目录；不支持 skill 的客户端也可以只接入 MCP tools。
 
 平台字段分两类：
 
@@ -62,6 +83,7 @@ MCP server 通过 `@mobile-automation/mcp-adapter` 暴露，只调用平台 REST
 - `run_script_flow_draft` / `run_script_flow`：经过设备预检后执行草稿或已保存用例。
 - `wait_for_run` / `get_run` / `get_run_report` / `get_report`：轮询执行结果和报告。`get_run_report` 支持 `responseMode`。
 - `generate_and_run_script_flow`：一站式执行 `validate device -> generate -> preview -> trial run -> wait -> report`，支持 `responseMode`。
+- `generate_repair_and_run_script_flow`：一站式生成、试运行、基于失败证据修复并重跑，适合定位失败、页面不匹配或结果验证失败；不要用于崩溃、ANR 或设备基础设施故障。
 - `run_previous_script_flow`：复用某次 ScriptFlow run 中保存的 `sourceYaml`，重新 preview 后在另一台设备上执行，不重新生成脚本。
 - `review_trial_outcome`：调用方明确确认或拒绝试运行结果后再调用。
 

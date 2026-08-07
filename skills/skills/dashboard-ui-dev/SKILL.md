@@ -1,6 +1,6 @@
 ---
 name: dashboard-ui-dev
-description: Use when implementing Mobile-Automation Dashboard UI: device list, preview page, recorder, step editor, run configuration, execution details, or report pages.
+description: Use when implementing Mobile-Automation Dashboard UI: device list, Agent pairing/visibility, realtime preview/control, ScriptFlow case center, AI ScriptFlow generation/editing, run configuration, stability exploration, execution details, reports, settings, or advanced PageAsset tools.
 ---
 
 # Dashboard UI Dev
@@ -16,41 +16,42 @@ Current stack:
 
 - Device list.
 - Device preview and control.
-- Recorder and live step list.
-- PageStateFlow asset recording and page task execution.
-- StructuredFlow detail and step detail for compatible linear replay artifacts.
-- Run configuration.
+- ScriptFlow case center.
+- AI ScriptFlow generation, manual step editing, preview, trial execution, repair, and outcome review.
+- Advanced-only PageAsset calibration and PageAsset library maintenance.
+- Stability exploration.
+- Run configuration and run controls.
 - Run detail.
 - Report list and report detail.
-- Experimental graph module.
+- System settings, including AI model settings and Android app monitor defaults.
 
 ## UI Rules
 
 - Keep operational UI dense and clear; this is a testing tool, not a landing page.
-- Keep PageStateFlow asset recording, page abilities, page tasks, and semantic execution as the primary product workflow.
-- When adding or editing PageElement UI, expose locator intent (`text_locator`, `visual_locator`, `structural_locator`, `collection_item_locator`) and dynamic masks when relevant. A marked region is evidence, not a promise to click its center.
-- For dynamic lists or grids, model the container and item template (`dynamicRegion`, `itemTemplate`, `parameterMapping`) before adding planner behavior. Do not encourage users to save each concrete row/card as a separate fixed element.
-- Keep old source-scan graph screens visually and semantically experimental; do not make source-code graph construction or auto-promotion the primary navigation path unless explicitly requested.
-- Show explicit states: loading, empty, online, offline, locked, recording, running, failed.
+- Keep ScriptFlow authoring, execution, and report review as the primary product workflow.
+- Treat PageAsset UI as advanced calibration/governance. A marked region is evidence for page identity or repair, not a promise to click its center.
+- When adding target UI, expose user-facing target intent: text, icon/visual, control, area/position, scope text, ordinal, search policy, and clear coordinate fallback only when unavoidable.
+- Keep old source-scan graph screens out of primary navigation unless explicitly requested.
+- Show explicit states: loading, empty, online, offline, locked, generating, previewing, running, paused, failed.
 - Disable unsupported actions based on `DeviceCapabilities`.
 - Preview controls must preserve aspect ratio and expose scale/coordinate metadata for debugging.
-- Keep module pages distinct: device management owns device facts and refresh, recording owns live preview, execution owns run control and results.
-- The case library should show structured steps: beforeState, semantic action, afterExpectations, systemGuards, recent result, and execution-to-step options.
+- Keep module pages distinct: device management owns device facts and refresh, advanced asset calibration owns page identity edits, ScriptFlow modules own authoring/execution, and run pages own results.
+- The case library should show ScriptFlow source status, verification status, typed parameters, preview/plan digest, trial/normal run entry points, recent result, and report links.
 - Do not expose `tap_if_text` as a normal step shortcut. Show it as an inserted conditional branch: "when text is visible, tap; otherwise skip".
-- For semantic target work, clearly separate coordinate, element, text, image/region, structural locator, collection item, and conditional branch steps.
+- For semantic target work, clearly separate coordinate fallback, text, icon/visual, control, area/position, scoped target, search policy, and conditional branch steps.
 
 ## Implementation Notes
 
-- Step recording helpers live in `platform/apps/dashboard/src/recording.ts`; reuse `createRecordedStep()` and `renumberSteps()` instead of rebuilding step objects in `App.tsx`.
 - scrcpy control message helpers live in `platform/apps/dashboard/src/scrcpy-control.ts`; keep control serialization covered by tests when changing pointer, key, text, or control channel behavior.
 - Preview gesture classification lives in `platform/apps/dashboard/src/preview-gesture.ts`; keep tap/long-press/swipe thresholds covered by tests.
-- Dashboard state is split across hooks such as `useDeviceList`, `useScrcpyStream`, `useRecorder`, and `useRunExecution`; do not add new large stateful blocks to `App.tsx`.
-- Step expectation and condition editors live in `StepsPanel`; changes there should preserve expected/actual, OCR, condition result, and run control display.
+- Dashboard state is split across hooks such as `useDeviceList`, `useScrcpyStream`, and `useRunExecution`; prefer component-local helpers over adding new large stateful blocks to `App.tsx`.
+- ScriptFlow authoring and draft run UI lives in `AiScriptFlowsPanel`; saved-case execution lives in `CaseCenterPanel`; run result grouping lives in `RunResultsPanel`.
+- Step expectation and condition editors live in `StepExpectationPanel` and `StepConditionEditor`; preserve expected/actual, OCR, condition result, and run control display.
 - Keep browser preview actions mapped through device coordinates and ratios. UI pixel coordinates are only an input to the shared coordinate conversion path.
-- Old graph UI components can remain available for experiments, but ordinary recording, replay, package smoke, and AI / CI validation should point users to PageStateFlow assets and page tasks.
+- Advanced asset panels live in `AssetRecordingPanel` and `PageAssetsPanel`; ordinary generation, replay, package smoke, and AI / CI validation should point users to ScriptFlow cases and reports.
 
 ## Testing
 
 - Component-test key states.
-- E2E-test the Mock Driver flow: select device, preview, record, save, run, report.
-- Unit-test changes to `recording.ts` and `scrcpy-control.ts` before touching the live preview or recorder flow.
+- E2E-test the Mock Driver flow: select device, preview, generate/edit ScriptFlow, preview plan, run, and open report.
+- Unit-test changes to `scrcpy-control.ts`, `preview-gesture.ts`, `AiScriptFlowsPanel`, `CaseCenterPanel`, `ScriptRunForm`, and run/result panels before touching live preview or execution flow.

@@ -13,11 +13,12 @@ The workflow intentionally borrows the useful execution discipline from GitHub `
 
 Current product mainline:
 
-- Default new product work goes to `PageStateFlow`.
-- PageStateFlow means: PageModel -> PageElement -> PageTransition/PageTask -> semantic execution -> repair evidence -> reportable result.
-- `StructuredFlow` / Smart Recorded Flow remains a compatible linear replay artifact for concrete step execution, but it is not the product-level source of truth.
-- Old source-code global graph capabilities are frozen as experimental: source scanning to global graph, candidate graph governance, graph quality, and auto-promotion.
-- Reuse the lower-level primitives already extracted from graph work: `TestRuleStep`, `StateMatcher` / `FlowStateAnchor`, semantic locators, `RuntimeOverlay`, dynamic wait, `RuntimeInterceptor`, screenshots, video, logs, metrics, and report evidence.
+- Default new product work goes to `ScriptFlow v1` for executable cases and `PageAsset` for page identity.
+- ScriptFlow means: YAML source -> validation -> preview/plan digest -> Agent-backed execution -> trial learning/outcome review -> reportable result.
+- PageAsset stores page identity evidence and optional public locators. It is not an executable PageTask, PageTransition, or route graph.
+- Learning support assets such as InteractionAsset, NavigationEntry, FlowVerification, and screen understanding may improve future generation/execution, but ScriptFlow remains the test behavior source of truth.
+- Old source-code global graph capabilities are historical/experimental: source scanning to global graph, candidate graph governance, graph quality, auto-promotion, PageTask, and graph-first UX.
+- Reuse the lower-level primitives that still exist in the codebase: semantic locators, RuntimeInterceptor, dynamic wait, page matching, screenshots, video, logs, metrics, app monitor, and report evidence.
 
 Before code changes, classify the user's request:
 
@@ -36,11 +37,11 @@ Before code changes, classify the user's request:
 
 ## Rules
 
-- Do not skip tests for recorder, runner, coordinate mapping, report generation, or driver contracts.
+- Do not skip tests for ScriptFlow contracts, Agent/device routing, runner controls, coordinate mapping, report generation, or driver contracts.
 - Do not close a task only because code was changed. Closure requires test evidence, docs sync, and visible residual risk.
 - Do not require git worktrees in this project unless the workspace is confirmed to be a git repository.
 - Do not apply Superpowers as a replacement for the current spec hierarchy; apply it as execution discipline.
-- Do not treat old source-scan graph flows as the default for new features; prefer PageStateFlow assets, semantic locators, page tasks, and route planning from saved page assets.
+- Do not treat old source-scan graph flows as the default for new features; prefer ScriptFlow cases, PageAsset identity, semantic target resolution, and explicit reusable `runFlow` cases.
 - When a decision becomes stable, ask for or create an ADR.
 - Keep changelog entries in either the feature spec changelog or `docs/changelog/`.
 - P0 regressions may use the fast-track flow in `docs/guides/ai-development-workflow.md`, but new product capabilities must not skip spec updates.

@@ -3,7 +3,7 @@ title: Action Step Coordinate Model
 doc_type: adr
 status: accepted
 created_at: 2026-06-04
-updated_at: 2026-06-04
+updated_at: 2026-08-07
 related_repos: ["Mobile-Automation"]
 related_modules: ["shared", "runner-core", "dashboard"]
 platform_scope: mobile-shared
@@ -14,7 +14,9 @@ platform_scope: mobile-shared
 - Status: accepted
 - Date: 2026-06-04
 - Deciders: project owner + Codex
-- Related Spec: [design.md](../product/mobile-automation-platform/spec/design.md)
+- Related Spec: [ScriptFlow v1](../product/mobile-automation-platform/spec/script-flow-v1.md)
+
+Current note: coordinate replay remains supported as execution data, but current ScriptFlow authoring must prefer semantic targets such as text, icon, visual, control, area/position, nearby text, and scope text. Coordinates must not become the primary product contract for AI-generated actions.
 
 ## Context
 

@@ -1,6 +1,8 @@
 # Server
 
-Node.js + TypeScript backend for device orchestration, PageAsset recognition, ScriptFlow execution, artifacts, metrics and reports.
+Node.js + TypeScript backend for Device Agent relay, PageAsset recognition, ScriptFlow execution, AI draft/repair, trial learning, artifacts, metrics, and reports.
+
+The server owns REST/WebSocket APIs, SQLite-backed storage, artifact cleanup, OCR sidecars, ScriptFlow planning, run orchestration, and HTML report serving. Device-specific work runs behind the Agent command channel; the server does not require direct USB access to devices.
 
 ## AI model
 

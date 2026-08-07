@@ -5,7 +5,7 @@ description: Use when implementing Mobile-Automation HTML reports, report data m
 
 # Report Generation
 
-MVP report format:
+Report format:
 
 - Web report detail.
 - HTML export.
@@ -22,7 +22,7 @@ MVP report format:
 - Step expectation expected/actual/status details.
 - Conditional step metadata: condition hit/miss, attempts, skipped reason, and evidence.
 - Screenshots or key artifacts.
-- Execution video for every run, linked from the report and step evidence when possible.
+- Execution video when enabled and supported by the selected device, linked from the report and step evidence when available.
 - Metrics summary and timeline.
 - Crash, ANR, command failure, timeout, and device-lost events.
 

@@ -7,18 +7,19 @@ description: "Mobile-Automation test role. Use when creating test stubs, regress
 
 ## Priority Areas
 
-- PageStateFlow is the current product mainline.
-- Test PageModel/PageElement/PageTransition/PageTask assets, semantic locators, route planning from page assets, repair evidence, `TestRuleStep` adapters, dynamic wait, RuntimeOverlay, RuntimeInterceptor, screenshots, video, logs, metrics, and reports first.
-- Old source-code global graph tests remain regression coverage for experimental code, not the default acceptance gate for new product features.
+- ScriptFlow v1 and PageAsset are the current product mainline.
+- Test ScriptFlow parsing, validation, serialization, compilation, plan digest, `runFlow` expansion, typed parameters, trial/normal runs, outcome review, learning summaries, semantic target resolution, RuntimeInterceptor, screenshots, video, logs, metrics, app monitor, and reports first.
+- Device routing tests should cover server registry, device-agent runtime, server-agent driver, shared capabilities, leases, pairing/shared visibility, and platform-specific driver gaps.
+- Old source-code global graph tests remain historical or page-identity regression coverage, not the default acceptance gate for new product features.
 - Step schema.
 - Coordinate conversion.
-- Recorder lifecycle.
+- ScriptFlow authoring and AI draft lifecycle.
 - Runner state machine.
 - Pause/resume/step and pause-after-each-step.
 - Flow start strategy and setup scope.
 - Step expectations and OCR behavior.
 - Conditional steps such as `tap_if_text`.
-- Semantic target fallback once T-050 starts.
+- Semantic target fallback for text, icon/visual, control, area/position, scope text, platform hierarchy/OCR, and coordinate fallback.
 - Failure policy.
 - Device lock.
 - Mock Driver.
@@ -36,7 +37,7 @@ description: "Mobile-Automation test role. Use when creating test stubs, regress
 
 ## Commands
 
-Planned commands:
+Commands:
 
 - `pnpm test`
 - `pnpm test:unit`

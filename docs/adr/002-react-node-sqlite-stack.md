@@ -3,9 +3,9 @@ title: React Node SQLite Stack
 doc_type: adr
 status: accepted
 created_at: 2026-06-04
-updated_at: 2026-06-04
+updated_at: 2026-08-07
 related_repos: ["Mobile-Automation"]
-related_modules: ["dashboard", "server", "shared"]
+related_modules: ["dashboard", "server", "shared", "device-agent"]
 platform_scope: mobile-shared
 ---
 
@@ -14,7 +14,9 @@ platform_scope: mobile-shared
 - Status: accepted
 - Date: 2026-06-04
 - Deciders: project owner + Codex
-- Related Spec: [design.md](../product/mobile-automation-platform/spec/design.md)
+- Related Spec: [mobile automation platform](../product/mobile-automation-platform/README.md)
+
+Current note: this stack decision still applies. Device subprocess work now primarily runs in Device Agents, while the central server owns API, storage, orchestration, reports, and relay.
 
 ## Context
 
@@ -45,7 +47,7 @@ Use:
 
 ### Neutral
 
-- Docker Compose is deferred to stage two; local host execution is preferred for USB/ADB access in MVP.
+- Docker Compose is deferred; host execution remains preferred for Device Agent machines because USB, ADB, HDC, usbmuxd, WDA, and screen-stream helpers are easier to manage outside containers.
 
 ## Alternatives Considered
 

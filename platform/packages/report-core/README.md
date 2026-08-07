@@ -1,10 +1,11 @@
 # Report Core
 
-Report generation module.
+HTML report rendering module.
 
-MVP:
+Current scope:
 
-- Build report model from stored run data.
-- Render HTML report.
-- Link artifacts and evidence.
-- Handle missing artifacts gracefully.
+- Render stored `TestRun` data into a standalone HTML report.
+- Summarize status, duration, steps, expectation results, skipped conditions, metrics, app-monitor incidents, abnormal events, and artifacts.
+- Link screenshots, logs, videos, metrics, report JSON, and report HTML through stored artifact URLs.
+- Handle missing artifacts gracefully and avoid live device or dashboard state.
+- Include stability-exploration summaries when the run has a stability config.

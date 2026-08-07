@@ -51,15 +51,18 @@ Use Mobile Automation MCP to generate, validate, preview, execute, and report Sc
    - `externalContext`
    - `responseMode`
 
-6. If you need to run the exact same generated script on another device/platform, do not call `generate_and_run_script_flow` again.
+6. Use `generate_repair_and_run_script_flow` only when bounded script self-repair is appropriate.
+   It may repair script-quality failures such as missing target, ambiguity, page mismatch, or result verification mismatch. Do not use it to hide app crashes, ANRs, process deaths, or device infrastructure failures.
+
+7. If you need to run the exact same generated script on another device/platform, do not call `generate_and_run_script_flow` again.
    Use `run_previous_script_flow` with the first run's `runId` as `sourceRunId`.
    This reuses the stored `sourceYaml`, previews it for a fresh `planDigest`, validates the target device, runs it, waits, and returns the report.
 
-7. If a staged workflow is needed, use:
+8. If a staged workflow is needed, use:
    `generate_script_flow_draft -> validate_script_flow -> preview_script_flow_draft -> run_script_flow_draft -> wait_for_run -> get_run_report`.
    Pass `responseMode` to `get_run_report`.
 
-8. Return a concise result:
+9. Return a concise result:
    - selected `deviceSerial`
    - `runId`
    - `status`
