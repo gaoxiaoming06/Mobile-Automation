@@ -90,6 +90,8 @@ type UiHierarchyTextResolution = {
   tapPointSource: "ui_text_center" | "ui_clickable_ancestor";
   matchStrategy: "ui_hierarchy_equals" | "ui_hierarchy_contains";
   candidateCount: number;
+  visibilityFilteredCandidateCount?: number;
+  visibilityOriginalCandidateCount?: number;
 };
 
 type UiHierarchyIconResolution = {
@@ -3236,10 +3238,66 @@ export class SemanticStepResolver {
           if (hierarchySelection.candidate || hierarchySelection.ambiguous) {
             if (hierarchySelection.candidate) {
               latestMatchStrategy = hierarchySelection.candidate.matchStrategy;
+              latestAmbiguous = false;
+              latestCandidateCount = hierarchySelection.candidateCount;
+              return {
+                hierarchyXml,
+                uiCandidate: hierarchySelection.candidate,
+                ambiguous: false,
+                canScrollPastAmbiguous: hierarchySelection.canScrollPastAmbiguous,
+                signature: hierarchySignature
+              };
+            }
+            if (hierarchySelection.ambiguous && locateText) {
+              const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, attempt);
+              artifacts.push(screenshot.artifact);
+              latestLayout = await locateText({
+                image: screenshot.png,
+                lang: textParam(input.step.params.lang) || undefined,
+                mode
+              });
+              latestVisibleText = normalizeOcrText(latestLayout.text);
+              const visibleHierarchyCandidates = filterUiHierarchyTextCandidatesByOcr(
+                hierarchySelection.candidates,
+                latestLayout,
+                expectedTargets,
+                mode,
+                input.deviceSize
+              );
+              if (visibleHierarchyCandidates.length === 1) {
+                const uiCandidate = {
+                  ...visibleHierarchyCandidates[0]!,
+                  candidateCount: hierarchySelection.candidateCount,
+                  visibilityFilteredCandidateCount: visibleHierarchyCandidates.length,
+                  visibilityOriginalCandidateCount: hierarchySelection.candidateCount
+                };
+                latestMatchStrategy = uiCandidate.matchStrategy;
+                latestAmbiguous = false;
+                latestCandidateCount = visibleHierarchyCandidates.length;
+                return {
+                  layout: latestLayout,
+                  hierarchyXml,
+                  uiCandidate,
+                  ambiguous: false,
+                  canScrollPastAmbiguous: false,
+                  signature: textSearchLayoutSignature(latestLayout, semanticArea, input.deviceSize)
+                };
+              }
+              if (visibleHierarchyCandidates.length > 1) {
+                latestMatchStrategy = visibleHierarchyCandidates[0]?.matchStrategy ?? latestMatchStrategy;
+                latestAmbiguous = true;
+                latestCandidateCount = visibleHierarchyCandidates.length;
+                return {
+                  layout: latestLayout,
+                  hierarchyXml,
+                  ambiguous: true,
+                  canScrollPastAmbiguous: false,
+                  signature: textSearchLayoutSignature(latestLayout, semanticArea, input.deviceSize)
+                };
+              }
             }
             return {
               hierarchyXml,
-              uiCandidate: hierarchySelection.candidate,
               ambiguous: hierarchySelection.ambiguous,
               canScrollPastAmbiguous: hierarchySelection.canScrollPastAmbiguous,
               signature: hierarchySignature
@@ -3377,6 +3435,10 @@ export class SemanticStepResolver {
           uiTextCandidate: candidate.textCandidate,
           ...(candidate.actionableCandidate ? { uiActionableCandidate: candidate.actionableCandidate } : {}),
           candidateCount: candidate.candidateCount,
+          ...(candidate.visibilityFilteredCandidateCount !== undefined ? {
+            visibilityFilteredCandidateCount: candidate.visibilityFilteredCandidateCount,
+            visibilityOriginalCandidateCount: candidate.visibilityOriginalCandidateCount
+          } : {}),
           search: {
             mode: searchMode,
             direction: searchDirection,
@@ -4872,6 +4934,7 @@ function findUiHierarchyTextSelection(
   }
 ): {
   candidate?: UiHierarchyTextResolution;
+  candidates: UiHierarchyTextResolution[];
   ambiguous: boolean;
   canScrollPastAmbiguous: boolean;
   candidateCount: number;
@@ -4881,7 +4944,7 @@ function findUiHierarchyTextSelection(
   const deviceSize = options.deviceSize ?? hierarchySize(candidates);
   const signature = uiHierarchyTextSignature(candidates, options.semanticArea, deviceSize);
   if (!expectedTargets.length) {
-    return { ambiguous: false, canScrollPastAmbiguous: false, candidateCount: 0, signature };
+    return { ambiguous: false, canScrollPastAmbiguous: false, candidateCount: 0, candidates: [], signature };
   }
 
   if (options.exactFirst) {
@@ -4892,11 +4955,9 @@ function findUiHierarchyTextSelection(
       deviceSize
     });
     if (exactSelection.candidate || exactSelection.ambiguous) {
+      const annotated = annotateUiHierarchyTextSelection(exactSelection, "ui_hierarchy_equals");
       return {
-        ...exactSelection,
-        candidate: exactSelection.candidate
-          ? { ...exactSelection.candidate, matchStrategy: "ui_hierarchy_equals", candidateCount: exactSelection.candidateCount }
-          : undefined,
+        ...annotated,
         canScrollPastAmbiguous: false,
         signature
       };
@@ -4907,12 +4968,10 @@ function findUiHierarchyTextSelection(
       semanticArea: options.semanticArea,
       deviceSize
     });
+    const annotated = annotateUiHierarchyTextSelection(containsSelection, "ui_hierarchy_contains");
     return {
-      ...containsSelection,
-      candidate: containsSelection.candidate
-        ? { ...containsSelection.candidate, matchStrategy: "ui_hierarchy_contains", candidateCount: containsSelection.candidateCount }
-        : undefined,
-      canScrollPastAmbiguous: containsSelection.ambiguous,
+      ...annotated,
+      canScrollPastAmbiguous: annotated.ambiguous,
       signature
     };
   }
@@ -4923,17 +4982,40 @@ function findUiHierarchyTextSelection(
     semanticArea: options.semanticArea,
     deviceSize
   });
+  const annotated = annotateUiHierarchyTextSelection(
+    selection,
+    options.mode === "equals" ? "ui_hierarchy_equals" : "ui_hierarchy_contains"
+  );
   return {
-    ...selection,
-    candidate: selection.candidate
-      ? {
-        ...selection.candidate,
-        matchStrategy: options.mode === "equals" ? "ui_hierarchy_equals" : "ui_hierarchy_contains",
-        candidateCount: selection.candidateCount
-      }
-      : undefined,
+    ...annotated,
     canScrollPastAmbiguous: false,
     signature
+  };
+}
+
+function annotateUiHierarchyTextSelection(
+  selection: {
+    candidate?: UiHierarchyTextResolution;
+    candidates: UiHierarchyTextResolution[];
+    ambiguous: boolean;
+    candidateCount: number;
+  },
+  matchStrategy: "ui_hierarchy_equals" | "ui_hierarchy_contains"
+): {
+  candidate?: UiHierarchyTextResolution;
+  candidates: UiHierarchyTextResolution[];
+  ambiguous: boolean;
+  candidateCount: number;
+} {
+  const annotate = (candidate: UiHierarchyTextResolution): UiHierarchyTextResolution => ({
+    ...candidate,
+    matchStrategy,
+    candidateCount: selection.candidateCount
+  });
+  return {
+    ...selection,
+    candidate: selection.candidate ? annotate(selection.candidate) : undefined,
+    candidates: selection.candidates.map(annotate)
   };
 }
 
@@ -4948,12 +5030,13 @@ function selectUiHierarchyTextCandidate(
   }
 ): {
   candidate?: UiHierarchyTextResolution;
+  candidates: UiHierarchyTextResolution[];
   ambiguous: boolean;
   candidateCount: number;
 } {
   const normalizedTargets = expectedTargets.map((target) => normalizeOcrText(target)).filter(Boolean);
   if (!normalizedTargets.length) {
-    return { ambiguous: false, candidateCount: 0 };
+    return { ambiguous: false, candidateCount: 0, candidates: [] };
   }
   const matches = candidates
     .filter((candidate) => candidate.text)
@@ -4963,7 +5046,7 @@ function selectUiHierarchyTextCandidate(
     .sort(compareUiHierarchyTextResolution);
 
   if (matches.length <= 1) {
-    return { candidate: matches[0], ambiguous: false, candidateCount: matches.length };
+    return { candidate: matches[0], ambiguous: false, candidateCount: matches.length, candidates: matches };
   }
 
   const hasMeaningfulPoint = Boolean(options.preferredPoint && options.preferredPoint.x > 0 && options.preferredPoint.y > 0);
@@ -4972,11 +5055,11 @@ function selectUiHierarchyTextCandidate(
     const bestDistance = uiCandidateDistanceToPoint(best.textCandidate, options.preferredPoint) ?? Number.POSITIVE_INFINITY;
     const secondDistance = uiCandidateDistanceToPoint(second.textCandidate, options.preferredPoint) ?? Number.POSITIVE_INFINITY;
     if (secondDistance - bestDistance >= 48) {
-      return { candidate: best, ambiguous: false, candidateCount: matches.length };
+      return { candidate: best, ambiguous: false, candidateCount: matches.length, candidates: matches };
     }
   }
 
-  return { ambiguous: true, candidateCount: matches.length };
+  return { ambiguous: true, candidateCount: matches.length, candidates: matches };
 }
 
 function buildUiHierarchyTextResolution(
@@ -5252,6 +5335,83 @@ function matchTextCandidateExpectation(actual: string, expected: string, mode: "
     return matchTextExpectation(actual, expected, mode);
   }
   return actual === expected;
+}
+
+function filterUiHierarchyTextCandidatesByOcr(
+  candidates: UiHierarchyTextResolution[],
+  layout: OcrLayoutResult,
+  expectedTargets: string[],
+  mode: "contains" | "equals",
+  deviceSize?: { width: number; height: number }
+): UiHierarchyTextResolution[] {
+  if (!candidates.length || !layout.boxes.length) {
+    return [];
+  }
+  const ocrCandidates = layout.boxes.map((box) => toCandidate(box));
+  return candidates.filter((candidate) =>
+    ocrCandidates.some((ocrCandidate) =>
+      ocrTextConfirmsUiHierarchyCandidate(ocrCandidate.text, candidate.actual, expectedTargets, mode) &&
+      ocrCandidateOverlapsUiTextCandidate(ocrCandidate, candidate.textCandidate, layout, deviceSize)
+    )
+  );
+}
+
+function ocrTextConfirmsUiHierarchyCandidate(
+  ocrText: string,
+  uiText: string,
+  expectedTargets: string[],
+  mode: "contains" | "equals"
+): boolean {
+  const normalizedOcr = normalizeOcrText(ocrText);
+  const normalizedUi = normalizeOcrText(uiText);
+  const normalizedTargets = expectedTargets.map((target) => normalizeOcrText(target)).filter(Boolean);
+  if (!normalizedOcr || !normalizedUi) {
+    return false;
+  }
+  if (mode === "equals") {
+    return normalizedOcr === normalizedUi || normalizedTargets.some((target) => normalizedOcr === target);
+  }
+  return normalizedTargets.some((target) => matchTextExpectation(normalizedOcr, target, "contains"))
+    || matchTextExpectation(normalizedOcr, normalizedUi, "contains")
+    || matchTextExpectation(normalizedUi, normalizedOcr, "contains");
+}
+
+function ocrCandidateOverlapsUiTextCandidate(
+  ocrCandidate: TextLocatorCandidate,
+  uiCandidate: UiElementCandidate,
+  layout: OcrLayoutResult,
+  deviceSize?: { width: number; height: number }
+): boolean {
+  const uiRect = scaleUiBoundsToOcrLayout(uiCandidate.bounds, layout, deviceSize);
+  const ocrRect = {
+    x: ocrCandidate.x,
+    y: ocrCandidate.y,
+    width: ocrCandidate.width,
+    height: ocrCandidate.height
+  };
+  const margin = Math.max(12, Math.min(36, Math.round(Math.max(ocrCandidate.height, uiRect.height) * 0.35)));
+  const expandedUiRect = expandRect(uiRect, margin);
+  if (rectIntersectionArea(expandedUiRect, ocrRect) > 0) {
+    return true;
+  }
+  return pointInsideRect({ x: ocrCandidate.centerX, y: ocrCandidate.centerY }, expandedUiRect);
+}
+
+function scaleUiBoundsToOcrLayout(
+  bounds: UiElementCandidate["bounds"],
+  layout: OcrLayoutResult,
+  deviceSize?: { width: number; height: number }
+): { x: number; y: number; width: number; height: number } {
+  const sourceWidth = deviceSize?.width || layout.width;
+  const sourceHeight = deviceSize?.height || layout.height;
+  const scaleX = sourceWidth > 0 ? layout.width / sourceWidth : 1;
+  const scaleY = sourceHeight > 0 ? layout.height / sourceHeight : 1;
+  return {
+    x: bounds.left * scaleX,
+    y: bounds.top * scaleY,
+    width: bounds.width * scaleX,
+    height: bounds.height * scaleY
+  };
 }
 
 function isLikelyFloatingMenuTextCandidate(

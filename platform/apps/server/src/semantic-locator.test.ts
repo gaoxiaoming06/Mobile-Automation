@@ -361,6 +361,54 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("filters hierarchy text candidates that are hidden behind the current visual layer", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const locateText = vi.fn(async () => ({
+      text: "课堂\n多模式实时师生互动授课，AI赋能课堂分析与智能章节总结",
+      engine: "fake-layout",
+      lang: "test",
+      width: 1080,
+      height: 2340,
+      boxes: [
+        { text: "课堂", confidence: 0.99, x: 105, y: 554, width: 91, height: 49 },
+        { text: "多模式实时师生互动授课，AI赋能课堂分析与智能章节总结", confidence: 0.98, x: 108, y: 614, width: 842, height: 38 }
+      ]
+    }));
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("课堂"),
+        locateText
+      },
+      dumpUiHierarchy: async () => publishActivityOverlayHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-visible-layer-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-visible-layer",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2340 },
+      step: tapOnTextStep("课堂", 0, 0, {
+        mode: "equals",
+        searchMode: "visibleOnly"
+      })
+    });
+
+    expect(locateText).toHaveBeenCalledTimes(1);
+    expect(actions).toEqual([{ type: "tap", x: 150, y: 580 }]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        actual: "课堂",
+        matchStrategy: "ui_hierarchy_equals",
+        visibilityFilteredCandidateCount: 1
+      })
+    }));
+  });
+
   it("falls back to OCR when UI hierarchy does not expose the text", async () => {
     const actions: DeviceActionRequest[] = [];
     const locateText = vi.fn(async () => layout("进入课堂"));
@@ -7600,6 +7648,26 @@ function composeLessonInfoHierarchy(): string {
     <node index="0" text="" resource-id="cn.eeo.classin:id/lesson_info" class="androidx.compose.ui.platform.ComposeView" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[0,656][1200,794]">
       <node index="0" text="课堂信息" resource-id="" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[64,682][192,720]" />
       <node index="1" text="修改" resource-id="" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[1050,686][1102,716]" />
+    </node>
+  </node>
+</hierarchy>`;
+}
+
+function publishActivityOverlayHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2340]">
+    <node index="0" text="" resource-id="" class="androidx.compose.ui.platform.ComposeView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2218]">
+      <node index="0" text="" resource-id="" class="android.widget.ScrollView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="true" bounds="[60,338][1020,2218]">
+        <node index="0" text="" resource-id="" class="android.view.View" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[60,411][1020,742]">
+          <node index="0" text="课堂" resource-id="" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[108,555][192,604]" />
+          <node index="1" text="多模式实时师生互动授课， AI 赋能课堂分析与智能章节总结" resource-id="" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[108,616][972,694]" />
+        </node>
+      </node>
+    </node>
+    <node index="1" text="" resource-id="cn.eeo.classin:id/background_list" class="android.view.ViewGroup" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="true" bounds="[0,0][1080,2218]">
+      <node index="0" text="课堂" resource-id="cn.eeo.classin:id/tv_activity_type" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[252,1465][318,1504]" />
+      <node index="1" text="课堂" resource-id="cn.eeo.classin:id/tv_activity_type" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[252,1939][318,1978]" />
     </node>
   </node>
 </hierarchy>`;
