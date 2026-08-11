@@ -109,11 +109,12 @@ DEVICE_AGENT_MAX_CONCURRENT_RUNS=3 \
 pnpm agent
 ```
 
-Private local devices should omit `DEVICE_AGENT_SHARED=1`. Generate a short-lived code from the dashboard `配对 Agent` button, then start the packaged Agent with:
+For teammates who do not have the repository checked out, use the Dashboard device page instead:
 
-```bash
-NODE_BIN=/opt/homebrew/bin/node ./start-private-agent.sh --agent-id agent-package-local --pairing-code <code>
-```
+- `共享 Agent` copies a one-line installer command that downloads or reuses the Agent and publishes the host's devices to the public pool.
+- `配对 Agent` creates a short-lived pairing code and copies a one-line installer command that keeps the host's devices visible only to the current browser session.
+
+The installer stores files under `~/.mobile-automation-agent`, verifies the downloaded Agent checksum from `/agent/manifest.json`, checks `agent.pid` to avoid duplicate Agent processes, and writes logs to `~/.mobile-automation-agent/agent.log`.
 
 ## Process Management
 

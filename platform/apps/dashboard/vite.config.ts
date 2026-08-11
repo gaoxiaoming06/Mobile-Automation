@@ -20,6 +20,10 @@ export default defineConfig({
       "/artifacts": {
         target: apiTarget,
         secure: false
+      },
+      "/agent": {
+        target: apiTarget,
+        secure: false
       }
     }
   }

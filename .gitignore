@@ -21,6 +21,7 @@ platform/data/*.sqlite3
 *.sqlite-*
 *.sqlite3
 platform/apps/dashboard/dist/
+platform/apps/server/public/agent/
 *.tmp
 .tmp-*
 *.part

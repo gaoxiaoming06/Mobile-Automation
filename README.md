@@ -141,6 +141,13 @@ DEVICE_AGENT_SHARED=1 \
 pnpm agent
 ```
 
+For non-developer device hosts, open the Dashboard device page and copy one of the generated Agent commands:
+
+- `配对 Agent`: private to the current browser session.
+- `共享 Agent`: publishes the host's devices to the public device pool.
+
+Both commands download or reuse `~/.mobile-automation-agent/mobile-automation-agent.mjs`, avoid starting a duplicate process when `agent.pid` is alive, and connect the Agent back to the current server.
+
 Connect Android devices with USB debugging enabled before starting the agent. For iOS physical devices, install libimobiledevice tools and trust/unlock the device first:
 
 ```bash
@@ -174,7 +181,7 @@ pnpm agent
 
 Agent devices appear in `/api/devices` and the Dashboard with serials like `my-macbook:android:<local-serial>`. The agent uses the command WebSocket with HTTP polling fallback, and executes device info, screenshot, UI hierarchy, foreground app, tap/input/swipe/app launch, clear data, logs, semantic Android actions, stream startup, and performance sampling through the platform drivers.
 
-For private local use, create a pairing code from the server and start the agent with it:
+For private local use from source, create a pairing code from the server and start the Agent without `DEVICE_AGENT_SHARED=1`:
 
 ```bash
 curl -X POST http://127.0.0.1:4010/api/local-sessions/pairing-codes \

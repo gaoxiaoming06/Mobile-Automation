@@ -16,6 +16,7 @@ import { renderReportHtml } from "@mobile-automation/report-core";
 import { type BusinessGraphVersion, type Observation } from "@mobile-automation/graph-core";
 import { WebSocketServer } from "ws";
 import { ArtifactCleanupScheduler } from "./artifact-cleanup.js";
+import { registerAgentDistributionRoutes } from "./agent-distribution.js";
 import { createAutomaticAssetLearningService } from "./automatic-asset-learning-runtime.js";
 import { readAndroidAppMonitorConfig } from "./android-app-monitor-request.js";
 import { AutomationRunner } from "./automation-runner.js";
@@ -85,6 +86,7 @@ const port = Number(process.env.PORT ?? 4010);
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const dashboardDist = path.resolve(moduleDir, "../../dashboard/dist");
 const dashboardIndex = path.join(dashboardDist, "index.html");
+const agentDistributionDir = path.resolve(moduleDir, "../public/agent");
 const app = express();
 const storage = new Storage();
 const agentRegistry = new ServerAgentRegistry();
@@ -139,6 +141,10 @@ registerScriptFlowRoutes(app, { storage, runner: scriptFlowRunner });
 registerTrialLearningRoutes(app, { storage });
 registerPageAssetLibraryRoutes(app, { storage });
 registerServerAgentRoutes(app, { registry: agentRegistry });
+registerAgentDistributionRoutes(app, {
+  distributionDir: agentDistributionDir,
+  version: process.env.DEVICE_AGENT_VERSION ?? "0.1.0"
+});
 registerScriptFlowAiRoutes(app, {
   getFlow: (id) => storage.getScriptFlow(id),
   getRun: (id) => storage.getRun(id),

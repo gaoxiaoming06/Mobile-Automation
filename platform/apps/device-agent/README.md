@@ -26,7 +26,7 @@ HarmonyOS dashboard preview currently uses screenshots. To test the experimental
 For private local use, open the dashboard, click `配对 Agent`, then start the packaged Agent with the generated code:
 
 ```bash
-NODE_BIN=/opt/homebrew/bin/node ./start-private-agent.sh --agent-id agent-package-local --pairing-code <code>
+curl -kfsSL https://<server>/agent/install.sh?server=https%3A%2F%2F<server> | bash -s -- --agent-id "$(hostname)" --pairing-code <code> --insecure-tls
 ```
 
-Source runs can use the same code through `DEVICE_AGENT_PAIRING_CODE=<code>` while omitting `DEVICE_AGENT_SHARED=1`.
+For public sharing, click `共享 Agent` in the dashboard or start from source with `DEVICE_AGENT_SHARED=1`.
