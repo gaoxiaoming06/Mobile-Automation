@@ -130,8 +130,11 @@ export const mobileAutomationMcpTools: MobileAutomationMcpToolDefinition[] = [
       devicePlatform: devicePlatformSchema,
       deviceSerial: stringSchema(),
       parameters: objectSchema({}, [], true),
-      executionPurpose: enumSchema(["trial", "normal"])
-    }, ["sourceYaml", "planDigest"])
+      executionPurpose: enumSchema(["trial", "step_trial", "normal"]),
+      startStepId: stringSchema(),
+      endStepId: stringSchema(),
+      pauseAfterEachStep: booleanSchema()
+    }, ["sourceYaml"])
   },
   {
     name: "preview_script_flow",
@@ -274,12 +277,15 @@ export function createMobileAutomationMcpToolHandlers(config: McpAdapterConfig =
     }),
     run_script_flow_draft: (input) => adapter.runScriptFlowDraft({
       sourceYaml: requiredString(input.sourceYaml, "sourceYaml"),
-      planDigest: requiredString(input.planDigest, "planDigest"),
+      planDigest: optionalString(input.planDigest),
       appId: optionalString(input.appId),
       devicePlatform: devicePlatform(input.devicePlatform ?? input.platform),
       deviceSerial: optionalString(input.deviceSerial),
       parameters: scalarRecord(input.parameters),
-      executionPurpose: executionPurpose(input.executionPurpose)
+      executionPurpose: executionPurpose(input.executionPurpose),
+      startStepId: optionalString(input.startStepId),
+      endStepId: optionalString(input.endStepId),
+      pauseAfterEachStep: optionalBoolean(input.pauseAfterEachStep, "pauseAfterEachStep")
     }),
     preview_script_flow: (input) => adapter.previewScriptFlow({
       flowId: requiredString(input.flowId, "flowId"),
@@ -338,7 +344,7 @@ export function createMobileAutomationMcpToolHandlers(config: McpAdapterConfig =
       devicePlatform: devicePlatform(input.devicePlatform ?? input.platform),
       deviceSerial: optionalString(input.deviceSerial),
       parameters: scalarRecord(input.parameters),
-      executionPurpose: executionPurpose(input.executionPurpose),
+      executionPurpose: regularExecutionPurpose(input.executionPurpose),
       responseMode: responseMode(input.responseMode),
       timeoutMs: optionalPositiveInteger(input.timeoutMs, "timeoutMs"),
       pollIntervalMs: optionalNonNegativeInteger(input.pollIntervalMs, "pollIntervalMs")
@@ -367,6 +373,10 @@ function stringSchema(): JsonSchema {
 
 function integerSchema(): JsonSchema {
   return { type: "integer", minimum: 1 };
+}
+
+function booleanSchema(): JsonSchema {
+  return { type: "boolean" };
 }
 
 function enumSchema(values: string[]): JsonSchema {
@@ -415,7 +425,11 @@ function requiredDevicePlatform(value: unknown): "android" | "ios" | "harmony" {
   return platform;
 }
 
-function executionPurpose(value: unknown): "trial" | "normal" | undefined {
+function executionPurpose(value: unknown): "trial" | "step_trial" | "normal" | undefined {
+  return value === "trial" || value === "step_trial" || value === "normal" ? value : undefined;
+}
+
+function regularExecutionPurpose(value: unknown): "trial" | "normal" | undefined {
   return value === "trial" || value === "normal" ? value : undefined;
 }
 
@@ -463,5 +477,11 @@ function optionalPositiveInteger(value: unknown, field: string): number | undefi
 function optionalNonNegativeInteger(value: unknown, field: string): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new Error(`${field} must be a non-negative integer`);
+  return value;
+}
+
+function optionalBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
   return value;
 }

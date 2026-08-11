@@ -41,7 +41,11 @@ Use Mobile Automation MCP to generate, validate, preview, execute, and report Sc
    - `candidateSteps`: likely user-visible steps
    - `constraints`: execution constraints
 
-5. Prefer `generate_and_run_script_flow` for one-call real-device validation when you only need one platform/device run.
+5. For new, route-sensitive, or fixture-dependent business paths, call `list_page_assets` and `list_script_flows` before generation.
+   If no recorded PageAsset, reusable ScriptFlow, or code-derived concrete path supports the target page, do not guess a route.
+   Ask for concrete fixture values such as class name, activity title, account role/state, visible entry text, or target-page stable text.
+
+6. Prefer `generate_and_run_script_flow` only when the user-visible path is already concrete and you only need one platform/device run.
    Required inputs:
    - `goal`
    - `appId`
@@ -51,18 +55,24 @@ Use Mobile Automation MCP to generate, validate, preview, execute, and report Sc
    - `externalContext`
    - `responseMode`
 
-6. Use `generate_repair_and_run_script_flow` only when bounded script self-repair is appropriate.
+7. Use `generate_repair_and_run_script_flow` only when bounded script self-repair is appropriate.
    It may repair script-quality failures such as missing target, ambiguity, page mismatch, or result verification mismatch. Do not use it to hide app crashes, ANRs, process deaths, or device infrastructure failures.
+   If the failure kind is `route_mismatch`, stop and return the mismatch evidence; do not keep repairing locators on the wrong module/page.
 
-7. If you need to run the exact same generated script on another device/platform, do not call `generate_and_run_script_flow` again.
+8. If you need to run the exact same generated script on another device/platform, do not call `generate_and_run_script_flow` again.
    Use `run_previous_script_flow` with the first run's `runId` as `sourceRunId`.
    This reuses the stored `sourceYaml`, previews it for a fresh `planDigest`, validates the target device, runs it, waits, and returns the report.
 
-8. If a staged workflow is needed, use:
+9. If a staged workflow is needed, use:
    `generate_script_flow_draft -> validate_script_flow -> preview_script_flow_draft -> run_script_flow_draft -> wait_for_run -> get_run_report`.
    Pass `responseMode` to `get_run_report`.
 
-9. Return a concise result:
+10. For path bring-up or uncertain generated drafts, prefer isolated step trials before a full trial:
+   - Preview the draft and inspect the plan step IDs.
+   - Call `run_script_flow_draft` with `executionPurpose: "step_trial"`, `startStepId`, optional `endStepId`, and optional `pauseAfterEachStep`.
+   - Advance one verified route segment at a time, then run the full trial only after the segments reach the intended state.
+
+11. Return a concise result:
    - selected `deviceSerial`
    - `runId`
    - `status`
@@ -136,6 +146,7 @@ The result includes the new `runId`, `status`, `reportUrl`, final/evidence scree
 
 - `DEVICE_NOT_CONNECTED`, `DEVICE_OFFLINE`, `DEVICE_PLATFORM_MISMATCH`, `DEVICE_SELECTION_REQUIRED`, or `PLATFORM_NOT_SUPPORTED_BY_RUNTIME` means the device precondition failed. Do not generate or run more scripts until the device issue is fixed.
 - `needs_clarification` means the route or target is underspecified. Add visible page text, the user-visible path, or target page characteristics, then regenerate.
+- `route_mismatch` means execution has reached a page or module that is not supported by the target business path. Stop repairing and ask for the real entry path, fixture data, or a reusable navigation flow.
 - Script validation errors mean the YAML is not executable. Regenerate or repair according to `get_script_flow_authoring_contract`; do not add forbidden locator types.
 - Locator failures mean the target was missing, ambiguous, unsupported, or visually ungrounded. Report the failure and screenshot evidence before retrying.
 - App crash, native crash, ANR, or process death events are product/runtime evidence. Return the event details, screenshots, logs if available, and report URL.
@@ -149,5 +160,6 @@ The result includes the new `runId`, `status`, `reportUrl`, final/evidence scree
 - Use `control` for supported controls such as checkbox, switch, and textField.
 - Do not turn a visual target into text just because the icon role is unknown.
 - Do not silently rewrite a failed script into a different business path.
+- Do not use placeholder target text such as "包含某活动的课程或班级", "相关入口", "目标按钮", or "指定条目". Replace it with concrete fixture values or ask for clarification.
 - Do not pass secrets or large source files in `externalContext`; summarize instead.
 - Prefer trial execution for generated or imported drafts.

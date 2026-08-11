@@ -644,6 +644,59 @@ describe("ScriptFlow MCP REST adapter", () => {
     });
   });
 
+  it("stops repair loops for route mismatches", async () => {
+    const requests: string[] = [];
+    const adapter = new MobileAutomationMcpAdapter({
+      serverUrl: "http://server.test",
+      fetch: fakeFetch(requests, {
+        "GET /api/devices": { devices: [device("device-1", "harmony", "online")] },
+        "POST /api/script-flow-drafts/generate": { draft: { status: "ready", sourceYaml } },
+        "POST /api/script-flow-drafts/preview": { planDigest: "a".repeat(64), plan: { steps: [] }, dependencies: [] },
+        "POST /api/script-flow-drafts/trial-runs": {
+          run: { id: "run-route", status: "running", sourceSnapshot: { kind: "script_flow" }, stepResults: [], artifacts: [] }
+        },
+        "GET /api/runs/run-route": {
+          run: {
+            id: "run-route",
+            status: "failed",
+            sourceSnapshot: { kind: "script_flow" },
+            stepResults: [{ stepId: "reach-checkin-record", status: "failed", errorMessage: "当前页面不在目标路径" }],
+            artifacts: [],
+            events: []
+          }
+        },
+        "GET /api/script-flow-runs/run-route": {
+          run: {
+            id: "run-route",
+            status: "failed",
+            sourceSnapshot: { kind: "script_flow" },
+            stepResults: [{ stepId: "reach-checkin-record", status: "failed", errorMessage: "当前页面不在目标路径" }],
+            artifacts: [],
+            events: []
+          },
+          failure: { kind: "route_mismatch", message: "当前页面已偏离目标业务路径。" }
+        },
+        "GET /api/trial-runs/run-route/learning-summary": { session: { status: "completed" } }
+      })
+    });
+
+    await expect(adapter.generateRepairAndRunScriptFlow({
+      goal: "验证打卡记录页右上角分享按钮",
+      appId: "classin",
+      scriptPlatform: "flutter",
+      devicePlatform: "harmony",
+      deviceSerial: "device-1",
+      repairPolicy: { maxAttempts: 2 },
+      pollIntervalMs: 0
+    })).resolves.toMatchObject({
+      status: "failed",
+      runId: "run-route",
+      repairStoppedReason: "non_repairable_failure",
+      repairHistory: []
+    });
+    expect(requests).not.toContain("POST /api/script-flow-drafts/repair");
+  });
+
   it("passes compact response mode through one-call execution", async () => {
     const adapter = new MobileAutomationMcpAdapter({
       serverUrl: "http://server.test",
@@ -685,9 +738,62 @@ describe("ScriptFlow MCP REST adapter", () => {
       runId: "run-compact",
       status: "passed",
       responseMode: "compact",
-      finalScreenshotUrl: "/artifacts/final.png"
+      finalScreenshotUrl: "/artifacts/final.png",
+      sourceYaml,
+      planDigest: "c".repeat(64)
     });
     expect("artifactUrls" in (result as Record<string, unknown>)).toBe(false);
+  });
+
+  it("returns generated YAML and plan digest when one-call execution fails", async () => {
+    const adapter = new MobileAutomationMcpAdapter({
+      serverUrl: "http://server.test",
+      fetch: fakeFetch([], {
+        "GET /api/devices": { devices: [device("device-1", "harmony", "online")] },
+        "POST /api/script-flow-drafts/generate": { draft: { status: "ready", sourceYaml } },
+        "POST /api/script-flow-drafts/preview": { planDigest: "d".repeat(64), plan: { steps: [] }, dependencies: [] },
+        "POST /api/script-flow-drafts/trial-runs": {
+          run: { id: "run-failed", status: "running", sourceSnapshot: { kind: "script_flow" }, stepResults: [], artifacts: [] }
+        },
+        "GET /api/runs/run-failed": {
+          run: {
+            id: "run-failed",
+            status: "failed",
+            sourceSnapshot: { kind: "script_flow" },
+            stepResults: [{ stepId: "open-class", status: "failed", errorMessage: "跑错路径" }],
+            artifacts: [],
+            events: []
+          }
+        },
+        "GET /api/script-flow-runs/run-failed": {
+          run: {
+            id: "run-failed",
+            status: "failed",
+            sourceSnapshot: { kind: "script_flow" },
+            stepResults: [{ stepId: "open-class", status: "failed", errorMessage: "跑错路径" }],
+            artifacts: [],
+            events: []
+          },
+          failure: { kind: "target_not_found", message: "未找到分享按钮" }
+        },
+        "GET /api/trial-runs/run-failed/learning-summary": { session: { status: "completed" } }
+      })
+    });
+
+    await expect(adapter.generateAndRunScriptFlow({
+      goal: "验证打卡记录页右上角分享按钮",
+      appId: "classin",
+      scriptPlatform: "flutter",
+      devicePlatform: "harmony",
+      deviceSerial: "device-1",
+      pollIntervalMs: 0
+    })).resolves.toMatchObject({
+      runId: "run-failed",
+      status: "failed",
+      sourceYaml,
+      planDigest: "d".repeat(64),
+      failure: { kind: "target_not_found" }
+    });
   });
 
   it("does not run when generate-and-run needs clarification", async () => {

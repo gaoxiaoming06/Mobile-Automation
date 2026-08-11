@@ -3,12 +3,32 @@ title: Deployment Guide
 doc_type: guide
 status: draft
 created_at: 2026-06-05
-updated_at: 2026-08-07
+updated_at: 2026-08-11
 ---
 
 # Deployment Guide
 
 This project is currently optimized for local or intranet QA deployment with a central server plus one or more Device Agents. The server hosts the dashboard, APIs, storage, AI orchestration, and reports. Each Agent runs on a machine with physical device access and provides Android, iOS, and HarmonyOS device commands.
+
+## Service Topology
+
+Device discovery always goes through Device Agents. A healthy server/dashboard with no registered Agent will show `0` devices.
+
+| Process | Development command | Team/production command | Runs on | Purpose |
+| --- | --- | --- | --- | --- |
+| Dashboard dev server | `pnpm --filter @mobile-automation/dashboard dev` | Not used after `pnpm build` | Developer workstation | Vite HMR during development |
+| Central server | `pnpm --filter @mobile-automation/server dev` | `PORT=4010 DATA_DIR=/var/lib/mobile-automation pnpm --filter @mobile-automation/server start` | Workstation or intranet server | API, storage, AI orchestration, reports, and built dashboard SPA fallback |
+| Device Agent | `DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 DEVICE_AGENT_SHARED=1 pnpm agent` | Same command, with the intranet server URL | Every host with USB devices | Android, iOS, and HarmonyOS discovery and commands |
+| RapidOCR sidecar | Auto-started by server unless disabled | Auto-started by server unless disabled | Server host | Local OCR backend |
+
+For single-workstation development with local USB devices, prefer:
+
+```bash
+pnpm install
+pnpm dev:local
+```
+
+Use `pnpm dev` only when you intentionally want to run the web service without registering local devices. Start at least one `pnpm agent` process before expecting devices in `/api/devices` or the dashboard.
 
 ## Option A: Single QA Workstation
 
@@ -31,20 +51,28 @@ pnpm agent
 Use the dev shape during active development:
 
 ```bash
-# Terminal 1
+# One command, includes a shared local Agent
+pnpm dev:local
+```
+
+Or split the processes for clearer logs:
+
+```bash
+# Terminal 1: server + dashboard
 pnpm dev
 
-# Terminal 2
+# Terminal 2: local Agent
 DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 DEVICE_AGENT_SHARED=1 pnpm agent
 ```
 
 Use the HTTPS dev shape when another computer opens the dashboard over the LAN. Browser Android realtime preview depends on WebCodecs, and many browsers only expose WebCodecs in a secure context. Plain `http://<lan-ip>:5173` can therefore fall back to screenshot preview even when the Agent and Android device support realtime streaming.
 
 ```bash
-# Terminal 1: HTTPS dashboard + HTTPS API
-pnpm dev:https
+# One command, includes a shared local Agent over HTTPS
+pnpm dev:https:local
 
-# Terminal 2: local Agent over HTTPS
+# Or split terminals
+pnpm dev:https
 pnpm agent:https
 ```
 
@@ -66,6 +94,7 @@ Use this when the dashboard and storage should run on an intranet server while d
 Central server:
 
 ```bash
+pnpm install
 pnpm build
 DATA_DIR=/var/lib/mobile-automation PORT=4010 pnpm --filter @mobile-automation/server start
 ```
@@ -95,6 +124,16 @@ Minimal PM2 example:
 ```bash
 pnpm build
 DATA_DIR=/var/lib/mobile-automation PORT=4010 pm2 start "pnpm --filter @mobile-automation/server start" --name mobile-automation
+pm2 save
+```
+
+Run Agents as separate managed processes on the device hosts, not inside the central server process. Example PM2 Agent process on a lab Mac:
+
+```bash
+DEVICE_AGENT_SERVER_URL=http://mobile-automation.local \
+DEVICE_AGENT_ID=lab-mac-01 \
+DEVICE_AGENT_SHARED=1 \
+pm2 start "pnpm agent" --name mobile-automation-agent-lab-mac-01
 pm2 save
 ```
 
@@ -193,4 +232,5 @@ The `localStorage` value overrides `VITE_DASHBOARD_ADVANCED_TOOLS` in that brows
 - No authentication or multi-user permission model in MVP.
 - No Docker image yet; Agent device connectivity is easier and more predictable on host workstations.
 - No production CI/CD pipeline yet.
+- The current `start` command still uses the workspace TypeScript runtime through `tsx`; install the full workspace dependencies on the runtime host.
 - Browser-embedded Android realtime preview depends on WebCodecs support; LAN browser access should use HTTPS so the page is a secure context. HarmonyOS dashboard preview currently uses screenshot polling.

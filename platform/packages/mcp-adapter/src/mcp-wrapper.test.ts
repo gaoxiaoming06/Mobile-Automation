@@ -36,6 +36,8 @@ describe("mobile automation MCP tools", () => {
     expect(JSON.stringify(mobileAutomationMcpTools.find((tool) => tool.name === "get_run_report")?.inputSchema)).toContain("responseMode");
     expect(JSON.stringify(mobileAutomationMcpTools.find((tool) => tool.name === "generate_and_run_script_flow")?.inputSchema)).toContain("responseMode");
     expect(JSON.stringify(mobileAutomationMcpTools.find((tool) => tool.name === "generate_repair_and_run_script_flow")?.inputSchema)).toContain("repairPolicy");
+    expect(JSON.stringify(mobileAutomationMcpTools.find((tool) => tool.name === "run_script_flow_draft")?.inputSchema)).toContain("step_trial");
+    expect(JSON.stringify(mobileAutomationMcpTools.find((tool) => tool.name === "run_script_flow_draft")?.inputSchema)).toContain("startStepId");
     expect(JSON.stringify(mobileAutomationMcpTools)).not.toContain("confirmedRisks");
   });
 
@@ -60,6 +62,49 @@ describe("mobile automation MCP tools", () => {
       repair: { runId: "run-failed", failure: { kind: "target_not_found" } }
     });
     expect(requests).toEqual(["POST /api/script-flow-drafts/repair"]);
+  });
+
+  it("maps isolated draft step trials to the step-run endpoint", async () => {
+    const requests: Array<{ key: string; body?: Record<string, unknown> }> = [];
+    const handlers = createMobileAutomationMcpToolHandlers({
+      serverUrl: "http://server.test",
+      fetch: (async (url, init) => {
+        const parsed = new URL(String(url));
+        const method = init?.method ?? "GET";
+        const key = `${method} ${parsed.pathname}`;
+        const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+        requests.push({ key, body });
+        if (key === "GET /api/devices") return new Response(JSON.stringify({ devices: [device("device-1", "android", "online")] }));
+        if (key === "POST /api/script-flow-drafts/step-runs") {
+          return new Response(JSON.stringify({ run: { id: "run-step", status: "running", sourceSnapshot: { kind: "script_flow" }, stepResults: [], artifacts: [] } }));
+        }
+        return new Response(JSON.stringify({ error: `No fake response for ${key}` }), { status: 404 });
+      }) as typeof fetch
+    });
+
+    await expect(handlers.run_script_flow_draft({
+      sourceYaml: "version: 1\nkind: case\nname: demo\napp: { id: classin }\nsteps: []",
+      executionPurpose: "step_trial",
+      devicePlatform: "android",
+      deviceSerial: "device-1",
+      startStepId: "open-checkin-detail",
+      endStepId: "open-record-page",
+      pauseAfterEachStep: true
+    })).resolves.toMatchObject({ runId: "run-step", status: "running" });
+
+    expect(requests).toEqual([
+      { key: "GET /api/devices", body: undefined },
+      {
+        key: "POST /api/script-flow-drafts/step-runs",
+        body: {
+          sourceYaml: "version: 1\nkind: case\nname: demo\napp: { id: classin }\nsteps: []",
+          deviceSerial: "device-1",
+          startStepId: "open-checkin-detail",
+          endStepId: "open-record-page",
+          pauseAfterEachStep: true
+        }
+      }
+    ]);
   });
 
   it("maps handlers to ScriptFlow REST endpoints", async () => {

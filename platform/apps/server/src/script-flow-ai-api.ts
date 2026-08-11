@@ -81,6 +81,9 @@ export function registerScriptFlowAiRoutes(
         throw new ScriptFlowAiApiError(409, "当前执行没有可修复失败。");
       }
       if (!isRepairableFailure(failure.kind)) {
+        if (failure.kind === "route_mismatch") {
+          throw new ScriptFlowAiApiError(409, "当前执行路径已经偏离目标业务上下文，不应通过修改定位脚本继续修复。", { failure });
+        }
         throw new ScriptFlowAiApiError(409, "当前失败属于 App、设备或环境问题，不应通过修改脚本掩盖。", { failure });
       }
       const document = parseScriptFlow(sourceYaml);
@@ -354,7 +357,7 @@ function latestFailedStep(run: TestRun): TestRun["stepResults"][number] | undefi
 }
 
 function isRepairableFailure(kind: PublicExecutionFailureKind): boolean {
-  return kind !== "app_failure" && kind !== "infrastructure_failure" && kind !== "left_target_app";
+  return kind !== "app_failure" && kind !== "infrastructure_failure" && kind !== "left_target_app" && kind !== "route_mismatch";
 }
 
 function uniqueStrings(values: string[]): string[] {

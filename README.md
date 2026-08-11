@@ -81,12 +81,13 @@ For future implementation sessions:
 
 ## Current Implementation Shape
 
-1. `pnpm dev` starts the central server and dashboard.
+1. `pnpm dev` starts only the central server and dashboard.
 2. `pnpm agent` starts a local Device Agent that registers Android, iOS, and HarmonyOS devices with the server.
-3. Dashboard reads devices through `/api/devices`, then routes screenshots, actions, UI hierarchy, streams, logs, and performance sampling through the server-to-agent command channel.
-4. ScriptFlow v1 YAML is parsed, validated, previewed into an immutable plan digest, and executed through the shared runner.
-5. Runs persist screenshots, logs, metrics, trial-learning summaries, HTML reports, and videos when enabled/supported under `DATA_DIR`.
-6. External AI clients can use the MCP adapter to generate, repair, run, and report ScriptFlow validations without direct database or driver access.
+3. `pnpm dev:local` starts the server, dashboard, and one shared local Agent for a single workstation.
+4. Dashboard reads devices through `/api/devices`, then routes screenshots, actions, UI hierarchy, streams, logs, and performance sampling through the server-to-agent command channel.
+5. ScriptFlow v1 YAML is parsed, validated, previewed into an immutable plan digest, and executed through the shared runner.
+6. Runs persist screenshots, logs, metrics, trial-learning summaries, HTML reports, and videos when enabled/supported under `DATA_DIR`.
+7. External AI clients can use the MCP adapter to generate, repair, run, and report ScriptFlow validations without direct database or driver access.
 
 ## Local Development
 
@@ -94,19 +95,36 @@ Requires Node.js >= 22.7.0 and pnpm >= 9.0.0. The server uses `node:sqlite`, so 
 
 ```bash
 pnpm install
-pnpm dev
+pnpm dev:local
 ```
 
 - Dashboard: http://localhost:5173
 - Server health: http://localhost:4010/api/health
+- Devices: provided by the local shared Agent in the same command.
+
+If you intentionally want to run the web service without local devices, use `pnpm dev`. In that mode `/api/devices` returns an empty list until at least one `pnpm agent` process registers devices with the server.
+
+To split the processes while developing, use two terminals:
+
+```bash
+# Terminal 1: central server + dashboard
+pnpm dev
+
+# Terminal 2: local device node, shared into the public device pool
+DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 \
+DEVICE_AGENT_ID=my-macbook \
+DEVICE_AGENT_SHARED=1 \
+pnpm agent
+```
 
 For another computer on the same LAN, use the HTTPS dev shape so browser WebCodecs remains available for Android realtime preview:
 
 ```bash
-# Terminal 1
-pnpm dev:https
+# One workstation command
+pnpm dev:https:local
 
-# Terminal 2
+# Or split terminals
+pnpm dev:https
 pnpm agent:https
 ```
 
@@ -114,7 +132,7 @@ pnpm agent:https
 - LAN Server health: `https://<server-lan-ip>:4010/api/health`
 - First visit may require accepting the local self-signed certificate.
 
-Start at least one Device Agent on the machine that has USB-connected devices:
+Start at least one Device Agent on every machine that has USB-connected devices:
 
 ```bash
 DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 \
@@ -141,7 +159,7 @@ Runtime DB and artifacts default to `~/.local/share/mobile-automation`. Override
 
 ### Device Agent
 
-The server uses Device Agents as its device access layer. Start the central server first, then start an agent on each machine that has USB-connected devices:
+The server uses Device Agents as its device access layer. A running server/dashboard without a registered Agent is healthy but has no devices to show. Start the central server first, then start an Agent on each machine that has USB-connected devices, or use `pnpm dev:local` for the single-workstation development case:
 
 ```bash
 # Terminal 1: central server + dashboard

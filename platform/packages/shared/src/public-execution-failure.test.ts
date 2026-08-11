@@ -106,6 +106,23 @@ describe("publicExecutionFailureFromRun", () => {
     }))?.kind).toBe("page_not_recognized");
   });
 
+  it("classifies missing navigation paths as route mismatches", () => {
+    expect(publicExecutionFailureFromRun(failedRun({
+      errorCode: "PAGE_NAVIGATION_FAILED",
+      metadata: {
+        pageNavigation: {
+          status: "no_reliable_path",
+          currentPageId: "classin.teacher.space",
+          targetPageName: "打卡记录"
+        }
+      }
+    }))).toEqual({
+      kind: "route_mismatch",
+      message: "当前页面已偏离目标业务路径，请补充真实入口、测试数据或可复用导航流程后重试。",
+      nextAction: "supplement_process"
+    });
+  });
+
   it("classifies a failed result oracle separately from target lookup", () => {
     expect(publicExecutionFailureFromRun(failedRun({ errorCode: "EXPECTATION_FAILED" }))).toEqual({
       kind: "result_not_verified",

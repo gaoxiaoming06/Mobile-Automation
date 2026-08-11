@@ -302,4 +302,55 @@ steps:
     });
     expect(generateDraft).not.toHaveBeenCalled();
   });
+
+  it("does not repair route mismatches", async () => {
+    const generateDraft = vi.fn();
+    const app = express();
+    app.use(express.json());
+    registerScriptFlowAiRoutes(app, {
+      generateDraft,
+      getFlow: () => undefined,
+      getRun: (id: string) => id === "run-route" ? {
+        id: "run-route",
+        status: "failed",
+        caseName: "打开打卡记录",
+        sourceSnapshot: { kind: "script_flow" },
+        steps: [],
+        stepResults: [{
+          id: "result-1",
+          runId: "run-route",
+          iterationIndex: 0,
+          stepId: "reach-checkin-record",
+          stepOrder: 1,
+          type: "page_navigation",
+          status: "failed",
+          errorCode: "PAGE_NAVIGATION_FAILED",
+          startedAt: "2026-08-11T00:00:00.000Z",
+          artifacts: [],
+          metadata: { pageNavigation: { status: "no_reliable_path", currentPageId: "classin.teacher.space", targetPageName: "打卡记录" } }
+        }],
+        artifacts: [],
+        events: []
+      } as never : undefined
+    });
+    const server = createServer(app);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("address unavailable");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const response = await fetch(`${baseUrl}/api/script-flow-drafts/repair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sourceYaml: "version: 1\nname: 打开页面\napp: { id: classin }\nsteps: []", runId: "run-route" })
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "当前执行路径已经偏离目标业务上下文，不应通过修改定位脚本继续修复。",
+      failure: { kind: "route_mismatch" }
+    });
+    expect(generateDraft).not.toHaveBeenCalled();
+  });
 });

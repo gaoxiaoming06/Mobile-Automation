@@ -226,6 +226,14 @@ export async function generateScriptFlowDraft(input: {
         model: input.config.model
       };
     }
+    if (firstError instanceof PlaceholderExecutableTargetError) {
+      return {
+        status: "needs_clarification",
+        clarification: placeholderExecutableTargetClarification(firstError.target),
+        channel,
+        model: input.config.model
+      };
+    }
     const repaired = await timedScriptFlowAiStage(input.timingContext, "repair_request", () => runAiJsonRequest(requestConfig, {
       developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
       userContent: buildScriptFlowRepairPrompt(plannerPrompt, result.content, firstError),
@@ -254,6 +262,14 @@ export async function generateScriptFlowDraft(input: {
         return {
           status: "needs_clarification",
           clarification: unsupportedExecutableTargetClarification(repairError.action),
+          channel,
+          model: input.config.model
+        };
+      }
+      if (repairError instanceof PlaceholderExecutableTargetError) {
+        return {
+          status: "needs_clarification",
+          clarification: placeholderExecutableTargetClarification(repairError.target),
           channel,
           model: input.config.model
         };
@@ -1504,6 +1520,10 @@ function validateGeneratedExecutableTargetContracts(document: ScriptFlowDocument
   });
 
   for (const step of flattenSteps(document.steps)) {
+    const placeholderTarget = operationLiteralTargetText(step);
+    if (placeholderTarget && looksLikePlaceholderExecutableTarget(placeholderTarget)) {
+      throw new PlaceholderExecutableTargetError(placeholderTarget);
+    }
     if ("selectText" in step && !isTextTarget(step.selectText.target)) {
       throw new UnsupportedExecutableTargetError("selectText");
     }
@@ -1531,6 +1551,14 @@ function validateTapTargetContract(target: ScriptTarget, operationPhrase: string
 
 function hasExplicitVisualTargetCue(value: string): boolean {
   return /图标|图片|图像|图形|视觉|符号|icon|image|picture|visual|symbol/iu.test(value);
+}
+
+function looksLikePlaceholderExecutableTarget(value: string): boolean {
+  const text = value.trim();
+  if (!text || /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(text)) return false;
+  return /^(?:包含|带有).*(?:的)?(?:课程|班级|活动|入口|按钮|条目|记录|对象)$/u.test(text)
+    || /^(?:相关|目标|对应|合适|任一|任意|某个|指定)(?:的)?(?:课程|班级|活动|入口|按钮|条目|记录|对象)$/u.test(text)
+    || /(?:相关|目标|对应|合适|任一|任意|某个|指定)(?:的)?(?:入口|按钮|条目|对象)$/u.test(text);
 }
 
 function isTextLikeTarget(target: ScriptTarget): boolean {
@@ -1652,6 +1680,10 @@ function unsupportedExecutableTargetClarification(action: string): string {
   return `生成结果里的 ${action} 目标不是当前执行器支持的可执行定位方式。请补充要操作的字段或按钮原文，或开启“结合当前屏幕生成”让我读取当前页面控件。`;
 }
 
+function placeholderExecutableTargetClarification(target: string): string {
+  return `生成结果把“${target}”当成了可执行目标，但这只是占位描述，不是真实屏幕文字。请补充真实班级名、活动标题、入口文字或目标页独有稳定文字。`;
+}
+
 function validatePageReference(
   reference: string | undefined,
   field: string,
@@ -1688,6 +1720,13 @@ class UnsupportedExecutableTargetError extends Error {
   constructor(readonly action: string) {
     super(`${action} 使用了当前执行器不支持的目标定位方式`);
     this.name = "UnsupportedExecutableTargetError";
+  }
+}
+
+class PlaceholderExecutableTargetError extends Error {
+  constructor(readonly target: string) {
+    super(`AI 草稿把占位描述“${target}”当成可执行目标`);
+    this.name = "PlaceholderExecutableTargetError";
   }
 }
 

@@ -66,7 +66,7 @@ describe("semantic locator helpers", () => {
     }));
   });
 
-  it("does not treat OCR icon noise around a text label as an exact candidate", () => {
+  it("treats attached OCR icon noise around a text label as an exact candidate", () => {
     const candidate = findTextCandidate(
       {
         text: "8+添加好友\n28加入班级\n加入公开课\n扫一扫",
@@ -83,6 +83,77 @@ describe("semantic locator helpers", () => {
       },
       "添加好友",
       { mode: "equals", semanticArea: "content", deviceSize: { width: 1200, height: 2000 } }
+    );
+
+    expect(candidate).toEqual(expect.objectContaining({
+      text: "8+添加好友",
+      centerX: 980,
+      centerY: 254
+    }));
+  });
+
+  it("treats a separated leading OCR glyph as decoration for an exact text candidate", () => {
+    const candidate = findTextCandidate(
+      {
+        text: "Q Jej\n打卡|14/30天",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1256,
+        height: 2760,
+        boxes: [
+          { text: "Q Jej", confidence: 0.84, x: 185, y: 619, width: 140, height: 65 },
+          { text: "打卡|14/30天", confidence: 0.96, x: 289, y: 719, width: 282, height: 47 }
+        ]
+      },
+      "Jej",
+      { mode: "equals", semanticArea: "content", deviceSize: { width: 1256, height: 2760 } }
+    );
+
+    expect(candidate).toEqual(expect.objectContaining({
+      text: "Q Jej",
+      centerX: 255,
+      centerY: 652
+    }));
+  });
+
+  it("treats a separated non-Latin OCR glyph as decoration for an exact text candidate", () => {
+    const candidate = findTextCandidate(
+      {
+        text: "心 Jej\n打卡|14/30天",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1256,
+        height: 2760,
+        boxes: [
+          { text: "心 Jej", confidence: 0.84, x: 185, y: 619, width: 140, height: 65 },
+          { text: "打卡|14/30天", confidence: 0.96, x: 289, y: 719, width: 282, height: 47 }
+        ]
+      },
+      "Jej",
+      { mode: "equals", semanticArea: "content", deviceSize: { width: 1256, height: 2760 } }
+    );
+
+    expect(candidate).toEqual(expect.objectContaining({
+      text: "心 Jej",
+      centerX: 255,
+      centerY: 652
+    }));
+  });
+
+  it("does not treat a separated multi-character OCR prefix as decoration for an exact text candidate", () => {
+    const candidate = findTextCandidate(
+      {
+        text: "新建 Jej",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1256,
+        height: 2760,
+        boxes: [
+          { text: "新建 Jej", confidence: 0.96, x: 185, y: 619, width: 180, height: 65 }
+        ]
+      },
+      "Jej",
+      { mode: "equals", semanticArea: "content", deviceSize: { width: 1256, height: 2760 } }
     );
 
     expect(candidate).toBeUndefined();
@@ -315,6 +386,55 @@ describe("SemanticStepResolver", () => {
       metadata: expect.objectContaining({
         actual: "确定(1/6)",
         matchStrategy: "ui_hierarchy_contains"
+      })
+    }));
+  });
+
+  it("resolves a Harmony clickable card when the exact target is one label line", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const locateText = vi.fn(async () => {
+      throw new Error("OCR should not be used when hierarchy exposes the card label line");
+    });
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("Jej"),
+        locateText
+      },
+      dumpUiHierarchy: async () => hierarchyWithText(
+        "Jej\n打卡｜14/30天\n8月27日 周四 23:59 截止\n嚯嚯嚯666\n｜ 今日已提交 1/7\n已打卡",
+        {
+          className: "harmony.widget.Image",
+          bounds: "[0,1207][1256,1654]",
+          clickable: true
+        }
+      ),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot: async () => {
+        throw new Error("screenshot should not be captured when hierarchy resolves the card label line");
+      }
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-harmony-card-label",
+      serial: "device-1",
+      deviceSize: { width: 1256, height: 2760 },
+      step: tapOnTextStep("Jej", 0, 0, {
+        mode: "equals",
+        searchMode: "visibleOnly"
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 628, y: 1431 }]);
+    expect(locateText).not.toHaveBeenCalled();
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        actual: "Jej\n打卡｜14/30天\n8月27日 周四 23:59 截止\n嚯嚯嚯666\n｜ 今日已提交 1/7\n已打卡",
+        matchStrategy: "ui_hierarchy_equals",
+        tapPointSource: "ui_text_center"
       })
     }));
   });

@@ -120,6 +120,8 @@ export type ScriptFlowRepairRunResult = ScriptFlowReportResult & {
   repairStoppedReason?: "max_attempts" | "non_repairable_failure" | "needs_clarification";
 };
 
+type DraftExecutionPurpose = "trial" | "step_trial" | "normal";
+
 const defaultServerUrl = "http://127.0.0.1:4010";
 const terminalRunStatuses = new Set<TestRun["status"]>(["passed", "failed", "stopped", "timeout", "device_lost"]);
 const requiredExecutionCapabilities = ["screenshot", "tap", "launchApp"] as const;
@@ -341,12 +343,15 @@ export class MobileAutomationMcpAdapter {
 
   async runScriptFlowDraft(input: {
     sourceYaml: string;
-    planDigest: string;
+    planDigest?: string;
     appId?: string;
     devicePlatform?: DevicePlatform;
     deviceSerial?: string;
     parameters?: Record<string, string | number | boolean>;
-    executionPurpose?: "trial" | "normal";
+    executionPurpose?: DraftExecutionPurpose;
+    startStepId?: string;
+    endStepId?: string;
+    pauseAfterEachStep?: boolean;
   }): Promise<ScriptFlowRunResult | DevicePreflightFailure> {
     const validation = await this.validateDevice({ devicePlatform: input.devicePlatform, appId: input.appId, deviceSerial: input.deviceSerial });
     if (!validation.ok) return validation;
@@ -355,7 +360,10 @@ export class MobileAutomationMcpAdapter {
       planDigest: input.planDigest,
       deviceSerial: validation.selectedDevice.serial,
       parameters: input.parameters,
-      executionPurpose: input.executionPurpose
+      executionPurpose: input.executionPurpose,
+      startStepId: input.startStepId,
+      endStepId: input.endStepId,
+      pauseAfterEachStep: input.pauseAfterEachStep
     });
   }
 
@@ -488,7 +496,12 @@ export class MobileAutomationMcpAdapter {
       executionPurpose: "trial"
     });
     await this.waitForRun({ runId: run.runId, timeoutMs: input.timeoutMs, pollIntervalMs: input.pollIntervalMs });
-    return this.getRunReport({ runId: run.runId, responseMode: input.responseMode });
+    const report = await this.getRunReport({ runId: run.runId, responseMode: input.responseMode });
+    return {
+      ...report,
+      sourceYaml,
+      planDigest: preview.planDigest
+    };
   }
 
   async generateRepairAndRunScriptFlow(input: {
@@ -645,17 +658,37 @@ export class MobileAutomationMcpAdapter {
 
   private async startScriptFlowDraftRun(input: {
     sourceYaml: string;
-    planDigest: string;
+    planDigest?: string;
     deviceSerial: string;
     parameters?: Record<string, string | number | boolean>;
-    executionPurpose?: "trial" | "normal";
+    executionPurpose?: DraftExecutionPurpose;
+    startStepId?: string;
+    endStepId?: string;
+    pauseAfterEachStep?: boolean;
   }): Promise<ScriptFlowRunResult> {
     const purpose = input.executionPurpose ?? "trial";
+    if (purpose === "step_trial") {
+      const startStepId = requiredNonEmptyString(input.startStepId, "startStepId");
+      const payload = await this.request<{ run: TestRun }>(
+        "POST",
+        "/api/script-flow-drafts/step-runs",
+        compactObject({
+          sourceYaml: input.sourceYaml,
+          deviceSerial: input.deviceSerial,
+          parameters: input.parameters,
+          startStepId,
+          endStepId: input.endStepId,
+          pauseAfterEachStep: input.pauseAfterEachStep
+        })
+      );
+      return runResult(this.serverUrl, payload.run);
+    }
     const path = purpose === "normal" ? "/api/script-flow-drafts/runs" : "/api/script-flow-drafts/trial-runs";
+    const planDigest = requiredNonEmptyString(input.planDigest, "planDigest");
     const payload = await this.request<{ run: TestRun }>(
       "POST",
       path,
-      compactObject({ sourceYaml: input.sourceYaml, planDigest: input.planDigest, deviceSerial: input.deviceSerial, parameters: input.parameters })
+      compactObject({ sourceYaml: input.sourceYaml, planDigest, deviceSerial: input.deviceSerial, parameters: input.parameters })
     );
     return runResult(this.serverUrl, payload.run);
   }
@@ -787,7 +820,7 @@ function failureKindFromReport(report: ScriptFlowReportResult): string | undefin
 }
 
 function isRepairableFailureKind(kind: string): boolean {
-  return kind !== "app_failure" && kind !== "infrastructure_failure" && kind !== "left_target_app";
+  return kind !== "app_failure" && kind !== "infrastructure_failure" && kind !== "left_target_app" && kind !== "route_mismatch";
 }
 
 function optionalRepairMessage(failure: unknown): { message?: string } {
@@ -860,6 +893,12 @@ function stringValue(value: unknown): string {
 
 function optionalString(value: unknown): string | undefined {
   return stringValue(value).trim() || undefined;
+}
+
+function requiredNonEmptyString(value: unknown, field: string): string {
+  const text = optionalString(value);
+  if (!text) throw new Error(`${field} is required`);
+  return text;
 }
 
 function parsedScriptFlowAppId(parsed: Record<string, unknown> | undefined): string | undefined {

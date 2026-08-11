@@ -6,6 +6,7 @@ export type PublicExecutionFailureKind =
   | "target_not_found"
   | "target_ambiguous"
   | "page_not_recognized"
+  | "route_mismatch"
   | "result_not_verified"
   | "left_target_app"
   | "app_failure"
@@ -33,6 +34,8 @@ export function publicExecutionFailure(kind: PublicExecutionFailureKind): Public
       return { kind, message: "当前操作匹配到多个目标，请补充位置、附近文字或更明确的操作描述。", nextAction: "supplement_process" };
     case "page_not_recognized":
       return { kind, message: "未能稳定识别当前页面，无法继续执行后续步骤。", nextAction: "view_report" };
+    case "route_mismatch":
+      return { kind, message: "当前页面已偏离目标业务路径，请补充真实入口、测试数据或可复用导航流程后重试。", nextAction: "supplement_process" };
     case "result_not_verified":
       return { kind, message: "操作已经执行，但未能确认结果符合预期。", nextAction: "view_report" };
     case "left_target_app":
@@ -67,6 +70,9 @@ export function publicExecutionFailureFromRun(run: TestRun): PublicExecutionFail
   if (step.errorCode === "PAGE_NAVIGATION_FAILED") {
     const status = nestedString(step.metadata, "pageNavigation", "status");
     if (status === "recovery_left_app") return publicExecutionFailure("left_target_app");
+    if (status === "no_reliable_path" || status === "route_mismatch" || status === "business_context_mismatch") {
+      return publicExecutionFailure("route_mismatch");
+    }
     if (status === "route_verification_failed" || status === "target_not_reached") {
       return publicExecutionFailure("result_not_verified");
     }

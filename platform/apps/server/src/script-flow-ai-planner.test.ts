@@ -2371,6 +2371,47 @@ describe("ScriptFlow AI planner", () => {
     expect(calls).toBe(1);
   });
 
+  it("asks for concrete fixture values when generated text targets are placeholders", async () => {
+    const response = readyResponse();
+    response.document.name = "进入打卡记录";
+    response.document.purpose = "business";
+    response.document.testLevel = "business_smoke";
+    response.document.steps = [{
+      id: "open-checkin-class",
+      role: "navigation",
+      onPage: "classin.home",
+      tap: {
+        target: { text: "包含打卡活动的课程或班级", match: "semantic", area: "content" },
+        search: { mode: "auto", direction: "down", maxSwipes: 6 }
+      }
+    }];
+
+    expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog: buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android"),
+      prompt: "进入打卡记录页"
+    })).toThrow(/占位描述/);
+
+    let calls = 0;
+    await expect(generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "进入打卡记录页，查看右上角分享按钮",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: pageCatalog(),
+      flows: [],
+      fetchImpl: async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 });
+      }
+    })).resolves.toMatchObject({
+      status: "needs_clarification",
+      clarification: expect.stringContaining("真实")
+    });
+    expect(calls).toBe(1);
+  });
+
   it("repairs legacy semantic non-tap targets into executable text targets", async () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();

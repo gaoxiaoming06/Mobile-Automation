@@ -5114,12 +5114,20 @@ function uiHierarchyTextMatches(actual: string, normalizedTargets: string[], mod
   if (!normalizedActual) {
     return false;
   }
+  const lineTexts = mode === "equals" ? normalizedTextLines(actual) : [];
   return normalizedTargets.some((target) => {
     if (mode === "contains") {
       return matchTextExpectation(normalizedActual, target, "contains");
     }
-    return normalizedActual === target;
+    return normalizedActual === target || lineTexts.includes(target);
   });
+}
+
+function normalizedTextLines(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => normalizeOcrText(line))
+    .filter(Boolean);
 }
 
 function uiCandidateMatchesSemanticArea(
@@ -5338,7 +5346,39 @@ function matchTextCandidateExpectation(actual: string, expected: string, mode: "
   if (mode !== "equals") {
     return matchTextExpectation(actual, expected, mode);
   }
-  return actual === expected;
+  return actual === expected || hasLeadingDecorativeOcrPrefix(actual, expected);
+}
+
+function hasLeadingDecorativeOcrPrefix(actual: string, expected: string): boolean {
+  if (!actual || !expected || actual === expected || !actual.endsWith(expected)) {
+    return false;
+  }
+  const prefix = actual.slice(0, actual.length - expected.length);
+  const trimmedPrefix = prefix.trim();
+  if (!trimmedPrefix) {
+    return false;
+  }
+  if (/\s$/.test(prefix) && isCompactOcrDecorationToken(trimmedPrefix)) {
+    return true;
+  }
+  return isShortSymbolPrefix(trimmedPrefix) || isShortAttachedOcrDecorationPrefix(trimmedPrefix);
+}
+
+function isCompactOcrDecorationToken(value: string): boolean {
+  if (/\s/u.test(value)) {
+    return false;
+  }
+  const chars = Array.from(value);
+  return chars.length === 1 || isShortSymbolPrefix(value);
+}
+
+function isShortSymbolPrefix(value: string): boolean {
+  return /^[^\p{L}\p{N}\s]+$/u.test(value) && Array.from(value).length <= 2;
+}
+
+function isShortAttachedOcrDecorationPrefix(value: string): boolean {
+  const chars = Array.from(value);
+  return chars.length <= 2 && !/\s/u.test(value) && chars.some((char) => /[^\p{L}\p{N}]/u.test(char));
 }
 
 function filterUiHierarchyTextCandidatesByOcr(
