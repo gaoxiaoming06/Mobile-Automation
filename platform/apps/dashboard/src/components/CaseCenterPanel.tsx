@@ -32,10 +32,12 @@ import {
 type CaseCenterPanelProps = {
   devices: Array<{ serial: string; name?: string }>;
   selectedSerial: string;
+  targetAppId?: string;
   initialFlows?: ScriptFlow[];
   initialSelectedFlowId?: string;
   externallySavedFlow?: ScriptFlow;
   setMessage: (message: string) => void;
+  onSelectDevice?: (serial: string) => void;
   onOpenRun: (runId: string) => void;
   onModifyCase: (flow: ScriptFlow, verification?: ScriptFlowVerificationAssessment) => void;
   onAiModifyCase: (flow: ScriptFlow) => void;
@@ -66,10 +68,12 @@ export function mergeExternallySavedCaseFlow(flows: ScriptFlow[], savedFlow: Scr
 export function CaseCenterPanel({
   devices,
   selectedSerial,
+  targetAppId,
   initialFlows,
   initialSelectedFlowId,
   externallySavedFlow,
   setMessage,
+  onSelectDevice,
   onOpenRun,
   onModifyCase,
   onAiModifyCase,
@@ -78,7 +82,8 @@ export function CaseCenterPanel({
 }: CaseCenterPanelProps) {
   const [flows, setFlows] = useState<ScriptFlow[]>(initialFlows ?? []);
   const [selectedId, setSelectedId] = useState(initialSelectedFlowId ?? initialFlows?.[0]?.id ?? "");
-  const selected = flows.find((flow) => flow.id === selectedId) ?? flows[0];
+  const visibleFlows = targetAppId ? flows.filter((flow) => flow.appId === targetAppId) : flows;
+  const selected = visibleFlows.find((flow) => flow.id === selectedId) ?? visibleFlows[0];
   const document = readCaseDocument(selected?.parsed);
   const [parameterValues, setParameterValues] = useState<Record<string, ScriptParameterValue>>(() => defaultCaseParameterValues(document));
   const [deviceSerial, setDeviceSerial] = useState(selectedSerial);
@@ -91,10 +96,10 @@ export function CaseCenterPanel({
 
   useEffect(() => {
     if (!initialFlows) void refreshFlows();
-  }, []);
+  }, [targetAppId]);
 
   useEffect(() => {
-    if (selectedSerial) setDeviceSerial(selectedSerial);
+    setDeviceSerial(selectedSerial);
   }, [selectedSerial]);
 
   useEffect(() => {
@@ -154,6 +159,14 @@ export function CaseCenterPanel({
     setLearning(undefined);
     setVerification(undefined);
     setExecutionMode("once");
+  }
+
+  function selectRunDevice(serial: string) {
+    if (!serial) {
+      return;
+    }
+    setDeviceSerial(serial);
+    onSelectDevice?.(serial);
   }
 
   async function loadVerification(flow: ScriptFlow) {
@@ -281,12 +294,12 @@ export function CaseCenterPanel({
       </header>
       <div className="case-center-layout">
         <aside className="case-list" aria-label="测试列表">
-          {flows.map((flow) => (
+          {visibleFlows.map((flow) => (
             <button key={flow.id} type="button" className={flow.id === selected?.id ? "selected" : ""} onClick={() => selectCase(flow)}>
               <strong>{flow.name}</strong><span>{flow.description || flow.appId}</span><small><span className={`test-kind-badge ${readCaseDocument(flow.parsed)?.kind ?? "case"}`}>{testKindLabel(readCaseDocument(flow.parsed)?.kind)}</span>{statusLabel(flow.status)} · v{flow.version}</small>
             </button>
           ))}
-          {!flows.length ? <div className="empty"><strong>暂无测试</strong><span>通过 AI 创建第一个可复用用例或场景。</span></div> : null}
+          {!visibleFlows.length ? <div className="empty"><strong>暂无测试</strong><span>通过 AI 创建第一个可复用用例或场景。</span></div> : null}
         </aside>
         <section className="case-detail">
           {selected ? <>
@@ -332,7 +345,7 @@ export function CaseCenterPanel({
               setParameterValues((current) => ({ ...current, [key]: value }));
               setPlan(undefined);
             }}
-            onDeviceChange={setDeviceSerial}
+            onDeviceChange={selectRunDevice}
             onExecutionModeChange={setExecutionMode}
             onRun={() => void runSelected()}
             onStop={() => void stopCurrentRun()}

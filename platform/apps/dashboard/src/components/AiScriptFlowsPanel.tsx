@@ -239,6 +239,7 @@ type AiScriptFlowsPanelProps = {
   devices: Array<{ serial: string; name?: string }>;
   selectedSerial: string;
   setMessage: (message: string) => void;
+  onSelectDevice?: (serial: string) => void;
   onSaved: (flow: ScriptFlow) => void;
   onOpenRun: (runId: string) => void;
   onStartNewTest?: () => void;
@@ -254,6 +255,7 @@ export function AiScriptFlowsPanel({
   devices,
   selectedSerial,
   setMessage,
+  onSelectDevice,
   onSaved,
   onOpenRun,
   onStartNewTest,
@@ -298,7 +300,7 @@ export function AiScriptFlowsPanel({
   const lastRunFailure = lastRun ? publicExecutionFailureFromRun(lastRun) : undefined;
 
   useEffect(() => {
-    if (selectedSerial) setDeviceSerial(selectedSerial);
+    setDeviceSerial(selectedSerial);
   }, [selectedSerial]);
 
   useEffect(() => {
@@ -876,6 +878,14 @@ export function AiScriptFlowsPanel({
     setExpandedStepKeys(expandedStepKey ? new Set([expandedStepKey]) : new Set());
   }
 
+  function selectRunDevice(serial: string) {
+    if (!serial) {
+      return;
+    }
+    setDeviceSerial(serial);
+    onSelectDevice?.(serial);
+  }
+
   async function runDraftStep(step: StepReviewItem, mode: "single" | "from_here") {
     if (!generatedDraft || step.structural) return;
     if (!deviceSerial) {
@@ -1147,7 +1157,7 @@ export function AiScriptFlowsPanel({
                 setParameterValues((current) => ({ ...current, [key]: value }));
                 setPlan(undefined);
               }}
-              onDeviceChange={setDeviceSerial}
+              onDeviceChange={selectRunDevice}
               onExecutionModeChange={setExecutionMode}
               onRun={() => void runDraft()}
               onStop={() => void stopCurrentRun()}

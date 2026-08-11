@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultAndroidCapabilities, defaultHarmonyCapabilities, type DeviceInfo } from "@mobile-automation/shared";
-import { devicePlatformLabel, deviceSwitchDisabledReason, formatPreviewStatus, isDeviceSwitchDisabled } from "./PreviewPanel.js";
+import { devicePlatformLabel, formatPreviewStatus } from "./PreviewPanel.js";
 
 describe("devicePlatformLabel", () => {
   it("labels HarmonyOS devices explicitly", () => {
@@ -22,16 +22,6 @@ describe("formatPreviewStatus", () => {
   });
 });
 
-describe("device switch availability", () => {
-  it("disables devices leased by another browser in the dropdown", () => {
-    const leased = leasedDevice("harmony-1", "browser-a");
-
-    expect(isDeviceSwitchDisabled(leased, "browser-b")).toBe(true);
-    expect(deviceSwitchDisabledReason(leased, "browser-b")).toBe("被 browser-a 占用");
-    expect(isDeviceSwitchDisabled(leased, "browser-a")).toBe(false);
-  });
-});
-
 function device(platform: DeviceInfo["platform"]): DeviceInfo {
   return {
     id: `${platform}-1`,
@@ -42,19 +32,4 @@ function device(platform: DeviceInfo["platform"]): DeviceInfo {
     capabilities: platform === "harmony" ? defaultHarmonyCapabilities() : defaultAndroidCapabilities(),
     lastSeenAt: "2026-08-07T00:00:00.000Z"
   };
-}
-
-function leasedDevice(serial: string, ownerId: string): DeviceInfo {
-  return {
-    ...device("harmony"),
-    serial,
-    currentLease: {
-      id: `lease-${serial}`,
-      type: "manual_control",
-      ownerId,
-      acquiredAt: "2026-08-07T08:00:00.000Z",
-      renewedAt: "2026-08-07T08:00:00.000Z",
-      expiresAt: "2026-08-07T08:01:00.000Z"
-    }
-  } as DeviceInfo;
 }

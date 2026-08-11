@@ -1,11 +1,17 @@
 import {
+  Check,
+  ChevronDown,
   Copy,
   KeyRound,
+  Package,
+  Pencil,
   PlayCircle,
+  Plus,
   RefreshCw,
   Save,
   Square,
-  Smartphone
+  Smartphone,
+  Trash2
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, MutableRefObject, PointerEvent, ReactNode } from "react";
@@ -155,6 +161,9 @@ type StabilityAllowedActions = {
   wait: boolean;
 };
 type TextStorage = Pick<Storage, "getItem" | "setItem">;
+type TargetAppStorage = Pick<Storage, "getItem">;
+type TargetAppWriteStorage = Pick<Storage, "setItem">;
+type TargetAppSelectionStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 type AiModelSettingsSource = "stored" | "environment" | "none";
 export type PublicAiModelSettings = {
   enabled: boolean;
@@ -169,6 +178,13 @@ export type AiModelSettingsDraft = {
   model: string;
   timeoutMs: number;
 };
+export type TargetAppDefinition = {
+  appId: string;
+  name: string;
+  androidPackageName?: string;
+  harmonyBundleName?: string;
+  iosBundleId?: string;
+};
 
 export const DEFAULT_STABILITY_EXPLORER_START_MODE: StabilityExplorerStartMode = "restart_app";
 export const DEFAULT_STABILITY_EXPLORER_APP_EXIT_POLICY: StabilityExplorerAppExitPolicy = "back_to_app";
@@ -176,6 +192,14 @@ export const DEFAULT_STABILITY_EXPLORER_MAX_DEPTH = 4;
 export const DEFAULT_STABILITY_DANGEROUS_TEXT_PATTERNS = ["删除", "退出登录", "注销", "支付", "发布", "提交", "确认删除"];
 export const DEFAULT_STABILITY_DANGEROUS_TEXT = DEFAULT_STABILITY_DANGEROUS_TEXT_PATTERNS.join("\n");
 export const DEFAULT_SCRIPT_APP_ID = "classin";
+export const DEFAULT_TARGET_APPS: TargetAppDefinition[] = [
+  {
+    appId: "classin",
+    name: "ClassIn",
+    androidPackageName: "cn.eeo.classin",
+    harmonyBundleName: "com.eeo.classin.harmony"
+  }
+];
 export const DEFAULT_AI_MODEL_SETTINGS: PublicAiModelSettings = {
   enabled: false,
   baseURL: "",
@@ -194,6 +218,8 @@ export const DEFAULT_ANDROID_APP_MONITOR_SETTINGS: AndroidAppMonitorSettingsDraf
   enableHeapDump: false
 };
 const STABILITY_DANGEROUS_TEXT_BY_PACKAGE_STORAGE_KEY = "mobile-automation.stabilityDangerousTextByPackage.v1";
+const TARGET_APPS_STORAGE_KEY = "mobile-automation.targetApps.v1";
+const SELECTED_TARGET_APP_STORAGE_KEY = "mobile-automation.selectedTargetAppId";
 export const DASHBOARD_ADVANCED_TOOLS_STORAGE_KEY = "mobile-automation.advancedTools";
 type PreviewWorkspaceStyle = CSSProperties & {
   "--asset-recording-preview-width"?: string;
@@ -397,6 +423,174 @@ export function workspaceStyleForNav(navItem: AppNavItemId, _devicePreviewWidth:
     };
   }
   return {};
+}
+
+export function loadTargetApps(storage: TargetAppStorage | undefined = browserTargetAppStorage()): TargetAppDefinition[] {
+  try {
+    const raw = storage?.getItem(TARGET_APPS_STORAGE_KEY);
+    if (!raw) {
+      return DEFAULT_TARGET_APPS;
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return DEFAULT_TARGET_APPS;
+    }
+    const apps = parsed.map(normalizeTargetAppDefinition).filter((app): app is TargetAppDefinition => Boolean(app));
+    return apps.length ? apps : DEFAULT_TARGET_APPS;
+  } catch {
+    return DEFAULT_TARGET_APPS;
+  }
+}
+
+export function saveTargetApps(apps: TargetAppDefinition[], storage: TargetAppWriteStorage | undefined = browserTargetAppStorage()): void {
+  try {
+    storage?.setItem(TARGET_APPS_STORAGE_KEY, JSON.stringify(apps.map(compactTargetAppDefinition)));
+  } catch {
+    // Ignore storage failures; target apps can still work in memory for this session.
+  }
+}
+
+export function defaultSelectedTargetAppId(apps: TargetAppDefinition[], currentAppId: string): string {
+  if (apps.some((app) => app.appId === currentAppId)) {
+    return currentAppId;
+  }
+  return apps[0]?.appId ?? DEFAULT_SCRIPT_APP_ID;
+}
+
+export function targetAppIdentifierForPlatform(app: TargetAppDefinition | undefined, platform: DeviceInfo["platform"] | undefined): string | undefined {
+  if (!app || !platform) {
+    return undefined;
+  }
+  if (platform === "android") {
+    return app.androidPackageName;
+  }
+  if (platform === "harmony") {
+    return app.harmonyBundleName;
+  }
+  if (platform === "ios") {
+    return app.iosBundleId;
+  }
+  return undefined;
+}
+
+function loadSelectedTargetAppId(storage: TargetAppStorage | undefined = browserTargetAppStorage()): string {
+  try {
+    return storage?.getItem(SELECTED_TARGET_APP_STORAGE_KEY)?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveSelectedTargetAppId(appId: string, storage: TargetAppSelectionStorage | undefined = browserTargetAppSelectionStorage()): void {
+  try {
+    if (!storage) {
+      return;
+    }
+    const trimmed = appId.trim();
+    if (trimmed) {
+      storage.setItem(SELECTED_TARGET_APP_STORAGE_KEY, trimmed);
+    } else {
+      storage.removeItem(SELECTED_TARGET_APP_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage failures; target app selection can still work in memory.
+  }
+}
+
+function normalizeTargetAppDefinition(value: unknown): TargetAppDefinition | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const appId = trimmedOptionalString(record.appId);
+  if (!appId) {
+    return undefined;
+  }
+  return compactTargetAppDefinition({
+    appId,
+    name: trimmedOptionalString(record.name) ?? appId,
+    androidPackageName: trimmedOptionalString(record.androidPackageName),
+    harmonyBundleName: trimmedOptionalString(record.harmonyBundleName),
+    iosBundleId: trimmedOptionalString(record.iosBundleId)
+  });
+}
+
+function compactTargetAppDefinition(app: TargetAppDefinition): TargetAppDefinition {
+  return {
+    appId: app.appId.trim(),
+    name: app.name.trim() || app.appId.trim(),
+    ...(trimmedOptionalString(app.androidPackageName) ? { androidPackageName: trimmedOptionalString(app.androidPackageName) } : {}),
+    ...(trimmedOptionalString(app.harmonyBundleName) ? { harmonyBundleName: trimmedOptionalString(app.harmonyBundleName) } : {}),
+    ...(trimmedOptionalString(app.iosBundleId) ? { iosBundleId: trimmedOptionalString(app.iosBundleId) } : {})
+  };
+}
+
+export function isDefaultTargetApp(appId: string): boolean {
+  return DEFAULT_TARGET_APPS.some((app) => app.appId === appId.trim());
+}
+
+export function upsertTargetApp(apps: TargetAppDefinition[], app: TargetAppDefinition): TargetAppDefinition[] {
+  const normalized = compactTargetAppDefinition(app);
+  const existingIndex = apps.findIndex((item) => item.appId === normalized.appId);
+  if (existingIndex < 0) {
+    return [...apps, normalized];
+  }
+  return apps.map((item, index) => index === existingIndex ? normalized : item);
+}
+
+export function deleteTargetApp(apps: TargetAppDefinition[], appId: string): TargetAppDefinition[] {
+  const normalizedAppId = appId.trim();
+  if (!normalizedAppId || isDefaultTargetApp(normalizedAppId)) {
+    return apps.map(compactTargetAppDefinition);
+  }
+  const nextApps = apps
+    .filter((app) => app.appId !== normalizedAppId)
+    .map(compactTargetAppDefinition);
+  return nextApps.length ? nextApps : DEFAULT_TARGET_APPS;
+}
+
+function promptTargetAppDefinition(initial?: TargetAppDefinition, options: { lockAppId?: boolean } = {}): TargetAppDefinition | undefined {
+  const initialAppId = initial?.appId ?? "";
+  const promptedAppId = options.lockAppId ? initialAppId : window.prompt("应用 ID（用于关联用例和资产，修改后不会迁移旧数据）", initialAppId);
+  const appId = promptedAppId?.trim() ?? "";
+  if (!appId) {
+    return undefined;
+  }
+  const promptedName = window.prompt("应用名称", initial?.name ?? appId);
+  if (promptedName === null) {
+    return undefined;
+  }
+  const androidPackageName = window.prompt("Android 包名（可留空）", initial?.androidPackageName ?? "");
+  if (androidPackageName === null) {
+    return undefined;
+  }
+  const harmonyBundleName = window.prompt("Harmony bundleName（可留空）", initial?.harmonyBundleName ?? "");
+  if (harmonyBundleName === null) {
+    return undefined;
+  }
+  const iosBundleId = window.prompt("iOS Bundle ID（可留空）", initial?.iosBundleId ?? "");
+  if (iosBundleId === null) {
+    return undefined;
+  }
+  return compactTargetAppDefinition({
+    appId,
+    name: promptedName.trim() || appId,
+    androidPackageName: trimmedOptionalString(androidPackageName),
+    harmonyBundleName: trimmedOptionalString(harmonyBundleName),
+    iosBundleId: trimmedOptionalString(iosBundleId)
+  });
+}
+
+function trimmedOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function browserTargetAppStorage(): (TargetAppStorage & TargetAppWriteStorage) | undefined {
+  return typeof window === "undefined" ? undefined : window.localStorage;
+}
+
+function browserTargetAppSelectionStorage(): TargetAppSelectionStorage | undefined {
+  return typeof window === "undefined" ? undefined : window.localStorage;
 }
 
 export function actionStrategyForWorkspace(
@@ -647,6 +841,8 @@ export function App() {
   const [assetLibraryInitialization, setAssetLibraryInitialization] = useState<PageAssetLibraryInitialization>();
   const [assetRecordingIdentifying, setAssetRecordingIdentifying] = useState(false);
   const [assetRecordingAiIdentifying, setAssetRecordingAiIdentifying] = useState(false);
+  const [targetApps, setTargetApps] = useState<TargetAppDefinition[]>(() => loadTargetApps());
+  const [selectedTargetAppId, setSelectedTargetAppId] = useState(() => loadSelectedTargetAppId());
   const [stabilityPackageName, setStabilityPackageName] = useState("");
   const [stabilityMaxDurationMinutes, setStabilityMaxDurationMinutes] = useState(3);
   const [stabilityMaxActions, setStabilityMaxActions] = useState(100);
@@ -680,6 +876,7 @@ export function App() {
   const activeControlLeaseRef = useRef<ActiveDashboardControlLease | null>(null);
   const [controlOwnerId] = useState(() => loadDashboardControlOwnerId());
   const [agentPairing, setAgentPairing] = useState<AgentPairingCode>();
+  const [sharedAgentCommand, setSharedAgentCommand] = useState("");
   const [creatingAgentPairing, setCreatingAgentPairing] = useState(false);
 
   const {
@@ -697,6 +894,8 @@ export function App() {
   const selectableDevices = selectableDevicesForOwner(devices, controlOwnerId);
   const selectedDeviceLease = currentDeviceLease(selectedDevice);
   const selectedDeviceIsAgent = isAgentDevice(selectedDevice);
+  const selectedTargetApp = targetApps.find((app) => app.appId === selectedTargetAppId) ?? targetApps[0] ?? DEFAULT_TARGET_APPS[0];
+  const selectedTargetPackageName = targetAppIdentifierForPlatform(selectedTargetApp, selectedDevice?.platform);
   const controlLeaseDeviceSerial = dashboardControlLeaseDeviceSerial(activeNavItem, selectedDevice, selectedSerial);
   const selectedOwnControlLease = selectedDeviceLease?.ownerId === controlOwnerId
     ? { id: selectedDeviceLease.id, ownerId: selectedDeviceLease.ownerId }
@@ -749,6 +948,20 @@ export function App() {
     androidAppMonitorExecutionOverrides.stability_exploration
   );
 
+  useEffect(() => {
+    const nextAppId = defaultSelectedTargetAppId(targetApps, selectedTargetAppId);
+    if (nextAppId !== selectedTargetAppId) {
+      setSelectedTargetAppId(nextAppId);
+      saveSelectedTargetAppId(nextAppId);
+    }
+  }, [targetApps, selectedTargetAppId]);
+
+  useEffect(() => {
+    if (selectedTargetPackageName) {
+      updateStabilityPackageName(selectedTargetPackageName);
+    }
+  }, [selectedTargetApp.appId, selectedDevice?.platform, selectedTargetPackageName]);
+
   function updateAssetRecordingIdentification(event: "begin" | "end") {
     const nextState = assetRecordingIdentificationStateAfter(assetRecordingIdentificationInFlightRef.current, event);
     assetRecordingIdentificationInFlightRef.current = nextState.inFlightCount;
@@ -784,7 +997,8 @@ export function App() {
         })
       });
       setAgentPairing(json.pairing);
-      setMessage(`已生成 Agent 配对码：${json.pairing.code}`);
+      setSharedAgentCommand("");
+      setMessage(await copyCreatedAgentPairingCommand(json.pairing.code));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -794,15 +1008,21 @@ export function App() {
 
   async function copyAgentPairingCommand(code: string) {
     const command = agentPairingCommand(code);
-    if (typeof navigator === "undefined" || typeof navigator.clipboard?.writeText !== "function") {
-      setMessage("当前浏览器不允许自动复制，请手动复制配对命令");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(command);
+    if (await copyTextToClipboard(command)) {
       setMessage("已复制 Agent 配对命令");
-    } catch {
+    } else {
       setMessage("当前浏览器不允许自动复制，请手动复制配对命令");
+    }
+  }
+
+  async function copySharedAgentInstallCommand() {
+    const command = agentPairingCommand(undefined, { mode: "shared" });
+    setAgentPairing(undefined);
+    setSharedAgentCommand(command);
+    if (await copyTextToClipboard(command)) {
+      setMessage("已复制共享 Agent 接入命令");
+    } else {
+      setMessage("已生成共享 Agent 命令，请在设备管理卡片中手动复制");
     }
   }
 
@@ -1204,6 +1424,77 @@ export function App() {
     selectDevice(device, () => closeScrcpyStream("device switch"));
   }
 
+  function selectDeviceSerialAndCloseStream(serial: string) {
+    const device = selectableDevices.find((item) => item.serial === serial);
+    if (device) {
+      selectDeviceAndCloseStream(device);
+    }
+  }
+
+  function applyTargetApps(nextApps: TargetAppDefinition[], nextSelectedAppId: string) {
+    const normalizedSelectedAppId = defaultSelectedTargetAppId(nextApps, nextSelectedAppId);
+    const nextSelectedApp = nextApps.find((app) => app.appId === normalizedSelectedAppId) ?? nextApps[0];
+    setTargetApps(nextApps);
+    saveTargetApps(nextApps);
+    setSelectedTargetAppId(normalizedSelectedAppId);
+    saveSelectedTargetAppId(normalizedSelectedAppId);
+    const packageName = targetAppIdentifierForPlatform(nextSelectedApp, selectedDevice?.platform);
+    if (packageName) {
+      updateStabilityPackageName(packageName);
+    }
+  }
+
+  function selectTargetApp(appId: string) {
+    const nextAppId = defaultSelectedTargetAppId(targetApps, appId);
+    const app = targetApps.find((item) => item.appId === nextAppId) ?? targetApps[0];
+    setSelectedTargetAppId(nextAppId);
+    saveSelectedTargetAppId(nextAppId);
+    const packageName = targetAppIdentifierForPlatform(app, selectedDevice?.platform);
+    if (packageName) {
+      updateStabilityPackageName(packageName);
+    }
+  }
+
+  function createTargetAppFromPrompt() {
+    const nextApp = promptTargetAppDefinition();
+    if (!nextApp) {
+      return;
+    }
+    const nextApps = upsertTargetApp(targetApps, nextApp);
+    applyTargetApps(nextApps, nextApp.appId);
+    setMessage(`已新增目标应用：${nextApp.name}`);
+  }
+
+  function editTargetAppFromPrompt(app: TargetAppDefinition) {
+    const nextApp = promptTargetAppDefinition(app, { lockAppId: isDefaultTargetApp(app.appId) });
+    if (!nextApp) {
+      return;
+    }
+    if (nextApp.appId !== app.appId && targetApps.some((item) => item.appId === nextApp.appId)) {
+      setMessage(`目标应用 ID 已存在：${nextApp.appId}`);
+      return;
+    }
+    const baseApps = nextApp.appId === app.appId ? targetApps : deleteTargetApp(targetApps, app.appId);
+    const nextApps = upsertTargetApp(baseApps, nextApp);
+    const nextSelectedAppId = selectedTargetAppId === app.appId ? nextApp.appId : selectedTargetAppId;
+    applyTargetApps(nextApps, nextSelectedAppId);
+    setMessage(`已更新目标应用：${nextApp.name}`);
+  }
+
+  function deleteTargetAppFromMenu(app: TargetAppDefinition) {
+    if (isDefaultTargetApp(app.appId)) {
+      setMessage("默认目标应用 ClassIn 不可删除");
+      return;
+    }
+    if (!window.confirm(`从目标应用列表移除「${app.name || app.appId}」？已有用例、资产和执行记录不会删除。`)) {
+      return;
+    }
+    const nextApps = deleteTargetApp(targetApps, app.appId);
+    const nextSelectedAppId = selectedTargetAppId === app.appId ? "" : selectedTargetAppId;
+    applyTargetApps(nextApps, nextSelectedAppId);
+    setMessage(`已从目标应用列表移除：${app.name || app.appId}，相关数据未删除`);
+  }
+
   async function markCurrentPageAsRuntimeInterceptor() {
     if (!selectedSerial || !selectedDevice) {
       setMessage("请先选择设备");
@@ -1499,6 +1790,14 @@ export function App() {
     });
   }
 
+  function appMonitorPackageNameForApp(
+    appId: string,
+    targetApp: TargetAppDefinition | undefined,
+    targetPackageName: string | undefined
+  ): string {
+    return targetApp?.appId === appId && targetPackageName ? targetPackageName : appId;
+  }
+
   async function startStabilityExploration() {
     if (!selectedSerial) {
       setMessage("请先选择设备");
@@ -1610,10 +1909,8 @@ export function App() {
   const devicePreviewPanel = (
     <PreviewPanel
       key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
-      devices={controllableDeviceList}
       selectedSerial={selectedSerial}
       selectedDevice={selectedDevice}
-      controlOwnerId={controlOwnerId}
       previewRef={previewRef}
       imageRef={imageRef}
       canvasRef={canvasRef}
@@ -1635,7 +1932,6 @@ export function App() {
       startScrcpy={startScrcpy}
       stopScrcpy={stopScrcpy}
       runAction={runAction}
-      onSelectDevice={selectDeviceAndCloseStream}
       handleScreenshotLoaded={handleScreenshotLoaded}
       onPreviewPointerDown={onPreviewPointerDown}
       onPreviewPointerUp={onPreviewPointerUp}
@@ -1650,6 +1946,25 @@ export function App() {
           <h1>自动化测试平台</h1>
         </div>
         <p>{message}</p>
+        <div className="topbar-context-group">
+          <GlobalDeviceSwitcher
+            devices={controllableDeviceList}
+            selectedSerial={selectedSerial}
+            selectedDevice={selectedDevice}
+            controlOwnerId={controlOwnerId}
+            onSelectDevice={selectDeviceAndCloseStream}
+            onRefreshDevices={() => refreshDevices().catch((error) => setMessage(error.message))}
+          />
+          <GlobalTargetAppSwitcher
+            apps={targetApps}
+            selectedApp={selectedTargetApp}
+            selectedPlatform={selectedDevice?.platform}
+            onSelectApp={selectTargetApp}
+            onCreateApp={createTargetAppFromPrompt}
+            onEditApp={editTargetAppFromPrompt}
+            onDeleteApp={deleteTargetAppFromMenu}
+          />
+        </div>
       </header>
 
       <section ref={workspaceRef} className={`workspace ${navCollapsed ? "nav-collapsed" : "nav-expanded"} page-${activeNavItem}`} style={workspaceStyle}>
@@ -1679,9 +1994,11 @@ export function App() {
             controlOwnerId={controlOwnerId}
             activeRunForSelectedDevice={activeRunForSelectedDevice}
             agentPairing={agentPairing}
+            sharedAgentCommand={sharedAgentCommand}
             creatingAgentPairing={creatingAgentPairing}
             onCreateAgentPairing={createAgentPairingCode}
             onCopyAgentPairingCommand={copyAgentPairingCommand}
+            onCopySharedAgentCommand={copySharedAgentInstallCommand}
             onOpenRuns={openRuns}
             onRefreshDevices={() => refreshDevices().catch((error) => setMessage(error.message))}
           />
@@ -1705,10 +2022,8 @@ export function App() {
             previewSlot={
               <PreviewPanel
                 key={`preview-${activePreviewWorkspaceKey}-${selectedSerial || "none"}`}
-                devices={controllableDeviceList}
                 selectedSerial={selectedSerial}
                 selectedDevice={selectedDevice}
-                controlOwnerId={controlOwnerId}
                 previewRef={previewRef}
                 imageRef={imageRef}
                 canvasRef={canvasRef}
@@ -1730,7 +2045,6 @@ export function App() {
                 startScrcpy={startScrcpy}
                 stopScrcpy={stopScrcpy}
                 runAction={runAction}
-                onSelectDevice={selectDeviceAndCloseStream}
                 handleScreenshotLoaded={handleScreenshotLoaded}
                 onPreviewPointerDown={onPreviewPointerDown}
                 onPreviewPointerUp={onPreviewPointerUp}
@@ -1756,6 +2070,8 @@ export function App() {
             <CaseCenterPanel
               devices={selectableDevices}
               selectedSerial={selectedSerial}
+              targetAppId={selectedTargetApp.appId}
+              onSelectDevice={selectDeviceSerialAndCloseStream}
               initialSelectedFlowId={pendingCaseSelection || undefined}
               externallySavedFlow={pendingSavedCaseFlow}
               setMessage={setMessage}
@@ -1777,7 +2093,7 @@ export function App() {
               }}
               androidAppMonitorForApp={(appId) => keepCurrentAndroidAppMonitorForPackage(
                 "script_flow",
-                appId,
+                appMonitorPackageNameForApp(appId, selectedTargetApp, selectedTargetPackageName),
                 androidAppMonitorExecutionOverrides.script_flow
               )}
               onOpenRun={(runId) => {
@@ -1791,10 +2107,11 @@ export function App() {
         {(activeNavItem === "aiScriptFlows" || retainedNavItems.has("aiScriptFlows")) && (
           <RetainedNavPanel active={activeNavItem === "aiScriptFlows"} panelId="aiScriptFlows">
             <AiScriptFlowsPanel
-              key={pendingCaseRevision ? `${pendingCaseRevision.flowId}:${pendingCaseRevision.version}:${pendingCaseDraft ? "manual" : "ai"}` : `new-case:${newCaseWorkspaceVersion}`}
-              defaultAppId={DEFAULT_SCRIPT_APP_ID}
+              key={pendingCaseRevision ? `${pendingCaseRevision.flowId}:${pendingCaseRevision.version}:${pendingCaseDraft ? "manual" : "ai"}` : `new-case:${newCaseWorkspaceVersion}:${selectedTargetApp.appId}`}
+              defaultAppId={selectedTargetApp.appId}
               devices={selectableDevices}
               selectedSerial={selectedSerial}
+              onSelectDevice={selectDeviceSerialAndCloseStream}
               activeRunForDevice={activeRunForSelectedDevice}
               setMessage={setMessage}
               onStartNewTest={openNewAiScriptFlow}
@@ -1802,7 +2119,7 @@ export function App() {
               initialDraft={pendingCaseDraft}
               androidAppMonitorForApp={(appId) => keepCurrentAndroidAppMonitorForPackage(
                 "script_flow",
-                appId,
+                appMonitorPackageNameForApp(appId, selectedTargetApp, selectedTargetPackageName),
                 androidAppMonitorExecutionOverrides.script_flow
               )}
               onSaved={(flow) => {
@@ -1844,10 +2161,7 @@ export function App() {
             busy={busy}
             onAndroidAppMonitorEnabledChange={(enabled) => updateAndroidAppMonitorExecutionOverride("stability_exploration", enabled)}
             onSelectDevice={(serial) => {
-              const device = selectableDevices.find((item) => item.serial === serial);
-              if (device) {
-                selectDeviceAndCloseStream(device);
-              }
+              selectDeviceSerialAndCloseStream(serial);
             }}
             onPackageNameChange={updateStabilityPackageName}
             onMaxDurationMinutesChange={setStabilityMaxDurationMinutes}
@@ -1890,6 +2204,308 @@ export function App() {
       </section>
     </main>
   );
+}
+
+type GlobalDeviceSwitcherProps = {
+  devices: DeviceInfo[];
+  selectedSerial: string;
+  selectedDevice?: DeviceInfo;
+  controlOwnerId: string;
+  onSelectDevice: (device: DeviceInfo) => void;
+  onRefreshDevices: () => void;
+};
+
+export function GlobalDeviceSwitcher({
+  devices,
+  selectedSerial,
+  selectedDevice,
+  controlOwnerId,
+  onSelectDevice,
+  onRefreshDevices
+}: GlobalDeviceSwitcherProps) {
+  const [open, setOpen] = useState(false);
+  const switcherRef = useRef<HTMLDivElement | null>(null);
+  const buttonText = selectedDevice?.name || selectedSerial || "未选择设备";
+  const selectedMeta = selectedDevice ? formatGlobalDeviceSwitchMeta(selectedDevice) : "选择设备后开始执行";
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (switcherRef.current && !switcherRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+    window.addEventListener("mousedown", closeOnOutsideClick);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("mousedown", closeOnOutsideClick);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="topbar-device-switcher">
+      <div className="device-switcher global-device-switcher" ref={switcherRef}>
+        <button
+          className="context-switch-button"
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          disabled={!devices.length}
+          title={`切换当前设备：${selectedMeta}`}
+          aria-haspopup="menu"
+          aria-expanded={open}
+        >
+          <Smartphone size={17} />
+          <span className="context-switch-text">
+            <span className="context-switch-kicker">设备</span>
+            <strong>{buttonText}</strong>
+          </span>
+          <ChevronDown size={16} />
+        </button>
+        {open && (
+          <div className="device-switch-menu global-device-switch-menu" role="menu">
+            {devices.map((device) => {
+              const disabled = isGlobalDeviceSwitchDisabled(device, controlOwnerId);
+              const disabledReason = globalDeviceSwitchDisabledReason(device, controlOwnerId);
+              return (
+                <button
+                  className={globalDeviceSwitchItemClass(device, selectedSerial, controlOwnerId)}
+                  disabled={disabled}
+                  key={device.serial}
+                  type="button"
+                  onClick={() => {
+                    if (disabled) {
+                      return;
+                    }
+                    onSelectDevice(device);
+                    setOpen(false);
+                  }}
+                  role="menuitem"
+                  title={disabledReason ?? "切换设备"}
+                >
+                  <div>
+                    <strong>{device.name || device.serial}</strong>
+                    <span>{formatGlobalDeviceSwitchMeta(device)}{disabledReason ? ` · ${disabledReason}` : ""}</span>
+                  </div>
+                  {device.serial === selectedSerial && <Check size={16} />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <button className="icon-button compact context-icon-button" type="button" onClick={onRefreshDevices} title="刷新设备">
+        <RefreshCw size={15} />
+      </button>
+    </div>
+  );
+}
+
+function isGlobalDeviceSwitchDisabled(device: DeviceInfo, ownerId: string): boolean {
+  return isDeviceLockedByOtherOwner(device, ownerId);
+}
+
+function globalDeviceSwitchDisabledReason(device: DeviceInfo, ownerId: string): string | undefined {
+  if (!isGlobalDeviceSwitchDisabled(device, ownerId)) {
+    return undefined;
+  }
+  const lease = currentDeviceLease(device);
+  return lease ? `被 ${lease.ownerId} 占用` : "被其他客户端占用";
+}
+
+function globalDeviceSwitchItemClass(device: DeviceInfo, selectedSerial: string, ownerId: string): string {
+  return [
+    "device-switch-item",
+    device.serial === selectedSerial ? "active" : "",
+    isGlobalDeviceSwitchDisabled(device, ownerId) ? "disabled" : ""
+  ].filter(Boolean).join(" ");
+}
+
+function formatGlobalDeviceSwitchMeta(device: DeviceInfo): string {
+  const platform = devicePlatformLabel(device.platform);
+  const version = device.osVersion ? ` ${device.osVersion}` : "";
+  const status = device.status === "online" ? "在线" : device.status;
+  return `${platform}${version} · ${status} · ${device.serial}`;
+}
+
+type GlobalTargetAppSwitcherProps = {
+  apps: TargetAppDefinition[];
+  selectedApp?: TargetAppDefinition;
+  selectedPlatform?: DeviceInfo["platform"];
+  onSelectApp: (appId: string) => void;
+  onCreateApp: () => void;
+  onEditApp?: (app: TargetAppDefinition) => void;
+  onDeleteApp?: (app: TargetAppDefinition) => void;
+};
+
+export function GlobalTargetAppSwitcher({
+  apps,
+  selectedApp,
+  selectedPlatform,
+  onSelectApp,
+  onCreateApp,
+  onEditApp,
+  onDeleteApp
+}: GlobalTargetAppSwitcherProps) {
+  const [open, setOpen] = useState(false);
+  const switcherRef = useRef<HTMLDivElement | null>(null);
+  const buttonText = selectedApp?.name || selectedApp?.appId || "未选择应用";
+  const selectedMeta = selectedApp ? formatTargetAppMeta(selectedApp, selectedPlatform) : "选择目标应用后生成测试";
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (switcherRef.current && !switcherRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+    window.addEventListener("mousedown", closeOnOutsideClick);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("mousedown", closeOnOutsideClick);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="topbar-target-app-switcher">
+      <div className="device-switcher global-device-switcher" ref={switcherRef}>
+        <button
+          className="context-switch-button"
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          disabled={!apps.length}
+          title={`切换目标应用：${selectedMeta}`}
+          aria-haspopup="menu"
+          aria-expanded={open}
+        >
+          <Package size={17} />
+          <span className="context-switch-text">
+            <span className="context-switch-kicker">应用</span>
+            <strong>{buttonText}</strong>
+          </span>
+          <ChevronDown size={16} />
+        </button>
+        {open && (
+          <TargetAppMenu
+            apps={apps}
+            selectedApp={selectedApp}
+            selectedPlatform={selectedPlatform}
+            onSelectApp={onSelectApp}
+            onEditApp={onEditApp}
+            onDeleteApp={onDeleteApp}
+            onClose={() => setOpen(false)}
+          />
+        )}
+      </div>
+      <button className="icon-button compact context-icon-button" type="button" onClick={onCreateApp} title="新增应用">
+        <Plus size={15} />
+      </button>
+    </div>
+  );
+}
+
+type TargetAppMenuProps = {
+  apps: TargetAppDefinition[];
+  selectedApp?: TargetAppDefinition;
+  selectedPlatform?: DeviceInfo["platform"];
+  onSelectApp: (appId: string) => void;
+  onEditApp?: (app: TargetAppDefinition) => void;
+  onDeleteApp?: (app: TargetAppDefinition) => void;
+  onClose?: () => void;
+};
+
+export function TargetAppMenu({
+  apps,
+  selectedApp,
+  selectedPlatform,
+  onSelectApp,
+  onEditApp,
+  onDeleteApp,
+  onClose
+}: TargetAppMenuProps) {
+  return (
+    <div className="device-switch-menu global-device-switch-menu target-app-menu" role="menu">
+      {apps.map((app) => {
+        const defaultApp = isDefaultTargetApp(app.appId);
+        return (
+          <div className="target-app-menu-row" key={app.appId} role="none">
+            <button
+              className={app.appId === selectedApp?.appId ? "device-switch-item target-app-select active" : "device-switch-item target-app-select"}
+              type="button"
+              onClick={() => {
+                onSelectApp(app.appId);
+                onClose?.();
+              }}
+              role="menuitem"
+              title="切换目标应用"
+            >
+              <div>
+                <strong>
+                  {app.name || app.appId}
+                  {defaultApp && <span className="target-app-default-badge">默认应用</span>}
+                </strong>
+                <span>{formatTargetAppMeta(app, selectedPlatform)}</span>
+              </div>
+              {app.appId === selectedApp?.appId && <Check size={16} />}
+            </button>
+            <div className="target-app-row-actions" role="none">
+              {onEditApp && (
+                <button
+                  className="target-app-action-button icon-only"
+                  type="button"
+                  onClick={() => {
+                    onEditApp(app);
+                    onClose?.();
+                  }}
+                  role="menuitem"
+                  aria-label={`编辑目标应用 ${app.name || app.appId}`}
+                  title="编辑应用"
+                >
+                  <Pencil size={14} />
+                </button>
+              )}
+              {onDeleteApp && !defaultApp && (
+                <button
+                  className="target-app-action-button icon-only danger"
+                  type="button"
+                  onClick={() => {
+                    onDeleteApp(app);
+                    onClose?.();
+                  }}
+                  role="menuitem"
+                  aria-label={`移除目标应用 ${app.name || app.appId}`}
+                  title="从列表移除应用"
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatTargetAppMeta(app: TargetAppDefinition, platform: DeviceInfo["platform"] | undefined): string {
+  const platformText = platform ? devicePlatformLabel(platform) : "跨平台";
+  const identifier = targetAppIdentifierForPlatform(app, platform);
+  return `${app.appId} · ${platformText} · ${identifier ?? "未配置"}`;
 }
 
 type SettingsViewProps = {
@@ -2397,9 +3013,11 @@ type DeviceManagementViewProps = {
   controlOwnerId: string;
   activeRunForSelectedDevice?: TestRun;
   agentPairing?: AgentPairingCode;
+  sharedAgentCommand: string;
   creatingAgentPairing: boolean;
   onCreateAgentPairing: () => void;
   onCopyAgentPairingCommand: (code: string) => void;
+  onCopySharedAgentCommand: () => void;
   onOpenRuns: () => void;
   onRefreshDevices: () => void;
 };
@@ -2414,9 +3032,11 @@ function DeviceManagementView({
   controlOwnerId,
   activeRunForSelectedDevice,
   agentPairing,
+  sharedAgentCommand,
   creatingAgentPairing,
   onCreateAgentPairing,
   onCopyAgentPairingCommand,
+  onCopySharedAgentCommand,
   onOpenRuns,
   onRefreshDevices
 }: DeviceManagementViewProps) {
@@ -2426,38 +3046,20 @@ function DeviceManagementView({
   const unavailableCount = devices.length - selectableDeviceCount;
   const activeRunsCount = runs.filter(isActiveRunStatus).length;
   const selectedLease = currentDeviceLease(selectedDevice);
+  const agentAccessCommand = agentPairing ? agentPairingCommand(agentPairing.code) : sharedAgentCommand;
 
   return (
     <section className="module-page device-module">
       <div className="device-management-preview">{previewPanel}</div>
 
       <div className="device-detail-panel">
-        <div className="panel module-head-panel">
-          <div>
-            <span className="module-eyebrow">设备管理</span>
-            <h2>设备资产与可用状态</h2>
-            <ToolStatusBar tools={tools} />
-            {agentPairing && (
-              <div className="agent-pairing-strip" role="status">
-                <div className="agent-pairing-code">
-                  <span>配对码</span>
-                  <strong>{agentPairing.code}</strong>
-                  <small>{agentPairing.paired ? "已配对" : `${formatDateTime(agentPairing.expiresAt)} 过期`}</small>
-                </div>
-                <code>{agentPairingCommand(agentPairing.code)}</code>
-                <button
-                  className="icon-button compact"
-                  onClick={() => onCopyAgentPairingCommand(agentPairing.code)}
-                  title="复制配对命令"
-                  type="button"
-                >
-                  <Copy size={15} />
-                </button>
-              </div>
-            )}
-          </div>
-          <div className="device-head-actions">
-            <div className="module-stat-grid">
+        <div className="panel module-head-panel device-overview-panel">
+          <div className="device-overview-top">
+            <div className="device-overview-title">
+              <span className="module-eyebrow">设备管理</span>
+              <h2>设备资产与可用状态</h2>
+            </div>
+            <div className="module-stat-grid device-stat-grid">
               <div>
                 <strong>{selectableDeviceCount}</strong>
                 <span>可用设备</span>
@@ -2475,9 +3077,39 @@ function DeviceManagementView({
                 <span>执行中</span>
               </div>
             </div>
+          </div>
+
+          <div className="device-overview-tools">
+            <ToolStatusBar tools={tools} />
+          </div>
+
+          {agentAccessCommand && (
+            <div className="agent-pairing-strip agent-access-strip" role="status">
+              <div className="agent-pairing-code">
+                <span>{agentPairing ? "私有配对" : "公共共享"}</span>
+                <strong>{agentPairing ? agentPairing.code : "共享"}</strong>
+                <small>{agentPairing ? agentPairing.paired ? "已配对" : `${formatDateTime(agentPairing.expiresAt)} 过期` : "发布到公共设备池"}</small>
+              </div>
+              <code>{agentAccessCommand}</code>
+              <button
+                className="icon-button compact"
+                onClick={() => agentPairing ? onCopyAgentPairingCommand(agentPairing.code) : onCopySharedAgentCommand()}
+                title="复制 Agent 命令"
+                type="button"
+              >
+                <Copy size={15} />
+              </button>
+            </div>
+          )}
+
+          <div className="device-head-actions">
             <button className="icon-button" disabled={creatingAgentPairing} onClick={onCreateAgentPairing} title="配对私有 Agent" type="button">
               <KeyRound size={18} />
               {creatingAgentPairing ? "生成中" : "配对 Agent"}
+            </button>
+            <button className="icon-button" onClick={onCopySharedAgentCommand} title="复制共享 Agent 接入命令" type="button">
+              <Copy size={18} />
+              共享 Agent
             </button>
             <button className="icon-button" onClick={onRefreshDevices} title="刷新设备" type="button">
               <RefreshCw size={18} />
@@ -3464,17 +4096,40 @@ function buildCapabilityItems(device: DeviceInfo): Array<{ label: string; enable
 }
 
 export function agentPairingCommand(
-  pairingCode: string,
+  pairingCode?: string,
   options: {
-    nodeBin?: string;
-    startScript?: string;
+    currentOrigin?: string;
+    serverUrl?: string;
+    mode?: "private" | "shared";
     agentId?: string;
+    insecureTls?: boolean;
   } = {}
 ): string {
-  const nodeBin = options.nodeBin ?? "/opt/homebrew/bin/node";
-  const startScript = options.startScript ?? "./start-private-agent.sh";
-  const agentId = options.agentId ?? "agent-package-local";
-  return `NODE_BIN=${shellWord(nodeBin)} ${shellWord(startScript)} --agent-id ${shellWord(agentId)} --pairing-code ${shellWord(pairingCode)}`;
+  const currentOrigin = normalizedOrigin(options.currentOrigin ?? browserOrigin() ?? "http://127.0.0.1:5173");
+  const serverUrl = normalizedOrigin(options.serverUrl ?? agentServerUrlFromDashboardOrigin(currentOrigin));
+  const mode = options.mode ?? "private";
+  const insecureTls = options.insecureTls ?? new URL(currentOrigin).protocol === "https:";
+  const installUrl = `${currentOrigin}/agent/install.sh?server=${encodeURIComponent(serverUrl)}`;
+  const curl = insecureTls ? "curl -kfsSL" : "curl -fsSL";
+  const agentId = options.agentId ? shellWord(options.agentId) : "\"$(hostname)\"";
+  const modeArgs = mode === "shared"
+    ? "--shared"
+    : `--pairing-code ${shellWord(requiredPairingCode(pairingCode))}`;
+  const tlsArg = insecureTls ? " --insecure-tls" : "";
+  return `${curl} ${shellWord(installUrl)} | bash -s -- --agent-id ${agentId} ${modeArgs}${tlsArg}`;
+}
+
+export async function copyCreatedAgentPairingCommand(
+  pairingCode: string,
+  copyText: (text: string) => Promise<boolean> = copyTextToClipboard,
+  commandOptions?: Parameters<typeof agentPairingCommand>[1]
+): Promise<string> {
+  try {
+    const copied = await copyText(agentPairingCommand(pairingCode, commandOptions));
+    return copied ? "已复制 Agent 配对命令" : "已生成 Agent 配对命令，请在设备管理卡片中手动复制";
+  } catch {
+    return "已生成 Agent 配对命令，请在设备管理卡片中手动复制";
+  }
 }
 
 function shellWord(value: string): string {
@@ -3483,6 +4138,61 @@ function shellWord(value: string): string {
     return trimmed;
   }
   return `'${trimmed.replace(/'/g, "'\\''")}'`;
+}
+
+export function agentServerUrlFromDashboardOrigin(origin: string): string {
+  const url = new URL(origin);
+  if (url.port === "5173") {
+    url.port = "4010";
+  }
+  return normalizedOrigin(url.toString());
+}
+
+function normalizedOrigin(value: string): string {
+  return new URL(value).origin;
+}
+
+function requiredPairingCode(value: string | undefined): string {
+  if (!value) {
+    throw new Error("pairing code is required for private Agent command");
+  }
+  return value;
+}
+
+function browserOrigin(): string | undefined {
+  return typeof window === "undefined" ? undefined : window.location.origin;
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the legacy selection-based copy path for non-secure LAN origins.
+    }
+  }
+  return legacyCopyTextToClipboard(text);
+}
+
+function legacyCopyTextToClipboard(text: string): boolean {
+  if (typeof document === "undefined" || typeof document.execCommand !== "function") {
+    return false;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textarea);
+  }
 }
 
 const dashboardControlOwnerStorageKey = "mobile-automation.control-owner-id";

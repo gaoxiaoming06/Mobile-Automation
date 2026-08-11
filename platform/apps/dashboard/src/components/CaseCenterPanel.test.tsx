@@ -63,6 +63,32 @@ describe("CaseCenterPanel", () => {
     });
   });
 
+  it("filters retained cases by the selected target app id without legacy aliases", () => {
+    const currentAppFlow = {
+      ...flow(),
+      id: "classin-flow",
+      appId: "classin",
+      name: "ClassIn 新用例",
+      parsed: { ...flow().parsed, app: { id: "classin" }, name: "ClassIn 新用例" }
+    };
+    const markup = renderToStaticMarkup(
+      <CaseCenterPanel
+        devices={[{ serial: "device-1", name: "YAL-AL10" }]}
+        selectedSerial="device-1"
+        targetAppId="classin"
+        initialFlows={[flow(), currentAppFlow]}
+        setMessage={vi.fn()}
+        onOpenRun={vi.fn()}
+        onModifyCase={vi.fn()}
+        onAiModifyCase={vi.fn()}
+        onCreateCase={vi.fn()}
+      />
+    );
+
+    expect(markup).toContain("ClassIn 新用例");
+    expect(markup).not.toContain("创建课堂但不发布");
+  });
+
   it("uses trial execution until the exact use case version is verified", () => {
     expect(caseRunEndpoint("flow-1", "needs_trial")).toBe("/api/script-flows/flow-1/trial-runs");
     expect(caseRunEndpoint("flow-1", "verified")).toBe("/api/script-flows/flow-1/runs");

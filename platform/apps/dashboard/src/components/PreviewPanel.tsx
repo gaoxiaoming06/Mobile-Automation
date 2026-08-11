@@ -1,14 +1,12 @@
-import { Check, ChevronDown, Home, Keyboard, ListRestart, RotateCcw, Smartphone, Square } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Home, Keyboard, ListRestart, RotateCcw, Square } from "lucide-react";
 import type { Dispatch, PointerEvent, RefObject, SetStateAction } from "react";
 import type { DeviceActionRequest, DeviceInfo } from "@mobile-automation/shared";
-import { currentDeviceLease, isAgentDevice, isDeviceLockedByOtherOwner } from "../device-availability";
+import { isAgentDevice } from "../device-availability";
 
 type PreviewMode = "scrcpy" | "scrcpy_connecting" | "screenshot";
 type PreviewRenderer = "canvas" | "video";
 
 type PreviewPanelProps = {
-  devices: DeviceInfo[];
   selectedSerial: string;
   selectedDevice?: DeviceInfo;
   previewRef: RefObject<HTMLDivElement | null>;
@@ -24,7 +22,6 @@ type PreviewPanelProps = {
   scrcpyAvailable: boolean;
   scrcpyRunning: boolean;
   busy: boolean;
-  controlOwnerId?: string;
   controlLocked?: boolean;
   controlLockedReason?: string;
   inputText: string;
@@ -33,7 +30,6 @@ type PreviewPanelProps = {
   startScrcpy: () => Promise<void>;
   stopScrcpy: () => Promise<void>;
   runAction: (action: DeviceActionRequest) => Promise<void>;
-  onSelectDevice: (device: DeviceInfo) => void;
   handleScreenshotLoaded: (image: HTMLImageElement) => void;
   onPreviewPointerDown: (event: PointerEvent<HTMLDivElement>) => void;
   onPreviewPointerUp: (event: PointerEvent<HTMLDivElement>) => void;
@@ -42,7 +38,6 @@ type PreviewPanelProps = {
 };
 
 export function PreviewPanel({
-  devices,
   selectedSerial,
   selectedDevice,
   previewRef,
@@ -58,7 +53,6 @@ export function PreviewPanel({
   scrcpyAvailable,
   scrcpyRunning,
   busy,
-  controlOwnerId = "",
   controlLocked = false,
   controlLockedReason,
   inputText,
@@ -67,29 +61,12 @@ export function PreviewPanel({
   startScrcpy,
   stopScrcpy,
   runAction,
-  onSelectDevice,
   handleScreenshotLoaded,
   onPreviewPointerDown,
   onPreviewPointerUp,
   onPreviewPointerCancel,
   compact = false
 }: PreviewPanelProps) {
-  const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
-  const switcherRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!deviceMenuOpen) {
-      return undefined;
-    }
-    function closeOnOutsideClick(event: MouseEvent) {
-      if (switcherRef.current && !switcherRef.current.contains(event.target as Node)) {
-        setDeviceMenuOpen(false);
-      }
-    }
-    window.addEventListener("mousedown", closeOnOutsideClick);
-    return () => window.removeEventListener("mousedown", closeOnOutsideClick);
-  }, [deviceMenuOpen]);
-
   const previewStatus = formatPreviewStatus(previewMode, scrcpyStreamStatus, selectedDevice);
   const scrcpyDebugAvailable = Boolean(selectedSerial && scrcpyAvailable && selectedDevice?.platform === "android" && !isAgentDevice(selectedDevice));
   const controlDisabled = busy || controlLocked;
@@ -103,50 +80,6 @@ export function PreviewPanel({
     <section className="preview-column">
       <div className="preview-toolbar">
         <div className="preview-device-head">
-          <div className="device-switcher" ref={switcherRef}>
-            <button
-              className="device-switch-button"
-              type="button"
-              onClick={() => setDeviceMenuOpen((value) => !value)}
-              disabled={!devices.length}
-              title="切换设备"
-            >
-              <Smartphone size={17} />
-              <span>{selectedDevice?.name || "未选择设备"}</span>
-              <ChevronDown size={16} />
-            </button>
-            {deviceMenuOpen && (
-              <div className="device-switch-menu" role="menu">
-                {devices.map((device) => {
-                  const disabled = isDeviceSwitchDisabled(device, controlOwnerId);
-                  const disabledReason = deviceSwitchDisabledReason(device, controlOwnerId);
-                  return (
-                    <button
-                      className={deviceSwitchItemClass(device, selectedSerial, controlOwnerId)}
-                      disabled={disabled}
-                      key={device.serial}
-                      type="button"
-                      onClick={() => {
-                        if (disabled) {
-                          return;
-                        }
-                        onSelectDevice(device);
-                        setDeviceMenuOpen(false);
-                      }}
-                      role="menuitem"
-                      title={disabledReason ?? "切换设备"}
-                    >
-                      <div>
-                        <strong>{device.name || device.serial}</strong>
-                        <span>{formatDeviceSwitchMeta(device)}{disabledReason ? ` · ${disabledReason}` : ""}</span>
-                      </div>
-                      {device.serial === selectedSerial && <Check size={16} />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
           <span>{selectedDeviceMeta} · {previewStatus}{controlLockedReason ? ` · ${controlLockedReason}` : ""}</span>
         </div>
         <div className="toolbar-actions">
@@ -279,33 +212,6 @@ export function formatPreviewStatus(previewMode: PreviewMode, rawStatus: string,
 
 function isRealtimePreviewStatus(status: string): boolean {
   return status.includes("实时预览") || status.includes("WebCodecs");
-}
-
-function formatDeviceSwitchMeta(device: DeviceInfo): string {
-  const platform = devicePlatformLabel(device.platform);
-  const version = device.osVersion ? ` ${device.osVersion}` : "";
-  const status = device.status === "online" ? "在线" : device.status;
-  return `${platform}${version} · ${status} · ${device.serial}`;
-}
-
-export function isDeviceSwitchDisabled(device: DeviceInfo, ownerId = ""): boolean {
-  return isDeviceLockedByOtherOwner(device, ownerId);
-}
-
-export function deviceSwitchDisabledReason(device: DeviceInfo, ownerId = ""): string | undefined {
-  if (!isDeviceSwitchDisabled(device, ownerId)) {
-    return undefined;
-  }
-  const lease = currentDeviceLease(device);
-  return lease ? `被 ${lease.ownerId} 占用` : "被其他客户端占用";
-}
-
-function deviceSwitchItemClass(device: DeviceInfo, selectedSerial: string, ownerId: string): string {
-  return [
-    "device-switch-item",
-    device.serial === selectedSerial ? "active" : "",
-    isDeviceSwitchDisabled(device, ownerId) ? "disabled" : ""
-  ].filter(Boolean).join(" ");
 }
 
 export function devicePlatformLabel(platform: DeviceInfo["platform"]): string {
