@@ -252,6 +252,28 @@ describe("script-flow orchestrator", () => {
     });
   });
 
+  it("edits text field locators to use a relative text anchor", () => {
+    const draft = updateDraftStep(baseDraft(), "0:tap-target", {
+      action: "inputText",
+      value: "自动化课堂"
+    });
+    const updated = updateDraftStepLocator(draft, "0:tap-target", {
+      targetKind: "control",
+      targetValue: "textField",
+      anchorText: "开始时间",
+      relation: "above"
+    });
+
+    expect(updated.document.steps[0]).toMatchObject({
+      inputText: {
+        target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" },
+        value: "自动化课堂"
+      }
+    });
+    expect(JSON.stringify(updated.document.steps[0])).not.toContain("scopeText");
+    expect(JSON.stringify(updated.document.steps[0])).not.toContain("ordinal");
+  });
+
   it("keeps target edits valid when changing a text field locator to a switch", () => {
     const draft = updateDraftStep(baseDraft(), "0:tap-target", { action: "inputText" });
 

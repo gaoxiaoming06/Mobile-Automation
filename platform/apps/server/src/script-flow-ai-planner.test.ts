@@ -222,6 +222,8 @@ describe("ScriptFlow AI planner", () => {
     expect(plannerPrompt).toContain("\"screenContext\"");
     expect(plannerPrompt).toContain("\"control\": \"textField\"");
     expect(plannerPrompt).toContain("target: { control: \"textField\", area: \"content\", scopeText, ordinal }");
+    expect(plannerPrompt).toContain("anchorText+relation");
+    expect(plannerPrompt).not.toContain("开始时间上方输入框");
     expect(plannerPrompt).not.toContain("小王");
     expect(result).toMatchObject({
       status: "trial_ready",
@@ -234,6 +236,157 @@ describe("ScriptFlow AI planner", () => {
         }]
       },
       parameterValues: { lessonName: "自动化课堂" }
+    });
+  });
+
+  it("accepts a relative text field anchor generated from above-or-beside wording", () => {
+    const response = readyResponse();
+    response.summary = "修改开始时间上方输入框";
+    response.document.purpose = "business";
+    response.document.testLevel = "component";
+    response.document.name = "修改开始时间上方输入框";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.parameters = {
+      inputValue: { type: "string", required: true, label: "输入内容" }
+    };
+    response.document.steps = [{
+      id: "fill-field-above-start-time",
+      role: "business",
+      inputText: {
+        target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" },
+        value: "${inputValue}",
+        search: { mode: "auto" }
+      }
+    }];
+    response.parameterValues = { inputValue: "123333" };
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog: buildScriptFlowPlannerCatalog(planningPageCatalog(), [], "cn.eeo.classin", "android"),
+      prompt: "更新开始时间上方输入框内容为123333"
+    })).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [{
+          inputText: {
+            target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" }
+          }
+        }]
+      }
+    });
+  });
+
+  it("uses AI target grounding review to repair a mistaken field-label target into a relative anchor", async () => {
+    const first = readyResponse();
+    first.summary = "修改开始时间上方第一个输入框";
+    first.document.purpose = "business";
+    first.document.testLevel = "component";
+    first.document.name = "修改开始时间上方第一个输入框";
+    first.document.entry = undefined;
+    first.document.outcome = undefined;
+    first.document.parameters = {
+      lessonTitle: { type: "string", required: true, label: "课堂标题" }
+    };
+    first.document.steps = [
+      {
+        id: "clear-start-time",
+        role: "business",
+        clearText: {
+          target: { text: "开始时间", area: "content" },
+          search: { mode: "auto" }
+        }
+      },
+      {
+        id: "input-lesson-title",
+        role: "business",
+        inputText: {
+          target: { text: "开始时间", area: "content" },
+          value: "${lessonTitle}",
+          search: { mode: "auto" }
+        }
+      }
+    ];
+    first.parameterValues = { lessonTitle: "1212" };
+
+    const repaired = readyResponse();
+    repaired.summary = "修改开始时间上方第一个输入框";
+    repaired.document.purpose = "business";
+    repaired.document.testLevel = "component";
+    repaired.document.name = "修改开始时间上方第一个输入框";
+    repaired.document.entry = undefined;
+    repaired.document.outcome = undefined;
+    repaired.document.parameters = {
+      lessonTitle: { type: "string", required: true, label: "课堂标题" }
+    };
+    repaired.document.steps = [
+      {
+        id: "clear-start-time",
+        role: "business",
+        clearText: {
+          target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" },
+          search: { mode: "auto" }
+        }
+      },
+      {
+        id: "input-lesson-title",
+        role: "business",
+        inputText: {
+          target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" },
+          value: "${lessonTitle}",
+          search: { mode: "auto" }
+        }
+      }
+    ];
+    repaired.parameterValues = { lessonTitle: "1212" };
+
+    const requests: string[] = [];
+    const responses = [
+      first,
+      { status: "ok", summary: "参数化合理。", issues: [] },
+      {
+        status: "needs_repair",
+        summary: "脚本把用户描述中的参照文字“开始时间”当成了输入目标。",
+        issues: [
+          { stepId: "clear-start-time", reason: "用户要操作的是开始时间上方的输入框，开始时间是锚点。" },
+          { stepId: "input-lesson-title", reason: "用户要操作的是开始时间上方的输入框，开始时间是锚点。" }
+        ],
+        repairInstructions: "把两个步骤的 target 改成 control:textField，anchorText 为“开始时间”，relation 为 above。"
+      },
+      repaired,
+      { status: "ok", summary: "目标控件和参照锚点已区分。", issues: [] }
+    ];
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "更新开始时间上方第一个输入框内容为1212",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: [],
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        requests.push(body.messages?.at(-1)?.content ?? "");
+        const content = responses.shift();
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(content) } }]
+        }), { status: 200 });
+      }
+    });
+
+    expect(requests).toHaveLength(5);
+    expect(requests[1]).toContain("参数化 review");
+    expect(requests[2]).toContain("目标 grounding review");
+    expect(requests[3]).toContain("上一稿未通过目标 grounding review");
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      document: {
+        steps: [
+          { clearText: { target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" } } },
+          { inputText: { target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" } } }
+        ]
+      }
     });
   });
 
@@ -550,7 +703,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(aiCalls).toBe(2);
+    expect(aiCalls).toBe(3);
     expect(result).toMatchObject({
       status: "trial_ready",
       document: {
@@ -611,7 +764,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(aiCalls).toBe(2);
+    expect(aiCalls).toBe(3);
     expect(result.status).toBe("trial_ready");
     if (result.status === "needs_clarification") throw new Error(result.clarification);
     expect(result.document.steps).toEqual([
@@ -645,7 +798,7 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(aiCalls).toBe(2);
+    expect(aiCalls).toBe(3);
     expect(result).toMatchObject({
       status: "trial_ready",
       document: { testLevel: "full_regression" }

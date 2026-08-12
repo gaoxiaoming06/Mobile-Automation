@@ -286,6 +286,15 @@ describe("renderReportHtml", () => {
           title: "selectText",
           params: { text: "课堂时长", value: "7小时20分钟" },
           createdAt: "2026-06-04T00:00:05.000Z"
+        },
+        {
+          id: "fill-relative-field",
+          order: 3,
+          type: "input_text",
+          enabled: true,
+          title: "inputText",
+          params: { value: "1212" },
+          createdAt: "2026-06-04T00:00:08.000Z"
         }
       ],
       stepResults: [
@@ -311,6 +320,18 @@ describe("renderReportHtml", () => {
           status: "passed",
           startedAt: "2026-06-04T00:00:10.000Z",
           durationMs: 230,
+          artifacts: []
+        },
+        {
+          id: "step-result-3",
+          runId: "run-readable-steps",
+          iterationIndex: 1,
+          stepId: "fill-relative-field",
+          stepOrder: 3,
+          type: "input_text",
+          status: "passed",
+          startedAt: "2026-06-04T00:00:12.000Z",
+          durationMs: 180,
           artifacts: []
         }
       ],
@@ -344,6 +365,14 @@ describe("renderReportHtml", () => {
                 target: { text: "课堂时长", area: "content" },
                 value: "7小时20分钟"
               }
+            },
+            {
+              id: "fill-relative-field",
+              role: "business",
+              inputText: {
+                target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" },
+                value: "1212"
+              }
             }
           ],
           tags: []
@@ -355,6 +384,7 @@ describe("renderReportHtml", () => {
 
     expect(html).toContain("点击“创建公开课”");
     expect(html).toContain("将“课堂时长”选择为“7小时20分钟”");
+    expect(html).toContain("在“开始时间上方输入框”中输入“1212”");
   });
 
   it("keeps the screenshot gallery focused on primary step screenshots and folds diagnostic captures", () => {

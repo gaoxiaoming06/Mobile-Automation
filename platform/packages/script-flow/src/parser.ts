@@ -47,7 +47,7 @@ const actionFields = [
   "repeat",
   "when"
 ] as const;
-const targetFields = new Set(["text", "icon", "visual", "control", "area", "position", "nearText", "scopeText", "ordinal", "checked", "match"]);
+const targetFields = new Set(["text", "icon", "visual", "control", "area", "position", "nearText", "scopeText", "ordinal", "anchorText", "relation", "checked", "match"]);
 const parameterReferencePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 export function parseScriptFlow(source: string): ScriptFlowDocument {
@@ -554,6 +554,8 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
     ...optionalStringProperty(target.nearText, `${path}.nearText`, "nearText", issues),
     ...optionalStringProperty(target.scopeText, `${path}.scopeText`, "scopeText", issues),
     ...optionalOrdinalProperty(target.ordinal, `${path}.ordinal`, issues),
+    ...optionalStringProperty(target.anchorText, `${path}.anchorText`, "anchorText", issues),
+    ...readTargetRelation(target.relation, `${path}.relation`, issues),
     ...optionalBooleanProperty(target.checked, `${path}.checked`, "checked", issues),
     ...readTargetMatch(target.match, `${path}.match`, issues)
   };
@@ -578,8 +580,21 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
   if (result.control === "switch" && (!result.nearText || result.area !== "content" || result.checked === undefined)) {
     issues.push({ path, message: "switch control targets require nearText, checked, and area content" });
   }
-  if (result.control === "textField" && (!result.scopeText || !result.ordinal || result.area !== "content")) {
-    issues.push({ path, message: "textField control targets require scopeText, ordinal, and area content" });
+  if (result.anchorText && !result.relation) {
+    issues.push({ path: `${path}.relation`, message: "relation is required when anchorText is set" });
+  }
+  if (result.relation && !result.anchorText) {
+    issues.push({ path: `${path}.anchorText`, message: "anchorText is required when relation is set" });
+  }
+  if (result.relation && result.control !== "textField") {
+    issues.push({ path: `${path}.relation`, message: "relation is only supported for textField control targets" });
+  }
+  if (result.control === "textField") {
+    const hasScopedTarget = Boolean(result.scopeText && result.ordinal);
+    const hasRelativeTarget = Boolean(result.anchorText && result.relation);
+    if (result.area !== "content" || hasScopedTarget === hasRelativeTarget) {
+      issues.push({ path, message: "textField control targets require either scopeText with ordinal or anchorText with relation, and area content" });
+    }
   }
   return result;
 }
@@ -676,6 +691,17 @@ function readVisualTargetKind(value: unknown, path: string, issues: ScriptFlowVa
   }
   issues.push({ path, message: "Visual target kind must be icon, image, or object" });
   return undefined;
+}
+
+function readTargetRelation(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Pick<ScriptTarget, "relation"> {
+  if (value === undefined) {
+    return {};
+  }
+  if (value === "above" || value === "below" || value === "leftOf" || value === "rightOf") {
+    return { relation: value };
+  }
+  issues.push({ path, message: "Target relation must be above, below, leftOf, or rightOf" });
+  return {};
 }
 
 function readTargetMatch(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Pick<ScriptTarget, "match"> {

@@ -99,6 +99,41 @@ describe("caseStepViews", () => {
     ]);
   });
 
+  it("presents relative text field anchors in generated step titles", () => {
+    const document: CaseDocumentView = {
+      version: 1,
+      kind: "case",
+      purpose: "business",
+      testLevel: "component",
+      name: "更新开始时间上方输入框",
+      app: { id: "cn.eeo.classin" },
+      parameters: {},
+      steps: [
+        {
+          id: "clear-relative-field",
+          clearText: {
+            target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" },
+            search: { mode: "auto" }
+          }
+        },
+        {
+          id: "fill-relative-field",
+          inputText: {
+            target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" },
+            value: "1212",
+            search: { mode: "auto" }
+          }
+        }
+      ],
+      tags: []
+    };
+
+    expect(caseStepViews(document).map((step) => [step.name, step.context])).toEqual([
+      ["清空“开始时间上方输入框”", "开始时间上方输入框"],
+      ["在“开始时间上方输入框”中输入“1212”", "开始时间上方输入框 = 1212"]
+    ]);
+  });
+
   it("renders current parameter values in step summaries while keeping the parameter identity visible", () => {
     const document: CaseDocumentView = {
       version: 1,

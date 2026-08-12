@@ -266,8 +266,14 @@ export class ScriptTargetResolver {
     if (input.action !== "inputText" && input.action !== "clearText") {
       throw new ScriptTargetResolutionError(`Text field targets do not support ${input.action}`);
     }
-    if (input.target.area !== "content" || !input.target.scopeText || !input.target.ordinal) {
-      throw new ScriptTargetResolutionError("Text field targets require scopeText, ordinal, and area content");
+    if (input.target.area !== "content") {
+      throw new ScriptTargetResolutionError("Text field targets require area content");
+    }
+    if (input.target.anchorText && input.target.relation) {
+      return this.resolveRelativeTextFieldControl(input);
+    }
+    if (!input.target.scopeText || !input.target.ordinal) {
+      throw new ScriptTargetResolutionError("Text field targets require scopeText with ordinal, or anchorText with relation");
     }
     return {
       type: "input_text_to_element",
@@ -289,6 +295,38 @@ export class ScriptTargetResolver {
       }
     };
   }
+
+  private resolveRelativeTextFieldControl(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
+    if (!input.target.anchorText || !input.target.relation) {
+      throw new ScriptTargetResolutionError("Relative text field targets require anchorText and relation");
+    }
+    return {
+      type: "input_text_to_element",
+      strategy: "semantic_control",
+      params: {
+        text: input.value ?? "",
+        clearFirst: true,
+        ...inputValueParams(input),
+        ...(input.action === "clearText" ? { clearOnly: true } : {}),
+        locatorKind: "structural_locator",
+        structuralLocator: {
+          strategy: "ocr_relative_input",
+          anchorText: input.target.anchorText,
+          relation: runtimeRelativeInputRelation(input.target.relation),
+          role: "text_input"
+        },
+        ...searchParams(input.target, input.search),
+        allowRegionFallback: false
+      }
+    };
+  }
+}
+
+function runtimeRelativeInputRelation(relation: NonNullable<ScriptTarget["relation"]>): "nearest_text_above" | "nearest_text_below" | "nearest_text_left" | "nearest_text_right" {
+  if (relation === "below") return "nearest_text_below";
+  if (relation === "leftOf") return "nearest_text_left";
+  if (relation === "rightOf") return "nearest_text_right";
+  return "nearest_text_above";
 }
 
 function runtimePickerMode(targetText: string, selectedValue: string): "duration_hours_minutes" | "date_time" | undefined {

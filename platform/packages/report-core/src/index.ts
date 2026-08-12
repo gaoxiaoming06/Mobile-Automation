@@ -423,10 +423,25 @@ function actionTargetRecord(value: unknown): { action: Record<string, unknown>; 
 }
 
 function descriptiveTargetLabel(target: Record<string, unknown>): string | undefined {
-  return nonEmptyString(target.text)
+  return relativeTextFieldLabel(target)
+    ?? nonEmptyString(target.text)
     ?? nonEmptyString(target.nearText)
     ?? nonEmptyString(target.scopeText)
     ?? nonEmptyString(target.semantic);
+}
+
+function relativeTextFieldLabel(target: Record<string, unknown>): string | undefined {
+  if (nonEmptyString(target.control) !== "textField") return undefined;
+  const anchor = nonEmptyString(target.anchorText);
+  if (!anchor) return undefined;
+  const relation = nonEmptyString(target.relation);
+  const suffixes: Record<string, string> = {
+    above: "上方输入框",
+    below: "下方输入框",
+    leftOf: "左侧输入框",
+    rightOf: "右侧输入框"
+  };
+  return `${anchor}${suffixes[relation ?? ""] ?? "附近输入框"}`;
 }
 
 function targetPositionLabel(target: Record<string, unknown>): string {

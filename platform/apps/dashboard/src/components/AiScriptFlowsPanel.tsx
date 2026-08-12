@@ -146,6 +146,8 @@ type StepLocatorView = {
   nearText?: string;
   scopeText?: string;
   ordinal?: string;
+  anchorText?: string;
+  relation?: string;
   checked?: string;
   searchMode?: string;
   direction?: string;
@@ -199,6 +201,14 @@ const SEARCH_MODE_OPTIONS: LocatorOption[] = [
   { value: "auto", label: "自动滚动查找" },
   { value: "visibleOnly", label: "只在当前屏幕查找" },
   { value: "scroll", label: "滚动查找" }
+];
+
+const RELATION_OPTIONS: LocatorOption[] = [
+  { value: "", label: "不使用锚点" },
+  { value: "above", label: "锚点上方" },
+  { value: "below", label: "锚点下方" },
+  { value: "leftOf", label: "锚点左侧" },
+  { value: "rightOf", label: "锚点右侧" }
 ];
 
 const EDITABLE_ACTIONS: EditableStepAction[] = [
@@ -1701,6 +1711,12 @@ function StepLocatorEditor({
       <label>相邻文字<input value={locator.nearText ?? ""} onChange={(event) => onChange(stepKey, { nearText: event.target.value })} /></label>
       <label>限定文字<input value={locator.scopeText ?? ""} onChange={(event) => onChange(stepKey, { scopeText: event.target.value })} /></label>
       <label>匹配序号<input type="number" min="1" value={locator.ordinal ?? ""} onChange={(event) => onChange(stepKey, { ordinal: event.target.value })} /></label>
+      {locator.targetKind === "control" && locator.targetValue === "textField" ? <>
+        <label>锚点文字<input value={locator.anchorText ?? ""} onChange={(event) => onChange(stepKey, { anchorText: event.target.value })} /></label>
+        <label>锚点关系<select value={locator.relation ?? ""} onChange={(event) => onChange(stepKey, { relation: event.target.value })}>
+          {RELATION_OPTIONS.map((option) => <option key={option.value || "none"} value={option.value}>{option.label}</option>)}
+        </select></label>
+      </> : null}
       {locator.targetKind === "control" && locator.targetValue === "switch" ? <label>选中状态<select value={locator.checked ?? "false"} onChange={(event) => onChange(stepKey, { checked: event.target.value })}><option value="true">已选中</option><option value="false">未选中</option></select></label> : null}
       {locator.targetKind === "icon" || locator.targetKind === "visual" ? <label>相对位置<select value={locator.position ?? ""} onChange={(event) => onChange(stepKey, { position: event.target.value })}><option value="">自动</option><option value="leading">前侧</option><option value="trailing">后侧</option></select></label> : null}
       {locator.usesSearchPolicy ? <>
@@ -1716,7 +1732,10 @@ function StepLocatorEditor({
 function locatorTargetSummary(locator: StepLocatorView): string {
   const kind = targetKindLabel(locator.targetKind);
   const value = locator.targetKind === "control" ? controlLabel(locator.targetValue) : locator.targetValue.trim();
-  return value ? `${kind}“${value}”` : kind;
+  const relation = optionLabel(RELATION_OPTIONS, locator.relation);
+  const anchor = locator.anchorText?.trim();
+  const suffix = anchor && locator.relation ? `，${relation}“${anchor}”` : "";
+  return value ? `${kind}“${value}”${suffix}` : `${kind}${suffix}`;
 }
 
 function locatorSearchSummary(locator: StepLocatorView): string {
@@ -2074,6 +2093,8 @@ function locatorView(step: CaseSourceStep): StepLocatorView | undefined {
     ...optionalStringField(targetAction.target.nearText, "nearText"),
     ...optionalStringField(targetAction.target.scopeText, "scopeText"),
     ...(typeof targetAction.target.ordinal === "number" ? { ordinal: String(targetAction.target.ordinal) } : {}),
+    ...optionalStringField(targetAction.target.anchorText, "anchorText"),
+    ...optionalStringField(targetAction.target.relation, "relation"),
     ...(typeof targetAction.target.checked === "boolean" ? { checked: String(targetAction.target.checked) } : {}),
     ...optionalStringField(search?.mode, "searchMode"),
     ...optionalStringField(search?.direction ?? targetAction.action.direction, "direction"),

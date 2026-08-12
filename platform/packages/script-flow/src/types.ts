@@ -47,6 +47,8 @@ export type ScriptTargetPosition = "leading" | "trailing";
 
 export type ScriptTargetControl = "checkbox" | "switch" | "textField";
 
+export type ScriptTargetRelation = "above" | "below" | "leftOf" | "rightOf";
+
 export type ScriptVisualTargetKind = "icon" | "image" | "object";
 
 export type ScriptVisualTarget = {
@@ -67,6 +69,8 @@ export type ScriptTarget = {
   nearText?: string;
   scopeText?: string;
   ordinal?: number;
+  anchorText?: string;
+  relation?: ScriptTargetRelation;
   checked?: boolean;
   match?: "contains" | "exact" | "semantic";
 };

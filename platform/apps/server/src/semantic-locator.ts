@@ -6269,8 +6269,8 @@ function findRelativeInputFocusCandidate(
   if (textParam(structuralLocator?.strategy).trim() !== "ocr_relative_input") {
     return undefined;
   }
-  const relation = textParam(structuralLocator?.relation).trim();
-  if (relation !== "nearest_text_above") {
+  const relation = relativeInputRelation(textParam(structuralLocator?.relation).trim());
+  if (!relation) {
     return undefined;
   }
   const anchorText = textParam(structuralLocator?.anchorText ?? params.anchorText).trim();
@@ -6285,21 +6285,77 @@ function findRelativeInputFocusCandidate(
     return undefined;
   }
   const maxGapPercent = positiveNumberParam(structuralLocator?.maxVerticalGapPercent, 18);
-  const maxGap = Math.max(80, layout.height * maxGapPercent / 100);
+  const maxGap = relativeInputMaxGap(layout, relation, maxGapPercent);
   return candidates
     .filter((candidate) => candidate !== anchor)
-    .filter((candidate) => candidate.centerY < anchor.centerY)
-    .map((candidate) => ({
-      candidate,
-      gap: anchor.y - (candidate.y + candidate.height),
-      horizontalDistance: Math.abs(candidate.centerX - anchor.centerX)
-    }))
-    .filter((entry) => entry.gap >= 0 && entry.gap <= maxGap)
+    .map((candidate) => relativeInputCandidateEntry(candidate, anchor, relation))
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+    .filter((entry) => entry.gap >= 0 && entry.gap <= maxGap && entry.crossAxisDistance <= entry.crossAxisLimit)
     .sort((left, right) =>
       left.gap - right.gap ||
-      left.horizontalDistance - right.horizontalDistance ||
+      left.crossAxisDistance - right.crossAxisDistance ||
       candidateScore(right.candidate) - candidateScore(left.candidate)
     )[0]?.candidate;
+}
+
+type RelativeInputRelation = "nearest_text_above" | "nearest_text_below" | "nearest_text_left" | "nearest_text_right";
+
+function relativeInputRelation(value: string): RelativeInputRelation | undefined {
+  if (value === "nearest_text_above" || value === "nearest_text_below" || value === "nearest_text_left" || value === "nearest_text_right") {
+    return value;
+  }
+  return undefined;
+}
+
+function relativeInputMaxGap(layout: OcrLayoutResult, relation: RelativeInputRelation, maxGapPercent: number): number {
+  const axisSize = relation === "nearest_text_left" || relation === "nearest_text_right" ? layout.width : layout.height;
+  return Math.max(80, axisSize * maxGapPercent / 100);
+}
+
+function relativeInputCandidateEntry(
+  candidate: TextLocatorCandidate,
+  anchor: TextLocatorCandidate,
+  relation: RelativeInputRelation
+): { candidate: TextLocatorCandidate; gap: number; crossAxisDistance: number; crossAxisLimit: number } | undefined {
+  if (relation === "nearest_text_above") {
+    return candidate.centerY < anchor.centerY
+      ? {
+          candidate,
+          gap: anchor.y - (candidate.y + candidate.height),
+          crossAxisDistance: Math.abs(candidate.centerX - anchor.centerX),
+          crossAxisLimit: Number.POSITIVE_INFINITY
+        }
+      : undefined;
+  }
+  if (relation === "nearest_text_below") {
+    return candidate.centerY > anchor.centerY
+      ? {
+          candidate,
+          gap: candidate.y - (anchor.y + anchor.height),
+          crossAxisDistance: Math.abs(candidate.centerX - anchor.centerX),
+          crossAxisLimit: Number.POSITIVE_INFINITY
+        }
+      : undefined;
+  }
+  const sameRowLimit = Math.max(anchor.height, candidate.height, 80);
+  if (relation === "nearest_text_left") {
+    return candidate.centerX < anchor.centerX
+      ? {
+          candidate,
+          gap: anchor.x - (candidate.x + candidate.width),
+          crossAxisDistance: Math.abs(candidate.centerY - anchor.centerY),
+          crossAxisLimit: sameRowLimit
+        }
+      : undefined;
+  }
+  return candidate.centerX > anchor.centerX
+    ? {
+        candidate,
+        gap: candidate.x - (anchor.x + anchor.width),
+        crossAxisDistance: Math.abs(candidate.centerY - anchor.centerY),
+        crossAxisLimit: sameRowLimit
+      }
+    : undefined;
 }
 
 function isRelativeInputStructure(params: Record<string, unknown>): boolean {

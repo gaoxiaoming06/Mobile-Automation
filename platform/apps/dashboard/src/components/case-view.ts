@@ -337,7 +337,8 @@ function tapSummary(target: Record<string, unknown>, display: StepDisplayContext
 }
 
 function descriptiveTargetLabel(target: Record<string, unknown>, display: StepDisplayContext): string | undefined {
-  return displayValue(target.text, display)
+  return relativeTextFieldLabel(target, display)
+    ?? displayValue(target.text, display)
     ?? displayValue(target.nearText, display)
     ?? displayValue(target.scopeText, display)
     ?? displayValue(target.semantic, display);
@@ -393,12 +394,27 @@ function targetContext(target: Record<string, unknown>, display: StepDisplayCont
 }
 
 function targetLabel(target: Record<string, unknown>, display: StepDisplayContext): string | undefined {
-  return displayValue(target.text, display)
+  return relativeTextFieldLabel(target, display)
+    ?? displayValue(target.text, display)
     ?? displayValue(target.nearText, display)
     ?? displayValue(target.scopeText, display)
     ?? displayValue(target.semantic, display)
     ?? iconLabel(stringValue(target.icon))
     ?? stringValue(target.control);
+}
+
+function relativeTextFieldLabel(target: Record<string, unknown>, display: StepDisplayContext): string | undefined {
+  if (stringValue(target.control) !== "textField") return undefined;
+  const anchor = displayValue(target.anchorText, display);
+  if (!anchor) return undefined;
+  const relation = stringValue(target.relation);
+  const suffixes: Record<string, string> = {
+    above: "上方输入框",
+    below: "下方输入框",
+    leftOf: "左侧输入框",
+    rightOf: "右侧输入框"
+  };
+  return `${anchor}${suffixes[relation ?? ""] ?? "附近输入框"}`;
 }
 
 function iconLabel(icon: string | undefined): string | undefined {

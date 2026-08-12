@@ -620,6 +620,36 @@ steps:
     });
   });
 
+  it("accepts a text field described by a relative text anchor", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: fill field above start time
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: fill-title
+    role: business
+    inputText:
+      target:
+        control: textField
+        area: content
+        anchorText: 开始时间
+        relation: above
+      value: 自动化课堂
+      search: { mode: auto }
+`);
+
+    expect(flow.steps[0]).toMatchObject({
+      inputText: {
+        target: {
+          control: "textField",
+          area: "content",
+          anchorText: "开始时间",
+          relation: "above"
+        }
+      }
+    });
+  });
+
   it("accepts a content search icon target as a semantic visual target", () => {
     const flow = parseScriptFlow(`
 version: 1

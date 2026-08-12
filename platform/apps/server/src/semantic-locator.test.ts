@@ -3373,6 +3373,83 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("resolves a dynamic input value from the nearest text to the right of a stable OCR anchor", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "课堂名称 班级四十二号 开始时间 当前时间",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "课堂名称", confidence: 0.99, x: 90, y: 330, width: 160, height: 52 },
+            { text: "班级四十二号", confidence: 0.98, x: 310, y: 330, width: 260, height: 52 },
+            { text: "开始时间", confidence: 0.99, x: 90, y: 510, width: 160, height: 52 },
+            { text: "当前时间", confidence: 0.99, x: 680, y: 510, width: 160, height: 52 }
+          ]
+        },
+        {
+          text: "课堂名称 自动化课堂 开始时间 当前时间",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "课堂名称", confidence: 0.99, x: 90, y: 330, width: 160, height: 52 },
+            { text: "自动化课堂", confidence: 0.99, x: 310, y: 330, width: 240, height: 52 },
+            { text: "开始时间", confidence: 0.99, x: 90, y: 510, width: 160, height: 52 },
+            { text: "当前时间", confidence: 0.99, x: 680, y: 510, width: 160, height: 52 }
+          ]
+        }
+      ]),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return {
+          driverChannel: "mock"
+        };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-right-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-relative-right",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "自动化课堂",
+        clearFirst: true,
+        focusDelayMs: 1,
+        inputVerificationDelayMs: 1,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "ocr_relative_input",
+          anchorText: "课堂名称",
+          relation: "nearest_text_right",
+          role: "text_input",
+          fallbackPolicy: "no_region_center_fallback"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 440, y: 356 },
+      { type: "clear_text" },
+      { type: "input_text", text: "自动化课堂" }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: true,
+      metadata: expect.objectContaining({
+        focusResolvedBy: "ocr_relative_structure",
+        inputVerified: true
+      })
+    }));
+  });
+
   it("resolves a scoped text field by ordinal without relying on a dynamic current value as a label", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({

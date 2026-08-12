@@ -484,6 +484,39 @@ describe("ScriptTargetResolver", () => {
     });
   });
 
+  it("routes relative text field anchors to runtime structural input locators", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "inputText",
+      target: { control: "textField", area: "content", anchorText: "开始时间", relation: "above" },
+      value: "自动化课堂",
+      search: { mode: "auto", direction: "down", maxSwipes: 4 },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "input_text_to_element",
+      strategy: "semantic_control",
+      params: {
+        text: "自动化课堂",
+        clearFirst: true,
+        locatorKind: "structural_locator",
+        structuralLocator: {
+          strategy: "ocr_relative_input",
+          anchorText: "开始时间",
+          relation: "nearest_text_above",
+          role: "text_input"
+        },
+        semanticArea: "content",
+        searchMode: "auto",
+        searchDirection: "down",
+        maxSwipes: 4,
+        resetToTop: true,
+        allowRegionFallback: false
+      }
+    });
+  });
+
   it("uses a frozen interaction asset locator without exposing coordinates", () => {
     const resolver = new ScriptTargetResolver();
     const result = resolver.resolve({

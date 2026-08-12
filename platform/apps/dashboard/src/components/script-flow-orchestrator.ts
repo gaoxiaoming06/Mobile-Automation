@@ -11,6 +11,8 @@ export type StepLocatorPatch = {
   nearText?: string;
   scopeText?: string;
   ordinal?: string;
+  anchorText?: string;
+  relation?: string;
   checked?: string;
   searchMode?: string;
   direction?: string;
@@ -469,6 +471,8 @@ function applyLocatorPatch(
   setOptionalString(targetAction.target, "nearText", patch.nearText);
   setOptionalString(targetAction.target, "scopeText", patch.scopeText);
   setOptionalNumber(targetAction.target, "ordinal", patch.ordinal);
+  setOptionalString(targetAction.target, "anchorText", patch.anchorText);
+  setOptionalString(targetAction.target, "relation", patch.relation);
   setOptionalBoolean(targetAction.target, "checked", patch.checked);
   normalizeTargetConstraints(targetAction.target);
 
@@ -492,6 +496,10 @@ function normalizeTargetConstraints(target: Record<string, unknown>): void {
   const primary = primaryTargetValue(target);
   if (primary.kind !== "icon" && primary.kind !== "visual") delete target.position;
   if (primary.kind !== "control" || primary.value !== "switch") delete target.checked;
+  if (primary.kind !== "control" || primary.value !== "textField") {
+    delete target.anchorText;
+    delete target.relation;
+  }
 
   if (primary.kind === "icon") {
     if (target.area !== "topBar" && target.area !== "content") target.area = "topBar";
@@ -502,6 +510,18 @@ function normalizeTargetConstraints(target: Record<string, unknown>): void {
 
   target.area = "content";
   if (primary.value === "textField") {
+    const relation = typeof target.relation === "string" && ["above", "below", "leftOf", "rightOf"].includes(target.relation)
+      ? target.relation
+      : undefined;
+    if (typeof target.anchorText === "string" && target.anchorText.trim() && relation) {
+      target.anchorText = target.anchorText.trim();
+      target.relation = relation;
+      delete target.scopeText;
+      delete target.ordinal;
+      return;
+    }
+    delete target.anchorText;
+    delete target.relation;
     if (typeof target.scopeText !== "string" || !target.scopeText.trim()) {
       target.scopeText = typeof target.nearText === "string" && target.nearText.trim()
         ? target.nearText.trim()

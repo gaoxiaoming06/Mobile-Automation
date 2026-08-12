@@ -40,8 +40,8 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "icon 和 visual 都是非 OCR 视觉目标；非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal。用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定；用户未提供任何限定且标准视觉 role 足够明确时才可省略。内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
   "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象，例如 { visual: { kind: icon, query: \"课堂报告右侧箭头图标\", area: content, position: trailing, nearText: \"课堂报告\" } } 或 { visual: { kind: image, query: \"封面图片\", area: content } }。执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
   "用户明确说‘点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复、reachPage 或重启。",
-  "control 当前支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content、scopeText 和 ordinal，用于预填输入框没有稳定标签的场景；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text。",
-  "textField.scopeText 必须是局部表单区域标题、字段组标题或控件附近稳定文字，不能使用页面标题、顶栏固定标题、App 名称等全局固定文字。用户只用“某页面标题上方/下方/第几个输入框”定位时应返回 needs_clarification，请其补充局部字段名或开启当前屏幕辅助。",
+  "control 当前支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content，并使用 scopeText+ordinal 或 anchorText+relation：scopeText+ordinal 用于某局部区域内第几个输入框；anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text。",
+  "textField 的 scopeText 或 anchorText 必须是局部表单区域标题、字段组标题、字段标签或控件附近稳定文字，不能使用页面标题、顶栏固定标题、App 名称等全局固定文字。用户只用“某页面标题上方/下方/左侧/右侧/第几个输入框”定位时应返回 needs_clarification，请其补充局部字段名或开启当前屏幕辅助。",
   "执行器能力合同：visual 仅支持 tap；selectText 和 scrollUntilVisible 必须使用 text；inputText 和 clearText 必须使用 text 或 control: textField。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
   "用户明确操作是硬约束：点击、输入、清空、滑动或启动等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。用户明确要求启动时生成唯一一个 role: setup 的 launchApp；没有要求启动时不要添加。",
@@ -329,6 +329,16 @@ export async function generateScriptFlowDraft(input: {
     model: input.config.model,
     timingContext: input.timingContext
   });
+  parsed = await reviewAndRepairTargetGrounding({
+    parsed,
+    plannerPrompt,
+    requestConfig,
+    parseInput,
+    fetchImpl: input.fetchImpl ?? fetch,
+    channel,
+    model: input.config.model,
+    timingContext: input.timingContext
+  });
   parsed = await reviewAndRepairNonOcrGrounding({
     parsed,
     plannerPrompt,
@@ -465,15 +475,15 @@ export function buildScriptFlowPlannerPrompt(
     "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
     "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
-    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal；用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 与 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content、scopeText 和 ordinal；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
-    "textField.scopeText 必须是局部表单区域标题、字段组标题或控件附近稳定文字，不能使用页面标题、顶栏固定标题、App 名称等全局固定文字。用户只用“某页面标题上方/下方/第几个输入框”定位时返回 needs_clarification，要求补充局部字段名或开启当前屏幕辅助。",
+    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal；用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 与 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content，并使用 scopeText+ordinal 或 anchorText+relation；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
+    "textField.scopeText+ordinal 用于某局部区域内第几个输入框；textField.anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置。相对锚点文字必须写入 anchorText，不能降级成 target.text；scopeText 或 anchorText 不能使用页面标题、顶栏固定标题、App 名称等全局固定文字；用户只用“某页面标题上方/下方/左侧/右侧/第几个输入框”定位时返回 needs_clarification，要求补充局部字段名或开启当前屏幕辅助。",
     "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 默认按完整控件文字匹配，按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和参数化名称不要写 match: contains。使用 screenContext 或读屏证据时，根据当前可见原文选择 match：实际原文与目标完全一致时用 exact/省略 match；screenContext 原文是“确定(1/6)”而用户只说“确定”时，必须生成 target: { text: \"确定\", match: \"contains\" }；类似“完成 2/6”“保存(已选3项)”这类动态数量或状态后缀也用 contains，并尽量补充 area、nearText、scopeText、ordinal 或容器语义。未启用当前屏幕上下文时，根据自然语言语义选择 match：用户明确表达‘包含、带有、关键字、模糊匹配’或明显只给动态状态控件的基础动作词时，才写 match: contains。",
     screenContext
       ? [
           "当前屏幕理解上下文由用户显式开启看屏后生成。它只能帮助理解用户对当前页面的描述，不能覆盖已验证资产。",
           "如果用户说当前页面、当前屏幕、最上面、第一个输入框，可以优先使用 screenContext.controlCandidates 中的受控候选。",
           "screenContext 中 valueKind=dynamicValue 的内容只是当前值，不能写成 target.text、字段名、资产名或默认值。",
-          "使用 textField 候选时，生成 target: { control: \"textField\", area: \"content\", scopeText, ordinal }。使用 switch 候选时，根据用户说打开/关闭生成 target: { control: \"switch\", area: \"content\", nearText, checked }。",
+          "使用 textField 候选时，优先生成 target: { control: \"textField\", area: \"content\", scopeText, ordinal }；如果用户明确说某稳定文字上方/下方/左侧/右侧输入框，生成 target: { control: \"textField\", area: \"content\", anchorText, relation }。使用 switch 候选时，根据用户说打开/关闭生成 target: { control: \"switch\", area: \"content\", nearText, checked }。",
           "仍然禁止坐标、bounds、region、resource-id、accessibility-id、candidateId 出现在 ScriptFlow 中。",
           JSON.stringify({ screenContext }, null, 2)
         ].join("\n")
@@ -566,6 +576,7 @@ type ScriptFlowReviewAssessment = {
 };
 
 type ScriptFlowParameterizationReview = ScriptFlowReviewAssessment;
+type ScriptFlowTargetGroundingReview = ScriptFlowReviewAssessment;
 type ScriptFlowGroundingReview = ScriptFlowReviewAssessment;
 
 async function reviewAndRepairParameterization(input: {
@@ -603,6 +614,46 @@ async function reviewAndRepairParameterization(input: {
   const repairedAssessment = parseScriptFlowParameterizationReview(repairedReview.content);
   if (repairedAssessment.status === "needs_repair") {
     throw new Error(`AI 修复后仍未通过参数化 review：${repairedAssessment.summary}`);
+  }
+  return repairedParsed;
+}
+
+async function reviewAndRepairTargetGrounding(input: {
+  parsed: ReadyParsedScriptFlowAiDraft;
+  plannerPrompt: string;
+  requestConfig: { baseURL: string; apiKey?: string; model: string; timeoutMs: number };
+  parseInput: Parameters<typeof parseScriptFlowAiResponse>[1];
+  fetchImpl: AiClientFetch;
+  channel: "codex" | "openai-compatible";
+  model: string;
+  timingContext?: ScriptFlowAiTimingContext;
+}): Promise<ReadyParsedScriptFlowAiDraft> {
+  if (!hasEditableTextTargets(input.parsed.document)) return input.parsed;
+  const review = await timedScriptFlowAiStage(input.timingContext, "target_grounding_review_request", () => runAiJsonRequest(input.requestConfig, {
+    developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
+    userContent: buildScriptFlowTargetGroundingReviewPrompt(input.parseInput.prompt ?? "", input.parsed),
+    effort: "low"
+  }, input.fetchImpl), { channel: input.channel, model: input.model });
+  const assessment = parseScriptFlowTargetGroundingReview(review.content);
+  if (assessment.status === "ok") return input.parsed;
+
+  const repaired = await timedScriptFlowAiStage(input.timingContext, "target_grounding_repair_request", () => runAiJsonRequest(input.requestConfig, {
+    developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
+    userContent: buildScriptFlowTargetGroundingRepairPrompt(input.plannerPrompt, input.parsed, assessment),
+    effort: "low"
+  }, input.fetchImpl), { channel: input.channel, model: input.model });
+  const repairedParsed = parseScriptFlowAiResponse(repaired.content, input.parseInput);
+  if (repairedParsed.status === "needs_clarification") {
+    throw new Error(`target grounding repair 返回了追问信息：${repairedParsed.clarification}`);
+  }
+  const repairedReview = await timedScriptFlowAiStage(input.timingContext, "target_grounding_review_request", () => runAiJsonRequest(input.requestConfig, {
+    developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
+    userContent: buildScriptFlowTargetGroundingReviewPrompt(input.parseInput.prompt ?? "", repairedParsed),
+    effort: "low"
+  }, input.fetchImpl), { channel: input.channel, model: input.model });
+  const repairedAssessment = parseScriptFlowTargetGroundingReview(repairedReview.content);
+  if (repairedAssessment.status === "needs_repair") {
+    throw new Error(`AI 修复后仍未通过目标 grounding review：${repairedAssessment.summary}`);
   }
   return repairedParsed;
 }
@@ -694,6 +745,52 @@ function buildScriptFlowParameterizationRepairPrompt(
   ].join("\n\n");
 }
 
+function buildScriptFlowTargetGroundingReviewPrompt(
+  prompt: string,
+  parsed: Pick<ScriptFlowAiGeneratedDraft, "sourceYaml" | "summary" | "assumptions">
+): string {
+  return [
+    "请对下面 ScriptFlow 草稿做目标 grounding review。",
+    "目标：判断 inputText/clearText 这类可编辑文本动作的 target 是否准确表达了用户真正要操作的输入控件，而不是把用户描述中的参照物、字段组、页面标题、附近文字、相对位置锚点或范围说明误写成可操作目标。",
+    "你需要直接理解自然语言里的语义角色，先区分“动作对象”和“定位线索”。不要依赖固定词表，也不要因为脚本结构合法就直接通过。",
+    "如果用户是在某个稳定字段标签本身中输入，target.text 可以保留该字段标签；如果用户描述的是某文字附近、上方、下方、左侧、右侧、同一行、某区域内第几个等空间/范围关系，那个文字通常是 anchorText 或 scopeText，真正 target 应该是 control:textField。",
+    "对于相对位置输入框，修复为 target: { control: \"textField\", area: \"content\", anchorText, relation }，relation 只能是 above、below、leftOf、rightOf；对于局部区域内第几个输入框，修复为 target: { control: \"textField\", area: \"content\", scopeText, ordinal }。",
+    "不要新增坐标、bounds、resourceId、accessibilityId、candidateId 或平台私有 selector；不要改变用户给出的输入值、参数化、步骤顺序或非目标语义。",
+    "如果目标和锚点已经区分合理，返回 ok；如果混淆，返回 needs_repair 并给出可操作的 repairInstructions。",
+    "只返回唯一 JSON 对象，格式：",
+    JSON.stringify({
+      status: "ok | needs_repair",
+      summary: "审查摘要",
+      issues: [{ stepId: "可选步骤 id", reason: "问题原因" }],
+      repairInstructions: "needs_repair 时填写"
+    }, null, 2),
+    "用户原始描述：",
+    prompt || "未提供",
+    "草稿摘要：",
+    parsed.summary,
+    "草稿 assumptions：",
+    JSON.stringify(parsed.assumptions, null, 2),
+    "草稿 YAML：",
+    parsed.sourceYaml
+  ].join("\n\n");
+}
+
+function buildScriptFlowTargetGroundingRepairPrompt(
+  plannerPrompt: string,
+  parsed: Pick<ScriptFlowAiGeneratedDraft, "sourceYaml">,
+  review: ScriptFlowTargetGroundingReview
+): string {
+  return [
+    plannerPrompt,
+    "上一稿未通过目标 grounding review。请只根据 review 指令修复 inputText/clearText 的目标定位，重点区分用户描述中的动作对象、字段标签、局部范围和相对锚点。",
+    "修复要求：必要时把误用的 target.text 改成 control:textField + scopeText/ordinal 或 anchorText/relation；保留输入值、参数名、步骤顺序、页面约束和 search 策略；不要引入坐标、resourceId、accessibilityId、candidateId 或平台私有 selector。",
+    "review 结果：",
+    JSON.stringify(review, null, 2),
+    "上一稿 YAML：",
+    parsed.sourceYaml
+  ].join("\n\n");
+}
+
 function buildScriptFlowGroundingReviewPrompt(
   prompt: string,
   parsed: Pick<ScriptFlowAiGeneratedDraft, "sourceYaml" | "summary" | "assumptions">
@@ -740,6 +837,10 @@ function parseScriptFlowGroundingReview(raw: string): ScriptFlowGroundingReview 
   return parseScriptFlowReviewAssessment(raw, "grounding review");
 }
 
+function parseScriptFlowTargetGroundingReview(raw: string): ScriptFlowTargetGroundingReview {
+  return parseScriptFlowReviewAssessment(raw, "目标 grounding review");
+}
+
 function parseScriptFlowParameterizationReview(raw: string): ScriptFlowParameterizationReview {
   return parseScriptFlowReviewAssessment(raw, "参数化 review");
 }
@@ -771,6 +872,13 @@ function parseScriptFlowReviewAssessment(raw: string, label: string): ScriptFlow
 
 function hasNonOcrTapTargets(document: ScriptFlowDocument): boolean {
   return flattenSteps(document.steps).some((step) => "tap" in step && Boolean(step.tap.target.icon || step.tap.target.visual));
+}
+
+function hasEditableTextTargets(document: ScriptFlowDocument): boolean {
+  return flattenSteps(document.steps).some((step) => {
+    const target = textFieldActionTarget(step);
+    return Boolean(target?.text && !target.control);
+  });
 }
 
 function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Record<string, unknown>[] {
@@ -1575,9 +1683,12 @@ function validateGeneratedTextFieldScopes(
   }
   for (const step of flattenSteps(document.steps)) {
     const target = textFieldActionTarget(step);
-    const scopeText = target?.scopeText;
-    if (target?.control === "textField" && scopeText && fixedTitles.has(compactGroundingText(scopeText))) {
-      throw new UnstableTextFieldScopeError(scopeText);
+    if (target?.control !== "textField") {
+      continue;
+    }
+    const fixedScope = [target.scopeText, target.anchorText].find((value) => value && fixedTitles.has(compactGroundingText(value)));
+    if (fixedScope) {
+      throw new UnstableTextFieldScopeError(fixedScope);
     }
   }
 }
@@ -1585,7 +1696,7 @@ function validateGeneratedTextFieldScopes(
 function hasRelativeTextFieldPrompt(prompt: string | undefined): boolean {
   return Boolean(prompt
     && /输入框|文本框|输入栏|输入区/u.test(prompt)
-    && /上方|上面|上边|下方|下面|下边|附近|旁边|前面|后面|最上|最下|第[一二三四五六七八九十\d]+个/u.test(prompt));
+    && /上方|上面|上边|下方|下面|下边|左侧|左边|右侧|右边|附近|旁边|前面|后面|最上|最下|第[一二三四五六七八九十\d]+个/u.test(prompt));
 }
 
 function fixedPageTitleScopeTexts(input: {
@@ -1750,7 +1861,7 @@ function placeholderExecutableTargetClarification(target: string): string {
 }
 
 function unstableTextFieldScopeClarification(scopeText: string): string {
-  return `“${scopeText}”像是固定页面标题，不能作为可滚动页面中输入框的稳定限定范围。请补充该输入框附近的局部字段名或区域名，或开启“结合当前屏幕生成”让我读取当前可见控件。`;
+  return `“${scopeText}”像是固定页面标题，不能作为可滚动页面中输入框的稳定限定范围或相对锚点。请补充该输入框附近的局部字段名或区域名，或开启“结合当前屏幕生成”让我读取当前可见控件。`;
 }
 
 function validatePageReference(
