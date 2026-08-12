@@ -78,10 +78,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             lang = str(payload.get("lang") or DEFAULT_LANG)
             image_bytes = base64.b64decode(image_base64)
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as image_file:
-                image_file.write(image_bytes)
-                image_file.flush()
-                result = runtime.recognize(Path(image_file.name), lang)
+            image_fd, image_name = tempfile.mkstemp(suffix=".png")
+            os.close(image_fd)
+            image_path = Path(image_name)
+            try:
+                image_path.write_bytes(image_bytes)
+                result = runtime.recognize(image_path, lang)
+            finally:
+                image_path.unlink(missing_ok=True)
             self.write_json(result)
         except Exception as error:  # noqa: BLE001 - service boundary should return details.
             self.send_response(500)

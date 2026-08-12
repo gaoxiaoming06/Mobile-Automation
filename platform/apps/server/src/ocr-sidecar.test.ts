@@ -1,5 +1,8 @@
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { rapidOcrHealthUrl, shouldAutoStartRapidOcrSidecar } from "./ocr-sidecar.js";
+import { rapidOcrHealthUrl, resolveRapidOcrPythonPath, shouldAutoStartRapidOcrSidecar } from "./ocr-sidecar.js";
 
 describe("OCR sidecar", () => {
   it("auto-starts RapidOCR for auto and rapid engines on the default local endpoint", () => {
@@ -25,5 +28,19 @@ describe("OCR sidecar", () => {
   it("derives the health URL from the OCR endpoint", () => {
     expect(rapidOcrHealthUrl("http://127.0.0.1:8766/ocr")).toBe("http://127.0.0.1:8766/health");
     expect(rapidOcrHealthUrl("http://127.0.0.1:8766/ocr/")).toBe("http://127.0.0.1:8766/health");
+  });
+
+  it("resolves the virtualenv Python path for the target platform", () => {
+    const root = path.join(os.tmpdir(), `mobile-automation-ocr-${process.pid}-${Date.now()}`);
+    const windowsPython = path.join(root, ".venv-paddleocr", "Scripts", "python.exe");
+    mkdirSync(path.dirname(windowsPython), { recursive: true });
+    writeFileSync(windowsPython, "");
+
+    try {
+      expect(existsSync(windowsPython)).toBe(true);
+      expect(resolveRapidOcrPythonPath({}, "win32", root)).toBe(windowsPython);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

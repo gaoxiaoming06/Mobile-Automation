@@ -36,7 +36,7 @@ async function packageOfflineRelease() {
   const rootPackage = await readJson(path.join(rootDir, "package.json"));
   const agentPackage = await readJson(path.join(rootDir, "platform/apps/device-agent/package.json"));
 
-  await run("pnpm", ["build"], { cwd: rootDir });
+  await runPackageManager(["build"], { cwd: rootDir });
 
   await rm(releaseDir, { recursive: true, force: true });
   await rm(archivePath, { force: true });
@@ -63,6 +63,14 @@ async function packageOfflineRelease() {
 
   console.log(`Offline release directory: ${path.relative(rootDir, releaseDir)}`);
   console.log(`Offline release archive: ${path.relative(rootDir, archivePath)}`);
+}
+
+function runPackageManager(args, options) {
+  const packageManagerEntry = process.env.npm_execpath;
+  if (packageManagerEntry) {
+    return run(process.execPath, [packageManagerEntry, ...args], options);
+  }
+  return run(process.platform === "win32" ? "pnpm.cmd" : "pnpm", args, options);
 }
 
 async function copyIntoRelease(relativePath) {

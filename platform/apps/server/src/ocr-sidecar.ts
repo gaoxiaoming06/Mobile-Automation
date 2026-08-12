@@ -108,11 +108,19 @@ export function rapidOcrHealthUrl(endpoint: string): string {
   return endpoint.replace(/\/ocr\/?$/, "/health");
 }
 
-export function resolveRapidOcrPythonPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function resolveRapidOcrPythonPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform = process.platform,
+  root = projectRoot()
+): string | undefined {
   if (env.RAPID_OCR_PYTHON) {
     return env.RAPID_OCR_PYTHON;
   }
-  const localPython = path.join(projectRoot(), ".venv-paddleocr", "bin", "python");
+  const localPython = path.join(
+    root,
+    ".venv-paddleocr",
+    platform === "win32" ? "Scripts/python.exe" : "bin/python"
+  );
   if (existsSync(localPython)) {
     return localPython;
   }
