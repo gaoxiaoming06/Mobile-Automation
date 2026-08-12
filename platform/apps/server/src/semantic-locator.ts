@@ -25,6 +25,7 @@ import {
   type UiElementLocator
 } from "./ui-hierarchy-locator.js";
 import { createVisualLocatorTemplate, imageSampleNativeBestEffort, locateVisualTemplateInScreenshot, type ImageSample } from "./page-matcher.js";
+import type { RuntimeInterceptorRunOutcome } from "./runtime-interceptor.js";
 
 type VisualSemanticArea = "top" | "content" | "bottom" | "unknown";
 
@@ -65,6 +66,7 @@ export type SemanticResolutionOutcome = {
   message: string;
   artifacts: ArtifactRef[];
   metadata: Record<string, unknown>;
+  runtimeInterceptorOutcome?: RuntimeInterceptorRunOutcome;
 };
 
 type PickerColumnValue = string | number;
@@ -110,6 +112,10 @@ type SemanticStepResolverDeps = {
   performAction: (serial: string, action: DeviceActionRequest) => Promise<DeviceActionResult | void>;
   performSemanticAction?: (serial: string, action: SemanticDeviceActionRequest) => Promise<DeviceActionResult | void>;
   dumpUiHierarchy?: (serial: string) => Promise<string>;
+  handleRuntimeInterceptors?: (input: {
+    serial: string;
+    deviceSize?: { width: number; height: number };
+  }) => Promise<RuntimeInterceptorRunOutcome>;
   captureLocatorScreenshot: (runId: string, stepResultId: string, serial: string, stepId: string, attempt: number) => Promise<ScreenshotCapture>;
 };
 
@@ -3178,6 +3184,39 @@ export class SemanticStepResolver {
     let latestMatchStrategy: string = semanticMatch ? "semantic" : mode;
     let latestVisibleText = "";
     const artifacts: ArtifactRef[] = [];
+    const runtimeInterceptorRecords: RuntimeInterceptorRunOutcome["records"] = [];
+    const runtimeInterceptorWarnings: string[] = [];
+    let latestBlockedByRuntimeInterceptor = false;
+
+    const attachRuntimeInterceptors = (outcome: SemanticResolutionOutcome): SemanticResolutionOutcome => {
+      if (!runtimeInterceptorRecords.length && !runtimeInterceptorWarnings.length) {
+        return outcome;
+      }
+      return {
+        ...outcome,
+        runtimeInterceptorOutcome: {
+          records: runtimeInterceptorRecords,
+          ...(runtimeInterceptorWarnings.length ? { warning: runtimeInterceptorWarnings.join("; ") } : {})
+        }
+      };
+    };
+
+    const handleLocatorRuntimeInterceptors = async (): Promise<boolean> => {
+      if (!this.deps.handleRuntimeInterceptors) {
+        latestBlockedByRuntimeInterceptor = false;
+        return false;
+      }
+      const outcome = await this.deps.handleRuntimeInterceptors({
+        serial: input.serial,
+        deviceSize: input.deviceSize
+      });
+      runtimeInterceptorRecords.push(...outcome.records);
+      if (outcome.warning) {
+        runtimeInterceptorWarnings.push(outcome.warning);
+      }
+      latestBlockedByRuntimeInterceptor = outcome.records.length > 0;
+      return latestBlockedByRuntimeInterceptor;
+    };
 
     if (!expectedTargets.length) {
       return {
@@ -3217,9 +3256,18 @@ export class SemanticStepResolver {
       candidate?: TextLocatorCandidate;
       ambiguous: boolean;
       canScrollPastAmbiguous: boolean;
+      intercepted: boolean;
       signature: string;
     }> => {
       attempt += 1;
+      if (await handleLocatorRuntimeInterceptors()) {
+        return {
+          ambiguous: false,
+          canScrollPastAmbiguous: false,
+          intercepted: true,
+          signature: `runtime-interceptor:${runtimeInterceptorRecords.length}:${attempt}`
+        };
+      }
       let hierarchyXml: string | undefined;
       let hierarchySignature = "";
       if (this.deps.dumpUiHierarchy && !semanticMatch) {
@@ -3246,6 +3294,7 @@ export class SemanticStepResolver {
                 uiCandidate: hierarchySelection.candidate,
                 ambiguous: false,
                 canScrollPastAmbiguous: hierarchySelection.canScrollPastAmbiguous,
+                intercepted: false,
                 signature: hierarchySignature
               };
             }
@@ -3281,6 +3330,7 @@ export class SemanticStepResolver {
                   uiCandidate,
                   ambiguous: false,
                   canScrollPastAmbiguous: false,
+                  intercepted: false,
                   signature: textSearchLayoutSignature(latestLayout, semanticArea, input.deviceSize)
                 };
               }
@@ -3293,6 +3343,7 @@ export class SemanticStepResolver {
                   hierarchyXml,
                   ambiguous: true,
                   canScrollPastAmbiguous: false,
+                  intercepted: false,
                   signature: textSearchLayoutSignature(latestLayout, semanticArea, input.deviceSize)
                 };
               }
@@ -3301,6 +3352,7 @@ export class SemanticStepResolver {
               hierarchyXml,
               ambiguous: hierarchySelection.ambiguous,
               canScrollPastAmbiguous: hierarchySelection.canScrollPastAmbiguous,
+              intercepted: false,
               signature: hierarchySignature
             };
           }
@@ -3317,6 +3369,7 @@ export class SemanticStepResolver {
           hierarchyXml,
           ambiguous: false,
           canScrollPastAmbiguous: false,
+          intercepted: false,
           signature: hierarchySignature
         };
       }
@@ -3329,6 +3382,7 @@ export class SemanticStepResolver {
           hierarchyXml,
           ambiguous: false,
           canScrollPastAmbiguous: false,
+          intercepted: false,
           signature: hierarchySignature
         };
       }
@@ -3366,6 +3420,7 @@ export class SemanticStepResolver {
             candidate: latestCandidate,
             ambiguous: latestAmbiguous,
             canScrollPastAmbiguous: false,
+            intercepted: false,
             signature: textSearchLayoutSignature(latestLayout, semanticArea, input.deviceSize)
           };
         }
@@ -3408,13 +3463,28 @@ export class SemanticStepResolver {
         candidate: latestCandidate,
         ambiguous: latestAmbiguous,
         canScrollPastAmbiguous: exactFirst && latestAmbiguous,
+        intercepted: false,
         signature: textSearchLayoutSignature(latestLayout, semanticArea, input.deviceSize)
       };
     };
 
+    const inspectActionableViewport = async (options: { allowOcrFallback?: boolean } = {}): Promise<Awaited<ReturnType<typeof inspectViewport>>> => {
+      const started = Date.now();
+      let current = await inspectViewport(options);
+      while (current.intercepted && Date.now() - started <= timeoutMs) {
+        const elapsed = Date.now() - started;
+        if (elapsed >= timeoutMs) {
+          break;
+        }
+        await this.wait(input, Math.min(intervalMs, timeoutMs - elapsed));
+        current = await inspectViewport(options);
+      }
+      return current;
+    };
+
     const tapUiCandidate = async (candidate: UiHierarchyTextResolution): Promise<SemanticResolutionOutcome> => {
       const actionResult = (await this.performAction(input, candidate.action)) ?? undefined;
-      return {
+      return attachRuntimeInterceptors({
         supported: true,
         resolved: true,
         action: candidate.action,
@@ -3451,7 +3521,7 @@ export class SemanticStepResolver {
           },
           evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
         }
-      };
+      });
     };
 
     const tapCandidate = async (candidate: TextLocatorCandidate, layout: OcrLayoutResult, hierarchyXml?: string): Promise<SemanticResolutionOutcome> => {
@@ -3463,7 +3533,7 @@ export class SemanticStepResolver {
       const hierarchyTap = await this.resolveTextTapClickableContainer(input, candidate, mode, ocrAction, hierarchyXml);
       const action = hierarchyTap?.action ?? ocrAction;
       const actionResult = (await this.performAction(input, action)) ?? undefined;
-      return {
+      return attachRuntimeInterceptors({
         supported: true,
         resolved: true,
         action,
@@ -3493,13 +3563,21 @@ export class SemanticStepResolver {
           },
           evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
         }
-      };
+      });
     };
 
     if (searchMode === "visibleOnly") {
       const started = Date.now();
       while (Date.now() - started <= timeoutMs) {
         const current = await inspectViewport();
+        if (current.intercepted) {
+          const elapsed = Date.now() - started;
+          if (elapsed >= timeoutMs) {
+            break;
+          }
+          await this.wait(input, Math.min(intervalMs, timeoutMs - elapsed));
+          continue;
+        }
         if (current.uiCandidate) {
           return tapUiCandidate(current.uiCandidate);
         }
@@ -3518,7 +3596,7 @@ export class SemanticStepResolver {
       }
     } else {
       const allowOcrFallback = searchMode !== "scroll";
-      let current = await inspectViewport({ allowOcrFallback });
+      let current = await inspectActionableViewport({ allowOcrFallback });
       if (current.uiCandidate) {
         return tapUiCandidate(current.uiCandidate);
       }
@@ -3535,7 +3613,7 @@ export class SemanticStepResolver {
           await this.performAction(input, scrollSwipeAction("up", input.deviceSize));
           resetSwipes += 1;
           await this.wait(input, intervalMs);
-          current = await inspectViewport({ allowOcrFallback });
+          current = await inspectActionableViewport({ allowOcrFallback });
           if (current.uiCandidate) {
             return tapUiCandidate(current.uiCandidate);
           }
@@ -3559,7 +3637,7 @@ export class SemanticStepResolver {
         await this.performAction(input, scrollSwipeAction(direction, input.deviceSize));
         scanSwipes += 1;
         await this.wait(input, intervalMs);
-        current = await inspectViewport({ allowOcrFallback });
+        current = await inspectActionableViewport({ allowOcrFallback });
         if (current.uiCandidate) {
           return tapUiCandidate(current.uiCandidate);
         }
@@ -3580,36 +3658,36 @@ export class SemanticStepResolver {
     return textTargetFailure();
 
     function textTargetFailure(): SemanticResolutionOutcome {
-      const reason = latestAmbiguous ? "ambiguous_target" : "target_not_found";
-      return {
-      supported: true,
-      resolved: false,
-      message: latestAmbiguous
-        ? `Text target "${expectedTargets.join(" / ")}" matched multiple visible candidates.`
-        : `Text target "${expectedTargets.join(" / ")}" was not found.`,
-      artifacts,
-      metadata: {
-        type: "text",
-        expected: expectedTargets,
-        actual: latestVisibleText || normalizeOcrText(latestLayout?.text ?? "") || "(empty text result)",
-        action: "fail",
-        reason,
-        attempts: attempt,
-        candidateCount: latestCandidateCount || latestLayout?.boxes.length || 0,
-        nearestCandidate: latestCandidate,
-        ...(fallbackSemanticQuery ? { fallbackSemanticQuery } : {}),
-        search: {
-          mode: searchMode,
-          direction: searchDirection,
-          resetToTop,
-          maxSwipes,
-          resetSwipes,
-          scanSwipes,
-          reachedBoundary
-        },
-        evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
-      }
-      };
+      const reason = latestBlockedByRuntimeInterceptor ? "blocked_by_runtime_interceptor" : latestAmbiguous ? "ambiguous_target" : "target_not_found";
+      return attachRuntimeInterceptors({
+        supported: true,
+        resolved: false,
+        message: latestAmbiguous
+          ? `Text target "${expectedTargets.join(" / ")}" matched multiple visible candidates.`
+          : `Text target "${expectedTargets.join(" / ")}" was not found.`,
+        artifacts,
+        metadata: {
+          type: "text",
+          expected: expectedTargets,
+          actual: latestVisibleText || normalizeOcrText(latestLayout?.text ?? "") || "(empty text result)",
+          action: "fail",
+          reason,
+          attempts: attempt,
+          candidateCount: latestCandidateCount || latestLayout?.boxes.length || 0,
+          nearestCandidate: latestCandidate,
+          ...(fallbackSemanticQuery ? { fallbackSemanticQuery } : {}),
+          search: {
+            mode: searchMode,
+            direction: searchDirection,
+            resetToTop,
+            maxSwipes,
+            resetSwipes,
+            scanSwipes,
+            reachedBoundary
+          },
+          evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
+        }
+      });
     }
   }
 

@@ -27,6 +27,17 @@ export type RuntimeInterceptorRecord = {
   handledAt: string;
 };
 
+export type RuntimeInterceptorPhase = "precondition" | "state_transition" | "locator";
+
+export type RuntimeInterceptorMetadataRecord = RuntimeInterceptorRecord & {
+  phase: RuntimeInterceptorPhase;
+};
+
+export type RuntimeInterceptorRunOutcome = {
+  records: RuntimeInterceptorMetadataRecord[];
+  warning?: string;
+};
+
 export type RuntimeInterceptorMatcher = {
   type: "text" | "resource_id" | "content_desc" | "activity" | "package";
   value: string;
@@ -62,7 +73,7 @@ export type RuntimeInterceptorDeps = {
 };
 
 export type RuntimeInterceptorInput = {
-  phase: "precondition" | "state_transition";
+  phase: RuntimeInterceptorPhase;
   maxPasses?: number;
 };
 

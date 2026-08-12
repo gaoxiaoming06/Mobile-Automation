@@ -40,7 +40,7 @@ import { ConditionalStepExecutor } from "./conditional-step-executor.js";
 import { AndroidAppMonitorRunSupport } from "./android-app-monitor-run-support.js";
 import { ObservationService } from "./observation-service.js";
 import { RunArtifactService } from "./run-artifact-service.js";
-import { RuntimeInterceptor, type RuntimeInterceptorRecord } from "./runtime-interceptor.js";
+import { RuntimeInterceptor, type RuntimeInterceptorMetadataRecord, type RuntimeInterceptorRunOutcome } from "./runtime-interceptor.js";
 import { SemanticStepResolver } from "./semantic-locator.js";
 import { DeviceExecutionLease } from "./device-execution-lease.js";
 import type { PageAssetPlatform } from "./page-asset-catalog.js";
@@ -121,15 +121,6 @@ type PreconditionEvaluationOutcome = {
   };
 };
 
-type RuntimeInterceptorMetadataRecord = RuntimeInterceptorRecord & {
-  phase: "precondition" | "state_transition";
-};
-
-type RuntimeInterceptorRunOutcome = {
-  records: RuntimeInterceptorMetadataRecord[];
-  warning?: string;
-};
-
 export class AutomationRunner {
   private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly artifactService: RunArtifactService;
@@ -176,6 +167,12 @@ export class AutomationRunner {
       performAction: (serial, action) => this.driver.performAction(serial, action),
       performSemanticAction: this.driver.performSemanticAction ? (serial, action) => this.driver.performSemanticAction!(serial, action) : undefined,
       dumpUiHierarchy: this.driver.dumpUiHierarchy ? (serial) => this.driver.dumpUiHierarchy!(serial) : undefined,
+      handleRuntimeInterceptors: ({ serial, deviceSize }) =>
+        this.handleRuntimeInterceptors({
+          serial,
+          deviceSize,
+          phase: "locator"
+        }),
       captureLocatorScreenshot: (runId, stepResultId, serial, stepId, attempt) =>
         this.artifactService.captureLocatorScreenshot(runId, stepResultId, serial, stepId, attempt)
     });
@@ -533,6 +530,7 @@ export class AutomationRunner {
       metadata: scriptStepResultMetadata(step.params)
     };
     setActiveStepResultId?.(result.id);
+    const expectationStep = stepWithRuntimeExpectedPageExpectation(step);
 
     try {
       throwIfStopped(signal);
@@ -573,7 +571,7 @@ export class AutomationRunner {
         }
       }
 
-      const needsBeforeScreenshot = enabledExpectations(step).some((expectation) => expectation.type === "screen_changed");
+      const needsBeforeScreenshot = enabledExpectations(expectationStep).some((expectation) => expectation.type === "screen_changed");
       const beforeScreenshot = needsBeforeScreenshot
         ? await this.artifactService.captureStepScreenshotWithBytes(runId, result.id, iterationIndex, step.order, config.deviceSerial, "before")
         : undefined;
@@ -629,6 +627,7 @@ export class AutomationRunner {
             signal
           });
           if (semanticOutcome) {
+            result.metadata = mergeRuntimeInterceptorMetadata(result.metadata, semanticOutcome.runtimeInterceptorOutcome ?? { records: [] });
             result.metadata = {
               ...(result.metadata ?? {}),
               semantic: semanticOutcome.metadata,
@@ -678,14 +677,14 @@ export class AutomationRunner {
           runId,
           serial: config.deviceSerial,
           stepResultId: result.id,
-          step,
+          step: expectationStep,
           beforeScreenshot,
           afterScreenshot: screenshot,
           metric,
           runtimeFailure: Boolean(isRuntimeFailure?.())
         })
       );
-      const failedExpectation = result.expectationResults.find((expectation) => shouldFailStepForExpectation(step, expectation));
+      const failedExpectation = result.expectationResults.find((expectation) => shouldFailStepForExpectation(expectationStep, expectation));
       if (failedExpectation) {
         result.status = "failed";
         result.errorCode = "EXPECTATION_FAILED";
@@ -898,7 +897,7 @@ export class AutomationRunner {
   private async handleRuntimeInterceptors(input: {
     serial: string;
     deviceSize: { width: number; height: number } | undefined;
-    phase: "precondition" | "state_transition";
+    phase: RuntimeInterceptorMetadataRecord["phase"];
   }): Promise<RuntimeInterceptorRunOutcome> {
     try {
       const rules = this.storage.listRuntimeInterceptorRules?.({ enabledOnly: true }) ?? [];
@@ -1254,11 +1253,53 @@ function navigationPlatform(value: unknown): PageAssetPlatform | undefined {
   return value === "android" || value === "ios" || value === "harmony" || value === "flutter" ? value : undefined;
 }
 
+function stepWithRuntimeExpectedPageExpectation(step: ActionStep): ActionStep {
+  const expectedPage = navigationString(step.params.expectPage);
+  const appId = navigationString(step.params.appId);
+  const platform = navigationPlatform(step.params.platform);
+  if (!expectedPage || !appId || !platform) {
+    return step;
+  }
+  const expectations = step.expectations ?? [];
+  const alreadyHasExpectedPage = expectations.some((expectation) => {
+    if (!expectation.enabled || expectation.type !== "state_is") {
+      return false;
+    }
+    const pageId = navigationString(expectation.params.pageId ?? expectation.params.nodeId);
+    return pageId === expectedPage;
+  });
+  if (alreadyHasExpectedPage) {
+    return step;
+  }
+  return {
+    ...step,
+    expectations: [
+      ...expectations,
+      {
+        id: `auto-expect-page-${step.id}`,
+        type: "state_is",
+        enabled: true,
+        params: {
+          appId,
+          platform,
+          pageId: expectedPage,
+          timeoutMs: step.timing?.timeoutMs ?? 15_000,
+          blocking: true,
+          autoGenerated: true
+        },
+        createdAt: step.createdAt ?? nowIso()
+      }
+    ]
+  };
+}
+
 function scriptStepResultMetadata(params: Record<string, unknown>): Record<string, unknown> | undefined {
   const keys = [
     "scriptFlowId",
     "scriptVersion",
     "scriptStepId",
+    "appId",
+    "platform",
     "sourceFlowName",
     "executionPhase",
     "onPage",

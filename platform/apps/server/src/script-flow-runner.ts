@@ -244,6 +244,8 @@ export class ScriptFlowRunner {
       scriptFlowId: context.flowId,
       scriptVersion: context.scriptVersion,
       scriptStepId: step.id,
+      appId: context.appId,
+      platform: context.platform,
       executionPhase: step.phase,
       sourceFlowName: step.source.flowName,
       ...(step.onPage ? { onPage: step.onPage } : {}),

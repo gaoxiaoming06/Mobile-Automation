@@ -1687,6 +1687,52 @@ describe("AutomationRunner regression flow", () => {
     }));
   });
 
+  it("synthesizes expected-page verification from script metadata when expectations are missing", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const requests: Array<{ pageId: string; appId: string }> = [];
+    const runner = new AutomationRunner(storage, driver, undefined, {
+      verifyPageState: async (request) => {
+        requests.push({ pageId: request.pageId, appId: request.appId });
+        return { status: "unknown", reason: "page evidence did not match" };
+      }
+    });
+    const recordedTap = driver.createTapStep(120, 240);
+    const step: ActionStep = {
+      ...recordedTap,
+      params: {
+        ...recordedTap.params,
+        scriptFlowId: "flow-1",
+        scriptStepId: "open-lesson",
+        appId: "cn.eeo.classin",
+        platform: "android",
+        expectPage: "classin.lesson.create"
+      }
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Script expected page fallback",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 120, y: 240 }]);
+    expect(requests).toEqual([{ pageId: "classin.lesson.create", appId: "cn.eeo.classin" }]);
+    expect(run.stepResults[0]).toEqual(expect.objectContaining({
+      errorCode: "EXPECTATION_FAILED",
+      expectationResults: [expect.objectContaining({
+        type: "state_is",
+        status: "failed",
+        blocking: true
+      })]
+    }));
+  });
+
   it("fails text expectations when OCR text does not match", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
@@ -2041,6 +2087,49 @@ describe("AutomationRunner regression flow", () => {
     );
   });
 
+  it("handles Harmony upgrade popups that appear during OCR text locating before tapping background text", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new HarmonyRuntimeInterceptorMockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const ocr = new SequenceLayoutOcrService([
+      ["主页", "创建公开课"],
+      ["版本6.1.0", "了解更新详情", "立即更新", "主页", "创建公开课"],
+      ["主页", "创建公开课"],
+      ["主页", "创建公开课"],
+      ["主页", "创建公开课"]
+    ]);
+    const runner = new AutomationRunner(storage, driver, ocr);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Harmony Locator Runtime Interceptor Flow",
+      steps: [createTextTapStep("创建公开课")],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([
+      { type: "back" },
+      { type: "tap", x: 160, y: 305 }
+    ]);
+    expect(run.stepResults[0]?.metadata).toEqual(
+      expect.objectContaining({
+        runtimeInterceptors: [
+          expect.objectContaining({
+            phase: "locator",
+            ruleId: "classin-upgrade-popup",
+            ruleName: "ClassIn 升级提示弹窗"
+          })
+        ],
+        semantic: expect.objectContaining({
+          tapPointSource: "ocr_text_center"
+        })
+      })
+    );
+  });
+
   it("uses OCR runtime interceptors for Android blocking upgrade popups before replaying a step", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new SequenceUiHierarchyMockDriver([hierarchy("com.demo:id/join_class")]);
@@ -2346,6 +2435,24 @@ function createElementTapStep(resourceId: string, x: number, y: number, params: 
       yRatio: y / 2400,
       deviceWidth: 1080,
       deviceHeight: 2400
+    },
+    createdAt: new Date().toISOString()
+  };
+}
+
+function createTextTapStep(text: string, params: Record<string, unknown> = {}): ActionStep {
+  return {
+    id: `text-${Math.random().toString(16).slice(2)}`,
+    order: 1,
+    type: "tap_on_text",
+    enabled: true,
+    params: {
+      text,
+      mode: "equals",
+      searchMode: "visibleOnly",
+      timeoutMs: 100,
+      intervalMs: 1,
+      ...params
     },
     createdAt: new Date().toISOString()
   };
