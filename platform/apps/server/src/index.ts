@@ -27,6 +27,7 @@ import { registerPageAssetLibraryRoutes } from "./page-asset-library-api.js";
 import { pageAssetDeprecationConfirmation } from "./page-asset-deprecation-guard.js";
 import { buildConfirmedPageAssetInput, identifyOrCreateCurrentPageDraft, readCurrentPageCollectionOptions } from "./current-page-asset.js";
 import { buildPageAssetLibrarySummary } from "./page-assets-summary.js";
+import { registerRunDiagnosticsRoutes } from "./run-diagnostics.js";
 import { scaleLocatorCoordinate } from "./locator-coordinate.js";
 import { registerServerAgentRoutes } from "./server-agent-api.js";
 import { AgentHarmonyStreamBroker } from "./agent-harmony-stream-broker.js";
@@ -141,6 +142,10 @@ registerScriptFlowRoutes(app, { storage, runner: scriptFlowRunner });
 registerTrialLearningRoutes(app, { storage });
 registerPageAssetLibraryRoutes(app, { storage });
 registerServerAgentRoutes(app, { registry: agentRegistry });
+registerRunDiagnosticsRoutes(app, {
+  storage,
+  getDeviceInfo: (serial) => driver.getDeviceInfo(serial)
+});
 registerAgentDistributionRoutes(app, {
   distributionDir: agentDistributionDir,
   version: process.env.DEVICE_AGENT_VERSION ?? "0.1.0"

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
 
-export const agentBundleFileName = "mobile-automation-agent.mjs";
+export const agentBundleFileName = "mobile-automation-agent.cjs";
 
 export type AgentDistributionManifest = {
   version: string;
@@ -37,6 +37,11 @@ export function registerAgentDistributionRoutes(app: express.Express, options: A
     res.type("text/x-shellscript").send(buildAgentInstallScript({ defaultServerUrl }));
   });
 
+  app.get("/agent/install.ps1", (req, res) => {
+    const defaultServerUrl = singleQueryValue(req.query.server) ?? requestOrigin(req);
+    res.type("text/plain").send(buildAgentPowerShellInstallScript({ defaultServerUrl }));
+  });
+
   app.get(`/agent/${agentBundleFileName}`, (_req, res) => {
     res.sendFile(path.join(options.distributionDir, agentBundleFileName), (error) => {
       if (error && !res.headersSent) {
@@ -68,9 +73,8 @@ PAIRING_CODE=""
 INSECURE_TLS=0
 AGENT_HOME="\${MOBILE_AUTOMATION_AGENT_HOME:-$HOME/.mobile-automation-agent}"
 AGENT_FILE="$AGENT_HOME/${agentBundleFileName}"
-PID_FILE="$AGENT_HOME/agent.pid"
-LOG_FILE="$AGENT_HOME/agent.log"
 VERSION_FILE="$AGENT_HOME/agent.version"
+CONTROL_PORT="\${MOBILE_AUTOMATION_AGENT_CONTROL_PORT:-17611}"
 
 usage() {
   cat <<'USAGE'
@@ -146,11 +150,6 @@ if [ "$INSECURE_TLS" = "1" ]; then
 fi
 
 mkdir -p "$AGENT_HOME"
-if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-  echo "Mobile Automation Agent already running with pid $(cat "$PID_FILE")."
-  echo "Log: $LOG_FILE"
-  exit 0
-fi
 
 curl_fetch() {
   curl $CURL_TLS_FLAG -fsSL "$@"
@@ -159,7 +158,7 @@ curl_fetch() {
 MANIFEST_JSON="$(curl_fetch "$SERVER_URL/agent/manifest.json")"
 VERSION="$("$NODE_CMD" -e 'const m=JSON.parse(process.argv[1]); process.stdout.write(String(m.version || ""));' "$MANIFEST_JSON")"
 SHA256="$("$NODE_CMD" -e 'const m=JSON.parse(process.argv[1]); process.stdout.write(String(m.sha256 || ""));' "$MANIFEST_JSON")"
-BUNDLE_URL="$("$NODE_CMD" -e 'const m=JSON.parse(process.argv[1]); const base=process.argv[2].replace(/\\/+$/, "") + "/"; process.stdout.write(new URL(m.url || "/agent/mobile-automation-agent.mjs", base).toString());' "$MANIFEST_JSON" "$SERVER_URL")"
+BUNDLE_URL="$("$NODE_CMD" -e 'const m=JSON.parse(process.argv[1]); const base=process.argv[2].replace(/\\/+$/, "") + "/"; process.stdout.write(new URL(m.url || "/agent/${agentBundleFileName}", base).toString());' "$MANIFEST_JSON" "$SERVER_URL")"
 
 sha256_of() {
   if command -v shasum >/dev/null 2>&1; then
@@ -193,6 +192,9 @@ if [ "$NEEDS_DOWNLOAD" = "1" ]; then
 fi
 
 AGENT_ENV=(
+  "MOBILE_AUTOMATION_AGENT_HOME=$AGENT_HOME"
+  "MOBILE_AUTOMATION_AGENT_FILE=$AGENT_FILE"
+  "MOBILE_AUTOMATION_AGENT_CONTROL_PORT=$CONTROL_PORT"
   "DEVICE_AGENT_SERVER_URL=$SERVER_URL"
   "DEVICE_AGENT_ID=$AGENT_ID"
 )
@@ -205,11 +207,79 @@ if [ "$INSECURE_TLS" = "1" ]; then
   AGENT_ENV+=("NODE_TLS_REJECT_UNAUTHORIZED=0")
 fi
 
-nohup env "\${AGENT_ENV[@]}" "$NODE_CMD" "$AGENT_FILE" > "$LOG_FILE" 2>&1 &
-echo $! > "$PID_FILE"
-echo "Mobile Automation Agent started with pid $(cat "$PID_FILE")."
-echo "Log: $LOG_FILE"
+echo "Starting Mobile Automation Agent."
+echo "Local control: http://127.0.0.1:$CONTROL_PORT"
 echo "Server: $SERVER_URL"
+exec env "\${AGENT_ENV[@]}" "$NODE_CMD" "$AGENT_FILE"
+`;
+}
+
+export function buildAgentPowerShellInstallScript(options: AgentInstallScriptOptions): string {
+  const defaultServerUrl = powerShellSingleQuoted(options.defaultServerUrl.replace(/\/+$/, ""));
+  return `param(
+  [string]$Server = '${defaultServerUrl}',
+  [string]$AgentId = $env:COMPUTERNAME,
+  [switch]$Shared,
+  [string]$PairingCode = "",
+  [switch]$InsecureTls
+)
+
+$ErrorActionPreference = "Stop"
+$Server = $Server.TrimEnd("/")
+if ($Shared -and $PairingCode) { throw "--Shared and --PairingCode cannot be used together" }
+if (-not $Shared -and [string]::IsNullOrWhiteSpace($PairingCode)) { throw "Choose -Shared or provide -PairingCode <code>" }
+
+$NodeCmd = if ($env:NODE_BIN) { $env:NODE_BIN } else { "node" }
+if (-not (Get-Command $NodeCmd -ErrorAction SilentlyContinue)) {
+  throw "Node.js is required. Set NODE_BIN to node.exe if needed."
+}
+
+$AgentHome = if ($env:MOBILE_AUTOMATION_AGENT_HOME) { $env:MOBILE_AUTOMATION_AGENT_HOME } else { Join-Path $HOME ".mobile-automation-agent" }
+$AgentFile = Join-Path $AgentHome "${agentBundleFileName}"
+$VersionFile = Join-Path $AgentHome "agent.version"
+$ControlPort = if ($env:MOBILE_AUTOMATION_AGENT_CONTROL_PORT) { $env:MOBILE_AUTOMATION_AGENT_CONTROL_PORT } else { "17611" }
+New-Item -ItemType Directory -Force -Path $AgentHome | Out-Null
+
+$WebParams = @{}
+if ($InsecureTls) { $WebParams.SkipCertificateCheck = $true }
+$Manifest = Invoke-RestMethod @WebParams -Uri "$Server/agent/manifest.json"
+$BundleUrl = [System.Uri]::new([System.Uri]::new("$Server/"), $Manifest.url).AbsoluteUri
+$NeedsDownload = $true
+if ((Test-Path $AgentFile) -and (Test-Path $VersionFile) -and ((Get-Content $VersionFile -Raw).Trim() -eq [string]$Manifest.version)) {
+  $ExistingHash = (Get-FileHash -Algorithm SHA256 $AgentFile).Hash.ToLowerInvariant()
+  if ([string]::IsNullOrWhiteSpace([string]$Manifest.sha256) -or $ExistingHash -eq ([string]$Manifest.sha256).ToLowerInvariant()) {
+    $NeedsDownload = $false
+  }
+}
+
+if ($NeedsDownload) {
+  $TempFile = "$AgentFile.tmp"
+  Write-Host "Downloading Mobile Automation Agent $($Manifest.version)..."
+  Invoke-WebRequest @WebParams -UseBasicParsing -Uri $BundleUrl -OutFile $TempFile
+  if (-not [string]::IsNullOrWhiteSpace([string]$Manifest.sha256)) {
+    $ActualHash = (Get-FileHash -Algorithm SHA256 $TempFile).Hash.ToLowerInvariant()
+    if ($ActualHash -ne ([string]$Manifest.sha256).ToLowerInvariant()) {
+      Remove-Item -Force $TempFile -ErrorAction SilentlyContinue
+      throw "Downloaded Agent checksum mismatch."
+    }
+  }
+  Move-Item -Force $TempFile $AgentFile
+  Set-Content -Path $VersionFile -Value ([string]$Manifest.version)
+}
+
+$env:MOBILE_AUTOMATION_AGENT_HOME = $AgentHome
+$env:MOBILE_AUTOMATION_AGENT_FILE = $AgentFile
+$env:MOBILE_AUTOMATION_AGENT_CONTROL_PORT = $ControlPort
+$env:DEVICE_AGENT_SERVER_URL = $Server
+$env:DEVICE_AGENT_ID = $AgentId
+$env:DEVICE_AGENT_SHARED = if ($Shared) { "1" } else { "" }
+$env:DEVICE_AGENT_PAIRING_CODE = if ($Shared) { "" } else { $PairingCode }
+if ($InsecureTls) { $env:NODE_TLS_REJECT_UNAUTHORIZED = "0" }
+
+Write-Host "Starting Mobile Automation Agent."
+Write-Host "Local control: http://127.0.0.1:$ControlPort"
+Write-Host "Server: $Server"
+& $NodeCmd $AgentFile
 `;
 }
 
@@ -235,6 +305,10 @@ function singleHeaderValue(value: string | string[] | undefined): string | undef
 
 function shellDoubleQuoted(value: string): string {
   return value.replace(/["\\$`]/g, (char) => `\\${char}`);
+}
+
+function powerShellSingleQuoted(value: string): string {
+  return value.replace(/'/g, "''");
 }
 
 function sendAgentDistributionError(res: express.Response, error: unknown): void {

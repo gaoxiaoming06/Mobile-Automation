@@ -141,12 +141,12 @@ DEVICE_AGENT_SHARED=1 \
 pnpm agent
 ```
 
-For non-developer device hosts, open the Dashboard device page and copy one of the generated Agent commands:
+For non-developer device hosts, open **系统设置 > 设备接入** in the Dashboard and copy one of the generated Agent commands:
 
-- `配对 Agent`: private to the current browser session.
-- `共享 Agent`: publishes the host's devices to the public device pool.
+- Public-device-pool command: publishes the host's devices to the public device pool.
+- Private command: creates a short-lived pairing code and keeps the host's devices visible only to the current browser session.
 
-Both commands download or reuse `~/.mobile-automation-agent/mobile-automation-agent.mjs`, avoid starting a duplicate process when `agent.pid` is alive, and connect the Agent back to the current server.
+Both commands download or reuse `~/.mobile-automation-agent/mobile-automation-agent.cjs`, verify it against `/agent/manifest.json`, and start a local control service at `http://127.0.0.1:17611`. Keep that terminal open while sharing devices; after it is running, **系统设置 > 设备接入** can switch between shared/private mode, reconnect with a fresh private pairing code, update the Agent bundle, or disconnect the managed Agent runtime.
 
 Connect Android devices with USB debugging enabled before starting the agent. For iOS physical devices, install libimobiledevice tools and trust/unlock the device first:
 

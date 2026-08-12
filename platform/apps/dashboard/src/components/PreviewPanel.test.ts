@@ -1,6 +1,8 @@
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { defaultAndroidCapabilities, defaultHarmonyCapabilities, type DeviceInfo } from "@mobile-automation/shared";
-import { devicePlatformLabel, formatPreviewStatus } from "./PreviewPanel.js";
+import { PreviewPanel, devicePlatformLabel, formatPreviewStatus } from "./PreviewPanel.js";
 
 describe("devicePlatformLabel", () => {
   it("labels HarmonyOS devices explicitly", () => {
@@ -19,6 +21,43 @@ describe("formatPreviewStatus", () => {
 
   it("keeps plain screenshot status when no realtime detail exists", () => {
     expect(formatPreviewStatus("screenshot", "HarmonyOS 截图预览", device("harmony"))).toBe("截图预览");
+  });
+});
+
+describe("PreviewPanel", () => {
+  it("does not render the legacy native scrcpy debug window action", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(PreviewPanel, {
+        selectedSerial: "agent-a:android:android-1",
+        selectedDevice: {
+          ...device("android"),
+          serial: "agent-a:android:android-1",
+          agent: { agentId: "agent-a" }
+        } as DeviceInfo,
+        previewRef: { current: null },
+        imageRef: { current: null },
+        canvasRef: { current: null },
+        videoRef: { current: null },
+        previewUrl: "",
+        screenshotError: "",
+        previewMode: "screenshot",
+        previewRenderer: "canvas",
+        scrcpyStreamStatus: "当前浏览器不支持 WebCodecs，使用截图预览",
+        isScrcpyPreviewActive: false,
+        busy: false,
+        inputText: "",
+        setInputText: () => undefined,
+        setMessage: () => undefined,
+        runAction: async () => undefined,
+        handleScreenshotLoaded: () => undefined,
+        onPreviewPointerDown: () => undefined,
+        onPreviewPointerUp: () => undefined,
+        onPreviewPointerCancel: () => undefined
+      })
+    );
+
+    expect(markup).not.toContain("调试窗口");
+    expect(markup).not.toContain("关闭调试");
   });
 });
 

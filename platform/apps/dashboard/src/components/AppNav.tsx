@@ -1,5 +1,4 @@
 import {
-  Cable,
   DatabaseZap,
   FileText,
   Package,
@@ -13,7 +12,7 @@ import {
   Workflow
 } from "lucide-react";
 
-export type AppNavItemId = "devices" | "agentAccess" | "assetRecording" | "pageAssets" | "scriptFlows" | "aiScriptFlows" | "stability" | "runs" | "settings";
+export type AppNavItemId = "devices" | "assetRecording" | "pageAssets" | "scriptFlows" | "aiScriptFlows" | "stability" | "runs" | "settings";
 
 type AppNavProps = {
   activeNavItem: AppNavItemId;
@@ -21,7 +20,6 @@ type AppNavProps = {
   advancedToolsEnabled?: boolean;
   setNavCollapsed: (updater: (value: boolean) => boolean) => void;
   openDevices: () => void;
-  openAgentAccess: () => void;
   openAssetRecording: () => void;
   openPageAssets: () => void;
   openScriptFlows: () => void;
@@ -37,7 +35,6 @@ export function AppNav({
   advancedToolsEnabled = false,
   setNavCollapsed,
   openDevices,
-  openAgentAccess,
   openAssetRecording,
   openPageAssets,
   openScriptFlows,
@@ -56,10 +53,6 @@ export function AppNav({
         <button className={navButtonClass(activeNavItem, "devices")} onClick={openDevices} title="设备管理" type="button">
           <Smartphone size={18} />
           <span>设备管理</span>
-        </button>
-        <button className={navButtonClass(activeNavItem, "agentAccess")} onClick={openAgentAccess} title="设备接入" type="button">
-          <Cable size={18} />
-          <span>设备接入</span>
         </button>
         {advancedToolsEnabled ? (
           <>

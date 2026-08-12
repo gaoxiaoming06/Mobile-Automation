@@ -48,14 +48,11 @@ export function useDeviceList({ setMessage, controlOwnerId = "" }: UseDeviceList
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedSerial, setSelectedSerial] = useState(() => loadSelectedDeviceSerial());
   const [tools, setTools] = useState<ToolStatus[]>([]);
-  const [scrcpyRunning, setScrcpyRunning] = useState(false);
 
   const selectedDevice = useMemo(
     () => devices.find((device) => device.serial === selectedSerial),
     [devices, selectedSerial]
   );
-
-  const scrcpyAvailable = tools.some((tool) => tool.name === "scrcpy" && tool.available);
 
   const refreshDevices = useCallback(async (options: { silent?: boolean } = {}) => {
     const query = controlOwnerId ? `?sessionId=${encodeURIComponent(controlOwnerId)}` : "";
@@ -88,11 +85,6 @@ export function useDeviceList({ setMessage, controlOwnerId = "" }: UseDeviceList
     setTools(json.tools);
   }, []);
 
-  const refreshScrcpySessions = useCallback(async () => {
-    const json = await apiFetchJson<{ sessions: Array<{ serial: string; status: string }> }>("/api/scrcpy/sessions");
-    setScrcpyRunning(Boolean(selectedSerial && json.sessions.some((session) => session.serial === selectedSerial && session.status === "running")));
-  }, [selectedSerial]);
-
   const selectDevice = useCallback((device: DeviceInfo, beforeSelect?: () => void) => {
     if (!isDeviceSelectableByOwner(device, controlOwnerId)) {
       const message = isDeviceLockedByOtherOwner(device, controlOwnerId) ? "设备正在被其他客户端占用" : "当前设备不可控制";
@@ -102,7 +94,6 @@ export function useDeviceList({ setMessage, controlOwnerId = "" }: UseDeviceList
     beforeSelect?.();
     saveSelectedDeviceSerial(device.serial);
     setSelectedSerial(device.serial);
-    setScrcpyRunning(false);
   }, [controlOwnerId, setMessage]);
 
   useEffect(() => {
@@ -117,18 +108,11 @@ export function useDeviceList({ setMessage, controlOwnerId = "" }: UseDeviceList
     return () => window.clearInterval(timer);
   }, [refreshDevices]);
 
-  useEffect(() => {
-    refreshScrcpySessions().catch(() => undefined);
-  }, [refreshScrcpySessions]);
-
   return {
     devices,
     selectedSerial,
     selectedDevice,
     tools,
-    scrcpyAvailable,
-    scrcpyRunning,
-    setScrcpyRunning,
     refreshDevices,
     selectDevice
   };

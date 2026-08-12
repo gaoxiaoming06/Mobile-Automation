@@ -1,27 +1,36 @@
 import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   App,
+  AgentAccessView,
   DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
+  DEFAULT_AI_MODEL_SETTINGS,
   DEFAULT_SCRIPT_APP_ID,
   DEFAULT_TARGET_APPS,
   DASHBOARD_ADVANCED_TOOLS_STORAGE_KEY,
+  DeviceManagementView,
   GlobalDeviceSwitcher,
   GlobalTargetAppSwitcher,
   RetainedNavPanel,
+  SettingsView,
   TargetAppMenu,
   actionStrategyForWorkspace,
   agentPairingCommand,
   aiModelSettingsRequestBody,
+  aiModelDraftFromSettings,
   androidAppMonitorDefaultEnabled,
+  agentVersionOutdated,
+  compareAgentVersions,
   defaultSelectedTargetAppId,
   deleteTargetApp,
   copyCreatedAgentPairingCommand,
   dashboardAdvancedToolsEnabled,
   detectAgentCommandShell,
+  fetchAgentDistributionManifest,
   isDefaultTargetApp,
+  localAgentDisplayVersion,
   loadTargetApps,
   pageAssetLibraryInitialization,
   previewWorkspaceKey,
@@ -32,6 +41,7 @@ import {
   workspaceStyleForNav
 } from "./App.js";
 import { defaultAndroidCapabilities, type DeviceInfo } from "@mobile-automation/shared";
+import type { LocalAgentControlStatus } from "./App.js";
 
 describe("App shell", () => {
   it("keeps global dropdown menus anchored to the trigger right edge", () => {
@@ -50,13 +60,222 @@ describe("App shell", () => {
     expect(markup).toContain("自动化测试平台");
     expect(markup).toContain("topbar-context-group");
     expect(markup).toContain("设备管理");
-    expect(markup).toContain("设备接入");
+    expect(markup).not.toContain("设备接入");
     expect(markup).not.toContain("资产校准");
     expect(markup).not.toContain("页面资产库");
     expect(markup).toContain("用例中心");
     expect(markup).not.toContain("脚本用例");
     expect(markup).toContain("AI 生成测试");
     expect(markup).not.toContain("资产用例");
+  });
+
+  it("places Agent access inside system settings", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(SettingsView, {
+        aiSettings: DEFAULT_AI_MODEL_SETTINGS,
+        aiDraft: aiModelDraftFromSettings(DEFAULT_AI_MODEL_SETTINGS),
+        androidAppMonitorDraft: DEFAULT_ANDROID_APP_MONITOR_SETTINGS,
+        busy: false,
+        activeSection: "agentAccess",
+        agentAccessPanel: React.createElement("div", null, "接入命令"),
+        onSectionChange: () => undefined,
+        onAiDraftChange: () => undefined,
+        onAndroidAppMonitorDraftChange: () => undefined,
+        onSaveAiSettings: () => undefined
+      })
+    );
+
+    expect(markup).toContain("系统设置");
+    expect(markup).toContain("设备接入");
+    expect(markup).toContain("接入命令");
+    expect(markup).toContain("Android 监控");
+    expect(markup).toContain("AI 模型");
+  });
+
+  it("links the empty device state to Agent access settings", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(DeviceManagementView, {
+        devices: [],
+        selectedSerial: "",
+        previewPanel: React.createElement("div", null, "preview"),
+        tools: [],
+        runs: [],
+        controlOwnerId: "browser-a",
+        onOpenRuns: () => undefined,
+        onRefreshDevices: () => undefined,
+        onOpenAgentAccess: () => undefined
+      })
+    );
+
+    expect(markup).toContain("没有可管理设备");
+    expect(markup).toContain("去设置接入 Agent");
+  });
+
+  it("keeps Agent access controls focused on mode switching instead of logs and low-level status", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AgentAccessView, {
+        status: localAgentStatus(false),
+        error: "",
+        busy: false,
+        agentPairing: {
+          code: "335226",
+          sessionId: "pairing-session",
+          createdAt: "2026-08-12T02:50:00.000Z",
+          expiresAt: "2026-08-12T02:56:09.000Z",
+          paired: false
+        },
+        sharedAgentCommand: "",
+        onRefreshStatus: () => undefined,
+        onStartShared: () => undefined,
+        onStartPrivate: () => undefined,
+        onStop: () => undefined,
+        onRestart: () => undefined,
+        onUpdate: () => undefined,
+        onCreatePairingCommand: () => undefined,
+        onCopyPairingCommand: () => undefined,
+        onCopySharedCommand: () => undefined
+      })
+    );
+
+    expect(markup).toContain("接入命令");
+    expect(markup).toContain("共享模式");
+    expect(markup).toContain("私有模式");
+    const actionGrid = markup.slice(markup.indexOf("agent-action-grid"), markup.indexOf("agent-config-grid"));
+    expect(markup).toContain("切换为共享模式");
+    expect(actionGrid).toContain("重连 Agent");
+    expect(actionGrid).toContain("断开 Agent");
+    expect(actionGrid).not.toContain("更新 Agent");
+    expect(markup.match(/agent-mode-switch-button/g)).toHaveLength(1);
+    expect(markup).not.toContain("共享到服务端");
+    expect(markup).not.toContain(">私有接入<");
+    expect(markup).not.toContain("查看日志");
+    expect(markup).not.toContain("本机 Agent 日志");
+    expect(markup).not.toContain("control online");
+    expect(markup).not.toContain("agent pid");
+  });
+
+  it("moves Agent update into the version card with an outdated badge", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AgentAccessView, {
+        status: localAgentStatus(false),
+        error: "",
+        busy: false,
+        agentPairing: undefined,
+        sharedAgentCommand: "",
+        agentManifest: {
+          version: "0.2.0",
+          file: "mobile-automation-agent.cjs",
+          url: "/agent/mobile-automation-agent.cjs",
+          sha256: "sha256"
+        },
+        onRefreshStatus: () => undefined,
+        onStartShared: () => undefined,
+        onStartPrivate: () => undefined,
+        onStop: () => undefined,
+        onRestart: () => undefined,
+        onUpdate: () => undefined,
+        onCreatePairingCommand: () => undefined,
+        onCopyPairingCommand: () => undefined,
+        onCopySharedCommand: () => undefined
+      })
+    );
+    const actionGrid = markup.slice(markup.indexOf("agent-action-grid"), markup.indexOf("agent-config-grid"));
+    const statGrid = markup.slice(markup.indexOf("agent-access-stat-grid"), markup.indexOf("agent-access-grid"));
+
+    expect(actionGrid).not.toContain("更新 Agent");
+    expect(statGrid).toContain("agent-version-card");
+    expect(statGrid).toContain("agent-update-dot");
+    expect(statGrid).toContain("服务端 0.2.0");
+    expect(statGrid).toContain("aria-label=\"更新 Agent\"");
+  });
+
+  it("shows pairing expiration only on the private command row", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(AgentAccessView, {
+        status: localAgentStatus(false),
+        error: "",
+        busy: false,
+        agentPairing: {
+          code: "335226",
+          sessionId: "pairing-session",
+          createdAt: "2026-08-12T02:50:00.000Z",
+          expiresAt: "2026-08-12T02:56:09.000Z",
+          paired: false
+        },
+        sharedAgentCommand: "",
+        onRefreshStatus: () => undefined,
+        onStartShared: () => undefined,
+        onStartPrivate: () => undefined,
+        onStop: () => undefined,
+        onRestart: () => undefined,
+        onUpdate: () => undefined,
+        onCreatePairingCommand: () => undefined,
+        onCopyPairingCommand: () => undefined,
+        onCopySharedCommand: () => undefined
+      })
+    );
+    const commandHeader = markup.slice(markup.indexOf("agent-command-title"), markup.indexOf("agent-command-list"));
+    const privateRow = markup.slice(markup.indexOf("私有 335226"));
+
+    expect(commandHeader).toContain("已按当前系统显示");
+    expect(commandHeader).not.toContain("过期");
+    expect(privateRow).toContain("过期");
+  });
+
+  it("explains expired private pairing errors in Agent access settings", () => {
+    const status = localAgentStatus(false);
+    status.agent.registrationError = "/api/agents/register failed (400): Pairing code is invalid or expired";
+    const markup = renderToStaticMarkup(
+      React.createElement(AgentAccessView, {
+        status,
+        error: "",
+        busy: false,
+        agentPairing: undefined,
+        sharedAgentCommand: "",
+        onRefreshStatus: () => undefined,
+        onStartShared: () => undefined,
+        onStartPrivate: () => undefined,
+        onStop: () => undefined,
+        onRestart: () => undefined,
+        onUpdate: () => undefined,
+        onCreatePairingCommand: () => undefined,
+        onCopyPairingCommand: () => undefined,
+        onCopySharedCommand: () => undefined
+      })
+    );
+
+    expect(markup).toContain("私有配对码无效或已过期");
+    expect(markup).toContain("重连 Agent 会生成新配对码");
+  });
+
+  it("separates local process status from server registration status", () => {
+    const status = localAgentStatus(false);
+    status.agent.serverConnected = false;
+    status.agent.registrationError = "/api/agents/register failed (400): Pairing code is invalid or expired";
+    const markup = renderToStaticMarkup(
+      React.createElement(AgentAccessView, {
+        status,
+        error: "",
+        busy: false,
+        agentPairing: undefined,
+        sharedAgentCommand: "",
+        onRefreshStatus: () => undefined,
+        onStartShared: () => undefined,
+        onStartPrivate: () => undefined,
+        onStop: () => undefined,
+        onRestart: () => undefined,
+        onUpdate: () => undefined,
+        onCreatePairingCommand: () => undefined,
+        onCopyPairingCommand: () => undefined,
+        onCopySharedCommand: () => undefined
+      })
+    );
+    const statGrid = markup.slice(markup.indexOf("agent-access-stat-grid"), markup.indexOf("agent-access-grid"));
+
+    expect(statGrid).toContain("<strong>可用</strong><span>本机控制</span>");
+    expect(statGrid).toContain("<strong>运行</strong><span>Agent 进程</span>");
+    expect(statGrid).toContain("<strong>注册失败</strong><span>服务端接入</span>");
+    expect(statGrid).not.toContain("<strong>在线</strong><span>控制服务</span>");
   });
 
   it("renders the selected target app in the global topbar switcher", () => {
@@ -346,6 +565,34 @@ describe("App shell", () => {
     expect(detectAgentCommandShell("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe("bash");
     expect(detectAgentCommandShell("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")).toBe("powershell");
   });
+
+  it("compares Agent versions numerically before showing update hints", () => {
+    const status = localAgentStatus(false);
+
+    expect(localAgentDisplayVersion(status)).toBe("0.1.0");
+    expect(compareAgentVersions("0.10.0", "0.9.0")).toBeGreaterThan(0);
+    expect(compareAgentVersions("0.1.0", "0.2.0")).toBeLessThan(0);
+    expect(agentVersionOutdated("0.1.0", "0.2.0")).toBe(true);
+    expect(agentVersionOutdated("0.10.0", "0.9.0")).toBe(false);
+  });
+
+  it("loads the Agent distribution manifest for update checks", async () => {
+    const manifest = {
+      version: "0.2.0",
+      file: "mobile-automation-agent.cjs",
+      url: "/agent/mobile-automation-agent.cjs",
+      sha256: "sha256"
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(manifest)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await expect(fetchAgentDistributionManifest()).resolves.toEqual(manifest);
+      expect(fetchMock).toHaveBeenCalledWith("/agent/manifest.json");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 function agentDevice(serial: string): DeviceInfo {
@@ -373,5 +620,26 @@ function regularDevice(serial: string): DeviceInfo {
     orientation: "portrait",
     capabilities: defaultAndroidCapabilities(),
     lastSeenAt: "2026-08-07T08:00:00.000Z"
+  };
+}
+
+function localAgentStatus(shared: boolean): LocalAgentControlStatus {
+  return {
+    ok: true,
+    control: {
+      running: true,
+      port: 17611,
+      version: "0.1.0"
+    },
+    agent: {
+      running: true,
+      pid: 66107,
+      config: {
+        serverUrl: "http://10.254.32.11:4010",
+        agentId: "eeos-MacBook-Pro-4.local",
+        shared,
+        version: "0.1.0"
+      }
+    }
   };
 }

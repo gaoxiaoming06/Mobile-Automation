@@ -23,10 +23,10 @@ That script connects to `https://127.0.0.1:4010`, sets `DEVICE_AGENT_SHARED=1`, 
 
 HarmonyOS dashboard preview currently uses screenshots. To test the experimental HarmonyOS stream bridge directly, start the Agent with `HARMONY_STREAM_ENABLED=1`.
 
-For private local use, open the dashboard, click `配对 Agent`, then start the packaged Agent with the generated code:
+For private local use on a host without this repository, open **系统设置 > 设备接入** in the dashboard, generate a private command, then run the generated command:
 
 ```bash
 curl -kfsSL https://<server>/agent/install.sh?server=https%3A%2F%2F<server> | bash -s -- --agent-id "$(hostname)" --pairing-code <code> --insecure-tls
 ```
 
-For public sharing, click `共享 Agent` in the dashboard or start from source with `DEVICE_AGENT_SHARED=1`.
+For public sharing, copy the public-device-pool command from the same settings panel or start from source with `DEVICE_AGENT_SHARED=1`. The packaged command starts a local control service at `http://127.0.0.1:17611`; keep the terminal open, then use the settings panel to switch mode, reconnect, update, or disconnect the managed Agent runtime.

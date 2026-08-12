@@ -339,7 +339,7 @@ describe("DeviceAgentRuntime", () => {
 
     await runtime.start(controller.signal);
 
-    expect(messages).toEqual(["agent sync failed: fetch failed"]);
+    expect(messages).toEqual(["agent registered", "agent sync failed: fetch failed"]);
   });
 });
 

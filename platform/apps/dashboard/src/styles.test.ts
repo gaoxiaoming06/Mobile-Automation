@@ -53,4 +53,20 @@ describe("dashboard styles", () => {
     expect(inspectorRule).toContain("flex: none");
     expect(inspectorRule).toContain("overflow: visible");
   });
+
+  it("lets Agent access settings scroll without clipping the local control panel", () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "styles.css"), "utf8");
+    const panelIndex = css.indexOf(".panel {");
+    const settingsSectionRule = css.slice(css.indexOf(".settings-section-panel {"), css.indexOf(".settings-content-panel {"));
+    const agentAccessRule = css.slice(css.indexOf(".agent-access-module {"), css.indexOf(".agent-access-head {"));
+    const agentPanelOverrideIndex = css.indexOf(".panel.agent-control-panel");
+    const agentPanelOverrideRule = css.slice(agentPanelOverrideIndex, agentPanelOverrideIndex + 220);
+
+    expect(settingsSectionRule).toContain("overflow-y: auto");
+    expect(settingsSectionRule).toContain("overflow-x: hidden");
+    expect(agentAccessRule).toContain("min-height: max-content");
+    expect(agentAccessRule).toContain("overflow: visible");
+    expect(agentPanelOverrideIndex).toBeGreaterThan(panelIndex);
+    expect(agentPanelOverrideRule).toContain("overflow: visible");
+  });
 });

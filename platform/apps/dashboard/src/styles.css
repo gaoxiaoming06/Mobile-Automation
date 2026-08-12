@@ -451,6 +451,7 @@ button:disabled {
 }
 
 .module-stat-grid div,
+.module-stat-grid button,
 .device-facts div {
   min-width: 0;
   border: 1px solid #dce4ef;
@@ -459,12 +460,25 @@ button:disabled {
   padding: 8px;
 }
 
+.module-stat-grid button {
+  position: relative;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.module-stat-grid button:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
 .device-stat-grid div {
   padding: 7px 9px;
 }
 
 .module-stat-grid strong,
 .module-stat-grid span,
+.module-stat-grid small,
 .device-facts strong,
 .device-facts span {
   display: block;
@@ -484,6 +498,14 @@ button:disabled {
 .device-facts span {
   color: #607087;
   font-size: 11px;
+}
+
+.module-stat-grid small {
+  margin-top: 3px;
+  color: #b91c1c;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 .device-profile-card {
@@ -565,14 +587,15 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  overflow: auto;
+  min-height: max-content;
+  overflow: visible;
   padding-right: 2px;
 }
 
 .agent-access-head {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(420px, 640px);
+  grid-template-columns: minmax(0, 1fr) minmax(560px, 760px);
   align-items: start;
   gap: 16px;
 }
@@ -583,12 +606,38 @@ button:disabled {
 
 .agent-access-stat-grid {
   width: 100%;
+  grid-template-columns: repeat(5, minmax(80px, 1fr));
 }
 
 .agent-access-stat-grid strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-access-stat-grid .agent-status-error {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.agent-access-stat-grid .agent-status-error strong {
+  color: #b91c1c;
+}
+
+.agent-version-card.has-update {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.agent-update-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #ef4444;
+  box-shadow: 0 0 0 2px #fff;
 }
 
 .agent-access-grid {
@@ -599,8 +648,7 @@ button:disabled {
 }
 
 .agent-control-panel,
-.agent-command-panel,
-.agent-log-panel {
+.agent-command-panel {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -619,16 +667,9 @@ button:disabled {
   white-space: nowrap;
 }
 
-.agent-local-state {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .agent-action-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
 }
 
@@ -682,6 +723,16 @@ button:disabled {
   gap: 8px;
 }
 
+.agent-command-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-help-button {
+  color: #64748b;
+}
+
 .agent-command-row {
   min-width: 0;
   display: grid;
@@ -695,7 +746,8 @@ button:disabled {
 }
 
 .agent-command-row span,
-.agent-command-row strong {
+.agent-command-row strong,
+.agent-command-row small {
   display: block;
 }
 
@@ -708,6 +760,13 @@ button:disabled {
 .agent-command-row strong {
   color: #17202a;
   font-size: 14px;
+}
+
+.agent-command-row small {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1.25;
 }
 
 .agent-command-row code {
@@ -746,27 +805,6 @@ button:disabled {
   border: 1px solid #fecaca;
   color: #991b1b;
   background: #fff7f7;
-}
-
-.agent-log-panel {
-  flex: 1 1 auto;
-  min-height: 210px;
-  overflow: hidden;
-}
-
-.agent-log-panel pre {
-  flex: 1 1 auto;
-  min-height: 140px;
-  max-height: 320px;
-  overflow: auto;
-  margin: 0;
-  border-radius: 7px;
-  background: #111827;
-  color: #e5e7eb;
-  padding: 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
 }
 
 .device-module .panel.device-runs-card {
@@ -821,6 +859,12 @@ button:disabled {
 .settings-module > .panel {
   flex: 0 0 auto;
   overflow: hidden;
+}
+
+.settings-head-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .settings-card {
@@ -1067,6 +1111,8 @@ button:disabled {
 }
 
 .settings-tab {
+  display: grid;
+  gap: 4px;
   border: 1px solid #cbd8e7;
   border-radius: 7px;
   background: #fff;
@@ -1077,10 +1123,43 @@ button:disabled {
   font-weight: 760;
 }
 
+.settings-tab strong,
+.settings-tab span {
+  display: block;
+  min-width: 0;
+}
+
+.settings-tab strong {
+  color: #17202a;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.settings-tab span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 620;
+  line-height: 1.35;
+}
+
 .settings-tab.active {
   border-color: #93c5fd;
   background: #eff6ff;
   color: #2563eb;
+}
+
+.settings-tab.active strong {
+  color: #2563eb;
+}
+
+.settings-section-panel {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
 }
 
 .settings-content-panel {
@@ -1563,7 +1642,23 @@ button:disabled {
 .device-empty-state {
   min-height: 200px;
   display: grid;
+  gap: 8px;
   place-items: center;
+  align-content: center;
+  text-align: center;
+}
+
+.device-empty-state strong {
+  color: #17202a;
+  font-size: 15px;
+}
+
+.device-empty-state span {
+  max-width: 320px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 620;
+  line-height: 1.45;
 }
 
 .execution-module {
@@ -2798,6 +2893,10 @@ button:disabled {
   overflow-y: auto;
 }
 
+.panel.agent-control-panel {
+  overflow: visible;
+}
+
 .asset-page-card.panel,
 .asset-recording-actions.panel,
 .asset-module-head.panel {
@@ -3486,11 +3585,6 @@ button:disabled {
   flex: 1 1 260px;
   justify-content: flex-end;
   flex-wrap: wrap;
-}
-
-.preview-toolbar .debug-action {
-  color: #53667d;
-  background: #f8fafc;
 }
 
 .preview-toolbar span,
@@ -5125,6 +5219,20 @@ button:disabled {
     overflow: visible;
   }
 
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .settings-tab {
+    min-width: 180px;
+  }
+
   .device-module {
     grid-template-columns: 1fr;
   }
@@ -6086,6 +6194,10 @@ button:disabled {
   display: block;
   margin: 4px 0 0;
   color: #6f3a35;
+}
+
+.compact-diagnostic-link {
+  margin-top: 8px;
 }
 
 .execution-failure-details {

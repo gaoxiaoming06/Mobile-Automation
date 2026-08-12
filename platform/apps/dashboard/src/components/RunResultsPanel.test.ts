@@ -404,6 +404,46 @@ describe("RunResultsPanel", () => {
     expect(markup).toContain("OCR 识别到 14 个文字候选");
     expect(markup).toContain("现场识别到“确定”");
   });
+
+  it("offers a run diagnostics export from the current run details and failure notice", () => {
+    const currentRun = run({
+      id: "run-diagnostics",
+      caseName: "提交作业",
+      status: "failed",
+      startedMinute: 1,
+      stepResults: [{
+        id: "result-1",
+        runId: "run-diagnostics",
+        iterationIndex: 0,
+        stepId: "tap-submit",
+        stepOrder: 1,
+        type: "tap_on_text",
+        status: "failed",
+        startedAt: "2026-07-23T08:01:00.000Z",
+        errorCode: "SEMANTIC_TARGET_NOT_FOUND",
+        errorMessage: "未找到提交按钮",
+        artifacts: []
+      }]
+    });
+
+    const markup = renderToStaticMarkup(React.createElement(RunResultsPanel, {
+      currentRun,
+      runs: [currentRun],
+      runsLimit: 30,
+      selectedSerial: "device-1",
+      setCurrentRunId: () => undefined,
+      stopCurrentRun: async () => undefined,
+      pauseCurrentRun: async () => undefined,
+      resumeCurrentRun: async () => undefined,
+      stepCurrentRun: async () => undefined,
+      loadMoreRuns: () => undefined
+    }));
+
+    expect(markup).toContain("/api/runs/run-diagnostics/diagnostics");
+    expect(markup).toContain("run-run-diagnostics-diagnostics.zip");
+    expect(markup).toContain("导出诊断包");
+    expect(markup).toContain("下载现场诊断包");
+  });
 });
 
 function run(input: {

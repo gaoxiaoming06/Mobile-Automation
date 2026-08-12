@@ -13,7 +13,6 @@ describe("AppNav", () => {
         navCollapsed: false,
         setNavCollapsed: noop,
         openDevices: noop,
-        openAgentAccess: noop,
         openAssetRecording: noop,
         openPageAssets: noop,
         openScriptFlows: noop,
@@ -25,7 +24,7 @@ describe("AppNav", () => {
     );
 
     expect(markup).toContain("设备管理");
-    expect(markup).toContain("设备接入");
+    expect(markup).not.toContain("设备接入");
     expect(markup).not.toContain("设备详情");
     expect(markup).toContain("nav-item active");
     expect(markup).not.toContain("用例录制");
@@ -55,7 +54,6 @@ describe("AppNav", () => {
         navCollapsed: false,
         setNavCollapsed: noop,
         openDevices: noop,
-        openAgentAccess: noop,
         openAssetRecording: noop,
         openPageAssets: noop,
         openScriptFlows: noop,

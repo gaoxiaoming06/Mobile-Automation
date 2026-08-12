@@ -161,6 +161,7 @@ export class DeviceAgentRuntime {
             await this.registerOnce();
             registered = true;
             lastHeartbeatAt = 0;
+            this.write?.("agent registered");
           }
           this.connectCommandChannelOnce();
           const now = Date.now();

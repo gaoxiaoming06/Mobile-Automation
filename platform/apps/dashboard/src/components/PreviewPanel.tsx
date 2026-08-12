@@ -1,7 +1,6 @@
 import { Home, Keyboard, ListRestart, RotateCcw, Square } from "lucide-react";
 import type { Dispatch, PointerEvent, RefObject, SetStateAction } from "react";
 import type { DeviceActionRequest, DeviceInfo } from "@mobile-automation/shared";
-import { isAgentDevice } from "../device-availability";
 
 type PreviewMode = "scrcpy" | "scrcpy_connecting" | "screenshot";
 type PreviewRenderer = "canvas" | "video";
@@ -19,16 +18,12 @@ type PreviewPanelProps = {
   previewRenderer: PreviewRenderer;
   scrcpyStreamStatus: string;
   isScrcpyPreviewActive: boolean;
-  scrcpyAvailable: boolean;
-  scrcpyRunning: boolean;
   busy: boolean;
   controlLocked?: boolean;
   controlLockedReason?: string;
   inputText: string;
   setInputText: Dispatch<SetStateAction<string>>;
   setMessage: (message: string) => void;
-  startScrcpy: () => Promise<void>;
-  stopScrcpy: () => Promise<void>;
   runAction: (action: DeviceActionRequest) => Promise<void>;
   handleScreenshotLoaded: (image: HTMLImageElement) => void;
   onPreviewPointerDown: (event: PointerEvent<HTMLDivElement>) => void;
@@ -50,16 +45,12 @@ export function PreviewPanel({
   previewRenderer,
   scrcpyStreamStatus,
   isScrcpyPreviewActive,
-  scrcpyAvailable,
-  scrcpyRunning,
   busy,
   controlLocked = false,
   controlLockedReason,
   inputText,
   setInputText,
   setMessage,
-  startScrcpy,
-  stopScrcpy,
   runAction,
   handleScreenshotLoaded,
   onPreviewPointerDown,
@@ -68,7 +59,6 @@ export function PreviewPanel({
   compact = false
 }: PreviewPanelProps) {
   const previewStatus = formatPreviewStatus(previewMode, scrcpyStreamStatus, selectedDevice);
-  const scrcpyDebugAvailable = Boolean(selectedSerial && scrcpyAvailable && selectedDevice?.platform === "android" && !isAgentDevice(selectedDevice));
   const controlDisabled = busy || controlLocked;
   const selectedDeviceMeta = selectedDevice
     ? `${devicePlatformLabel(selectedDevice.platform)}${selectedDevice.osVersion ? ` ${selectedDevice.osVersion}` : ""}${
@@ -110,17 +100,6 @@ export function PreviewPanel({
             <ListRestart size={18} />
             最近任务
           </button>
-          {!compact && (
-            <button
-              className="icon-button debug-action"
-              disabled={!scrcpyDebugAvailable}
-              onClick={() => (scrcpyRunning ? void stopScrcpy() : void startScrcpy())}
-              title={isAgentDevice(selectedDevice) ? "Agent 设备使用内嵌实时预览" : scrcpyRunning ? "关闭原生 scrcpy 调试窗口" : "打开原生 scrcpy 调试窗口"}
-            >
-              <Square size={16} />
-              {scrcpyRunning ? "关闭调试" : "调试窗口"}
-            </button>
-          )}
         </div>
       </div>
 

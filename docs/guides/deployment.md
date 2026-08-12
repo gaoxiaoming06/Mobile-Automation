@@ -109,12 +109,14 @@ DEVICE_AGENT_MAX_CONCURRENT_RUNS=3 \
 pnpm agent
 ```
 
-For teammates who do not have the repository checked out, use the Dashboard device page instead:
+For teammates who do not have the repository checked out, open **系统设置 > 设备接入** in the Dashboard instead:
 
-- `共享 Agent` copies a one-line installer command that downloads or reuses the Agent and publishes the host's devices to the public pool.
-- `配对 Agent` creates a short-lived pairing code and copies a one-line installer command that keeps the host's devices visible only to the current browser session.
+- Public-device-pool command copies a one-line installer command that downloads or reuses the Agent and publishes the host's devices to the public pool.
+- Private command creates a short-lived pairing code and copies a one-line installer command that keeps the host's devices visible only to the current browser session.
 
-The installer stores files under `~/.mobile-automation-agent`, verifies the downloaded Agent checksum from `/agent/manifest.json`, checks `agent.pid` to avoid duplicate Agent processes, and writes logs to `~/.mobile-automation-agent/agent.log`.
+The installer stores files under `~/.mobile-automation-agent`, verifies the downloaded Agent checksum from `/agent/manifest.json`, and starts a local control service at `http://127.0.0.1:17611`. Keep that terminal open on the device host. After the control service is online, **系统设置 > 设备接入** can switch shared/private mode, reconnect with a fresh private pairing code, update the downloaded Agent bundle, or disconnect the managed Agent runtime without closing the control service.
+
+Private pairing codes are short-lived bootstrap tokens, currently 5 minutes. If a private Agent starts after the code expires, or the server restarts before the Agent successfully registers, the Agent stays running but registration is rejected; use **重连 Agent** in the settings panel to generate a fresh private code and restart the managed runtime.
 
 ## Process Management
 

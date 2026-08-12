@@ -8,7 +8,7 @@ import {
   type StepExpectationResult,
   type TestRun
 } from "@mobile-automation/shared";
-import { ArrowLeft, Camera, CheckCircle2, Pause, Play, Square, StepForward, Video, XCircle } from "lucide-react";
+import { ArrowLeft, Camera, CheckCircle2, Download, Pause, Play, Square, StepForward, Video, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import { expectationLabel } from "./StepExpectationPanel";
 import { caseStepViews, readCaseDocument } from "./case-view";
@@ -113,6 +113,10 @@ export function RunResultsPanel({
                   打开 HTML 报告
                 </a>
               )}
+              <a className="report-link secondary" href={runDiagnosticsUrl(currentRun.id)} download={runDiagnosticsFileName(currentRun.id)}>
+                <Download size={14} />
+                导出诊断包
+              </a>
               {executionFailure && (
                 <div className="execution-failure-notice">
                   <strong>执行未完成</strong>
@@ -128,6 +132,10 @@ export function RunResultsPanel({
                     </dl>
                   )}
                   <small>现场截图和完整定位记录请查看 HTML 报告。</small>
+                  <a className="report-link secondary compact-diagnostic-link" href={runDiagnosticsUrl(currentRun.id)} download={runDiagnosticsFileName(currentRun.id)}>
+                    <Download size={14} />
+                    下载现场诊断包
+                  </a>
                 </div>
               )}
               {renderAndroidAppMonitorSummary(androidAppMonitorDisplaySummaryFromRun(currentRun))}
@@ -342,6 +350,14 @@ function eventSummaryForDisplay(event: TestRun["events"][number]): string {
   }
   if (event.type === "device_lost" || event.type === "preview_lost") return "设备连接在执行过程中中断。";
   return "执行过程中记录到异常，技术细节请查看报告。";
+}
+
+function runDiagnosticsUrl(runId: string): string {
+  return `/api/runs/${encodeURIComponent(runId)}/diagnostics`;
+}
+
+function runDiagnosticsFileName(runId: string): string {
+  return `run-${runId.replace(/[^a-zA-Z0-9._-]+/g, "-")}-diagnostics.zip`;
 }
 
 type RunStepResult = TestRun["stepResults"][number];

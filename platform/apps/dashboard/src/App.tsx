@@ -1,8 +1,8 @@
 import {
   Check,
   ChevronDown,
+  CircleHelp,
   Copy,
-  Download,
   KeyRound,
   Package,
   Pencil,
@@ -14,7 +14,6 @@ import {
   Save,
   Square,
   Smartphone,
-  Terminal,
   Trash2
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -109,6 +108,8 @@ type LocalAgentSnapshot = {
   running: boolean;
   pid?: number;
   config?: LocalAgentConfig;
+  serverConnected?: boolean;
+  registrationError?: string;
   logFile?: string;
   pidFile?: string;
 };
@@ -123,6 +124,13 @@ export type LocalAgentControlStatus = {
   agent: LocalAgentSnapshot;
 };
 
+export type AgentDistributionManifest = {
+  version: string;
+  file: string;
+  url: string;
+  sha256: string;
+};
+
 type LocalAgentControlUpdateResult = {
   version: string;
   agentChanged: boolean;
@@ -131,6 +139,7 @@ type LocalAgentControlUpdateResult = {
 };
 
 type NavItemId = AppNavItemId;
+type SettingsSectionId = "agentAccess" | "androidMonitor" | "aiModel";
 const retainedWorkbenchNavItems = new Set<NavItemId>(["pageAssets", "scriptFlows", "aiScriptFlows", "runs"]);
 export const LOCAL_AGENT_CONTROL_URL = "http://127.0.0.1:17611";
 
@@ -867,6 +876,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(true);
   const [activeNavItem, setActiveNavItem] = useState<NavItemId>("devices");
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("agentAccess");
   const [pendingCaseRevision, setPendingCaseRevision] = useState<CaseRevision>();
   const [pendingCaseDraft, setPendingCaseDraft] = useState<GeneratedDraft>();
   const [pendingCaseSelection, setPendingCaseSelection] = useState("");
@@ -919,17 +929,14 @@ export function App() {
   const [creatingAgentPairing, setCreatingAgentPairing] = useState(false);
   const [localAgentStatus, setLocalAgentStatus] = useState<LocalAgentControlStatus>();
   const [localAgentError, setLocalAgentError] = useState("");
-  const [localAgentLogs, setLocalAgentLogs] = useState("");
   const [localAgentBusy, setLocalAgentBusy] = useState(false);
+  const [agentManifest, setAgentManifest] = useState<AgentDistributionManifest>();
 
   const {
     devices,
     selectedSerial,
     selectedDevice,
     tools,
-    scrcpyAvailable,
-    scrcpyRunning,
-    setScrcpyRunning,
     refreshDevices,
     selectDevice
   } = useDeviceList({ setMessage, controlOwnerId });
@@ -1074,6 +1081,14 @@ export function App() {
     }
   }
 
+  async function refreshAgentManifest() {
+    try {
+      setAgentManifest(await fetchAgentDistributionManifest());
+    } catch {
+      setAgentManifest(undefined);
+    }
+  }
+
   async function startSharedLocalAgent() {
     await runLocalAgentAction(async () => {
       const status = await postLocalAgentControl<LocalAgentControlStatus>("/start", {
@@ -1120,6 +1135,26 @@ export function App() {
   }
 
   async function restartLocalAgent() {
+    const currentConfig = localAgentStatus?.agent.config;
+    if (currentConfig && currentConfig.shared === false) {
+      setCreatingAgentPairing(true);
+      await runLocalAgentAction(async () => {
+        const pairing = await requestAgentPairingCode();
+        const status = await postLocalAgentControl<LocalAgentControlStatus>("/start", {
+          serverUrl: currentAgentServerUrl(),
+          agentId: currentConfig.agentId,
+          shared: false,
+          pairingCode: pairing.code,
+          insecureTls: currentDashboardUsesHttps()
+        });
+        setAgentPairing(pairing);
+        setSharedAgentCommand("");
+        setLocalAgentStatus(status);
+        setMessage(`已用新配对码重连私有 Agent，配对码 ${pairing.code}`);
+        await refreshDevices({ silent: true });
+      }, () => setCreatingAgentPairing(false));
+      return;
+    }
     await runLocalAgentAction(async () => {
       const status = await postLocalAgentControl<LocalAgentControlStatus>("/restart", {});
       setLocalAgentStatus(status);
@@ -1139,16 +1174,9 @@ export function App() {
       setLocalAgentStatus({ ok: true, control: response.control, agent: response.agent });
       const restartText = response.update.restartRequired ? "，重新运行启动命令后生效" : "";
       setMessage(`已更新 Agent 到 ${response.update.version}${restartText}`);
+      await refreshAgentManifest();
       await refreshDevices({ silent: true });
     });
-  }
-
-  async function loadLocalAgentLogs() {
-    await runLocalAgentAction(async () => {
-      const response = await fetchLocalAgentControlLogs();
-      setLocalAgentLogs(response.logs);
-      setMessage("已读取本机 Agent 日志");
-    }, undefined, { keepBusy: false });
   }
 
   async function runLocalAgentAction(action: () => Promise<void>, onFinally?: () => void, options: { keepBusy?: boolean } = {}) {
@@ -1187,7 +1215,7 @@ export function App() {
     if (await copyTextToClipboard(command)) {
       setMessage("已复制共享 Agent 接入命令");
     } else {
-      setMessage("已生成共享 Agent 命令，请在设备接入面板中手动复制");
+      setMessage("已生成共享 Agent 命令，请在系统设置的设备接入中手动复制");
     }
   }
 
@@ -1248,15 +1276,17 @@ export function App() {
   }, [activeNavItem]);
 
   useEffect(() => {
-    if (activeNavItem !== "agentAccess") {
+    if (activeNavItem !== "settings" || settingsSection !== "agentAccess") {
       return undefined;
     }
     void refreshLocalAgentStatus({ silent: true });
+    void refreshAgentManifest();
     const timer = window.setInterval(() => {
       void refreshLocalAgentStatus({ silent: true });
+      void refreshAgentManifest();
     }, 3_000);
     return () => window.clearInterval(timer);
-  }, [activeNavItem]);
+  }, [activeNavItem, settingsSection]);
 
   useEffect(() => {
     if (activeNavItem !== "assetRecording" || !selectedSerial || !selectedDevice) {
@@ -1406,34 +1436,6 @@ export function App() {
     }
   }
 
-  async function startScrcpy() {
-    if (!selectedSerial) {
-      setMessage("请先选择设备");
-      return;
-    }
-    if (isAgentDevice(selectedDevice)) {
-      setMessage("Agent 设备使用内嵌实时预览，暂不支持打开本机 scrcpy 调试窗口");
-      return;
-    }
-    const response = await fetch(`/api/devices/${encodeURIComponent(selectedSerial)}/scrcpy`, { method: "POST" });
-    const json = (await response.json()) as { error?: string };
-    if (!response.ok) {
-      setMessage(json.error ?? "scrcpy 启动失败");
-      return;
-    }
-    setScrcpyRunning(true);
-    setMessage("调试窗口已打开");
-  }
-
-  async function stopScrcpy() {
-    if (!selectedSerial) {
-      return;
-    }
-    await fetch(`/api/devices/${encodeURIComponent(selectedSerial)}/scrcpy`, { method: "DELETE" });
-    setScrcpyRunning(false);
-    setMessage("调试窗口已关闭");
-  }
-
   function pointerToDevice(
     event: PointerEvent,
     targetSize = selectedDeviceSize
@@ -1550,10 +1552,6 @@ export function App() {
     setActiveNavItem("devices");
   }
 
-  function openAgentAccess() {
-    setActiveNavItem("agentAccess");
-  }
-
   function openAssetRecording() {
     if (!advancedToolsEnabled) {
       setActiveNavItem("devices");
@@ -1589,7 +1587,8 @@ export function App() {
     setActiveNavItem("stability");
   }
 
-  function openSettings() {
+  function openSettings(section: SettingsSectionId = "agentAccess") {
+    setSettingsSection(section);
     setActiveNavItem("settings");
   }
 
@@ -2103,16 +2102,12 @@ export function App() {
       previewRenderer={previewRenderer}
       scrcpyStreamStatus={scrcpyStreamStatus}
       isScrcpyPreviewActive={isScrcpyPreviewActive}
-      scrcpyAvailable={scrcpyAvailable}
-      scrcpyRunning={scrcpyRunning}
       busy={busy}
       controlLocked={selectedDeviceControlLocked}
       controlLockedReason={selectedDeviceControlLockedReason}
       inputText={inputText}
       setInputText={setInputText}
       setMessage={setMessage}
-      startScrcpy={startScrcpy}
-      stopScrcpy={stopScrcpy}
       runAction={runAction}
       handleScreenshotLoaded={handleScreenshotLoaded}
       onPreviewPointerDown={onPreviewPointerDown}
@@ -2156,14 +2151,13 @@ export function App() {
           advancedToolsEnabled={advancedToolsEnabled}
           setNavCollapsed={setNavCollapsed}
           openDevices={openDevices}
-          openAgentAccess={openAgentAccess}
           openAssetRecording={openAssetRecording}
           openPageAssets={openPageAssets}
           openScriptFlows={openScriptFlows}
           openAiScriptFlows={openAiScriptFlows}
           openStability={openStability}
           openRuns={openRuns}
-          openSettings={openSettings}
+          openSettings={() => openSettings()}
         />
 
         {activeNavItem === "devices" && (
@@ -2178,27 +2172,7 @@ export function App() {
             activeRunForSelectedDevice={activeRunForSelectedDevice}
             onOpenRuns={openRuns}
             onRefreshDevices={() => refreshDevices().catch((error) => setMessage(error.message))}
-          />
-        )}
-
-        {activeNavItem === "agentAccess" && (
-          <AgentAccessView
-            status={localAgentStatus}
-            error={localAgentError}
-            logs={localAgentLogs}
-            busy={localAgentBusy || creatingAgentPairing}
-            agentPairing={agentPairing}
-            sharedAgentCommand={sharedAgentCommand}
-            onRefreshStatus={() => void refreshLocalAgentStatus()}
-            onStartShared={startSharedLocalAgent}
-            onStartPrivate={startPrivateLocalAgent}
-            onStop={stopLocalAgent}
-            onRestart={restartLocalAgent}
-            onUpdate={updateLocalAgent}
-            onLoadLogs={loadLocalAgentLogs}
-            onCreatePairingCommand={createAgentPairingCode}
-            onCopyPairingCommand={copyAgentPairingCommand}
-            onCopySharedCommand={copySharedAgentInstallCommand}
+            onOpenAgentAccess={() => openSettings("agentAccess")}
           />
         )}
 
@@ -2232,16 +2206,12 @@ export function App() {
                 previewRenderer={previewRenderer}
                 scrcpyStreamStatus={scrcpyStreamStatus}
                 isScrcpyPreviewActive={isScrcpyPreviewActive}
-                scrcpyAvailable={scrcpyAvailable}
-                scrcpyRunning={scrcpyRunning}
                 busy={busy || assetRecordingIdentifying}
                 controlLocked={selectedDeviceControlLocked}
                 controlLockedReason={selectedDeviceControlLockedReason}
                 inputText={inputText}
                 setInputText={setInputText}
                 setMessage={setMessage}
-                startScrcpy={startScrcpy}
-                stopScrcpy={stopScrcpy}
                 runAction={runAction}
                 handleScreenshotLoaded={handleScreenshotLoaded}
                 onPreviewPointerDown={onPreviewPointerDown}
@@ -2393,6 +2363,27 @@ export function App() {
             aiDraft={aiModelDraft}
             androidAppMonitorDraft={androidAppMonitorDraft}
             busy={busy}
+            activeSection={settingsSection}
+            agentAccessPanel={
+              <AgentAccessView
+                status={localAgentStatus}
+                error={localAgentError}
+                busy={localAgentBusy || creatingAgentPairing}
+                agentPairing={agentPairing}
+                sharedAgentCommand={sharedAgentCommand}
+                agentManifest={agentManifest}
+                onRefreshStatus={() => void refreshLocalAgentStatus()}
+                onStartShared={startSharedLocalAgent}
+                onStartPrivate={startPrivateLocalAgent}
+                onStop={stopLocalAgent}
+                onRestart={restartLocalAgent}
+                onUpdate={updateLocalAgent}
+                onCreatePairingCommand={createAgentPairingCode}
+                onCopyPairingCommand={copyAgentPairingCommand}
+                onCopySharedCommand={copySharedAgentInstallCommand}
+              />
+            }
+            onSectionChange={setSettingsSection}
             onAiDraftChange={(patch) => setAiModelDraft((draft) => ({ ...draft, ...patch }))}
             onAndroidAppMonitorDraftChange={(patch) => setAndroidAppMonitorDraft((draft) => ({ ...draft, ...patch }))}
             onSaveAiSettings={() => void saveAiModelSettings()}
@@ -2711,35 +2702,92 @@ type SettingsViewProps = {
   aiDraft: AiModelSettingsDraft;
   androidAppMonitorDraft: AndroidAppMonitorSettingsDraft;
   busy: boolean;
+  activeSection: SettingsSectionId;
+  agentAccessPanel: ReactNode;
+  onSectionChange: (section: SettingsSectionId) => void;
   onAiDraftChange: (patch: Partial<AiModelSettingsDraft>) => void;
   onAndroidAppMonitorDraftChange: (patch: Partial<AndroidAppMonitorSettingsDraft>) => void;
   onSaveAiSettings: () => void;
 };
 
-function SettingsView({
+export function SettingsView({
   aiSettings,
   aiDraft,
   androidAppMonitorDraft,
   busy,
+  activeSection,
+  agentAccessPanel,
+  onSectionChange,
   onAiDraftChange,
   onAndroidAppMonitorDraftChange,
   onSaveAiSettings
 }: SettingsViewProps) {
   return (
     <section className="module-page settings-module">
-      <AndroidAppMonitorSettingsPanel
-        draft={androidAppMonitorDraft}
-        onDraftChange={onAndroidAppMonitorDraftChange}
-      />
-      <AiModelSettingsPanel
-        settings={aiSettings}
-        draft={aiDraft}
-        busy={busy}
-        onDraftChange={onAiDraftChange}
-        onSave={onSaveAiSettings}
-      />
+      <div className="panel module-head-panel settings-head-panel">
+        <div>
+          <span className="module-eyebrow">系统设置</span>
+          <h2>系统设置</h2>
+        </div>
+      </div>
+      <div className="settings-layout">
+        <div className="settings-tabs" role="tablist" aria-label="系统设置">
+          <button
+            className={settingsTabClass(activeSection, "agentAccess")}
+            type="button"
+            role="tab"
+            aria-selected={activeSection === "agentAccess"}
+            onClick={() => onSectionChange("agentAccess")}
+          >
+            <strong>设备接入</strong>
+            <span>启动、切换、更新本机 Agent。</span>
+          </button>
+          <button
+            className={settingsTabClass(activeSection, "androidMonitor")}
+            type="button"
+            role="tab"
+            aria-selected={activeSection === "androidMonitor"}
+            onClick={() => onSectionChange("androidMonitor")}
+          >
+            <strong>Android 监控</strong>
+            <span>默认采样策略与阈值。</span>
+          </button>
+          <button
+            className={settingsTabClass(activeSection, "aiModel")}
+            type="button"
+            role="tab"
+            aria-selected={activeSection === "aiModel"}
+            onClick={() => onSectionChange("aiModel")}
+          >
+            <strong>AI 模型</strong>
+            <span>页面分析与用例生成配置。</span>
+          </button>
+        </div>
+        <div className="settings-section-panel">
+          {activeSection === "agentAccess" && agentAccessPanel}
+          {activeSection === "androidMonitor" && (
+            <AndroidAppMonitorSettingsPanel
+              draft={androidAppMonitorDraft}
+              onDraftChange={onAndroidAppMonitorDraftChange}
+            />
+          )}
+          {activeSection === "aiModel" && (
+            <AiModelSettingsPanel
+              settings={aiSettings}
+              draft={aiDraft}
+              busy={busy}
+              onDraftChange={onAiDraftChange}
+              onSave={onSaveAiSettings}
+            />
+          )}
+        </div>
+      </div>
     </section>
   );
+}
+
+function settingsTabClass(activeSection: SettingsSectionId, section: SettingsSectionId): string {
+  return activeSection === section ? "settings-tab active" : "settings-tab";
 }
 
 type AiModelSettingsPanelProps = {
@@ -3204,36 +3252,34 @@ export function StabilityExplorerPanel({
 type AgentAccessViewProps = {
   status?: LocalAgentControlStatus;
   error: string;
-  logs: string;
   busy: boolean;
   agentPairing?: AgentPairingCode;
   sharedAgentCommand: string;
+  agentManifest?: AgentDistributionManifest;
   onRefreshStatus: () => void;
   onStartShared: () => void;
   onStartPrivate: () => void;
   onStop: () => void;
   onRestart: () => void;
   onUpdate: () => void;
-  onLoadLogs: () => void;
   onCreatePairingCommand: () => void;
   onCopyPairingCommand: (code: string, shell?: AgentCommandShell) => void;
   onCopySharedCommand: (shell?: AgentCommandShell) => void;
 };
 
-function AgentAccessView({
+export function AgentAccessView({
   status,
   error,
-  logs,
   busy,
   agentPairing,
   sharedAgentCommand,
+  agentManifest,
   onRefreshStatus,
   onStartShared,
   onStartPrivate,
   onStop,
   onRestart,
   onUpdate,
-  onLoadLogs,
   onCreatePairingCommand,
   onCopyPairingCommand,
   onCopySharedCommand
@@ -3248,9 +3294,26 @@ function AgentAccessView({
     : agentPairingCommand(undefined, { mode: "shared", shell: commandShell });
   const privateCommand = agentPairing ? agentPairingCommand(agentPairing.code, { shell: commandShell }) : "";
   const shellLabel = commandShell === "powershell" ? "Windows PowerShell" : "macOS / Linux";
+  const modeSwitchesToShared = agentConfig?.shared !== true;
+  const modeSwitchLabel = modeSwitchesToShared ? "切换为共享模式" : "切换为私有模式";
+  const modeSwitchTitle = modeSwitchesToShared ? "把本机设备发布到服务端公共设备池" : "只让当前浏览器会话使用本机设备";
+  const ModeSwitchIcon = modeSwitchesToShared ? Copy : KeyRound;
+  const agentModeHelpText = "共享模式：本机设备会进入服务端公共设备池，其他用户也能选择使用。私有模式：本机设备只对当前浏览器会话可见，需要配对码接入。";
+  const registrationError = agent?.registrationError;
+  const privatePairingExpired = agentConfig?.shared === false && Boolean(registrationError && /Pairing code is invalid or expired/i.test(registrationError));
+  const registrationErrorText = privatePairingExpired
+    ? "私有配对码无效或已过期，重连 Agent 会生成新配对码；也可以切换为共享模式。"
+    : registrationError ? `Agent 注册失败：${registrationError}` : "";
+  const restartTitle = privatePairingExpired ? "生成新配对码并重连私有 Agent" : "重连本机 Agent";
+  const displayVersion = localAgentDisplayVersion(status);
+  const updateAvailable = agentRunning && agentVersionOutdated(displayVersion, agentManifest?.version);
+  const versionTitle = updateAvailable
+    ? `服务端 Agent ${agentManifest?.version} 可用，点击更新`
+    : "检查并更新本机 Agent";
+  const serverConnectionLabel = localAgentServerConnectionLabel(agent);
 
   return (
-    <section className="module-page agent-access-module">
+    <section className="agent-access-module">
       <div className="panel agent-access-head">
         <div>
           <span className="module-eyebrow">设备接入</span>
@@ -3258,21 +3321,34 @@ function AgentAccessView({
         </div>
         <div className="module-stat-grid agent-access-stat-grid">
           <div>
-            <strong>{controlOnline ? "在线" : "未连接"}</strong>
-            <span>控制服务</span>
+            <strong>{controlOnline ? "可用" : "未连接"}</strong>
+            <span>本机控制</span>
           </div>
           <div>
             <strong>{agentRunning ? "运行" : "停止"}</strong>
-            <span>Agent</span>
+            <span>Agent 进程</span>
+          </div>
+          <div className={registrationError ? "agent-status-error" : undefined}>
+            <strong>{serverConnectionLabel}</strong>
+            <span>服务端接入</span>
           </div>
           <div>
             <strong>{localAgentModeLabel(agentConfig)}</strong>
             <span>接入模式</span>
           </div>
-          <div>
-            <strong>{status?.control.version ?? "-"}</strong>
+          <button
+            className={updateAvailable ? "agent-version-card has-update" : "agent-version-card"}
+            disabled={!controlOnline || busy}
+            onClick={onUpdate}
+            type="button"
+            title={versionTitle}
+            aria-label="更新 Agent"
+          >
+            <strong>{displayVersion ?? "-"}</strong>
             <span>版本</span>
-          </div>
+            {updateAvailable ? <small>服务端 {agentManifest?.version}</small> : null}
+            {updateAvailable ? <i className="agent-update-dot" aria-hidden="true" /> : null}
+          </button>
         </div>
       </div>
 
@@ -3288,42 +3364,28 @@ function AgentAccessView({
             </button>
           </div>
 
-          <div className="agent-local-state">
-            <span className={`device-status-pill ${controlOnline ? "online" : "offline"}`}>
-              {controlOnline ? "control online" : "control offline"}
-            </span>
-            <span className={`device-status-pill ${agentRunning ? "running" : "offline"}`}>
-              {agentRunning ? `agent pid ${agent?.pid ?? "-"}` : "agent stopped"}
-            </span>
-          </div>
-
           <div className="agent-action-grid">
-            <button className="icon-button primary" disabled={!controlOnline || busy} onClick={onStartShared} title="切换为共享 Agent" type="button">
-              <Copy size={17} />
-              共享到服务端
+            <button
+              className="icon-button primary agent-mode-switch-button"
+              disabled={!controlOnline || busy}
+              onClick={modeSwitchesToShared ? onStartShared : onStartPrivate}
+              title={modeSwitchTitle}
+              type="button"
+            >
+              <ModeSwitchIcon size={17} />
+              {modeSwitchLabel}
             </button>
-            <button className="icon-button" disabled={!controlOnline || busy} onClick={onStartPrivate} title="切换为私有配对 Agent" type="button">
-              <KeyRound size={17} />
-              私有接入
-            </button>
-            <button className="icon-button" disabled={!controlOnline || busy} onClick={onRestart} title="重连本机 Agent" type="button">
+            <button className="icon-button" disabled={!controlOnline || busy} onClick={onRestart} title={restartTitle} type="button">
               <RotateCw size={17} />
               重连 Agent
-            </button>
-            <button className="icon-button" disabled={!controlOnline || busy} onClick={onUpdate} title="更新本机 Agent" type="button">
-              <Download size={17} />
-              更新 Agent
             </button>
             <button className="icon-button danger" disabled={!controlOnline || busy || !agentRunning} onClick={onStop} title="断开本机 Agent" type="button">
               <Power size={17} />
               断开 Agent
             </button>
-            <button className="icon-button" disabled={!controlOnline} onClick={onLoadLogs} title="读取本机 Agent 日志" type="button">
-              <Terminal size={17} />
-              查看日志
-            </button>
           </div>
 
+          {registrationErrorText && <div className="agent-error-banner">{registrationErrorText}</div>}
           {error && <div className="agent-error-banner">{error}</div>}
 
           <div className="agent-config-grid">
@@ -3339,18 +3401,19 @@ function AgentAccessView({
               <span>本机控制</span>
               <strong>{LOCAL_AGENT_CONTROL_URL}</strong>
             </div>
-            <div>
-              <span>进程</span>
-              <strong>{agent?.pid ? `pid ${agent.pid}` : "-"}</strong>
-            </div>
           </div>
         </div>
 
         <div className="panel agent-command-panel">
           <div className="panel-head">
             <div>
-              <h2>接入命令</h2>
-              <span>{agentPairing ? `${formatDateTime(agentPairing.expiresAt)} 过期` : `已按当前系统显示 ${shellLabel} 命令`}</span>
+              <div className="agent-command-title">
+                <h2>接入命令</h2>
+                <button className="icon-button compact agent-help-button" title={agentModeHelpText} aria-label={agentModeHelpText} type="button">
+                  <CircleHelp size={16} />
+                </button>
+              </div>
+              <span>已按当前系统显示 {shellLabel} 命令</span>
             </div>
             <div className="agent-command-actions">
               <button className="icon-button compact-text" onClick={() => setCommandShell(commandShell === "bash" ? "powershell" : "bash")} title="切换命令系统" type="button">
@@ -3378,6 +3441,7 @@ function AgentAccessView({
                 <div>
                   <span>{shellLabel}</span>
                   <strong>私有 {agentPairing?.code}</strong>
+                  {agentPairing ? <small>{formatDateTime(agentPairing.expiresAt)} 过期</small> : null}
                 </div>
                 <code>{privateCommand}</code>
                 <button className="icon-button compact" onClick={() => agentPairing && onCopyPairingCommand(agentPairing.code, commandShell)} title="复制私有 Agent 命令" type="button">
@@ -3386,22 +3450,12 @@ function AgentAccessView({
               </div>
             ) : (
               <div className="agent-command-empty">
-                <Terminal size={18} />
+                <KeyRound size={18} />
                 <span>生成私有配对后可复制私有接入命令</span>
               </div>
             )}
           </div>
         </div>
-      </div>
-
-      <div className="panel agent-log-panel">
-        <div className="panel-head">
-          <h2>本机 Agent 日志</h2>
-          <button className="icon-button compact" disabled={!controlOnline} onClick={onLoadLogs} title="刷新日志" type="button">
-            <RefreshCw size={16} />
-          </button>
-        </div>
-        {logs ? <pre>{logs}</pre> : <div className="empty">暂无日志内容</div>}
       </div>
     </section>
   );
@@ -3412,6 +3466,53 @@ function localAgentModeLabel(config: LocalAgentConfig | undefined): string {
     return "未配置";
   }
   return config.shared ? "共享" : "私有";
+}
+
+function localAgentServerConnectionLabel(agent: LocalAgentSnapshot | undefined): string {
+  if (!agent?.running) {
+    return "未启动";
+  }
+  if (agent.registrationError) {
+    return "注册失败";
+  }
+  if (agent.serverConnected === true) {
+    return "已接入";
+  }
+  return "连接中";
+}
+
+export function localAgentDisplayVersion(status: LocalAgentControlStatus | undefined): string | undefined {
+  return status?.agent.config?.version || status?.control.version;
+}
+
+export function agentVersionOutdated(localVersion: string | undefined, latestVersion: string | undefined): boolean {
+  if (!localVersion || !latestVersion) {
+    return false;
+  }
+  return compareAgentVersions(localVersion, latestVersion) < 0;
+}
+
+export function compareAgentVersions(left: string, right: string): number {
+  const leftParts = versionParts(left);
+  const rightParts = versionParts(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParts[index] ?? 0;
+    const rightPart = rightParts[index] ?? 0;
+    if (leftPart !== rightPart) {
+      return leftPart - rightPart;
+    }
+  }
+  return left.localeCompare(right);
+}
+
+function versionParts(version: string): number[] {
+  return version
+    .trim()
+    .replace(/^[^\d]*/, "")
+    .split(/[.-]/)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((part) => Number.isFinite(part));
 }
 
 type DeviceManagementViewProps = {
@@ -3425,9 +3526,10 @@ type DeviceManagementViewProps = {
   activeRunForSelectedDevice?: TestRun;
   onOpenRuns: () => void;
   onRefreshDevices: () => void;
+  onOpenAgentAccess: () => void;
 };
 
-function DeviceManagementView({
+export function DeviceManagementView({
   devices,
   selectedSerial,
   selectedDevice,
@@ -3437,7 +3539,8 @@ function DeviceManagementView({
   controlOwnerId,
   activeRunForSelectedDevice,
   onOpenRuns,
-  onRefreshDevices
+  onRefreshDevices,
+  onOpenAgentAccess
 }: DeviceManagementViewProps) {
   const selectedDeviceRuns = selectedSerial ? runs.filter((run) => run.deviceSerial === selectedSerial).slice(0, 5) : [];
   const selectableDeviceCount = devices.filter(isControllableDevice).length;
@@ -3559,7 +3662,15 @@ function DeviceManagementView({
 
             </>
           ) : (
-            <div className="empty device-empty-state">请先在左侧选择一台设备</div>
+            <div className="empty device-empty-state">
+              <Smartphone size={24} />
+              <strong>没有可管理设备</strong>
+              <span>在系统设置里启动或共享本机 Agent 后，这里会显示可用设备。</span>
+              <button className="icon-button" type="button" onClick={onOpenAgentAccess}>
+                <KeyRound size={16} />
+                去设置接入 Agent
+              </button>
+            </div>
           )}
         </div>
 
@@ -4508,6 +4619,23 @@ export function detectAgentCommandShell(userAgent: string | undefined = browserU
   return value.includes("windows") ? "powershell" : "bash";
 }
 
+export async function fetchAgentDistributionManifest(pathName = "/agent/manifest.json"): Promise<AgentDistributionManifest> {
+  const response = await fetch(pathName);
+  const json = (await response.json().catch(() => ({}))) as Partial<AgentDistributionManifest> & { error?: string };
+  if (!response.ok) {
+    throw new Error(json.error ?? `Agent 版本信息请求失败：${response.status}`);
+  }
+  if (!json.version || !json.file || !json.url || !json.sha256) {
+    throw new Error("Agent 版本信息响应不完整");
+  }
+  return {
+    version: json.version,
+    file: json.file,
+    url: json.url,
+    sha256: json.sha256
+  };
+}
+
 export async function fetchLocalAgentControlStatus(baseUrl = LOCAL_AGENT_CONTROL_URL): Promise<LocalAgentControlStatus> {
   const response = await fetch(`${baseUrl}/status`);
   const json = await readLocalAgentControlJson<LocalAgentControlStatus>(response);
@@ -4526,11 +4654,6 @@ async function postLocalAgentControl<T>(pathName: string, body: unknown, baseUrl
   return readLocalAgentControlJson<T>(response);
 }
 
-async function fetchLocalAgentControlLogs(baseUrl = LOCAL_AGENT_CONTROL_URL): Promise<{ ok: true; logs: string }> {
-  const response = await fetch(`${baseUrl}/logs?lines=240`);
-  return readLocalAgentControlJson<{ ok: true; logs: string }>(response);
-}
-
 async function readLocalAgentControlJson<T>(response: Response): Promise<T> {
   const json = (await response.json().catch(() => ({}))) as { error?: string };
   if (!response.ok) {
@@ -4546,9 +4669,9 @@ export async function copyCreatedAgentPairingCommand(
 ): Promise<string> {
   try {
     const copied = await copyText(agentPairingCommand(pairingCode, commandOptions));
-    return copied ? "已复制 Agent 配对命令" : "已生成 Agent 配对命令，请在设备接入面板中手动复制";
+    return copied ? "已复制 Agent 配对命令" : "已生成 Agent 配对命令，请在系统设置的设备接入中手动复制";
   } catch {
-    return "已生成 Agent 配对命令，请在设备接入面板中手动复制";
+    return "已生成 Agent 配对命令，请在系统设置的设备接入中手动复制";
   }
 }
 
