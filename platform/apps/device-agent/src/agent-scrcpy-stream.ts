@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { AdbServerClient } from "@yume-chan/adb";
 import { AdbScrcpyClient, AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
 import { AdbServerNodeTcpConnector } from "@yume-chan/adb-server-node-tcp";
@@ -20,6 +21,9 @@ import { WebSocket } from "ws";
 
 const protocolVersion = 1;
 const scrcpyServerDevicePath = "/data/local/tmp/mobile-automation-scrcpy-server.jar";
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = path.resolve(moduleDir, "../../..");
+const defaultServerPath = path.join(workspaceRoot, "tools/scrcpy-server-v3.3.3");
 const maxWebSocketBacklogBytes = Number(process.env.SCRCPY_STREAM_MAX_WS_BACKLOG_BYTES ?? 512 * 1024);
 
 type ScrcpyStreamSession = {
@@ -370,14 +374,13 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function resolveScrcpyServerPath(): Promise<string> {
-  const candidates = uniqueStrings([
-    process.env.SCRCPY_SERVER_PATH,
-    path.resolve(process.cwd(), "platform/tools/scrcpy-server-v3.3.3"),
-    path.resolve(process.cwd(), "../../tools/scrcpy-server-v3.3.3"),
-    path.resolve(process.cwd(), "tools/scrcpy-server-v3.3.3"),
+  const configured = process.env.SCRCPY_SERVER_PATH;
+  const candidates = [
+    configured,
+    defaultServerPath,
     "/opt/homebrew/Cellar/scrcpy/3.3.3/share/scrcpy/scrcpy-server",
     "/usr/local/Cellar/scrcpy/3.3.3/share/scrcpy/scrcpy-server"
-  ].filter((item): item is string => Boolean(item)));
+  ].filter((item): item is string => Boolean(item));
 
   for (const candidate of candidates) {
     const info = await stat(candidate).catch(() => undefined);
@@ -387,8 +390,4 @@ async function resolveScrcpyServerPath(): Promise<string> {
   }
 
   throw new Error("scrcpy-server v3.3.3 not found. Set SCRCPY_SERVER_PATH or place it at platform/tools/scrcpy-server-v3.3.3");
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return Array.from(new Set(values));
 }
