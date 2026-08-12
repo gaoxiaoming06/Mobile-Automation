@@ -41,6 +41,7 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象，例如 { visual: { kind: icon, query: \"课堂报告右侧箭头图标\", area: content, position: trailing, nearText: \"课堂报告\" } } 或 { visual: { kind: image, query: \"封面图片\", area: content } }。执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
   "用户明确说‘点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复、reachPage 或重启。",
   "control 当前支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content、scopeText 和 ordinal，用于预填输入框没有稳定标签的场景；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text。",
+  "textField.scopeText 必须是局部表单区域标题、字段组标题或控件附近稳定文字，不能使用页面标题、顶栏固定标题、App 名称等全局固定文字。用户只用“某页面标题上方/下方/第几个输入框”定位时应返回 needs_clarification，请其补充局部字段名或开启当前屏幕辅助。",
   "执行器能力合同：visual 仅支持 tap；selectText 和 scrollUntilVisible 必须使用 text；inputText 和 clearText 必须使用 text 或 control: textField。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
   "用户明确操作是硬约束：点击、输入、清空、滑动或启动等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。用户明确要求启动时生成唯一一个 role: setup 的 launchApp；没有要求启动时不要添加。",
@@ -234,6 +235,14 @@ export async function generateScriptFlowDraft(input: {
         model: input.config.model
       };
     }
+    if (firstError instanceof UnstableTextFieldScopeError) {
+      return {
+        status: "needs_clarification",
+        clarification: unstableTextFieldScopeClarification(firstError.scopeText),
+        channel,
+        model: input.config.model
+      };
+    }
     const repaired = await timedScriptFlowAiStage(input.timingContext, "repair_request", () => runAiJsonRequest(requestConfig, {
       developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
       userContent: buildScriptFlowRepairPrompt(plannerPrompt, result.content, firstError),
@@ -270,6 +279,14 @@ export async function generateScriptFlowDraft(input: {
         return {
           status: "needs_clarification",
           clarification: placeholderExecutableTargetClarification(repairError.target),
+          channel,
+          model: input.config.model
+        };
+      }
+      if (repairError instanceof UnstableTextFieldScopeError) {
+        return {
+          status: "needs_clarification",
+          clarification: unstableTextFieldScopeClarification(repairError.scopeText),
           channel,
           model: input.config.model
         };
@@ -449,6 +466,7 @@ export function buildScriptFlowPlannerPrompt(
     "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
     JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
     "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal；用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 与 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content、scopeText 和 ordinal；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
+    "textField.scopeText 必须是局部表单区域标题、字段组标题或控件附近稳定文字，不能使用页面标题、顶栏固定标题、App 名称等全局固定文字。用户只用“某页面标题上方/下方/第几个输入框”定位时返回 needs_clarification，要求补充局部字段名或开启当前屏幕辅助。",
     "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 默认按完整控件文字匹配，按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和参数化名称不要写 match: contains。使用 screenContext 或读屏证据时，根据当前可见原文选择 match：实际原文与目标完全一致时用 exact/省略 match；screenContext 原文是“确定(1/6)”而用户只说“确定”时，必须生成 target: { text: \"确定\", match: \"contains\" }；类似“完成 2/6”“保存(已选3项)”这类动态数量或状态后缀也用 contains，并尽量补充 area、nearText、scopeText、ordinal 或容器语义。未启用当前屏幕上下文时，根据自然语言语义选择 match：用户明确表达‘包含、带有、关键字、模糊匹配’或明显只给动态状态控件的基础动作词时，才写 match: contains。",
     screenContext
       ? [
@@ -870,6 +888,7 @@ export function parseScriptFlowAiResponse(
   validateGeneratedReferences(document, input);
   validateGeneratedActionTargetReferences(document, input.catalog);
   validateGeneratedExecutableTargetContracts(document, input.prompt);
+  validateGeneratedTextFieldScopes(document, input);
   validateGeneratedNavigationReachability(document, input.catalog);
   return {
     status: "ready",
@@ -1539,6 +1558,52 @@ function validateGeneratedExecutableTargetContracts(document: ScriptFlowDocument
   }
 }
 
+function validateGeneratedTextFieldScopes(
+  document: ScriptFlowDocument,
+  input: {
+    prompt?: string;
+    catalog: ScriptFlowPlannerCatalog;
+    screenContext?: ScreenUnderstandingContext;
+  }
+): void {
+  if (!hasRelativeTextFieldPrompt(input.prompt)) {
+    return;
+  }
+  const fixedTitles = fixedPageTitleScopeTexts(input);
+  if (!fixedTitles.size) {
+    return;
+  }
+  for (const step of flattenSteps(document.steps)) {
+    const target = textFieldActionTarget(step);
+    const scopeText = target?.scopeText;
+    if (target?.control === "textField" && scopeText && fixedTitles.has(compactGroundingText(scopeText))) {
+      throw new UnstableTextFieldScopeError(scopeText);
+    }
+  }
+}
+
+function hasRelativeTextFieldPrompt(prompt: string | undefined): boolean {
+  return Boolean(prompt
+    && /输入框|文本框|输入栏|输入区/u.test(prompt)
+    && /上方|上面|上边|下方|下面|下边|附近|旁边|前面|后面|最上|最下|第[一二三四五六七八九十\d]+个/u.test(prompt));
+}
+
+function fixedPageTitleScopeTexts(input: {
+  catalog: ScriptFlowPlannerCatalog;
+  screenContext?: ScreenUnderstandingContext;
+}): Set<string> {
+  return new Set([
+    ...input.catalog.pages.flatMap((page) => [page.name]),
+    input.screenContext?.page.name
+  ].map((value) => value ? compactGroundingText(value) : "").filter(Boolean));
+}
+
+function textFieldActionTarget(step: ScriptStep): ScriptTarget | undefined {
+  if ("inputText" in step) return step.inputText.target;
+  if ("clearText" in step) return step.clearText.target;
+  return undefined;
+}
+
 function validateTapTargetContract(target: ScriptTarget, operationPhrase: string | undefined): void {
   if (!isTextLikeTarget(target)) {
     return;
@@ -1684,6 +1749,10 @@ function placeholderExecutableTargetClarification(target: string): string {
   return `生成结果把“${target}”当成了可执行目标，但这只是占位描述，不是真实屏幕文字。请补充真实班级名、活动标题、入口文字或目标页独有稳定文字。`;
 }
 
+function unstableTextFieldScopeClarification(scopeText: string): string {
+  return `“${scopeText}”像是固定页面标题，不能作为可滚动页面中输入框的稳定限定范围。请补充该输入框附近的局部字段名或区域名，或开启“结合当前屏幕生成”让我读取当前可见控件。`;
+}
+
 function validatePageReference(
   reference: string | undefined,
   field: string,
@@ -1727,6 +1796,13 @@ class PlaceholderExecutableTargetError extends Error {
   constructor(readonly target: string) {
     super(`AI 草稿把占位描述“${target}”当成可执行目标`);
     this.name = "PlaceholderExecutableTargetError";
+  }
+}
+
+class UnstableTextFieldScopeError extends Error {
+  constructor(readonly scopeText: string) {
+    super(`textField.scopeText “${scopeText}” is a fixed page title`);
+    this.name = "UnstableTextFieldScopeError";
   }
 }
 

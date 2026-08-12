@@ -426,6 +426,44 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
+  it("asks for a local field anchor when AI scopes a text field to a fixed page title", async () => {
+    const response = readyResponse();
+    response.summary = "修改新建课堂下方输入框";
+    response.document.purpose = "business";
+    response.document.testLevel = "component";
+    response.document.name = "修改新建课堂下方输入框";
+    response.document.entry = undefined;
+    response.document.outcome = undefined;
+    response.document.parameters = {
+      inputValue: { type: "string", required: true, label: "输入内容" }
+    };
+    response.document.steps = [{
+      id: "fill-field-under-title",
+      role: "business",
+      inputText: {
+        target: { control: "textField", area: "content", scopeText: "新建课堂", ordinal: 1 },
+        value: "${inputValue}",
+        search: { mode: "auto" }
+      }
+    }];
+    response.parameterValues = { inputValue: "123333" };
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "更新新建课堂下面的输入框内容为123333",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: planningPageCatalog(),
+      flows: [],
+      fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(response) } }] }), { status: 200 })
+    });
+
+    expect(result).toMatchObject({
+      status: "needs_clarification",
+      clarification: expect.stringContaining("固定页面标题")
+    });
+  });
+
   it("normalizes reusable form field searches to auto when the prompt does not pin the visible viewport", () => {
     const response = readyResponse();
     response.summary = "修改课堂标题";

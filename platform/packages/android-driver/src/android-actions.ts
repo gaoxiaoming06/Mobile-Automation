@@ -220,6 +220,12 @@ export class AndroidActionExecutor {
       await this.shell(serial, ["input", "keyevent", "KEYCODE_APP_SWITCH"]);
       return adbInputResult();
     }
+    if (action.type === "unlock") {
+      await this.shell(serial, ["input", "keyevent", "KEYCODE_WAKEUP"]);
+      await this.shell(serial, ["wm", "dismiss-keyguard"]).catch(() => undefined);
+      await this.shell(serial, ["input", "keyevent", "82"]).catch(() => undefined);
+      return adbInputResult();
+    }
     if (action.type === "input_text") {
       await this.inputText(serial, action.text);
       return adbInputResult();

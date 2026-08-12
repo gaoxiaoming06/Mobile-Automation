@@ -1,4 +1,4 @@
-import { Home, Keyboard, ListRestart, RotateCcw, Square } from "lucide-react";
+import { Home, Keyboard, ListRestart, LockOpen, RotateCcw, Square } from "lucide-react";
 import type { Dispatch, PointerEvent, RefObject, SetStateAction } from "react";
 import type { DeviceActionRequest, DeviceInfo } from "@mobile-automation/shared";
 
@@ -90,6 +90,15 @@ export function PreviewPanel({
           >
             <Home size={18} />
             Home
+          </button>
+          <button
+            className="icon-button"
+            disabled={!selectedSerial || controlDisabled || selectedDevice?.capabilities.unlock !== true}
+            onClick={() => void runAction({ type: "unlock" })}
+            title={controlLockedReason ?? "唤醒并解锁设备"}
+          >
+            <LockOpen size={18} />
+            解锁
           </button>
           <button
             className="icon-button"

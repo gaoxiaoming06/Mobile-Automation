@@ -1,4 +1,5 @@
 import {
+  DEVICE_AGENT_VERSION,
   type AgentCommandChannelMessage,
   type AgentCommandEnvelope,
   type AgentCommandResultEnvelope,
@@ -515,7 +516,7 @@ export function parseDeviceAgentArgs(argv: string[], env: Record<string, string 
   return normalizeConfig({
     serverUrl: stringOption(options.server) ?? env.DEVICE_AGENT_SERVER_URL ?? "http://127.0.0.1:4010",
     agentId: stringOption(options["agent-id"]) ?? env.DEVICE_AGENT_ID ?? defaultAgentId(),
-    version: env.DEVICE_AGENT_VERSION ?? "0.1.0",
+    version: env.DEVICE_AGENT_VERSION ?? DEVICE_AGENT_VERSION,
     shared: booleanOption(options.shared, env.DEVICE_AGENT_SHARED === "1" || env.DEVICE_AGENT_SHARED === "true"),
     pairingCode: stringOption(options["pairing-code"]) ?? env.DEVICE_AGENT_PAIRING_CODE,
     pollIntervalMs: numberOption(options["poll-interval-ms"]) ?? numberOption(env.DEVICE_AGENT_POLL_INTERVAL_MS),
@@ -578,7 +579,7 @@ function readDeviceAction(value: unknown, name: string): DeviceActionRequest {
   if (action.type === "input_keyevents" && typeof action.text === "string") return { type: "input_keyevents", text: action.text, ...(isFiniteNumber(action.intervalMs) ? { intervalMs: action.intervalMs } : {}) };
   if (action.type === "wait" && isFiniteNumber(action.durationMs)) return { type: "wait", durationMs: action.durationMs };
   if ((action.type === "launch_app" || action.type === "close_app") && typeof action.packageName === "string") return { type: action.type, packageName: action.packageName };
-  if (action.type === "hide_keyboard" || action.type === "back" || action.type === "home" || action.type === "recent_apps" || action.type === "clear_text" || action.type === "screenshot") {
+  if (action.type === "hide_keyboard" || action.type === "back" || action.type === "home" || action.type === "recent_apps" || action.type === "unlock" || action.type === "clear_text" || action.type === "screenshot") {
     return { type: action.type };
   }
   throw new Error(`${name} is invalid`);

@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,8 +11,9 @@ const agentOutputFile = path.join(outputDir, "mobile-automation-agent.cjs");
 const scrcpyServerFileName = "scrcpy-server-v3.3.3";
 const scrcpyServerSourceFile = path.join(rootDir, "platform/tools", scrcpyServerFileName);
 const scrcpyServerOutputFile = path.join(outputDir, scrcpyServerFileName);
-const rootPackage = JSON.parse(await readFile(path.join(rootDir, "package.json"), "utf8"));
+const agentPackage = JSON.parse(await readFile(path.join(rootDir, "platform/apps/device-agent/package.json"), "utf8"));
 
+await rm(outputDir, { recursive: true, force: true });
 await mkdir(outputDir, { recursive: true });
 await buildBundle(path.join(rootDir, "platform/apps/device-agent/src/index.ts"), agentOutputFile);
 await copyFile(scrcpyServerSourceFile, scrcpyServerOutputFile);
@@ -21,7 +22,7 @@ const agentBundle = await normalizeBundle(agentOutputFile);
 const sha256 = sha256Value(agentBundle);
 const scrcpyServerSha256 = sha256Value(await readFile(scrcpyServerOutputFile));
 await writeFile(path.join(outputDir, "manifest.json"), `${JSON.stringify({
-  version: rootPackage.version,
+  version: agentPackage.version,
   file: "mobile-automation-agent.cjs",
   url: "/agent/mobile-automation-agent.cjs",
   sha256,

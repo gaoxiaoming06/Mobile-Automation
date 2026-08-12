@@ -4567,6 +4567,7 @@ function buildCapabilityItems(device: DeviceInfo): Array<{ label: string; enable
     { label: "返回", enabled: device.capabilities.back },
     { label: "Home", enabled: device.capabilities.home },
     { label: "最近任务", enabled: device.capabilities.recentApps },
+    { label: "解锁", enabled: device.capabilities.unlock === true },
     { label: "文本输入", enabled: device.capabilities.textInput },
     { label: "截图", enabled: device.capabilities.screenshot },
     { label: "启动 App", enabled: device.capabilities.launchApp },
@@ -4871,6 +4872,9 @@ function canDeviceRunAction(device: DeviceInfo, actionType: DeviceActionRequest[
   }
   if (actionType === "recent_apps") {
     return device.capabilities.recentApps;
+  }
+  if (actionType === "unlock") {
+    return device.capabilities.unlock === true;
   }
   if (actionType === "input_text" || actionType === "clear_text") {
     return device.capabilities.textInput;

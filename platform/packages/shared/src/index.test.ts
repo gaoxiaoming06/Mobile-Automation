@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEVICE_AGENT_VERSION,
   androidAppMonitorDisplaySummaryFromRun,
+  defaultAndroidCapabilities,
   defaultHarmonyCapabilities,
+  defaultIosCapabilities,
   normalizeAndroidAppMonitorConfig,
   stepToAction,
   type ActionStep,
@@ -15,6 +18,16 @@ import {
 } from "./index.js";
 
 describe("platform capabilities", () => {
+  it("publishes the current device agent version", () => {
+    expect(DEVICE_AGENT_VERSION).toBe("0.1.1");
+  });
+
+  it("advertises unlock for controllable Android and Harmony devices", () => {
+    expect(defaultAndroidCapabilities()).toMatchObject({ unlock: true });
+    expect(defaultHarmonyCapabilities()).toMatchObject({ unlock: true });
+    expect(defaultIosCapabilities({ screenshot: true, control: true })).toMatchObject({ unlock: false });
+  });
+
   it("describes HarmonyOS MVP execution capabilities", () => {
     expect(defaultHarmonyCapabilities()).toMatchObject({
       preview: true,
@@ -24,6 +37,7 @@ describe("platform capabilities", () => {
       back: true,
       home: true,
       recentApps: false,
+      unlock: true,
       textInput: true,
       screenshot: true,
       launchApp: true,

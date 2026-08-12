@@ -25,6 +25,37 @@ describe("formatPreviewStatus", () => {
 });
 
 describe("PreviewPanel", () => {
+  it("renders an unlock control for devices that advertise unlock support", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(PreviewPanel, {
+        selectedSerial: "harmony-1",
+        selectedDevice: device("harmony"),
+        previewRef: { current: null },
+        imageRef: { current: null },
+        canvasRef: { current: null },
+        videoRef: { current: null },
+        previewUrl: "",
+        screenshotError: "",
+        previewMode: "screenshot",
+        previewRenderer: "canvas",
+        scrcpyStreamStatus: "截图预览",
+        isScrcpyPreviewActive: false,
+        busy: false,
+        inputText: "",
+        setInputText: () => undefined,
+        setMessage: () => undefined,
+        runAction: async () => undefined,
+        handleScreenshotLoaded: () => undefined,
+        onPreviewPointerDown: () => undefined,
+        onPreviewPointerUp: () => undefined,
+        onPreviewPointerCancel: () => undefined
+      })
+    );
+
+    expect(markup).toContain("解锁");
+    expect(markup).toContain("唤醒并解锁设备");
+  });
+
   it("does not render the legacy native scrcpy debug window action", () => {
     const markup = renderToStaticMarkup(
       React.createElement(PreviewPanel, {

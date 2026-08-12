@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { DEVICE_AGENT_VERSION } from "@mobile-automation/shared";
 import type { DeviceAgentConfig, DeviceAgentRuntime } from "./device-agent.js";
 
 export type ManagedAgentConfig = {
@@ -224,7 +225,7 @@ export class InProcessAgentManager implements LocalAgentManager {
 export function createLocalAgentControl(options: LocalAgentControlOptions): LocalAgentControlServer {
   const host = options.host ?? process.env.MOBILE_AUTOMATION_AGENT_CONTROL_HOST ?? "127.0.0.1";
   const port = options.port ?? positiveInteger(process.env.MOBILE_AUTOMATION_AGENT_CONTROL_PORT) ?? 17611;
-  const version = options.version ?? process.env.DEVICE_AGENT_VERSION ?? "0.1.0";
+  const version = options.version ?? process.env.DEVICE_AGENT_VERSION ?? DEVICE_AGENT_VERSION;
   const server = createServer((req, res) => {
     void handleControlRequest(req, res, { version, port, manager: options.manager });
   });

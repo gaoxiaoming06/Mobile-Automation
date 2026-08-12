@@ -290,6 +290,21 @@ describe("DeviceAgentRuntime", () => {
     ]);
   });
 
+  it("accepts unlock actions from server commands", async () => {
+    const server = new FakeAgentServer();
+    const driver = new FakeAgentDriver();
+    const runtime = new DeviceAgentRuntime({ serverUrl: "http://server", agentId: "agent-a" }, driver, { fetch: server.fetch });
+    server.commands.push(command("unlock-device", "performAction", { action: { type: "unlock" } }));
+
+    await expect(runtime.pollOnce()).resolves.toBe(1);
+
+    expect(driver.actions).toEqual([{ type: "unlock" }]);
+    expect(server.results).toEqual([{
+      requestId: "unlock-device",
+      body: { ok: true, result: { driverChannel: "mock" } }
+    }]);
+  });
+
   it("re-registers when heartbeat reports that the server lost the agent session", async () => {
     const server = new FakeAgentServer();
     const driver = new FakeAgentDriver();

@@ -2,6 +2,7 @@ import type express from "express";
 import { readFile } from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
+import { DEVICE_AGENT_VERSION } from "@mobile-automation/shared";
 
 export const agentBundleFileName = "mobile-automation-agent.cjs";
 export const scrcpyServerFileName = "scrcpy-server-v3.3.3";
@@ -33,7 +34,7 @@ export function registerAgentDistributionRoutes(app: express.Express, options: A
     try {
       const sha256 = options.sha256 ?? await sha256File(path.join(options.distributionDir, agentBundleFileName));
       const scrcpyServerSha256 = await sha256File(path.join(options.distributionDir, scrcpyServerFileName));
-      res.json(agentDistributionManifest({ version: options.version ?? "0.1.0", sha256, scrcpyServerSha256 }));
+      res.json(agentDistributionManifest({ version: options.version ?? DEVICE_AGENT_VERSION, sha256, scrcpyServerSha256 }));
     } catch (error) {
       sendAgentDistributionError(res, error);
     }

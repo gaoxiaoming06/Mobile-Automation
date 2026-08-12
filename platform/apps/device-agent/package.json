@@ -1,12 +1,13 @@
 {
   "name": "@mobile-automation/device-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "bin": {
     "mobile-automation-device-agent": "./src/index.ts"
   },
   "scripts": {
+    "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

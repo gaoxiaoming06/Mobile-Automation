@@ -715,6 +715,7 @@ function cloneCapabilities(capabilities: DeviceCapabilities): DeviceCapabilities
     back: capabilities.back === true,
     home: capabilities.home === true,
     recentApps: capabilities.recentApps === true,
+    unlock: capabilities.unlock === true,
     textInput: capabilities.textInput === true,
     screenshot: capabilities.screenshot === true,
     harmonyScreenStream: capabilities.harmonyScreenStream === true,

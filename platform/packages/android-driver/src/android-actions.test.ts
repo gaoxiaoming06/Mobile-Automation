@@ -77,6 +77,7 @@ describe("AndroidActionExecutor", () => {
     await actions.performAction("device-1", { type: "back" });
     await actions.performAction("device-1", { type: "home" });
     await actions.performAction("device-1", { type: "recent_apps" });
+    await actions.performAction("device-1", { type: "unlock" });
 
     expect(calls).toEqual([
       ["input", "tap", "10", "20"],
@@ -85,7 +86,10 @@ describe("AndroidActionExecutor", () => {
       ["input", "keyevent", "111"],
       ["input", "keyevent", "4"],
       ["input", "keyevent", "3"],
-      ["input", "keyevent", "KEYCODE_APP_SWITCH"]
+      ["input", "keyevent", "KEYCODE_APP_SWITCH"],
+      ["input", "keyevent", "KEYCODE_WAKEUP"],
+      ["wm", "dismiss-keyguard"],
+      ["input", "keyevent", "82"]
     ]);
   });
 

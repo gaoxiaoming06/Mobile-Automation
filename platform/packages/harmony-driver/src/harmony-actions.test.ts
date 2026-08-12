@@ -39,6 +39,21 @@ describe("HarmonyActionExecutor", () => {
     expect(calls).toEqual([["uitest", "uiInput", "swipe", "1", "2", "30", "40", "500"]]);
   });
 
+  it("wakes a locked Harmony screen without toggling power", async () => {
+    const calls: string[][] = [];
+    const executor = new HarmonyActionExecutor({
+      shell: async (_serial, args) => {
+        calls.push(args);
+        return "";
+      },
+      sleep: async () => undefined
+    });
+
+    await executor.performAction("SERIAL", { type: "unlock" });
+
+    expect(calls).toEqual([["power-shell", "wakeup"]]);
+  });
+
   it("clears focused text through Harmony key events", async () => {
     const calls: string[][] = [];
     const executor = new HarmonyActionExecutor({

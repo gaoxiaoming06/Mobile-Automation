@@ -2,6 +2,8 @@ export type Platform = "android" | "ios" | "harmony";
 
 export * from "./public-execution-failure.js";
 
+export const DEVICE_AGENT_VERSION = "0.1.1";
+
 export type DeviceStatus = "online" | "offline" | "locked" | "running" | "error";
 
 export type DeviceCapabilities = {
@@ -12,6 +14,7 @@ export type DeviceCapabilities = {
   back: boolean;
   home: boolean;
   recentApps: boolean;
+  unlock?: boolean;
   textInput: boolean;
   screenshot: boolean;
   harmonyScreenStream?: boolean;
@@ -58,6 +61,7 @@ export type ActionType =
   | "back"
   | "home"
   | "recent_apps"
+  | "unlock"
   | "input_text"
   | "input_keyevents"
   | "clear_text"
@@ -936,6 +940,7 @@ export type DeviceActionRequest =
   | { type: "back" }
   | { type: "home" }
   | { type: "recent_apps" }
+  | { type: "unlock" }
   | { type: "input_text"; text: string }
   | { type: "input_keyevents"; text: string; intervalMs?: number }
   | { type: "clear_text" }
@@ -1027,6 +1032,7 @@ export function defaultAndroidCapabilities(): DeviceCapabilities {
     back: true,
     home: true,
     recentApps: true,
+    unlock: true,
     textInput: true,
     screenshot: true,
     harmonyScreenStream: false,
@@ -1059,6 +1065,7 @@ export function defaultIosCapabilities(options: { screenshot?: boolean; control?
     back: false,
     home: control,
     recentApps: false,
+    unlock: false,
     textInput: control,
     screenshot: options.screenshot ?? true,
     harmonyScreenStream: false,
@@ -1090,6 +1097,7 @@ export function defaultHarmonyCapabilities(): DeviceCapabilities {
     back: true,
     home: true,
     recentApps: false,
+    unlock: true,
     textInput: true,
     screenshot: true,
     harmonyScreenStream: false,
@@ -1181,7 +1189,7 @@ export function stepToAction(step: ActionStep, deviceSize?: ImageSize): DeviceAc
   if (step.type === "close_app") {
     return { type: "close_app", packageName: stringParam(params.packageName) };
   }
-  if (step.type === "back" || step.type === "home" || step.type === "recent_apps" || step.type === "clear_text" || step.type === "screenshot") {
+  if (step.type === "back" || step.type === "home" || step.type === "recent_apps" || step.type === "unlock" || step.type === "clear_text" || step.type === "screenshot") {
     return { type: step.type };
   }
   throw new Error(`Unsupported direct action step: ${step.type}`);

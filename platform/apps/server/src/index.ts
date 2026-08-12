@@ -6,6 +6,7 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  DEVICE_AGENT_VERSION,
   nowIso,
   type ActionStep,
   type ArtifactRef,
@@ -22,6 +23,7 @@ import { readAndroidAppMonitorConfig } from "./android-app-monitor-request.js";
 import { AutomationRunner } from "./automation-runner.js";
 import { DeviceExecutionBusyError, DeviceExecutionLease } from "./device-execution-lease.js";
 import { artifactFilePath, artifactRoot, artifactSendFileOptions, artifactUrl } from "./artifacts.js";
+import { createDashboardStaticHandlers } from "./dashboard-static.js";
 import { pageAssetLibraryTargetMismatchMessage } from "./page-asset-library-target.js";
 import { registerPageAssetLibraryRoutes } from "./page-asset-library-api.js";
 import { pageAssetDeprecationConfirmation } from "./page-asset-deprecation-guard.js";
@@ -148,7 +150,7 @@ registerRunDiagnosticsRoutes(app, {
 });
 registerAgentDistributionRoutes(app, {
   distributionDir: agentDistributionDir,
-  version: process.env.DEVICE_AGENT_VERSION ?? "0.1.0"
+  version: process.env.DEVICE_AGENT_VERSION ?? DEVICE_AGENT_VERSION
 });
 registerScriptFlowAiRoutes(app, {
   getFlow: (id) => storage.getScriptFlow(id),
@@ -874,22 +876,7 @@ app.get("/api/reports/:runId/artifact-html", async (req, res) => {
   res.sendFile(reportPath, artifactSendFileOptions);
 });
 
-app.use(express.static(dashboardDist, { fallthrough: true }));
-
-app.use(async (req, res, next) => {
-  if (req.method !== "GET" || req.path.startsWith("/api") || req.path.startsWith("/artifacts")) {
-    next();
-    return;
-  }
-  const exists = await access(dashboardIndex)
-    .then(() => true)
-    .catch(() => false);
-  if (!exists) {
-    next();
-    return;
-  }
-  res.sendFile(dashboardIndex);
-});
+app.use(...createDashboardStaticHandlers({ dashboardDist, dashboardIndex }));
 
 const networkConfig = resolveServerNetworkConfig(process.env);
 const httpsOptions = await loadHttpsServerOptions(networkConfig);

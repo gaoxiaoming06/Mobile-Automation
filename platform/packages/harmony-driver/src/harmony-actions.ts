@@ -56,6 +56,12 @@ export class HarmonyActionExecutor {
       await this.shell(serial, ["uitest", "uiInput", "keyEvent", "Home"]);
       return hdcInputResult();
     }
+    if (action.type === "unlock") {
+      await this.shell(serial, ["power-shell", "wakeup"]).catch(async () => {
+        await this.shell(serial, ["uitest", "uiInput", "keyEvent", "Power"]);
+      });
+      return hdcInputResult();
+    }
     if (action.type === "input_text" || action.type === "input_keyevents") {
       await this.shell(serial, ["uitest", "uiInput", "text", action.text]);
       return hdcInputResult();
