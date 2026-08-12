@@ -141,12 +141,15 @@ DEVICE_AGENT_SHARED=1 \
 pnpm agent
 ```
 
-For non-developer device hosts, open the Dashboard device page and copy one of the generated Agent commands:
+For non-developer device hosts, open the Dashboard `设备接入` page:
 
-- `配对 Agent`: private to the current browser session.
-- `共享 Agent`: publishes the host's devices to the public device pool.
+- Copy the command that matches the device host OS: macOS/Linux uses the bash command, Windows uses the PowerShell command.
+- The command starts one foreground Agent process. Keep that terminal open while sharing devices.
+- After the Agent is running, use the panel to connect, disconnect, reconnect, update, or switch the Agent between private and shared modes.
+- `私有接入`: private to the current browser session through a short-lived pairing code.
+- `共享到服务端`: publishes the host's devices to the public device pool.
 
-Both commands download or reuse `~/.mobile-automation-agent/mobile-automation-agent.mjs`, avoid starting a duplicate process when `agent.pid` is alive, and connect the Agent back to the current server.
+The install command downloads or reuses `~/.mobile-automation-agent/mobile-automation-agent.cjs`, starts the Agent, and opens local control on `127.0.0.1:17611` for the dashboard panel. Re-running the command is idempotent and refreshes the bundle from the current server.
 
 Connect Android devices with USB debugging enabled before starting the agent. For iOS physical devices, install libimobiledevice tools and trust/unlock the device first:
 

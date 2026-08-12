@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   agentDistributionManifest,
   buildAgentInstallScript,
+  buildAgentPowerShellInstallScript,
   registerAgentDistributionRoutes
 } from "./agent-distribution.js";
 
@@ -22,21 +23,37 @@ describe("agent distribution", () => {
   it("builds an idempotent install script for shared and paired agents", () => {
     const script = buildAgentInstallScript({ defaultServerUrl: "https://mobile.example.test" });
 
-    expect(script).toContain("agent.pid");
-    expect(script).toContain("kill -0");
+    expect(script).toContain("MOBILE_AUTOMATION_AGENT_CONTROL_PORT");
+    expect(script).toContain("MOBILE_AUTOMATION_AGENT_FILE");
     expect(script).toContain("/agent/manifest.json");
-    expect(script).toContain("/agent/mobile-automation-agent.mjs");
+    expect(script).toContain("/agent/mobile-automation-agent.cjs");
+    expect(script).toContain("Local control: http://127.0.0.1:$CONTROL_PORT");
     expect(script).toContain("--shared");
     expect(script).toContain("--pairing-code");
     expect(script).toContain("NODE_TLS_REJECT_UNAUTHORIZED=0");
     expect(script).toContain("DEVICE_AGENT_SHARED=1");
     expect(script).toContain("DEVICE_AGENT_PAIRING_CODE");
+    expect(script).toContain("exec env");
+    expect(script).not.toContain("supervisor");
+    expect(script).not.toContain("launchctl");
+  });
+
+  it("builds a PowerShell install script for Windows hosts", () => {
+    const script = buildAgentPowerShellInstallScript({ defaultServerUrl: "https://mobile.example.test" });
+
+    expect(script).toContain("param(");
+    expect(script).toContain("Invoke-RestMethod");
+    expect(script).toContain("Invoke-WebRequest");
+    expect(script).toContain("Get-FileHash");
+    expect(script).toContain("DEVICE_AGENT_SHARED");
+    expect(script).toContain("DEVICE_AGENT_PAIRING_CODE");
+    expect(script).toContain("MOBILE_AUTOMATION_AGENT_CONTROL_PORT");
   });
 
   it("serves manifest, install script, and the agent bundle", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "mobile-agent-dist-"));
     tempDirs.push(dir);
-    await writeFile(path.join(dir, "mobile-automation-agent.mjs"), "console.log('agent')\n");
+    await writeFile(path.join(dir, "mobile-automation-agent.cjs"), "console.log('agent')\n");
 
     const app = express();
     registerAgentDistributionRoutes(app, {
@@ -48,21 +65,24 @@ describe("agent distribution", () => {
 
     expect(await getJson(`${baseUrl}/agent/manifest.json`)).toEqual({
       version: "0.1.0-test",
-      file: "mobile-automation-agent.mjs",
-      url: "/agent/mobile-automation-agent.mjs",
+      file: "mobile-automation-agent.cjs",
+      url: "/agent/mobile-automation-agent.cjs",
       sha256: "abc123"
     });
     expect(await getText(`${baseUrl}/agent/install.sh?server=https%3A%2F%2Fmobile.example.test`)).toContain(
       'DEFAULT_SERVER_URL="https://mobile.example.test"'
     );
-    expect(await getText(`${baseUrl}/agent/mobile-automation-agent.mjs`)).toBe("console.log('agent')\n");
+    expect(await getText(`${baseUrl}/agent/install.ps1?server=https%3A%2F%2Fmobile.example.test`)).toContain(
+      "[string]$Server = 'https://mobile.example.test'"
+    );
+    expect(await getText(`${baseUrl}/agent/mobile-automation-agent.cjs`)).toBe("console.log('agent')\n");
   });
 
   it("creates stable manifest values", () => {
     expect(agentDistributionManifest({ version: "0.1.0", sha256: "abc123" })).toEqual({
       version: "0.1.0",
-      file: "mobile-automation-agent.mjs",
-      url: "/agent/mobile-automation-agent.mjs",
+      file: "mobile-automation-agent.cjs",
+      url: "/agent/mobile-automation-agent.cjs",
       sha256: "abc123"
     });
   });
