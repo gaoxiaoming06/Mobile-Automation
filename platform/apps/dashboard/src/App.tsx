@@ -2,15 +2,19 @@ import {
   Check,
   ChevronDown,
   Copy,
+  Download,
   KeyRound,
   Package,
   Pencil,
   PlayCircle,
   Plus,
+  Power,
   RefreshCw,
+  RotateCw,
   Save,
   Square,
   Smartphone,
+  Terminal,
   Trash2
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -92,8 +96,43 @@ type AgentPairingCode = {
   pairedAgentId?: string;
 };
 
+type LocalAgentConfig = {
+  serverUrl: string;
+  agentId: string;
+  shared: boolean;
+  pairingCode?: string;
+  insecureTls?: boolean;
+  version?: string;
+};
+
+type LocalAgentSnapshot = {
+  running: boolean;
+  pid?: number;
+  config?: LocalAgentConfig;
+  logFile?: string;
+  pidFile?: string;
+};
+
+export type LocalAgentControlStatus = {
+  ok: boolean;
+  control: {
+    running: boolean;
+    port: number;
+    version: string;
+  };
+  agent: LocalAgentSnapshot;
+};
+
+type LocalAgentControlUpdateResult = {
+  version: string;
+  agentChanged: boolean;
+  restartRequired: boolean;
+  agent: LocalAgentSnapshot;
+};
+
 type NavItemId = AppNavItemId;
 const retainedWorkbenchNavItems = new Set<NavItemId>(["pageAssets", "scriptFlows", "aiScriptFlows", "runs"]);
+export const LOCAL_AGENT_CONTROL_URL = "http://127.0.0.1:17611";
 
 export function RetainedNavPanel({
   active,
@@ -878,6 +917,10 @@ export function App() {
   const [agentPairing, setAgentPairing] = useState<AgentPairingCode>();
   const [sharedAgentCommand, setSharedAgentCommand] = useState("");
   const [creatingAgentPairing, setCreatingAgentPairing] = useState(false);
+  const [localAgentStatus, setLocalAgentStatus] = useState<LocalAgentControlStatus>();
+  const [localAgentError, setLocalAgentError] = useState("");
+  const [localAgentLogs, setLocalAgentLogs] = useState("");
+  const [localAgentBusy, setLocalAgentBusy] = useState(false);
 
   const {
     devices,
@@ -985,20 +1028,25 @@ export function App() {
     setRuntimeInterceptorRules(json.rules);
   }
 
+  async function requestAgentPairingCode() {
+    const json = await apiFetchJson<{ pairing: AgentPairingCode }>("/api/local-sessions/pairing-codes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: controlOwnerId,
+        ttlMs: 5 * 60_000
+      })
+    });
+    return json.pairing;
+  }
+
   async function createAgentPairingCode() {
     setCreatingAgentPairing(true);
     try {
-      const json = await apiFetchJson<{ pairing: AgentPairingCode }>("/api/local-sessions/pairing-codes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: controlOwnerId,
-          ttlMs: 5 * 60_000
-        })
-      });
-      setAgentPairing(json.pairing);
+      const pairing = await requestAgentPairingCode();
+      setAgentPairing(pairing);
       setSharedAgentCommand("");
-      setMessage(await copyCreatedAgentPairingCommand(json.pairing.code));
+      setMessage(await copyCreatedAgentPairingCommand(pairing.code));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1006,8 +1054,125 @@ export function App() {
     }
   }
 
-  async function copyAgentPairingCommand(code: string) {
-    const command = agentPairingCommand(code);
+  async function refreshLocalAgentStatus(options: { silent?: boolean } = {}) {
+    try {
+      const status = await fetchLocalAgentControlStatus();
+      setLocalAgentStatus(status);
+      setLocalAgentError("");
+      if (!options.silent) {
+        setMessage(status.agent.running ? "本机 Agent 正在运行" : "本机控制服务已就绪");
+      }
+      return status;
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setLocalAgentStatus(undefined);
+      setLocalAgentError(messageText);
+      if (!options.silent) {
+        setMessage("本机 Agent 控制服务未运行");
+      }
+      return undefined;
+    }
+  }
+
+  async function startSharedLocalAgent() {
+    await runLocalAgentAction(async () => {
+      const status = await postLocalAgentControl<LocalAgentControlStatus>("/start", {
+        serverUrl: currentAgentServerUrl(),
+        agentId: localAgentStatus?.agent.config?.agentId,
+        shared: true,
+        insecureTls: currentDashboardUsesHttps()
+      });
+      setLocalAgentStatus(status);
+      setAgentPairing(undefined);
+      setSharedAgentCommand(agentPairingCommand(undefined, { mode: "shared" }));
+      setMessage("已切换为共享 Agent");
+      await refreshDevices({ silent: true });
+    });
+  }
+
+  async function startPrivateLocalAgent() {
+    setCreatingAgentPairing(true);
+    await runLocalAgentAction(async () => {
+      const pairing = await requestAgentPairingCode();
+      setAgentPairing(pairing);
+      setSharedAgentCommand("");
+      const status = await postLocalAgentControl<LocalAgentControlStatus>("/start", {
+        serverUrl: currentAgentServerUrl(),
+        agentId: localAgentStatus?.agent.config?.agentId,
+        shared: false,
+        pairingCode: pairing.code,
+        insecureTls: currentDashboardUsesHttps()
+      });
+      setLocalAgentStatus(status);
+      setAgentPairing(pairing);
+      setMessage(`已切换为私有 Agent，配对码 ${pairing.code}`);
+      await refreshDevices({ silent: true });
+    }, () => setCreatingAgentPairing(false));
+  }
+
+  async function stopLocalAgent() {
+    await runLocalAgentAction(async () => {
+      const status = await postLocalAgentControl<LocalAgentControlStatus>("/stop", {});
+      setLocalAgentStatus(status);
+      setMessage("已断开本机 Agent");
+      await refreshDevices({ silent: true });
+    });
+  }
+
+  async function restartLocalAgent() {
+    await runLocalAgentAction(async () => {
+      const status = await postLocalAgentControl<LocalAgentControlStatus>("/restart", {});
+      setLocalAgentStatus(status);
+      setMessage(status.agent.running ? "已重启本机 Agent" : "没有可重启的本机 Agent 配置");
+      await refreshDevices({ silent: true });
+    });
+  }
+
+  async function updateLocalAgent() {
+    await runLocalAgentAction(async () => {
+      const response = await postLocalAgentControl<{
+        ok: true;
+        update: LocalAgentControlUpdateResult;
+        agent: LocalAgentSnapshot;
+        control: LocalAgentControlStatus["control"];
+      }>("/update", { serverUrl: currentAgentServerUrl() });
+      setLocalAgentStatus({ ok: true, control: response.control, agent: response.agent });
+      const restartText = response.update.restartRequired ? "，重新运行启动命令后生效" : "";
+      setMessage(`已更新 Agent 到 ${response.update.version}${restartText}`);
+      await refreshDevices({ silent: true });
+    });
+  }
+
+  async function loadLocalAgentLogs() {
+    await runLocalAgentAction(async () => {
+      const response = await fetchLocalAgentControlLogs();
+      setLocalAgentLogs(response.logs);
+      setMessage("已读取本机 Agent 日志");
+    }, undefined, { keepBusy: false });
+  }
+
+  async function runLocalAgentAction(action: () => Promise<void>, onFinally?: () => void, options: { keepBusy?: boolean } = {}) {
+    if (options.keepBusy !== false) {
+      setLocalAgentBusy(true);
+    }
+    try {
+      await action();
+      setLocalAgentError("");
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setLocalAgentError(messageText);
+      setMessage(messageText);
+      await refreshLocalAgentStatus({ silent: true });
+    } finally {
+      if (options.keepBusy !== false) {
+        setLocalAgentBusy(false);
+      }
+      onFinally?.();
+    }
+  }
+
+  async function copyAgentPairingCommand(code: string, shell: AgentCommandShell = "bash") {
+    const command = agentPairingCommand(code, { shell });
     if (await copyTextToClipboard(command)) {
       setMessage("已复制 Agent 配对命令");
     } else {
@@ -1015,14 +1180,14 @@ export function App() {
     }
   }
 
-  async function copySharedAgentInstallCommand() {
-    const command = agentPairingCommand(undefined, { mode: "shared" });
+  async function copySharedAgentInstallCommand(shell: AgentCommandShell = "bash") {
+    const command = agentPairingCommand(undefined, { mode: "shared", shell });
     setAgentPairing(undefined);
     setSharedAgentCommand(command);
     if (await copyTextToClipboard(command)) {
       setMessage("已复制共享 Agent 接入命令");
     } else {
-      setMessage("已生成共享 Agent 命令，请在设备管理卡片中手动复制");
+      setMessage("已生成共享 Agent 命令，请在设备接入面板中手动复制");
     }
   }
 
@@ -1080,6 +1245,17 @@ export function App() {
     }
     aiModelSettingsLoadedRef.current = true;
     void loadAiModelSettings();
+  }, [activeNavItem]);
+
+  useEffect(() => {
+    if (activeNavItem !== "agentAccess") {
+      return undefined;
+    }
+    void refreshLocalAgentStatus({ silent: true });
+    const timer = window.setInterval(() => {
+      void refreshLocalAgentStatus({ silent: true });
+    }, 3_000);
+    return () => window.clearInterval(timer);
   }, [activeNavItem]);
 
   useEffect(() => {
@@ -1372,6 +1548,10 @@ export function App() {
 
   function openDevices() {
     setActiveNavItem("devices");
+  }
+
+  function openAgentAccess() {
+    setActiveNavItem("agentAccess");
   }
 
   function openAssetRecording() {
@@ -1887,6 +2067,8 @@ export function App() {
       runs={runs}
       runsLimit={runsLimit}
       selectedSerial={selectedSerial}
+      targetAppId={selectedTargetApp.appId}
+      targetAppName={selectedTargetApp.name}
       stopCurrentRun={stopCurrentRun}
       pauseCurrentRun={pauseCurrentRun}
       resumeCurrentRun={resumeCurrentRun}
@@ -1974,6 +2156,7 @@ export function App() {
           advancedToolsEnabled={advancedToolsEnabled}
           setNavCollapsed={setNavCollapsed}
           openDevices={openDevices}
+          openAgentAccess={openAgentAccess}
           openAssetRecording={openAssetRecording}
           openPageAssets={openPageAssets}
           openScriptFlows={openScriptFlows}
@@ -1993,14 +2176,29 @@ export function App() {
             runs={runs}
             controlOwnerId={controlOwnerId}
             activeRunForSelectedDevice={activeRunForSelectedDevice}
-            agentPairing={agentPairing}
-            sharedAgentCommand={sharedAgentCommand}
-            creatingAgentPairing={creatingAgentPairing}
-            onCreateAgentPairing={createAgentPairingCode}
-            onCopyAgentPairingCommand={copyAgentPairingCommand}
-            onCopySharedAgentCommand={copySharedAgentInstallCommand}
             onOpenRuns={openRuns}
             onRefreshDevices={() => refreshDevices().catch((error) => setMessage(error.message))}
+          />
+        )}
+
+        {activeNavItem === "agentAccess" && (
+          <AgentAccessView
+            status={localAgentStatus}
+            error={localAgentError}
+            logs={localAgentLogs}
+            busy={localAgentBusy || creatingAgentPairing}
+            agentPairing={agentPairing}
+            sharedAgentCommand={sharedAgentCommand}
+            onRefreshStatus={() => void refreshLocalAgentStatus()}
+            onStartShared={startSharedLocalAgent}
+            onStartPrivate={startPrivateLocalAgent}
+            onStop={stopLocalAgent}
+            onRestart={restartLocalAgent}
+            onUpdate={updateLocalAgent}
+            onLoadLogs={loadLocalAgentLogs}
+            onCreatePairingCommand={createAgentPairingCode}
+            onCopyPairingCommand={copyAgentPairingCommand}
+            onCopySharedCommand={copySharedAgentInstallCommand}
           />
         )}
 
@@ -3003,6 +3201,219 @@ export function StabilityExplorerPanel({
   );
 }
 
+type AgentAccessViewProps = {
+  status?: LocalAgentControlStatus;
+  error: string;
+  logs: string;
+  busy: boolean;
+  agentPairing?: AgentPairingCode;
+  sharedAgentCommand: string;
+  onRefreshStatus: () => void;
+  onStartShared: () => void;
+  onStartPrivate: () => void;
+  onStop: () => void;
+  onRestart: () => void;
+  onUpdate: () => void;
+  onLoadLogs: () => void;
+  onCreatePairingCommand: () => void;
+  onCopyPairingCommand: (code: string, shell?: AgentCommandShell) => void;
+  onCopySharedCommand: (shell?: AgentCommandShell) => void;
+};
+
+function AgentAccessView({
+  status,
+  error,
+  logs,
+  busy,
+  agentPairing,
+  sharedAgentCommand,
+  onRefreshStatus,
+  onStartShared,
+  onStartPrivate,
+  onStop,
+  onRestart,
+  onUpdate,
+  onLoadLogs,
+  onCreatePairingCommand,
+  onCopyPairingCommand,
+  onCopySharedCommand
+}: AgentAccessViewProps) {
+  const [commandShell, setCommandShell] = useState<AgentCommandShell>(() => detectAgentCommandShell());
+  const controlOnline = Boolean(status?.control.running);
+  const agent = status?.agent;
+  const agentRunning = Boolean(agent?.running);
+  const agentConfig = agent?.config;
+  const sharedCommand = commandShell === "bash" && sharedAgentCommand
+    ? sharedAgentCommand
+    : agentPairingCommand(undefined, { mode: "shared", shell: commandShell });
+  const privateCommand = agentPairing ? agentPairingCommand(agentPairing.code, { shell: commandShell }) : "";
+  const shellLabel = commandShell === "powershell" ? "Windows PowerShell" : "macOS / Linux";
+
+  return (
+    <section className="module-page agent-access-module">
+      <div className="panel agent-access-head">
+        <div>
+          <span className="module-eyebrow">设备接入</span>
+          <h2>本机 Agent 管理</h2>
+        </div>
+        <div className="module-stat-grid agent-access-stat-grid">
+          <div>
+            <strong>{controlOnline ? "在线" : "未连接"}</strong>
+            <span>控制服务</span>
+          </div>
+          <div>
+            <strong>{agentRunning ? "运行" : "停止"}</strong>
+            <span>Agent</span>
+          </div>
+          <div>
+            <strong>{localAgentModeLabel(agentConfig)}</strong>
+            <span>接入模式</span>
+          </div>
+          <div>
+            <strong>{status?.control.version ?? "-"}</strong>
+            <span>版本</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="agent-access-grid">
+        <div className="panel agent-control-panel">
+          <div className="panel-head">
+            <div>
+              <h2>本机控制</h2>
+              <span>{agentConfig?.serverUrl ?? currentAgentServerUrl()}</span>
+            </div>
+            <button className="icon-button compact" onClick={onRefreshStatus} title="刷新本机 Agent 状态" type="button">
+              <RefreshCw size={16} />
+            </button>
+          </div>
+
+          <div className="agent-local-state">
+            <span className={`device-status-pill ${controlOnline ? "online" : "offline"}`}>
+              {controlOnline ? "control online" : "control offline"}
+            </span>
+            <span className={`device-status-pill ${agentRunning ? "running" : "offline"}`}>
+              {agentRunning ? `agent pid ${agent?.pid ?? "-"}` : "agent stopped"}
+            </span>
+          </div>
+
+          <div className="agent-action-grid">
+            <button className="icon-button primary" disabled={!controlOnline || busy} onClick={onStartShared} title="切换为共享 Agent" type="button">
+              <Copy size={17} />
+              共享到服务端
+            </button>
+            <button className="icon-button" disabled={!controlOnline || busy} onClick={onStartPrivate} title="切换为私有配对 Agent" type="button">
+              <KeyRound size={17} />
+              私有接入
+            </button>
+            <button className="icon-button" disabled={!controlOnline || busy} onClick={onRestart} title="重连本机 Agent" type="button">
+              <RotateCw size={17} />
+              重连 Agent
+            </button>
+            <button className="icon-button" disabled={!controlOnline || busy} onClick={onUpdate} title="更新本机 Agent" type="button">
+              <Download size={17} />
+              更新 Agent
+            </button>
+            <button className="icon-button danger" disabled={!controlOnline || busy || !agentRunning} onClick={onStop} title="断开本机 Agent" type="button">
+              <Power size={17} />
+              断开 Agent
+            </button>
+            <button className="icon-button" disabled={!controlOnline} onClick={onLoadLogs} title="读取本机 Agent 日志" type="button">
+              <Terminal size={17} />
+              查看日志
+            </button>
+          </div>
+
+          {error && <div className="agent-error-banner">{error}</div>}
+
+          <div className="agent-config-grid">
+            <div>
+              <span>Agent ID</span>
+              <strong>{agentConfig?.agentId ?? "-"}</strong>
+            </div>
+            <div>
+              <span>服务端</span>
+              <strong>{agentConfig?.serverUrl ?? currentAgentServerUrl()}</strong>
+            </div>
+            <div>
+              <span>本机控制</span>
+              <strong>{LOCAL_AGENT_CONTROL_URL}</strong>
+            </div>
+            <div>
+              <span>进程</span>
+              <strong>{agent?.pid ? `pid ${agent.pid}` : "-"}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div className="panel agent-command-panel">
+          <div className="panel-head">
+            <div>
+              <h2>接入命令</h2>
+              <span>{agentPairing ? `${formatDateTime(agentPairing.expiresAt)} 过期` : `已按当前系统显示 ${shellLabel} 命令`}</span>
+            </div>
+            <div className="agent-command-actions">
+              <button className="icon-button compact-text" onClick={() => setCommandShell(commandShell === "bash" ? "powershell" : "bash")} title="切换命令系统" type="button">
+                {commandShell === "bash" ? "Windows" : "macOS/Linux"}
+              </button>
+              <button className="icon-button compact" disabled={busy} onClick={onCreatePairingCommand} title="生成私有 Agent 命令" type="button">
+                <KeyRound size={16} />
+              </button>
+            </div>
+          </div>
+
+          <div className="agent-command-list">
+            <div className="agent-command-row">
+              <div>
+                <span>{shellLabel}</span>
+                <strong>公共设备池</strong>
+              </div>
+              <code>{sharedCommand}</code>
+              <button className="icon-button compact" onClick={() => onCopySharedCommand(commandShell)} title="复制共享 Agent 命令" type="button">
+                <Copy size={15} />
+              </button>
+            </div>
+            {privateCommand ? (
+              <div className="agent-command-row">
+                <div>
+                  <span>{shellLabel}</span>
+                  <strong>私有 {agentPairing?.code}</strong>
+                </div>
+                <code>{privateCommand}</code>
+                <button className="icon-button compact" onClick={() => agentPairing && onCopyPairingCommand(agentPairing.code, commandShell)} title="复制私有 Agent 命令" type="button">
+                  <Copy size={15} />
+                </button>
+              </div>
+            ) : (
+              <div className="agent-command-empty">
+                <Terminal size={18} />
+                <span>生成私有配对后可复制私有接入命令</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="panel agent-log-panel">
+        <div className="panel-head">
+          <h2>本机 Agent 日志</h2>
+          <button className="icon-button compact" disabled={!controlOnline} onClick={onLoadLogs} title="刷新日志" type="button">
+            <RefreshCw size={16} />
+          </button>
+        </div>
+        {logs ? <pre>{logs}</pre> : <div className="empty">暂无日志内容</div>}
+      </div>
+    </section>
+  );
+}
+
+function localAgentModeLabel(config: LocalAgentConfig | undefined): string {
+  if (!config) {
+    return "未配置";
+  }
+  return config.shared ? "共享" : "私有";
+}
+
 type DeviceManagementViewProps = {
   devices: DeviceInfo[];
   selectedSerial: string;
@@ -3012,12 +3423,6 @@ type DeviceManagementViewProps = {
   runs: TestRun[];
   controlOwnerId: string;
   activeRunForSelectedDevice?: TestRun;
-  agentPairing?: AgentPairingCode;
-  sharedAgentCommand: string;
-  creatingAgentPairing: boolean;
-  onCreateAgentPairing: () => void;
-  onCopyAgentPairingCommand: (code: string) => void;
-  onCopySharedAgentCommand: () => void;
   onOpenRuns: () => void;
   onRefreshDevices: () => void;
 };
@@ -3031,12 +3436,6 @@ function DeviceManagementView({
   runs,
   controlOwnerId,
   activeRunForSelectedDevice,
-  agentPairing,
-  sharedAgentCommand,
-  creatingAgentPairing,
-  onCreateAgentPairing,
-  onCopyAgentPairingCommand,
-  onCopySharedAgentCommand,
   onOpenRuns,
   onRefreshDevices
 }: DeviceManagementViewProps) {
@@ -3046,7 +3445,6 @@ function DeviceManagementView({
   const unavailableCount = devices.length - selectableDeviceCount;
   const activeRunsCount = runs.filter(isActiveRunStatus).length;
   const selectedLease = currentDeviceLease(selectedDevice);
-  const agentAccessCommand = agentPairing ? agentPairingCommand(agentPairing.code) : sharedAgentCommand;
 
   return (
     <section className="module-page device-module">
@@ -3083,34 +3481,7 @@ function DeviceManagementView({
             <ToolStatusBar tools={tools} />
           </div>
 
-          {agentAccessCommand && (
-            <div className="agent-pairing-strip agent-access-strip" role="status">
-              <div className="agent-pairing-code">
-                <span>{agentPairing ? "私有配对" : "公共共享"}</span>
-                <strong>{agentPairing ? agentPairing.code : "共享"}</strong>
-                <small>{agentPairing ? agentPairing.paired ? "已配对" : `${formatDateTime(agentPairing.expiresAt)} 过期` : "发布到公共设备池"}</small>
-              </div>
-              <code>{agentAccessCommand}</code>
-              <button
-                className="icon-button compact"
-                onClick={() => agentPairing ? onCopyAgentPairingCommand(agentPairing.code) : onCopySharedAgentCommand()}
-                title="复制 Agent 命令"
-                type="button"
-              >
-                <Copy size={15} />
-              </button>
-            </div>
-          )}
-
           <div className="device-head-actions">
-            <button className="icon-button" disabled={creatingAgentPairing} onClick={onCreateAgentPairing} title="配对私有 Agent" type="button">
-              <KeyRound size={18} />
-              {creatingAgentPairing ? "生成中" : "配对 Agent"}
-            </button>
-            <button className="icon-button" onClick={onCopySharedAgentCommand} title="复制共享 Agent 接入命令" type="button">
-              <Copy size={18} />
-              共享 Agent
-            </button>
             <button className="icon-button" onClick={onRefreshDevices} title="刷新设备" type="button">
               <RefreshCw size={18} />
               刷新设备
@@ -4103,12 +4474,23 @@ export function agentPairingCommand(
     mode?: "private" | "shared";
     agentId?: string;
     insecureTls?: boolean;
+    shell?: AgentCommandShell;
   } = {}
 ): string {
   const currentOrigin = normalizedOrigin(options.currentOrigin ?? browserOrigin() ?? "http://127.0.0.1:5173");
   const serverUrl = normalizedOrigin(options.serverUrl ?? agentServerUrlFromDashboardOrigin(currentOrigin));
   const mode = options.mode ?? "private";
+  const shell = options.shell ?? "bash";
   const insecureTls = options.insecureTls ?? new URL(currentOrigin).protocol === "https:";
+  if (shell === "powershell") {
+    const installUrl = `${currentOrigin}/agent/install.ps1?server=${encodeURIComponent(serverUrl)}`;
+    const modeArgs = mode === "shared"
+      ? "-Shared"
+      : `-PairingCode ${powerShellString(requiredPairingCode(pairingCode))}`;
+    const tlsArg = insecureTls ? " -InsecureTls" : "";
+    const agentId = options.agentId ? powerShellString(options.agentId) : "$env:COMPUTERNAME";
+    return `powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'mobile-automation-agent-install.ps1'; iwr -UseBasicParsing ${powerShellString(installUrl)} -OutFile $p; & $p -AgentId ${agentId} ${modeArgs}${tlsArg}"`;
+  }
   const installUrl = `${currentOrigin}/agent/install.sh?server=${encodeURIComponent(serverUrl)}`;
   const curl = insecureTls ? "curl -kfsSL" : "curl -fsSL";
   const agentId = options.agentId ? shellWord(options.agentId) : "\"$(hostname)\"";
@@ -4119,6 +4501,44 @@ export function agentPairingCommand(
   return `${curl} ${shellWord(installUrl)} | bash -s -- --agent-id ${agentId} ${modeArgs}${tlsArg}`;
 }
 
+type AgentCommandShell = "bash" | "powershell";
+
+export function detectAgentCommandShell(userAgent: string | undefined = browserUserAgent()): AgentCommandShell {
+  const value = userAgent?.toLowerCase() ?? "";
+  return value.includes("windows") ? "powershell" : "bash";
+}
+
+export async function fetchLocalAgentControlStatus(baseUrl = LOCAL_AGENT_CONTROL_URL): Promise<LocalAgentControlStatus> {
+  const response = await fetch(`${baseUrl}/status`);
+  const json = await readLocalAgentControlJson<LocalAgentControlStatus>(response);
+  if (!json.agent || !json.control) {
+    throw new Error("本机 Agent 控制服务响应不完整");
+  }
+  return json;
+}
+
+async function postLocalAgentControl<T>(pathName: string, body: unknown, baseUrl = LOCAL_AGENT_CONTROL_URL): Promise<T> {
+  const response = await fetch(`${baseUrl}${pathName}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  return readLocalAgentControlJson<T>(response);
+}
+
+async function fetchLocalAgentControlLogs(baseUrl = LOCAL_AGENT_CONTROL_URL): Promise<{ ok: true; logs: string }> {
+  const response = await fetch(`${baseUrl}/logs?lines=240`);
+  return readLocalAgentControlJson<{ ok: true; logs: string }>(response);
+}
+
+async function readLocalAgentControlJson<T>(response: Response): Promise<T> {
+  const json = (await response.json().catch(() => ({}))) as { error?: string };
+  if (!response.ok) {
+    throw new Error(json.error ?? `本机 Agent 控制服务请求失败：${response.status}`);
+  }
+  return json as T;
+}
+
 export async function copyCreatedAgentPairingCommand(
   pairingCode: string,
   copyText: (text: string) => Promise<boolean> = copyTextToClipboard,
@@ -4126,9 +4546,9 @@ export async function copyCreatedAgentPairingCommand(
 ): Promise<string> {
   try {
     const copied = await copyText(agentPairingCommand(pairingCode, commandOptions));
-    return copied ? "已复制 Agent 配对命令" : "已生成 Agent 配对命令，请在设备管理卡片中手动复制";
+    return copied ? "已复制 Agent 配对命令" : "已生成 Agent 配对命令，请在设备接入面板中手动复制";
   } catch {
-    return "已生成 Agent 配对命令，请在设备管理卡片中手动复制";
+    return "已生成 Agent 配对命令，请在设备接入面板中手动复制";
   }
 }
 
@@ -4138,6 +4558,10 @@ function shellWord(value: string): string {
     return trimmed;
   }
   return `'${trimmed.replace(/'/g, "'\\''")}'`;
+}
+
+function powerShellString(value: string): string {
+  return `'${value.trim().replace(/'/g, "''")}'`;
 }
 
 export function agentServerUrlFromDashboardOrigin(origin: string): string {
@@ -4161,6 +4585,22 @@ function requiredPairingCode(value: string | undefined): string {
 
 function browserOrigin(): string | undefined {
   return typeof window === "undefined" ? undefined : window.location.origin;
+}
+
+function browserUserAgent(): string | undefined {
+  return typeof navigator === "undefined" ? undefined : navigator.userAgent;
+}
+
+function currentDashboardOrigin(): string {
+  return browserOrigin() ?? "http://127.0.0.1:5173";
+}
+
+function currentAgentServerUrl(): string {
+  return agentServerUrlFromDashboardOrigin(currentDashboardOrigin());
+}
+
+function currentDashboardUsesHttps(): boolean {
+  return new URL(currentDashboardOrigin()).protocol === "https:";
 }
 
 async function copyTextToClipboard(text: string): Promise<boolean> {

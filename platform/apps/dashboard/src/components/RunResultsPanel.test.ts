@@ -42,6 +42,59 @@ describe("RunResultsPanel", () => {
     expect(markup).not.toContain("子 Run");
   });
 
+  it("filters execution records by the selected target app across devices", () => {
+    const runs = [
+      run({
+        id: "classin-device-2",
+        caseName: "ClassIn 在另一台设备执行",
+        status: "passed",
+        startedMinute: 3,
+        deviceSerial: "device-2",
+        appId: "classin"
+      }),
+      run({
+        id: "demo-device-1",
+        caseName: "Demo 应用当前设备执行",
+        status: "failed",
+        startedMinute: 2,
+        deviceSerial: "device-1",
+        appId: "demo"
+      }),
+      run({
+        id: "classin-device-1",
+        caseName: "ClassIn 当前设备执行",
+        status: "passed",
+        startedMinute: 1,
+        deviceSerial: "device-1",
+        appId: "classin"
+      })
+    ];
+
+    const markup = renderToStaticMarkup(
+      React.createElement(RunResultsPanel, {
+        currentRun: null,
+        runs,
+        runsLimit: 30,
+        selectedSerial: "device-1",
+        targetAppId: "classin",
+        targetAppName: "ClassIn",
+        setCurrentRunId: () => undefined,
+        stopCurrentRun: async () => undefined,
+        pauseCurrentRun: async () => undefined,
+        resumeCurrentRun: async () => undefined,
+        stepCurrentRun: async () => undefined,
+        loadMoreRuns: () => undefined
+      })
+    );
+
+    expect(markup).toContain("ClassIn 执行记录");
+    expect(markup).toContain("2 条记录");
+    expect(markup).toContain("ClassIn 在另一台设备执行");
+    expect(markup).toContain("ClassIn 当前设备执行");
+    expect(markup).not.toContain("Demo 应用当前设备执行");
+    expect(markup).not.toContain("当前设备执行记录");
+  });
+
   it("renders current run app performance summary without exposing raw csv links", () => {
     const currentRun = run({
       id: "run-monitor",
@@ -108,7 +161,7 @@ describe("RunResultsPanel", () => {
     expect(markup).toContain("App 性能正常");
   });
 
-  it("labels HarmonyOS devices explicitly", () => {
+  it("omits the selected device header because the global switcher owns device context", () => {
     const markup = renderToStaticMarkup(
       React.createElement(RunResultsPanel, {
         selectedDevice: {
@@ -147,7 +200,8 @@ describe("RunResultsPanel", () => {
       })
     );
 
-    expect(markup).toContain("HarmonyOS");
+    expect(markup).not.toContain("当前设备");
+    expect(markup).not.toContain("harmony-1");
     expect(markup).not.toContain("Android");
   });
 
@@ -362,14 +416,17 @@ function run(input: {
   steps?: TestRun["steps"];
   stepResults?: TestRun["stepResults"];
   sourceSnapshot?: TestRun["sourceSnapshot"];
+  deviceSerial?: string;
+  appId?: string;
 }): TestRun {
+  const deviceSerial = input.deviceSerial ?? "device-1";
   return {
     id: input.id,
     caseName: input.caseName,
-    deviceSerial: "device-1",
+    deviceSerial,
     status: input.status,
     config: {
-      deviceSerial: "device-1",
+      deviceSerial,
       mode: "once",
       repeatCount: 1,
       stepIntervalMs: 0,
@@ -383,8 +440,33 @@ function run(input: {
     metrics: [],
     events: input.events ?? [],
     artifacts: input.artifacts ?? [],
-    ...(input.sourceSnapshot ? { sourceSnapshot: input.sourceSnapshot } : {}),
+    ...(input.sourceSnapshot ? { sourceSnapshot: input.sourceSnapshot } : input.appId ? { sourceSnapshot: sourceSnapshotForApp(input, input.appId) } : {}),
     startedAt: `2026-07-23T08:0${input.startedMinute}:00.000Z`
+  };
+}
+
+function sourceSnapshotForApp(
+  input: {
+    id: string;
+    caseName: string;
+  },
+  appId: string
+): TestRun["sourceSnapshot"] {
+  return {
+    kind: "script_flow",
+    flowId: `flow-${input.id}`,
+    version: 1,
+    planDigest: `digest-${input.id}`,
+    dependencies: [],
+    parsed: {
+      version: 1,
+      kind: "case",
+      name: input.caseName,
+      app: { id: appId },
+      parameters: {},
+      steps: [],
+      tags: []
+    }
   };
 }
 

@@ -8,10 +8,9 @@ import {
   type StepExpectationResult,
   type TestRun
 } from "@mobile-automation/shared";
-import { ArrowLeft, Camera, CheckCircle2, Pause, Play, Smartphone, Square, StepForward, Video, XCircle } from "lucide-react";
+import { ArrowLeft, Camera, CheckCircle2, Pause, Play, Square, StepForward, Video, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import { expectationLabel } from "./StepExpectationPanel";
-import { devicePlatformLabel } from "./PreviewPanel";
 import { caseStepViews, readCaseDocument } from "./case-view";
 import { formatShortTime } from "./time-format";
 
@@ -21,6 +20,8 @@ type RunResultsPanelProps = {
   runs: TestRun[];
   runsLimit: number;
   selectedSerial: string;
+  targetAppId?: string;
+  targetAppName?: string;
   setCurrentRunId: (runId: string) => void;
   stopCurrentRun: () => Promise<void>;
   pauseCurrentRun: () => Promise<void>;
@@ -30,11 +31,11 @@ type RunResultsPanelProps = {
 };
 
 export function RunResultsPanel({
-  selectedDevice,
   currentRun,
   runs,
   runsLimit,
-  selectedSerial,
+  targetAppId,
+  targetAppName,
   setCurrentRunId,
   stopCurrentRun,
   pauseCurrentRun,
@@ -42,14 +43,11 @@ export function RunResultsPanel({
   stepCurrentRun,
   loadMoreRuns
 }: RunResultsPanelProps) {
-  const currentDeviceRuns = selectedSerial ? runs.filter((run) => run.deviceSerial === selectedSerial) : [];
-  const visibleRuns = currentDeviceRuns.length ? currentDeviceRuns : runs;
+  const normalizedTargetAppId = nonEmptyString(targetAppId);
+  const visibleRuns = normalizedTargetAppId ? runs.filter((run) => runMatchesTargetApp(run, normalizedTargetAppId)) : runs;
   const resultGroups = buildRunResultGroups(visibleRuns);
   const failedRunCount = resultGroups.filter((group) => isFailureStatus(group.status)).length;
-  const deviceTitle = selectedDevice?.name || selectedSerial || "未选择设备";
-  const deviceMeta = selectedDevice
-    ? `${devicePlatformLabel(selectedDevice.platform)}${selectedDevice.osVersion ? ` ${selectedDevice.osVersion}` : ""} · ${selectedDevice.status} · ${selectedDevice.serial}`
-    : "请选择设备后查看执行结果";
+  const runListTitle = normalizedTargetAppId ? `${nonEmptyString(targetAppName) ?? normalizedTargetAppId} 执行记录` : "全部执行记录";
   const executionFailure = currentRun ? publicExecutionFailureFromRun(currentRun) : undefined;
   const sourceStepTitles = currentRun ? sourceStepTitlesForRun(currentRun) : new Map<string, string>();
 
@@ -57,14 +55,6 @@ export function RunResultsPanel({
     <aside className="steps-panel">
       <div className="panel automation-workbench runs-workbench">
         <div className="automation-tab-body runs-tab">
-          <div className="run-device-head">
-            <div>
-              <span>当前设备</span>
-              <strong>{deviceTitle}</strong>
-              <small>{deviceMeta}</small>
-            </div>
-            <Smartphone size={20} />
-          </div>
           <div className="panel-head">
             <h2>执行结果</h2>
             {!currentRun && (
@@ -203,7 +193,7 @@ export function RunResultsPanel({
           ) : (
             <>
               <div className="run-list-head">
-                <span>{currentDeviceRuns.length ? "当前设备执行记录" : "全部执行记录"}</span>
+                <span>{runListTitle}</span>
                 <strong>{resultGroups.length}</strong>
               </div>
               <div className="recent-runs">
@@ -333,6 +323,16 @@ function androidAppMonitorHealthLabel(summary: AndroidAppMonitorDisplaySummary):
 
 function androidAppMonitorSampleText(summary: AndroidAppMonitorDisplaySummary): string {
   return `CPU ${summary.cpuSamples} · 内存 ${summary.memorySamples} · 生命周期 ${summary.lifecycleSamples}`;
+}
+
+function runMatchesTargetApp(run: TestRun, targetAppId: string): boolean {
+  return runTargetAppId(run) === targetAppId;
+}
+
+function runTargetAppId(run: TestRun): string | undefined {
+  const parsed = recordValue(run.sourceSnapshot?.parsed);
+  const app = recordValue(parsed?.app);
+  return nonEmptyString(app?.id);
 }
 
 function eventSummaryForDisplay(event: TestRun["events"][number]): string {

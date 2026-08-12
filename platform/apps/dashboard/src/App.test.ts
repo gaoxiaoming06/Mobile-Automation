@@ -20,6 +20,7 @@ import {
   deleteTargetApp,
   copyCreatedAgentPairingCommand,
   dashboardAdvancedToolsEnabled,
+  detectAgentCommandShell,
   isDefaultTargetApp,
   loadTargetApps,
   pageAssetLibraryInitialization,
@@ -49,6 +50,7 @@ describe("App shell", () => {
     expect(markup).toContain("自动化测试平台");
     expect(markup).toContain("topbar-context-group");
     expect(markup).toContain("设备管理");
+    expect(markup).toContain("设备接入");
     expect(markup).not.toContain("资产校准");
     expect(markup).not.toContain("页面资产库");
     expect(markup).toContain("用例中心");
@@ -323,6 +325,26 @@ describe("App shell", () => {
       agentId: "lab-mac-01",
       insecureTls: false
     })).toBe("curl -fsSL 'https://mobile.example.test/agent/install.sh?server=https%3A%2F%2Fmobile.example.test' | bash -s -- --agent-id lab-mac-01 --shared");
+  });
+
+  it("builds a Windows PowerShell agent install command", () => {
+    expect(agentPairingCommand("654321", {
+      currentOrigin: "https://mobile.example.test",
+      serverUrl: "https://mobile.example.test",
+      shell: "powershell",
+      insecureTls: false
+    })).toContain("/agent/install.ps1?server=https%3A%2F%2Fmobile.example.test");
+    expect(agentPairingCommand("654321", {
+      currentOrigin: "https://mobile.example.test",
+      serverUrl: "https://mobile.example.test",
+      shell: "powershell",
+      insecureTls: false
+    })).toContain("-PairingCode '654321'");
+  });
+
+  it("detects the command shell from the browser platform", () => {
+    expect(detectAgentCommandShell("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe("bash");
+    expect(detectAgentCommandShell("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")).toBe("powershell");
   });
 });
 
