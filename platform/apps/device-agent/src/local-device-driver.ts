@@ -11,15 +11,24 @@ import type {
   ToolStatus
 } from "@mobile-automation/shared";
 import type { AgentLocalDeviceDriver } from "./device-agent.js";
+import { ensureMobileToolPath } from "./tool-path.js";
 
 export class LocalDeviceAgentDriver implements AgentLocalDeviceDriver {
   private readonly platformCache = new Map<string, DeviceInfo["platform"]>();
+  private readonly android: AndroidDriver;
+  private readonly ios: IosDriver;
+  private readonly harmony: HarmonyDriver;
 
   constructor(
-    private readonly android = new AndroidDriver(),
-    private readonly ios = new IosDriver(),
-    private readonly harmony = new HarmonyDriver()
-  ) {}
+    android?: AndroidDriver,
+    ios?: IosDriver,
+    harmony?: HarmonyDriver
+  ) {
+    ensureMobileToolPath();
+    this.android = android ?? new AndroidDriver();
+    this.ios = ios ?? new IosDriver();
+    this.harmony = harmony ?? new HarmonyDriver();
+  }
 
   async getToolStatus(): Promise<ToolStatus[]> {
     const [androidTools, iosTools, harmonyTools] = await Promise.all([

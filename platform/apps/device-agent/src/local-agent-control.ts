@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
+import path from "node:path";
 import type { DeviceAgentConfig, DeviceAgentRuntime } from "./device-agent.js";
 
 export type ManagedAgentConfig = {
@@ -140,6 +141,7 @@ export class InProcessAgentManager implements LocalAgentManager {
     await this.stop();
     this.options.logBuffer?.resetConnectionState();
     this.lastConfig = normalizeManagedAgentConfig(config);
+    applyManagedTlsConfig(this.lastConfig);
     const controller = new AbortController();
     const runtime = this.createRuntime(managedConfigToDeviceAgentConfig(this.lastConfig));
     const current = {
@@ -188,6 +190,15 @@ export class InProcessAgentManager implements LocalAgentManager {
       url: absoluteUrl(manifest.url, serverUrl),
       sha256: manifest.sha256
     }) : false;
+    if (agentFile && manifest.scrcpyServer) {
+      const scrcpyServerFile = path.join(path.dirname(agentFile), manifest.scrcpyServer.file);
+      await downloadBundleIfNeeded({
+        filePath: scrcpyServerFile,
+        url: absoluteUrl(manifest.scrcpyServer.url, serverUrl),
+        sha256: manifest.scrcpyServer.sha256
+      });
+      process.env.SCRCPY_SERVER_PATH = scrcpyServerFile;
+    }
     const nextConfig = config ? { ...config, serverUrl, version: manifest.version } : undefined;
     if (nextConfig) {
       this.lastConfig = nextConfig;
@@ -353,6 +364,12 @@ function managedConfigToDeviceAgentConfig(config: ManagedAgentConfig): DeviceAge
   };
 }
 
+function applyManagedTlsConfig(config: ManagedAgentConfig): void {
+  if (config.insecureTls) {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  }
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -391,6 +408,11 @@ type AgentDistributionManifest = {
   version: string;
   url: string;
   sha256: string;
+  scrcpyServer?: {
+    file: string;
+    url: string;
+    sha256: string;
+  };
 };
 
 async function fetchAgentDistributionManifest(serverUrl: string): Promise<AgentDistributionManifest> {
@@ -402,7 +424,20 @@ async function fetchAgentDistributionManifest(serverUrl: string): Promise<AgentD
   return {
     version: requiredString(manifest.version, "manifest.version"),
     url: requiredString(manifest.url, "manifest.url"),
-    sha256: requiredString(manifest.sha256, "manifest.sha256")
+    sha256: requiredString(manifest.sha256, "manifest.sha256"),
+    ...(readManifestScrcpyServer(manifest.scrcpyServer) ? { scrcpyServer: readManifestScrcpyServer(manifest.scrcpyServer) } : {})
+  };
+}
+
+function readManifestScrcpyServer(value: unknown): AgentDistributionManifest["scrcpyServer"] {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    file: optionalString(record.file) ?? "scrcpy-server-v3.3.3",
+    url: requiredString(record.url, "manifest.scrcpyServer.url"),
+    sha256: requiredString(record.sha256, "manifest.scrcpyServer.sha256")
   };
 }
 

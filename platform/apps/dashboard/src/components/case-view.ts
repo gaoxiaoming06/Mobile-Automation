@@ -36,6 +36,10 @@ export type CasePlanView = {
     expectPage?: string;
     phase?: "preparation" | "business" | "verification" | "reset";
     role?: "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery" | "reset";
+    source?: {
+      flowName?: string;
+      stepId?: string;
+    };
   }>;
 };
 
@@ -112,17 +116,21 @@ export function defaultCaseParameterValues(document: CaseDocumentView | undefine
 }
 
 export function caseStepViews(document: CaseDocumentView | undefined, plan?: CasePlanView, options: CaseStepViewOptions = {}): CaseStepView[] {
-  if (plan) {
-    return plan.steps.map((step) => ({
-      id: step.id,
-      order: step.order,
-      name: step.name ?? caseActionLabel(step.action),
-      action: step.action,
-      context: planStepContext(step),
-      ...(step.phase ? { phase: step.phase } : {})
-    }));
-  }
   const display = stepDisplayContext(document, options);
+  if (plan) {
+    const sourceDisplayById = sourceStepDisplayMap(document, display);
+    return plan.steps.map((step) => {
+      const sourceDisplay = sourceDisplayById.get(planSourceStepId(step) ?? step.id);
+      return {
+        id: step.id,
+        order: step.order,
+        name: planStepDisplayName(step, sourceDisplay),
+        action: step.action,
+        context: planStepContext(step) ?? sourceDisplay?.context,
+        ...(step.phase ? { phase: step.phase } : {})
+      };
+    });
+  }
   return flattenSourceSteps(document?.steps ?? []).map((step, index) => {
     const action = sourceAction(step);
     return {
@@ -133,6 +141,37 @@ export function caseStepViews(document: CaseDocumentView | undefined, plan?: Cas
       context: sourceStepContext(step, display)
     };
   });
+}
+
+type SourceStepDisplay = {
+  name: string;
+  context?: string;
+};
+
+function sourceStepDisplayMap(
+  document: CaseDocumentView | undefined,
+  display: StepDisplayContext
+): Map<string, SourceStepDisplay> {
+  return new Map(flattenSourceSteps(document?.steps ?? []).map((step) => {
+    const action = sourceAction(step);
+    return [step.id, {
+      name: sourceStepDisplayName(step, action, display),
+      context: sourceStepContext(step, display)
+    }];
+  }));
+}
+
+function planStepDisplayName(
+  step: CasePlanView["steps"][number],
+  sourceDisplay: SourceStepDisplay | undefined
+): string {
+  const explicitName = stringValue(step.name);
+  if (explicitName && !isGenericStepName(explicitName, step.action)) return explicitName;
+  return sourceDisplay?.name ?? explicitName ?? caseActionLabel(step.action);
+}
+
+function planSourceStepId(step: CasePlanView["steps"][number]): string | undefined {
+  return stringValue(recordValue(step.source)?.stepId);
 }
 
 export function caseActionLabel(action: string): string {

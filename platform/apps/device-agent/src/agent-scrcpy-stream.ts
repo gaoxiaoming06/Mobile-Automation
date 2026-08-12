@@ -369,12 +369,20 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-async function resolveScrcpyServerPath(): Promise<string> {
+export type ScrcpyServerPathResolutionOptions = {
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
+  cwd?: string;
+};
+
+export async function resolveScrcpyServerPath(options: ScrcpyServerPathResolutionOptions = {}): Promise<string> {
+  const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
   const candidates = uniqueStrings([
-    process.env.SCRCPY_SERVER_PATH,
-    path.resolve(process.cwd(), "platform/tools/scrcpy-server-v3.3.3"),
-    path.resolve(process.cwd(), "../../tools/scrcpy-server-v3.3.3"),
-    path.resolve(process.cwd(), "tools/scrcpy-server-v3.3.3"),
+    env.SCRCPY_SERVER_PATH,
+    env.MOBILE_AUTOMATION_AGENT_HOME ? path.join(env.MOBILE_AUTOMATION_AGENT_HOME, "scrcpy-server-v3.3.3") : undefined,
+    path.resolve(cwd, "platform/tools/scrcpy-server-v3.3.3"),
+    path.resolve(cwd, "../../tools/scrcpy-server-v3.3.3"),
+    path.resolve(cwd, "tools/scrcpy-server-v3.3.3"),
     "/opt/homebrew/Cellar/scrcpy/3.3.3/share/scrcpy/scrcpy-server",
     "/usr/local/Cellar/scrcpy/3.3.3/share/scrcpy/scrcpy-server"
   ].filter((item): item is string => Boolean(item)));

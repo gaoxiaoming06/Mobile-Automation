@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { caseStepViews, loopBodyAvailability, type CaseDocumentView } from "./case-view.js";
+import { caseStepViews, loopBodyAvailability, type CaseDocumentView, type CasePlanView } from "./case-view.js";
 
 describe("caseStepViews", () => {
   it("requires reset steps or an explicit no-reset contract for business looping", () => {
@@ -134,6 +134,86 @@ describe("caseStepViews", () => {
     }).map((step) => [step.name, step.context])).toEqual([
       ["将“课堂时长”选择为“7小时20分钟（参数：lessonDuration）”", "课堂时长 → 7小时20分钟（参数：lessonDuration）"],
       ["点击“海外55（参数：coTeacherName）”", "海外55（参数：coTeacherName）"]
+    ]);
+  });
+
+  it("keeps readable source actions when a compiled execution plan is present", () => {
+    const document: CaseDocumentView = {
+      version: 1,
+      kind: "case",
+      purpose: "business",
+      name: "从主页进入新建课堂页",
+      app: { id: "classin" },
+      parameters: {
+        className: { type: "string", label: "班级名称", required: true },
+        checkinActivityTitle: { type: "string", label: "打卡活动", required: true }
+      },
+      steps: [
+        {
+          id: "open-home",
+          name: "点击目标",
+          onPage: "classin.launch",
+          expectPage: "classin.home",
+          tap: { target: { text: "主页" } }
+        },
+        {
+          id: "open-class",
+          name: "点击目标",
+          onPage: "classin.home",
+          expectPage: "classin.teacher.class.detail.visual",
+          tap: { target: { text: "${className}" } }
+        },
+        {
+          id: "open-checkin-activity",
+          name: "点击目标",
+          onPage: "classin.teacher.activity.publish.visual",
+          expectPage: "classin.teacher.lesson.create.visual",
+          tap: { target: { text: "${checkinActivityTitle}" } }
+        }
+      ],
+      tags: []
+    };
+    const plan: CasePlanView = {
+      steps: [
+        {
+          id: "open-home",
+          order: 1,
+          name: "点击目标",
+          action: "tap",
+          input: { target: { text: "主页" } },
+          onPage: "classin.launch",
+          expectPage: "classin.home"
+        },
+        {
+          id: "open-class",
+          order: 2,
+          name: "点击目标",
+          action: "tap",
+          input: { target: { text: "班级四十二号" } },
+          onPage: "classin.home",
+          expectPage: "classin.teacher.class.detail.visual"
+        },
+        {
+          id: "open-checkin-activity",
+          order: 3,
+          name: "点击目标",
+          action: "tap",
+          input: { target: { text: "Jej" } },
+          onPage: "classin.teacher.activity.publish.visual",
+          expectPage: "classin.teacher.lesson.create.visual"
+        }
+      ]
+    };
+
+    expect(caseStepViews(document, plan, {
+      parameterValues: {
+        className: "班级四十二号",
+        checkinActivityTitle: "Jej"
+      }
+    }).map((step) => [step.name, step.context])).toEqual([
+      ["点击“主页”", "classin.launch → classin.home"],
+      ["点击“班级四十二号（参数：className）”", "classin.home → classin.teacher.class.detail.visual"],
+      ["点击“Jej（参数：checkinActivityTitle）”", "classin.teacher.activity.publish.visual → classin.teacher.lesson.create.visual"]
     ]);
   });
 

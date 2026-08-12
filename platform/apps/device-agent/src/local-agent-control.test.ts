@@ -1,4 +1,8 @@
 import { createServer, type Server } from "node:http";
+import crypto from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createLocalAgentControl,
@@ -12,10 +16,12 @@ import type { DeviceAgentRuntime } from "./device-agent.js";
 describe("local agent control", () => {
   const controls: Array<{ close(): Promise<void> }> = [];
   const servers: Server[] = [];
+  const tempDirs: string[] = [];
 
   afterEach(async () => {
     await Promise.all(controls.splice(0).map((control) => control.close()));
     await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
   it("starts, switches, stops, and reports the in-process managed agent", async () => {
@@ -121,6 +127,82 @@ describe("local agent control", () => {
     await expect(manager.status()).resolves.not.toHaveProperty("registrationError");
   });
 
+  it("applies insecure TLS mode before starting the in-process runtime", async () => {
+    const originalTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    let observedTlsSetting: string | undefined;
+    const manager = new InProcessAgentManager(undefined, () => ({
+      start: async (signal?: AbortSignal) => {
+        observedTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+        await new Promise<void>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+    }) as unknown as DeviceAgentRuntime);
+
+    try {
+      await manager.start({
+        serverUrl: "https://server.test",
+        agentId: "agent-a",
+        shared: false,
+        pairingCode: "123456",
+        insecureTls: true
+      });
+
+      expect(observedTlsSetting).toBe("0");
+    } finally {
+      await manager.stop();
+      if (originalTlsSetting === undefined) {
+        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      } else {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsSetting;
+      }
+    }
+  });
+
+  it("downloads the bundled scrcpy server during managed updates", async () => {
+    const agentHome = await mkdtemp(path.join(os.tmpdir(), "mobile-agent-update-"));
+    tempDirs.push(agentHome);
+    const agentFile = path.join(agentHome, "mobile-automation-agent.cjs");
+    await writeFile(agentFile, "old agent");
+    const server = createServer((req, res) => {
+      if (req.url === "/agent/manifest.json") {
+        sendTestJson(res, {
+          version: "0.2.0",
+          url: "/agent/mobile-automation-agent.cjs",
+          sha256: sha256Text("new agent"),
+          scrcpyServer: {
+            file: "scrcpy-server-v3.3.3",
+            url: "/agent/scrcpy-server-v3.3.3",
+            sha256: sha256Text("scrcpy server")
+          }
+        });
+        return;
+      }
+      if (req.url === "/agent/mobile-automation-agent.cjs") {
+        res.writeHead(200).end("new agent");
+        return;
+      }
+      if (req.url === "/agent/scrcpy-server-v3.3.3") {
+        res.writeHead(200).end("scrcpy server");
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    servers.push(server);
+    const serverUrl = await listen(server);
+    const manager = new InProcessAgentManager({
+      serverUrl,
+      agentId: "agent-a",
+      shared: true
+    }, () => new FakeRuntime() as unknown as DeviceAgentRuntime, { agentFile });
+
+    await manager.updateFromServer({ serverUrl });
+
+    await expect(readFile(agentFile, "utf8")).resolves.toBe("new agent");
+    await expect(readFile(path.join(agentHome, "scrcpy-server-v3.3.3"), "utf8")).resolves.toBe("scrcpy server");
+  });
+
   it("clears a previous registration error when the agent registers again", () => {
     const logBuffer = new MemoryLogBuffer();
 
@@ -223,4 +305,25 @@ async function postJson(url: string, body: unknown): Promise<unknown> {
   });
   expect(response.status).toBe(200);
   return response.json();
+}
+
+function sendTestJson(res: { writeHead(status: number, headers?: Record<string, string>): unknown; end(body?: string): unknown }, body: unknown): void {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+function listen(server: Server): Promise<string> {
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("server did not bind to a port");
+      }
+      resolve(`http://127.0.0.1:${address.port}`);
+    });
+  });
+}
+
+function sha256Text(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
 }

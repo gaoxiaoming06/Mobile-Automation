@@ -27,6 +27,8 @@ describe("agent distribution", () => {
     expect(script).toContain("MOBILE_AUTOMATION_AGENT_FILE");
     expect(script).toContain("/agent/manifest.json");
     expect(script).toContain("/agent/mobile-automation-agent.cjs");
+    expect(script).toContain("scrcpy-server-v3.3.3");
+    expect(script).toContain("SCRCPY_SERVER_PATH=$SCRCPY_SERVER_FILE");
     expect(script).toContain("Local control: http://127.0.0.1:$CONTROL_PORT");
     expect(script).toContain("--shared");
     expect(script).toContain("--pairing-code");
@@ -48,12 +50,15 @@ describe("agent distribution", () => {
     expect(script).toContain("DEVICE_AGENT_SHARED");
     expect(script).toContain("DEVICE_AGENT_PAIRING_CODE");
     expect(script).toContain("MOBILE_AUTOMATION_AGENT_CONTROL_PORT");
+    expect(script).toContain("scrcpy-server-v3.3.3");
+    expect(script).toContain("SCRCPY_SERVER_PATH");
   });
 
   it("serves manifest, install script, and the agent bundle", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "mobile-agent-dist-"));
     tempDirs.push(dir);
     await writeFile(path.join(dir, "mobile-automation-agent.cjs"), "console.log('agent')\n");
+    await writeFile(path.join(dir, "scrcpy-server-v3.3.3"), "scrcpy server\n");
 
     const app = express();
     registerAgentDistributionRoutes(app, {
@@ -67,7 +72,12 @@ describe("agent distribution", () => {
       version: "0.1.0-test",
       file: "mobile-automation-agent.cjs",
       url: "/agent/mobile-automation-agent.cjs",
-      sha256: "abc123"
+      sha256: "abc123",
+      scrcpyServer: {
+        file: "scrcpy-server-v3.3.3",
+        url: "/agent/scrcpy-server-v3.3.3",
+        sha256: "ec5634844295cbb2d649c80064e66225217e857b7b91d52d077750b843a0568e"
+      }
     });
     expect(await getText(`${baseUrl}/agent/install.sh?server=https%3A%2F%2Fmobile.example.test`)).toContain(
       'DEFAULT_SERVER_URL="https://mobile.example.test"'
@@ -76,14 +86,20 @@ describe("agent distribution", () => {
       "[string]$Server = 'https://mobile.example.test'"
     );
     expect(await getText(`${baseUrl}/agent/mobile-automation-agent.cjs`)).toBe("console.log('agent')\n");
+    expect(await getText(`${baseUrl}/agent/scrcpy-server-v3.3.3`)).toBe("scrcpy server\n");
   });
 
   it("creates stable manifest values", () => {
-    expect(agentDistributionManifest({ version: "0.1.0", sha256: "abc123" })).toEqual({
+    expect(agentDistributionManifest({ version: "0.1.0", sha256: "abc123", scrcpyServerSha256: "def456" })).toEqual({
       version: "0.1.0",
       file: "mobile-automation-agent.cjs",
       url: "/agent/mobile-automation-agent.cjs",
-      sha256: "abc123"
+      sha256: "abc123",
+      scrcpyServer: {
+        file: "scrcpy-server-v3.3.3",
+        url: "/agent/scrcpy-server-v3.3.3",
+        sha256: "def456"
+      }
     });
   });
 });
