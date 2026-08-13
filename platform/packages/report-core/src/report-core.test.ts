@@ -30,6 +30,70 @@ describe("renderReportHtml", () => {
     expect(renderReportHtml(run)).toContain("passed");
   });
 
+  it("renders fixed delay wait source steps with a readable title", () => {
+    const run: TestRun = {
+      id: "run-wait",
+      caseName: "Wait",
+      deviceSerial: "device-1",
+      status: "passed",
+      config: {
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 0,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false
+      },
+      steps: [{
+        id: "wait-after-submit",
+        order: 1,
+        type: "wait",
+        enabled: true,
+        title: "wait",
+        params: { scriptStepId: "wait-after-submit" },
+        createdAt: "2026-06-04T00:00:00.000Z"
+      }],
+      stepResults: [{
+        id: "step-result-1",
+        runId: "run-wait",
+        iterationIndex: 1,
+        stepId: "wait-after-submit",
+        stepOrder: 1,
+        type: "wait",
+        status: "passed",
+        startedAt: "2026-06-04T00:00:01.000Z",
+        endedAt: "2026-06-04T00:00:04.000Z",
+        durationMs: 3000,
+        artifacts: []
+      }],
+      metrics: [],
+      events: [],
+      artifacts: [],
+      sourceSnapshot: {
+        kind: "script_flow",
+        flowId: "flow-wait",
+        version: 1,
+        planDigest: "a".repeat(64),
+        executionPurpose: "normal",
+        executionPlatform: "android",
+        dependencies: [],
+        parsed: {
+          version: 1,
+          kind: "case",
+          name: "Wait",
+          app: { id: "cn.eeo.classin" },
+          parameters: {},
+          steps: [{ id: "wait-after-submit", wait: { durationMs: 3000 } }],
+          tags: []
+        }
+      },
+      startedAt: "2026-06-04T00:00:00.000Z"
+    };
+
+    expect(renderReportHtml(run)).toContain("等待 3 秒");
+  });
+
   it("renders android app monitor summary as a readable report section without raw csv links", () => {
     const run: TestRun = {
       id: "run-monitor",

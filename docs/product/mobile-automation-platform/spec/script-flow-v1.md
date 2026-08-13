@@ -70,6 +70,7 @@ NavigationEntry 是试运行验证出的轻量页面跳转经验，保存 `fromP
 - `clearText`
 - `selectText`
 - `swipe`
+- `wait`
 - `scrollUntilVisible`
 - `reachPage`
 - `waitForPage`
@@ -78,6 +79,14 @@ NavigationEntry 是试运行验证出的轻量页面跳转经验，保存 `fromP
 - `runFlow`
 - `repeat`
 - `when`
+
+`wait` 表示固定延时，用于“某个动作完成后停留一段时间再继续下一步”。它不轮询页面、文字或控件状态；需要等待页面或文字出现时应使用 `waitForPage` 或 `assertText`。
+
+```yaml
+- id: wait-after-submit
+  wait:
+    durationMs: 3000
+```
 
 ### 用例复用
 
@@ -114,7 +123,7 @@ NavigationEntry 是试运行验证出的轻量页面跳转经验，保存 `fromP
 
 1. 内部 ScriptFlow 先经过 schema 和参数校验，YAML 不作为面向普通用户的编辑界面。
 2. 执行器严格按照显式命令执行，不根据“发布、删除、支付”等按钮文字推断业务风险，也不要求步骤风险等级。旧脚本中的 `risk` 仅作为兼容输入读取并丢弃。
-3. 动作目标必须且只能使用 `text`、`icon`、`visual` 或 `control`。`text` 表示用户明确提供或目录中已有的屏幕原文；需要 OCR 文本语义匹配时使用 `text + match: semantic`；`icon` 表示执行器已有标准 role 的图标；`visual` 表示明确的视觉目标，例如 `{ visual: { kind: icon, query: "排序图标" } }` 或 `{ visual: { kind: image, query: "封面图片" } }`，不得退化为 OCR 文本；`control` 表示由执行器实时识别的通用控件。`semantic` 目标字段不再支持。`switch` 控件必须用 `nearText` 锚定行文字，并用 `checked` 声明目标开关状态。脚本不能引用页面元素资产 ID。
+3. 动作目标必须且只能使用 `text`、`icon`、`visual` 或 `control`。`text` 表示用户明确提供或目录中已有的屏幕原文；需要 OCR 文本语义匹配时使用 `text + match: semantic`；`icon` 表示执行器已有标准 role 的图标；`visual` 表示明确的视觉目标，例如 `{ visual: { kind: icon, query: "排序图标", area: content, scopeText: "工具区", ordinal: 2 } }` 或 `{ visual: { kind: image, query: "封面图片", area: content } }`，不得退化为 OCR 文本；`visual` 可携带 `area`、`position`、`nearText`、`scopeText` 和 `ordinal` 这类跨平台限定，但不能携带坐标、bounds、resourceId、accessibilityId 或临时视觉模板；`control` 表示由执行器实时识别的通用控件。`semantic` 目标字段不再支持。`switch` 控件必须用 `nearText` 锚定行文字，并用 `checked` 声明目标开关状态。脚本不能引用页面元素资产 ID。
 4. `tap`、`inputText`、`clearText` 和 `selectText` 的 `search` 声明是否允许查找：`visibleOnly` 只检查当前屏幕，`auto` 先检查当前屏幕、必要时回到顶部再逐屏扫描，`scroll` 按指定方向扫描。查找算法属于执行器，脚本不展开成机械滑动步骤。
 5. v1 的标准顶栏图标、内容区标准新增按钮、复选框和行尾开关不要求录制元素资产。底栏和业务入口存在可见文字时优先使用 `text`；尚未支持的自定义图形必须使用 `visual` 表达，并在执行阶段明确报告缺少视觉 grounding 或识别失败，不得退化为元素 ID、坐标、OCR 文本或圈选区域。
 6. 坐标和录制区域不能成为目标身份，也不能作为点击回退。

@@ -71,6 +71,19 @@ describe("script-flow orchestrator", () => {
     expect(preparation.draft.document.steps[2]).toMatchObject({ role: "assertion" });
   });
 
+  it("adds fixed delay wait steps as editable business steps", () => {
+    const added = addDraftStep(baseDraft(), "0:tap-target", "wait", "business");
+
+    expect(added.draft.document.steps[1]).toMatchObject({
+      id: "wait-step",
+      name: "等待",
+      role: "business",
+      wait: { durationMs: 1000 }
+    });
+    expect(added.draft.sourceYaml).toContain("wait:");
+    expect(added.draft.sourceYaml).toContain("durationMs: 1000");
+  });
+
   it("inserts reusable verification and reset flows into their selected sections", () => {
     const draft = baseDraft();
     draft.document.loop = { reset: "none" };

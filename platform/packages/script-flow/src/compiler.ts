@@ -251,6 +251,9 @@ function executableAction(
   if ("swipe" in step) {
     return { action: "swipe", input: interpolateRecord(step.swipe, parameters) };
   }
+  if ("wait" in step) {
+    return { action: "wait", input: interpolateRecord(step.wait, parameters) };
+  }
   if ("scrollUntilVisible" in step) {
     return { action: "scrollUntilVisible", input: interpolateRecord(step.scrollUntilVisible, parameters) };
   }

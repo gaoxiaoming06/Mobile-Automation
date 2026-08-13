@@ -38,6 +38,7 @@ const actionFields = [
   "clearText",
   "selectText",
   "swipe",
+  "wait",
   "scrollUntilVisible",
   "reachPage",
   "waitForPage",
@@ -338,6 +339,8 @@ function readStep(
       return { ...base, selectText: readSelectText(step.selectText, `${path}.selectText`, issues) };
     case "swipe":
       return { ...base, swipe: readSwipe(step.swipe, `${path}.swipe`, issues) };
+    case "wait":
+      return { ...base, wait: readWait(step.wait, `${path}.wait`, issues) };
     case "scrollUntilVisible":
       return { ...base, scrollUntilVisible: readScroll(step.scrollUntilVisible, `${path}.scrollUntilVisible`, issues) };
     case "reachPage":
@@ -462,6 +465,17 @@ function readSwipe(value: unknown, path: string, issues: ScriptFlowValidationIss
   return {
     direction: direction === "down" || direction === "left" || direction === "right" ? direction : "up",
     ...(distance !== undefined ? { distance } : {})
+  };
+}
+
+function readWait(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { durationMs: number } {
+  const action = recordAt(value, path, issues);
+  rejectUnknownFields(action, new Set(["durationMs"]), path, issues);
+  if (action.durationMs === undefined) {
+    issues.push({ path: `${path}.durationMs`, message: "Expected a positive number" });
+  }
+  return {
+    durationMs: optionalPositiveNumber(action.durationMs, `${path}.durationMs`, issues) ?? 1000
   };
 }
 
@@ -604,7 +618,7 @@ function readVisualTarget(value: unknown, path: string, issues: ScriptFlowValida
     return {};
   }
   const target = recordAt(value, path, issues);
-  rejectUnknownFields(target, new Set(["kind", "query", "area", "position", "nearText"]), path, issues);
+  rejectUnknownFields(target, new Set(["kind", "query", "area", "position", "nearText", "scopeText", "ordinal"]), path, issues);
   const kind = readVisualTargetKind(target.kind, `${path}.kind`, issues);
   const query = requiredString(target.query, `${path}.query`, issues);
   const visual: Partial<ScriptVisualTarget> = {
@@ -612,7 +626,9 @@ function readVisualTarget(value: unknown, path: string, issues: ScriptFlowValida
     ...(query ? { query } : {}),
     ...readTargetArea(target.area, `${path}.area`, issues),
     ...readTargetPosition(target.position, `${path}.position`, issues),
-    ...optionalStringProperty(target.nearText, `${path}.nearText`, "nearText", issues)
+    ...optionalStringProperty(target.nearText, `${path}.nearText`, "nearText", issues),
+    ...optionalStringProperty(target.scopeText, `${path}.scopeText`, "scopeText", issues),
+    ...optionalOrdinalProperty(target.ordinal, `${path}.ordinal`, issues)
   };
   if (visual.position && visual.kind !== "icon") {
     issues.push({ path: `${path}.position`, message: "Position is only supported for visual icon targets" });

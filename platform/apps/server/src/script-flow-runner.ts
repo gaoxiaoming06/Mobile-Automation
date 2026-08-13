@@ -326,6 +326,13 @@ export class ScriptFlowRunner {
     if (step.action === "swipe") {
       return swipeAction(step.input);
     }
+    if (step.action === "wait") {
+      return {
+        type: "wait",
+        params: { durationMs: numberInput(step.input, "durationMs") ?? 1000 },
+        strategy: "fixed_delay"
+      };
+    }
     if (step.action === "reachPage") {
       const pageReference = stringInput(step.input, "pageId");
       const targetPage = this.deps.pageCatalog?.resolvePage(pageReference, appId, platform);
@@ -743,7 +750,14 @@ function defaultStepTitle(step: ScriptExecutionPlanStep): string {
   if (step.action === "reachPage") {
     return `到达页面 ${stringInput(step.input, "pageId")}`;
   }
+  if (step.action === "wait") {
+    return `等待 ${formatDurationMs(numberInput(step.input, "durationMs") ?? 1000)}`;
+  }
   return step.action;
+}
+
+function formatDurationMs(durationMs: number): string {
+  return durationMs % 1000 === 0 ? `${durationMs / 1000} 秒` : `${durationMs} ms`;
 }
 
 function stringInput(input: Record<string, unknown>, key: string): string {

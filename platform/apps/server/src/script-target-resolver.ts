@@ -185,6 +185,8 @@ export class ScriptTargetResolver {
     const area = visual.area ?? input.target.area;
     const position = visual.position ?? input.target.position;
     const nearText = visual.nearText ?? input.target.nearText;
+    const scopeText = visual.scopeText ?? input.target.scopeText;
+    const ordinal = visual.ordinal ?? input.target.ordinal;
     const targetForSearch: ScriptTarget = { ...input.target, area };
     const search = searchParams(targetForSearch, input.search);
     const semanticArea = (search.semanticArea as "top" | "content" | "bottom" | undefined)
@@ -199,6 +201,8 @@ export class ScriptTargetResolver {
         visualQuery: visual.query,
         ...(position ? { slot: position } : {}),
         ...(nearText ? { anchorText: nearText } : {}),
+        ...(scopeText ? { scopeText } : {}),
+        ...(ordinal ? { ordinal } : {}),
         ...search,
         semanticArea,
         allowRegionFallback: false

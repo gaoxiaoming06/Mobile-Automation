@@ -30,6 +30,8 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("目标状态");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("reachPage");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("assertText");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("wait");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("固定延时");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("ocrText");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("pageElement");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("risk");
@@ -1474,7 +1476,9 @@ describe("ScriptFlow AI planner", () => {
           visual: {
             kind: "icon",
             query: "排序图标",
-            area: "content"
+            area: "content",
+            scopeText: "工具区",
+            ordinal: 2
           }
         },
         search: { mode: "visibleOnly" }
@@ -1491,8 +1495,94 @@ describe("ScriptFlow AI planner", () => {
       document: {
         steps: [{
           tap: {
-            target: { visual: { kind: "icon", query: "排序图标", area: "content" } },
+            target: { visual: { kind: "icon", query: "排序图标", area: "content", scopeText: "工具区", ordinal: 2 } },
             search: { mode: "visibleOnly" }
+          }
+        }]
+      }
+    });
+  });
+
+  it("instructs schema repair to preserve non-OCR target categories", async () => {
+    const first = readyResponse();
+    first.summary = "点击辅助图标";
+    first.document.name = "点击辅助图标";
+    first.document.purpose = "navigation";
+    first.document.steps = [{
+      id: "tap-assist-icon",
+      role: "navigation",
+      tap: {
+        target: {
+          visual: {
+            kind: "icon",
+            query: "辅助图标",
+            area: "content",
+            customHint: "工具区"
+          } as any
+        },
+        search: { mode: "visibleOnly" }
+      }
+    }];
+    const repaired = readyResponse();
+    repaired.summary = "点击辅助图标";
+    repaired.document.name = "点击辅助图标";
+    repaired.document.purpose = "navigation";
+    repaired.document.steps = [{
+      id: "tap-assist-icon",
+      role: "navigation",
+      tap: {
+        target: {
+          visual: {
+            kind: "icon",
+            query: "辅助图标",
+            area: "content",
+            scopeText: "工具区",
+            ordinal: 2
+          }
+        },
+        search: { mode: "visibleOnly" }
+      }
+    }];
+    const requests: string[] = [];
+    const responses: unknown[] = [
+      first,
+      repaired,
+      { status: "ok", summary: "参数化合理。", issues: [] },
+      { status: "ok", summary: "非 OCR 目标保留合理。", issues: [] }
+    ];
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "点击工具区的第二个辅助图标",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: pageCatalog(),
+      flows: [],
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        requests.push(body.messages?.at(-1)?.content ?? "");
+        const content = responses.shift();
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(content) } }]
+        }), { status: 200 });
+      }
+    });
+
+    expect(requests[1]).toContain("保持 target 的类别");
+    expect(requests[1]).toContain("icon/visual");
+    expect(requests[1]).toContain("不能改成 text");
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      document: {
+        steps: [{
+          tap: {
+            target: {
+              visual: {
+                query: "辅助图标",
+                scopeText: "工具区",
+                ordinal: 2
+              }
+            }
           }
         }]
       }

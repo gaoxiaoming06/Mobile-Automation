@@ -140,6 +140,28 @@ steps:
     });
   });
 
+  it("compiles fixed delay wait steps as business actions", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: wait after submit
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: submit
+    tap: { target: { text: 提交 } }
+  - id: wait-after-submit
+    wait: { durationMs: 3000 }
+  - id: continue
+    tap: { target: { text: 继续 } }
+`);
+
+    expect(compileScriptFlow(flow).steps[1]).toMatchObject({
+      id: "wait-after-submit",
+      action: "wait",
+      phase: "business",
+      input: { durationMs: 3000 }
+    });
+  });
+
   it("compiles reachPage as one explicit goal-directed execution step", () => {
     const flow = parseScriptFlow(`
 version: 1
@@ -202,6 +224,8 @@ steps:
           query: \${visualQuery}
           area: content
           nearText: 课节
+          scopeText: 工具区
+          ordinal: 2
       search: { mode: visibleOnly }
 `);
 
@@ -213,7 +237,9 @@ steps:
             kind: "icon",
             query: "排序图标",
             area: "content",
-            nearText: "课节"
+            nearText: "课节",
+            scopeText: "工具区",
+            ordinal: 2
           }
         },
         search: { mode: "visibleOnly" }

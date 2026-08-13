@@ -323,7 +323,7 @@ function sourceStepDisplayName(step: Record<string, unknown>): string {
 }
 
 function sourceAction(step: Record<string, unknown>): string {
-  const actions = ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"];
+  const actions = ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "wait", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"];
   return actions.find((action) => action in step) ?? "unknown";
 }
 
@@ -366,6 +366,10 @@ function sourceActionSummary(step: Record<string, unknown>, action: string): str
     const swipe = recordValue(step.swipe);
     return `${directionLabel(nonEmptyString(swipe?.direction))}滑动页面`;
   }
+  if (action === "wait") {
+    const durationMs = positiveNumber(recordValue(step.wait)?.durationMs);
+    return durationMs === undefined ? undefined : `等待 ${formatDurationMs(durationMs)}`;
+  }
   if (action === "reachPage") {
     const page = nonEmptyString(recordValue(step.reachPage)?.page);
     return page ? `到达页面“${page}”` : undefined;
@@ -383,6 +387,14 @@ function sourceActionSummary(step: Record<string, unknown>, action: string): str
     return text ? `确认出现“${text}”` : undefined;
   }
   return undefined;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function formatDurationMs(durationMs: number): string {
+  return durationMs % 1000 === 0 ? `${durationMs / 1000} 秒` : `${durationMs} ms`;
 }
 
 function tapSummary(target: Record<string, unknown>): string | undefined {

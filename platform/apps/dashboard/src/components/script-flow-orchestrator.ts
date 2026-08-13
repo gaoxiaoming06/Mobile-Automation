@@ -28,6 +28,7 @@ export type EditableStepAction =
   | "clearText"
   | "selectText"
   | "swipe"
+  | "wait"
   | "scrollUntilVisible"
   | "reachPage"
   | "waitForPage"
@@ -75,6 +76,7 @@ const ACTION_KEYS = [
   "clearText",
   "selectText",
   "swipe",
+  "wait",
   "scrollUntilVisible",
   "reachPage",
   "waitForPage",
@@ -316,6 +318,7 @@ function actionBody(action: EditableStepAction, appId: string): Record<string, u
   };
   if (action === "selectText") return { selectText: { target: { text: "待填写选项" }, value: "待填写选项", search: { mode: "auto" } } };
   if (action === "swipe") return { swipe: { direction: "up" } };
+  if (action === "wait") return { wait: { durationMs: 1000 } };
   if (action === "scrollUntilVisible") return { scrollUntilVisible: { target: { text: "待填写目标" }, direction: "down", maxSwipes: 6 } };
   if (action === "reachPage") return { reachPage: { page: "待填写页面", policy: "safe" } };
   if (action === "waitForPage") return { waitForPage: "待填写页面" };
@@ -331,6 +334,7 @@ function defaultStepName(action: EditableStepAction): string {
     clearText: "清空输入",
     selectText: "选择选项",
     swipe: "滑动页面",
+    wait: "等待",
     scrollUntilVisible: "查找内容",
     reachPage: "到达页面",
     waitForPage: "等待页面",
@@ -351,12 +355,17 @@ function applyActionPatch(step: CaseSourceStep, patch: DraftStepPatch): void {
   const assertText = recordValue(step.assertText);
   const reachPage = recordValue(step.reachPage);
   const swipe = recordValue(step.swipe);
+  const wait = recordValue(step.wait);
   const scroll = recordValue(step.scrollUntilVisible);
 
   if (patch.value !== undefined) {
     if (inputText) inputText.value = patch.value;
     else if (selectText) selectText.value = patch.value;
     else if (assertText) assertText.text = patch.value;
+    else if (wait) {
+      const durationMs = Number(patch.value);
+      if (Number.isFinite(durationMs) && durationMs > 0) wait.durationMs = durationMs;
+    }
   }
   if (patch.page !== undefined) {
     if (reachPage) reachPage.page = patch.page;

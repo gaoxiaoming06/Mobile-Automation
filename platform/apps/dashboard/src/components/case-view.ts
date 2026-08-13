@@ -182,6 +182,7 @@ export function caseActionLabel(action: string): string {
     clearText: "清空输入",
     selectText: "选择选项",
     swipe: "滑动页面",
+    wait: "等待",
     scrollUntilVisible: "查找内容",
     reachPage: "到达页面",
     waitForPage: "等待页面",
@@ -204,7 +205,7 @@ function flattenSourceSteps(steps: CaseSourceStep[]): CaseSourceStep[] {
 }
 
 function sourceAction(step: CaseSourceStep): string {
-  const actions = ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"];
+  const actions = ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "wait", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"];
   return actions.find((action) => action in step) ?? "unknown";
 }
 
@@ -250,6 +251,8 @@ function sourceStepContext(step: CaseSourceStep, display: StepDisplayContext): s
   }
   const scrollUntilVisible = actionTargetRecord(step.scrollUntilVisible);
   if (scrollUntilVisible) return targetLabel(scrollUntilVisible.target, display);
+  const waitDurationMs = durationMsValue(recordValue(step.wait)?.durationMs);
+  if (waitDurationMs !== undefined) return `${waitDurationMs} ms`;
   return pageContext(step.onPage, step.expectPage);
 }
 
@@ -298,6 +301,10 @@ function sourceActionSummary(step: CaseSourceStep, action: string, display: Step
     const swipe = recordValue(step.swipe);
     return `${directionLabel(stringValue(swipe?.direction))}滑动页面`;
   }
+  if (action === "wait") {
+    const durationMs = durationMsValue(recordValue(step.wait)?.durationMs);
+    return durationMs === undefined ? undefined : `等待 ${formatDurationMs(durationMs)}`;
+  }
   if (action === "reachPage") {
     const page = stringValue(recordValue(step.reachPage)?.page);
     return page ? `到达页面“${page}”` : undefined;
@@ -315,6 +322,14 @@ function sourceActionSummary(step: CaseSourceStep, action: string, display: Step
     return text ? `确认出现“${text}”` : undefined;
   }
   return undefined;
+}
+
+function durationMsValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function formatDurationMs(durationMs: number): string {
+  return durationMs % 1000 === 0 ? `${durationMs / 1000} 秒` : `${durationMs} ms`;
 }
 
 function tapSummary(target: Record<string, unknown>, display: StepDisplayContext): string | undefined {

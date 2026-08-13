@@ -42,6 +42,26 @@ describe("caseStepViews", () => {
     })]);
   });
 
+  it("presents fixed delay wait steps as readable test logic", () => {
+    const document: CaseDocumentView = {
+      version: 1,
+      kind: "case",
+      name: "提交后继续",
+      app: { id: "cn.eeo.classin" },
+      parameters: {},
+      steps: [
+        { id: "wait-after-submit", wait: { durationMs: 3000 } }
+      ],
+      tags: []
+    };
+
+    expect(caseStepViews(document)).toEqual([expect.objectContaining({
+      name: "等待 3 秒",
+      action: "wait",
+      context: "3000 ms"
+    })]);
+  });
+
   it("presents source action targets instead of page keys for form and switch steps", () => {
     const document: CaseDocumentView = {
       version: 1,

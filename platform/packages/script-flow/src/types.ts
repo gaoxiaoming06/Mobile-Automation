@@ -57,6 +57,8 @@ export type ScriptVisualTarget = {
   area?: ScriptTargetArea;
   position?: ScriptTargetPosition;
   nearText?: string;
+  scopeText?: string;
+  ordinal?: number;
 };
 
 export type ScriptTarget = {
@@ -138,6 +140,12 @@ export type ScriptSwipeStep = ScriptStepBase & {
   };
 };
 
+export type ScriptWaitStep = ScriptStepBase & {
+  wait: {
+    durationMs: number;
+  };
+};
+
 export type ScriptScrollUntilVisibleStep = ScriptStepBase & {
   scrollUntilVisible: {
     target: ScriptTarget;
@@ -195,6 +203,7 @@ export type ScriptStep =
   | ScriptClearTextStep
   | ScriptSelectTextStep
   | ScriptSwipeStep
+  | ScriptWaitStep
   | ScriptScrollUntilVisibleStep
   | ScriptReachPageStep
   | ScriptWaitForPageStep
@@ -232,6 +241,7 @@ export type ScriptExecutableAction =
   | "clearText"
   | "selectText"
   | "swipe"
+  | "wait"
   | "scrollUntilVisible"
   | "reachPage"
   | "waitForPage"

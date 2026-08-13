@@ -173,6 +173,49 @@ steps: []
     });
   });
 
+  it("parses a fixed delay wait step", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: wait between actions
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: submit
+    tap: { target: { text: 提交 } }
+  - id: wait-after-submit
+    name: 提交后停留 3 秒
+    wait: { durationMs: 3000 }
+  - id: continue
+    tap: { target: { text: 继续 } }
+`);
+
+    expect(flow.steps[1]).toMatchObject({
+      id: "wait-after-submit",
+      name: "提交后停留 3 秒",
+      role: "business",
+      wait: { durationMs: 3000 }
+    });
+  });
+
+  it("rejects fixed delay waits without a positive duration", () => {
+    expect(() => parseScriptFlow(`
+version: 1
+name: invalid wait
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: wait-without-duration
+    wait: {}
+`)).toThrow(/wait\.durationMs.*positive number/i);
+
+    expect(() => parseScriptFlow(`
+version: 1
+name: invalid wait
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: wait-zero
+    wait: { durationMs: 0 }
+`)).toThrow(/wait\.durationMs.*positive number/i);
+  });
+
   it("accepts a standard icon target without a recorded element asset", () => {
     const flow = parseScriptFlow(`
 version: 1
@@ -231,6 +274,8 @@ steps:
           query: 排序图标
           area: content
           nearText: 课节
+          scopeText: 工具区
+          ordinal: 2
       search: { mode: visibleOnly }
 `);
 
@@ -241,7 +286,9 @@ steps:
             kind: "icon",
             query: "排序图标",
             area: "content",
-            nearText: "课节"
+            nearText: "课节",
+            scopeText: "工具区",
+            ordinal: 2
           }
         },
         search: { mode: "visibleOnly" }

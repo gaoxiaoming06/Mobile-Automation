@@ -3,7 +3,7 @@ title: Deployment Guide
 doc_type: guide
 status: draft
 created_at: 2026-06-05
-updated_at: 2026-08-12
+updated_at: 2026-08-13
 ---
 
 # Deployment Guide
@@ -21,46 +21,47 @@ Device discovery always goes through Device Agents. A healthy server/dashboard w
 | --- | --- | --- | --- | --- |
 | Dashboard | `pnpm --filter @mobile-automation/dashboard dev` | `platform/apps/dashboard/dist` served by server | Developer workstation / central server | Vite HMR in development, static SPA in release |
 | Central server | `pnpm --filter @mobile-automation/server dev` | `node platform/apps/server/dist/index.mjs` | Workstation or intranet server | API, storage, AI orchestration, reports, built dashboard SPA fallback |
-| Device Agent | `DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 DEVICE_AGENT_SHARED=1 pnpm agent:dev` | Dashboard-generated installer command downloads `/agent/manifest.json` bundle | Every host with USB devices | Android, iOS, and HarmonyOS discovery and commands |
+| Device Agent | `pnpm agent:dev:https` or launched by `pnpm dev` | Dashboard-generated installer command downloads `/agent/manifest.json` bundle | Every host with USB devices | Android, iOS, and HarmonyOS discovery and commands |
 | RapidOCR sidecar | `pnpm setup:ocr`, then auto-started by server | `node scripts/setup-ocr.mjs`, then auto-started by server | Server host | Local OCR backend |
 
 ## Development Mode
 
-Use this while editing code. Dashboard changes hot reload through Vite. Server changes restart through `tsx watch`. The local Agent also uses `tsx watch` when launched through `pnpm dev:local`, `pnpm dev:https:local`, or `pnpm agent:dev`.
+Use this while editing code. Dashboard changes hot reload through Vite. Server changes restart through `tsx watch`. The local Agent also uses `tsx watch` when launched through `pnpm dev`, `pnpm dev:local`, `pnpm dev:https`, `pnpm dev:https:local`, `pnpm agent:dev:https`, or `pnpm agent:dev`.
 
 Single workstation with local USB devices:
 
 ```bash
 pnpm install
 pnpm setup:ocr
-pnpm dev:local
+pnpm dev
 ```
 
-- Dashboard: `http://localhost:5173`
-- Server health: `http://localhost:4010/api/health`
+- Dashboard: `https://localhost:5173`
+- Server health: `https://localhost:4010/api/health`
 - Devices: provided by the local shared Agent in the same command.
+- HTTPS is the default development mode so browser WebCodecs stays available for realtime preview on localhost and LAN addresses.
 
 Run the web service without local devices:
 
 ```bash
-pnpm dev
+pnpm dev:web
 ```
 
 Split the source processes for clearer logs:
 
 ```bash
 # Terminal 1: server + dashboard from source
-pnpm dev
+pnpm dev:web
 
 # Terminal 2: local Agent from source, shared into the public device pool
-DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 DEVICE_AGENT_SHARED=1 pnpm agent:dev
+pnpm agent:dev:https
 ```
 
-HTTPS development over a LAN:
+HTTPS development over a LAN uses the same default command:
 
 ```bash
 pnpm setup:ocr
-pnpm dev:https:local
+pnpm dev
 ```
 
 Open the dashboard from another LAN machine at `https://<server-lan-ip>:5173/`, for example `https://10.254.32.11:5173/`. The first visit may require accepting the local self-signed certificate. Browser Android realtime preview depends on WebCodecs, and many browsers only expose WebCodecs in a secure context. Plain `http://<lan-ip>:5173` can therefore fall back to screenshot preview even when the Agent and Android device support realtime streaming.
@@ -69,17 +70,24 @@ Split HTTPS source processes:
 
 ```bash
 # Terminal 1
-pnpm dev:https
+pnpm dev:web
 
 # Terminal 2
 pnpm agent:dev:https
 ```
 
-`pnpm agent` still runs the source Agent once without watch. Use `pnpm agent:dev` while editing Agent, driver, or shared protocol code.
+HTTP source mode is available only through explicit diagnostic commands:
+
+```bash
+pnpm dev:http:local
+pnpm dev:http:web
+```
+
+`pnpm agent` still runs the source Agent once without watch. Use `pnpm agent:dev:https` while editing Agent, driver, or shared protocol code against the default HTTPS dev server.
 
 ## Release Mode
 
-Use this when deploying a tested build to a central server. The target server runs compiled artifacts instead of Vite or `tsx watch`.
+Use this when deploying a tested build to a central server. The target server runs compiled artifacts instead of Vite or `tsx watch`. Device Agents are started separately on the machines that have USB devices; the central server does not need to run an Agent unless it is also a device host.
 
 Build the release package from a source checkout:
 

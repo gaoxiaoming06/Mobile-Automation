@@ -218,6 +218,7 @@ const EDITABLE_ACTIONS: EditableStepAction[] = [
   "clearText",
   "selectText",
   "swipe",
+  "wait",
   "scrollUntilVisible",
   "reachPage",
   "waitForPage",
@@ -1664,6 +1665,9 @@ function StepActionFields({
       <label>匹配方式<select value={stepActionMatch(step.source)} onChange={(event) => onChange(step.key, { match: event.target.value })}><option value="contains">包含文本</option><option value="exact">整屏文本完全一致</option></select></label>
     </>;
   }
+  if (action === "wait") {
+    return <label>等待时长 ms<input type="number" min="1" step="100" value={value} onChange={(event) => onChange(step.key, { value: event.target.value })} /></label>;
+  }
   if (action === "reachPage" || action === "waitForPage" || action === "assertPage") {
     return <label>页面标识<input value={stepActionPage(step.source, action)} onChange={(event) => onChange(step.key, { page: event.target.value })} /></label>;
   }
@@ -1779,8 +1783,10 @@ function stepActionValue(step: CaseSourceStep, action: string): string {
       ? recordValue(step.selectText)
       : action === "assertText"
         ? recordValue(step.assertText)
+        : action === "wait"
+          ? recordValue(step.wait)
         : undefined;
-  const value = action === "assertText" ? record?.text : record?.value;
+  const value = action === "assertText" ? record?.text : action === "wait" ? record?.durationMs : record?.value;
   return typeof value === "string" ? value : value === undefined ? "" : String(value);
 }
 
@@ -2066,7 +2072,7 @@ function reviewStepKey(path: number[], step: CaseSourceStep): string {
 }
 
 function sourceActionName(step: CaseSourceStep): string {
-  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"]
+  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "wait", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"]
     .find((action) => action in step) ?? "unknown";
 }
 

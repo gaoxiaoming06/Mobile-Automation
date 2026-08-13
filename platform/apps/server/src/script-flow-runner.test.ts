@@ -158,6 +158,33 @@ describe("ScriptFlowRunner", () => {
     expect(backend.input?.steps?.[0]?.params).toMatchObject({ restartBeforeLaunch: true });
   });
 
+  it("converts fixed delay wait script steps to backend wait actions", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-fixed-delay",
+      flow: document([
+        { id: "submit", tap: { target: { text: "提交" } } },
+        { id: "wait-after-submit", wait: { durationMs: 3000 } },
+        { id: "continue", tap: { target: { text: "继续" } } }
+      ]),
+      deviceSerial: "device-1"
+    });
+
+    expect(backend.input?.steps?.[1]).toEqual(expect.objectContaining({
+      id: "wait-after-submit",
+      type: "wait",
+      title: "等待 3 秒",
+      params: expect.objectContaining({
+        durationMs: 3000,
+        executionPhase: "business"
+      })
+    }));
+    expect(backend.input?.steps?.[1]?.expectations).toBeUndefined();
+  });
+
   it("passes the selected loop scope to the execution backend", async () => {
     const backend = new CapturingBackend();
     const runner = runnerWith(backend);

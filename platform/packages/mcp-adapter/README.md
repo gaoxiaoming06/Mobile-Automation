@@ -15,7 +15,7 @@ Start the platform first, then point any MCP-compatible client at this stdio ser
 pnpm dev
 
 # Terminal 2
-DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 DEVICE_AGENT_SHARED=1 pnpm agent
+pnpm agent:dev:https
 ```
 
 Config values:
@@ -24,6 +24,7 @@ Config values:
 - transport: `stdio`
 - command: `pnpm`
 - args: `--dir /Users/eeo/StudioProjects/Mobile-Automation --filter @mobile-automation/mcp-adapter start`
-- env: `MOBILE_AUTOMATION_SERVER_URL=http://127.0.0.1:4010`
+- env: `MOBILE_AUTOMATION_SERVER_URL=https://127.0.0.1:4010`
+- env: `NODE_TLS_REJECT_UNAUTHORIZED=0`
 
 The paired workflow prompt lives at `docs/skills/mobile-automation-test/SKILL.md` for clients that support importing skills or reusable instructions.

@@ -81,9 +81,9 @@ For future implementation sessions:
 
 ## Current Implementation Shape
 
-1. `pnpm dev` starts only the central server and dashboard.
-2. `pnpm agent:dev` starts a source-watched local Device Agent for development; `pnpm agent` starts the source Agent once without watch.
-3. `pnpm dev:local` starts the server, dashboard, and one shared local Agent for a single workstation.
+1. `pnpm dev` starts the HTTPS source stack: central server, dashboard, and one shared local Agent for a single workstation.
+2. `pnpm dev:web` starts only the central server and dashboard when local devices are intentionally split out or unavailable.
+3. `pnpm agent:dev:https` starts a source-watched local Device Agent against the HTTPS development server; `pnpm agent` starts the source Agent once without watch.
 4. Dashboard reads devices through `/api/devices`, then routes screenshots, actions, UI hierarchy, streams, logs, and performance sampling through the server-to-agent command channel.
 5. ScriptFlow v1 YAML is parsed, validated, previewed into an immutable plan digest, and executed through the shared runner.
 6. Runs persist screenshots, logs, metrics, trial-learning summaries, HTML reports, and videos when enabled/supported under `DATA_DIR`.
@@ -98,37 +98,36 @@ Development mode runs from source:
 ```bash
 pnpm install
 pnpm setup:ocr
-pnpm dev:local
+pnpm dev
 ```
 
-- Dashboard: http://localhost:5173
-- Server health: http://localhost:4010/api/health
+- Dashboard: https://localhost:5173
+- Server health: https://localhost:4010/api/health
 - Devices: provided by the local shared Agent in the same command.
 - Source updates: Dashboard uses Vite HMR, server uses `tsx watch`, and the local Agent uses `tsx watch`.
 
-If you intentionally want to run the web service without local devices, use `pnpm dev`. In that mode `/api/devices` returns an empty list until at least one `pnpm agent:dev` process registers devices with the server.
+The default command uses HTTPS so browser WebCodecs stays available for realtime preview on localhost and LAN addresses. The first browser visit may require accepting the local self-signed certificate.
+
+If you intentionally want to run the web service without local devices, use `pnpm dev:web`. In that mode `/api/devices` returns an empty list until at least one Agent process registers devices with the server.
 
 To split the processes while developing, use two terminals:
 
 ```bash
 # Terminal 1: central server + dashboard
-pnpm dev
+pnpm dev:web
 
 # Terminal 2: local source Agent, shared into the public device pool
-DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 \
-DEVICE_AGENT_ID=my-macbook \
-DEVICE_AGENT_SHARED=1 \
-pnpm agent:dev
+pnpm agent:dev:https
 ```
 
-For another computer on the same LAN, use the HTTPS dev shape so browser WebCodecs remains available for Android realtime preview:
+For another computer on the same LAN, open the HTTPS dev dashboard so browser WebCodecs remains available for Android realtime preview:
 
 ```bash
 # One workstation command
-pnpm dev:https:local
+pnpm dev
 
 # Or split terminals
-pnpm dev:https
+pnpm dev:web
 pnpm agent:dev:https
 ```
 
@@ -136,13 +135,12 @@ pnpm agent:dev:https
 - LAN Server health: `https://<server-lan-ip>:4010/api/health`
 - First visit may require accepting the local self-signed certificate.
 
+HTTP development is still available for diagnostics as `pnpm dev:http:local` or `pnpm dev:http:web`, but it can force the dashboard to fall back to screenshot preview in browsers that require a secure context for WebCodecs.
+
 Start at least one Device Agent on every machine that has USB-connected devices:
 
 ```bash
-DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 \
-DEVICE_AGENT_ID=my-macbook \
-DEVICE_AGENT_SHARED=1 \
-pnpm agent
+pnpm agent:dev:https
 ```
 
 For non-developer device hosts, open **系统设置 > 设备接入** in the Dashboard and copy one of the generated Agent commands:
@@ -190,7 +188,7 @@ node scripts/setup-ocr.mjs
 OCR_ENGINE=rapid DATA_DIR=/var/lib/mobile-automation PORT=4010 node platform/apps/server/dist/index.mjs
 ```
 
-Device hosts do not need the source repository in release mode. Open **系统设置 > 设备接入** on the deployed dashboard and copy the generated Agent command. When Agent code changes, bump the Agent version and rebuild the release package; after the server is redeployed, new Agent starts download the latest bundle, and already-running managed Agents can detect the newer `/agent/manifest.json` from the settings panel and update manually.
+Device hosts do not need the source repository in release mode, and the central server does not run a permanent local Agent unless that same machine also has USB devices to share. Open **系统设置 > 设备接入** on the deployed dashboard and copy the generated Agent command for each device host. When Agent code changes, bump the Agent version and rebuild the release package; after the server is redeployed, new Agent starts download the latest bundle, and already-running managed Agents can detect the newer `/agent/manifest.json` from the settings panel and update manually.
 
 Connect Android devices with USB debugging enabled before starting the agent. For iOS physical devices, install libimobiledevice tools and trust/unlock the device first:
 
@@ -210,17 +208,14 @@ Runtime DB and artifacts default to `~/.local/share/mobile-automation`. Override
 
 ### Device Agent
 
-The server uses Device Agents as its device access layer. A running server/dashboard without a registered Agent is healthy but has no devices to show. Start the central server first, then start an Agent on each machine that has USB-connected devices, or use `pnpm dev:local` for the single-workstation development case:
+The server uses Device Agents as its device access layer. A running server/dashboard without a registered Agent is healthy but has no devices to show. Start the central server first, then start an Agent on each machine that has USB-connected devices, or use `pnpm dev` for the single-workstation development case:
 
 ```bash
 # Terminal 1: central server + dashboard
-pnpm dev
+pnpm dev:web
 
 # Terminal 2: local device node, shared into the public device pool
-DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 \
-DEVICE_AGENT_ID=my-macbook \
-DEVICE_AGENT_SHARED=1 \
-pnpm agent:dev
+pnpm agent:dev:https
 ```
 
 Agent devices appear in `/api/devices` and the Dashboard with serials like `my-macbook:android:<local-serial>`. The agent uses the command WebSocket with HTTP polling fallback, and executes device info, screenshot, UI hierarchy, foreground app, tap/input/swipe/app launch, clear data, logs, semantic Android actions, stream startup, and performance sampling through the platform drivers.
@@ -228,16 +223,17 @@ Agent devices appear in `/api/devices` and the Dashboard with serials like `my-m
 For private local use from source, create a pairing code from the server and start the Agent without `DEVICE_AGENT_SHARED=1`:
 
 ```bash
-curl -X POST http://127.0.0.1:4010/api/local-sessions/pairing-codes \
+curl -k -X POST https://127.0.0.1:4010/api/local-sessions/pairing-codes \
   -H 'content-type: application/json' \
   -d '{"sessionId":"my-browser","ttlMs":300000}'
 
-DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 \
+NODE_TLS_REJECT_UNAUTHORIZED=0 \
+DEVICE_AGENT_SERVER_URL=https://127.0.0.1:4010 \
 DEVICE_AGENT_ID=my-private-agent \
 DEVICE_AGENT_PAIRING_CODE=<code> \
 pnpm agent:dev
 
-curl 'http://127.0.0.1:4010/api/devices?sessionId=my-browser'
+curl -k 'https://127.0.0.1:4010/api/devices?sessionId=my-browser'
 ```
 
 ### OCR Engines

@@ -46,6 +46,7 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
   "用户明确操作是硬约束：点击、输入、清空、滑动或启动等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。用户明确要求启动时生成唯一一个 role: setup 的 launchApp；没有要求启动时不要添加。",
   "ScriptFlow 的 launchApp 表示保留应用数据，先终止应用进程再重新启动；步骤名称应写为‘重启 App’，不能把它描述成仅切回前台。",
+  "用户明确要求某个动作完成后停留、暂停、等待固定时间再继续时，生成独立 wait 步骤，例如 { wait: { durationMs: 3000 } }。wait 只表示固定延时，不等待页面、文字或控件状态。",
   "用户描述打开选择器、滑动到具体选中值并确认时，必须把这组机械操作规范化为一个 selectText：target 保留字段入口，value 完整保留用户指定值，confirmText 保留确认文字。selectText 自身会点击并打开字段，由执行器动态查找选项；禁止保留前置 tap，也禁止猜测固定滑动次数。",
   "用户只表达进入、打开、前往或回到某页面时，这是目标状态而不是操作方式。只有目标是 navigationAnchors 中的状态入口，或 transitions 中存在到该目标的路径时，才生成 reachPage；不要因为‘回到’推断系统返回或重启。",
   "navigationEntries 是试运行验证并经用户确认的导航入口。目标型请求只能使用 navigationEntries、已验证 transitions 或 navigationAnchors；页面标签和页面名称不能作为入口推断依据。",
@@ -468,7 +469,7 @@ export function buildScriptFlowPlannerPrompt(
         tags: ["ai-generated"]
       }
     }, null, 2),
-    "可用动作：launchApp、tap、inputText、clearText、selectText、swipe、scrollUntilVisible、reachPage、waitForPage、assertPage、assertText、runFlow、repeat、when。",
+    "可用动作：launchApp、tap、inputText、clearText、selectText、swipe、wait、scrollUntilVisible、reachPage、waitForPage、assertPage、assertText、runFlow、repeat、when。",
     `系统判定的 testLevel：${systemTestLevel}。document.testLevel 必须保持这个值，不能由模型自行改成其它层级。`,
     "testLevel 含义：probe=临时验证单点问题，component=字段/控件能力用例，business_smoke=最小业务主链路，full_regression=全字段或全配置回归。",
     "full_regression 不允许凭页面名称自动枚举字段。用户未列出全部字段时，先根据已有上下文生成可编辑草稿，并在 assumptions 中说明当前覆盖范围；不要仅因此返回 needs_clarification。",
@@ -551,6 +552,7 @@ function buildScriptFlowRepairPrompt(plannerPrompt: string, invalidResponse: str
   return [
     plannerPrompt,
     "上一稿未通过 ScriptFlow v1 校验。请重新输出唯一、完整的 JSON 对象，不要 Markdown、代码围栏、解释文字、额外字段，也不要沿用无效字段。",
+    "修复校验错误时必须保持 target 的类别：上一稿中 text、icon、visual、control 的选择是语义合同，不能为了绕过 schema 错误互相改写；icon/visual 非 OCR 目标不能改成 text。若某个字段不合法，只能在同一 target 类别内删除、改名或改用合法限定字段。",
     `校验错误：${compactError(error)}`,
     `上一稿：${invalidResponse.slice(0, 12_000)}`
   ].join("\n\n");
@@ -826,6 +828,7 @@ function buildScriptFlowGroundingRepairPrompt(
   return [
     plannerPrompt,
     "上一稿未通过非 OCR 目标 grounding review。请只根据 review 指令修复脚本中缺失的跨平台限定，不要引入坐标、resourceId、accessibilityId 或平台私有 selector。",
+    "修复时必须保持 target 的类别；icon/visual 非 OCR 目标不能改成 text。只能补充或调整 area、position、nearText、scopeText、ordinal、visual.query 等跨平台限定。",
     "review 结果：",
     JSON.stringify(review, null, 2),
     "上一稿 YAML：",
@@ -948,6 +951,7 @@ function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Re
         search: { mode: "auto", direction: "down", maxSwipes: 6 }
       }
     },
+    { id: "wait-after-action", role: "business", wait: { durationMs: 3000 } },
     { id: "reach-page", role: "navigation", reachPage: { page: pageReference, policy: "safe" } },
     { id: "assert-page", role: "assertion", assertPage: pageReference },
     { id: "assert-stable-text", role: "assertion", assertText: { text: "用户明确提供的页面独有文字", match: "contains" } }
@@ -1450,7 +1454,7 @@ function normalizeRawRunFlowSteps(
 }
 
 function hasRawActionOtherThanRunFlow(step: Record<string, unknown>): boolean {
-  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "repeat", "when"]
+  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "wait", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "repeat", "when"]
     .some((action) => step[action] !== undefined);
 }
 
@@ -1954,7 +1958,7 @@ function flattenRecords(steps: unknown[]): Record<string, unknown>[] {
 }
 
 function actionFromRecord(step: Record<string, unknown>): string {
-  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"]
+  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "wait", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"]
     .find((action) => action in step) ?? "unknown";
 }
 

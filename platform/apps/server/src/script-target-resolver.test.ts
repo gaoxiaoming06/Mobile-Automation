@@ -114,7 +114,9 @@ describe("ScriptTargetResolver", () => {
           kind: "icon",
           query: "排序图标",
           area: "content",
-          nearText: "课节"
+          nearText: "课节",
+          scopeText: "工具区",
+          ordinal: 2
         }
       },
       search: { mode: "visibleOnly" },
@@ -129,6 +131,8 @@ describe("ScriptTargetResolver", () => {
         visualQuery: "排序图标",
         semanticArea: "content",
         anchorText: "课节",
+        scopeText: "工具区",
+        ordinal: 2,
         searchMode: "visibleOnly",
         allowRegionFallback: false
       }

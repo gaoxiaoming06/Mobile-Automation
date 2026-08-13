@@ -9,9 +9,13 @@
     "pnpm": ">=9.0.0"
   },
   "scripts": {
-    "dev": "pnpm build:agent && concurrently -n server,dashboard -c cyan,green \"pnpm --filter @mobile-automation/server dev\" \"pnpm --filter @mobile-automation/dashboard dev\"",
-    "dev:local": "pnpm build:agent && concurrently -n server,dashboard,agent -c cyan,green,magenta \"pnpm --filter @mobile-automation/server dev\" \"pnpm --filter @mobile-automation/dashboard dev\" \"DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 DEVICE_AGENT_SHARED=1 pnpm --filter @mobile-automation/device-agent dev\"",
-    "dev:https": "pnpm build:agent && node scripts/ensure-lan-https-cert.mjs && HOST=0.0.0.0 HTTPS=1 HTTPS_KEY=$PWD/.cert/mobile-automation-lan-key.pem HTTPS_CERT=$PWD/.cert/mobile-automation-lan-cert.pem concurrently -n server,dashboard -c cyan,green \"pnpm --filter @mobile-automation/server dev\" \"pnpm --filter @mobile-automation/dashboard dev\"",
+    "dev": "pnpm dev:https:local",
+    "dev:local": "pnpm dev:https:local",
+    "dev:https": "pnpm dev:https:local",
+    "dev:web": "pnpm dev:web:https",
+    "dev:web:https": "pnpm build:agent && node scripts/ensure-lan-https-cert.mjs && HOST=0.0.0.0 HTTPS=1 HTTPS_KEY=$PWD/.cert/mobile-automation-lan-key.pem HTTPS_CERT=$PWD/.cert/mobile-automation-lan-cert.pem concurrently -n server,dashboard -c cyan,green \"pnpm --filter @mobile-automation/server dev\" \"pnpm --filter @mobile-automation/dashboard dev\"",
+    "dev:http:web": "pnpm build:agent && concurrently -n server,dashboard -c cyan,green \"pnpm --filter @mobile-automation/server dev\" \"pnpm --filter @mobile-automation/dashboard dev\"",
+    "dev:http:local": "pnpm build:agent && concurrently -n server,dashboard,agent -c cyan,green,magenta \"pnpm --filter @mobile-automation/server dev\" \"pnpm --filter @mobile-automation/dashboard dev\" \"DEVICE_AGENT_SERVER_URL=http://127.0.0.1:4010 DEVICE_AGENT_SHARED=1 pnpm --filter @mobile-automation/device-agent dev\"",
     "dev:https:local": "pnpm build:agent && node scripts/ensure-lan-https-cert.mjs && HOST=0.0.0.0 HTTPS=1 HTTPS_KEY=$PWD/.cert/mobile-automation-lan-key.pem HTTPS_CERT=$PWD/.cert/mobile-automation-lan-cert.pem concurrently -n server,dashboard,agent -c cyan,green,magenta \"pnpm --filter @mobile-automation/server dev\" \"pnpm --filter @mobile-automation/dashboard dev\" \"NODE_TLS_REJECT_UNAUTHORIZED=0 DEVICE_AGENT_SERVER_URL=https://127.0.0.1:4010 DEVICE_AGENT_SHARED=1 pnpm --filter @mobile-automation/device-agent dev\"",
     "agent": "pnpm --filter @mobile-automation/device-agent start",
     "agent:dev": "pnpm --filter @mobile-automation/device-agent dev",
