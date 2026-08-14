@@ -949,7 +949,7 @@ export type DeviceActionRequest =
   | { type: "launch_app"; packageName: string }
   | { type: "close_app"; packageName: string };
 
-export type DriverChannel = "adb_input" | "uiautomator2" | "appium" | "scrcpy_control" | "hdc_input" | "mock";
+export type DriverChannel = "adb_input" | "uiautomator2" | "appium" | "scrcpy_control" | "hdc_input" | "mock" | "runner";
 
 export type SemanticElementLocator = {
   strategy?: "android_uiautomator";

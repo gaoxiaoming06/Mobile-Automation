@@ -372,6 +372,7 @@ export class ScriptFlowRunner {
       return this.deps.targetResolver.resolve({
         action: "inputText",
         target,
+        search: searchInput(step.input),
         onPage: step.onPage,
         appId,
         platform,
@@ -386,6 +387,7 @@ export class ScriptFlowRunner {
       return this.deps.targetResolver.resolve({
         action: "clearText",
         target,
+        search: searchInput(step.input),
         onPage: step.onPage,
         appId,
         platform,
@@ -397,6 +399,7 @@ export class ScriptFlowRunner {
       return this.deps.targetResolver.resolve({
         action: "selectText",
         target,
+        search: searchInput(step.input),
         onPage: step.onPage,
         appId,
         platform,
@@ -793,5 +796,5 @@ function directionInput(input: Record<string, unknown>, horizontal = false): "up
 }
 
 function verticalDirectionInput(input: Record<string, unknown>): "up" | "down" {
-  return input.direction === "down" ? "down" : "up";
+  return input.direction === "up" ? "up" : "down";
 }

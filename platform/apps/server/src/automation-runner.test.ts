@@ -438,6 +438,44 @@ describe("AutomationRunner regression flow", () => {
     );
   });
 
+  it("handles fixed delay wait steps in the runner without dispatching a device action", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
+    const waitStep: ActionStep = {
+      id: "wait-after-tap",
+      order: 1,
+      type: "wait",
+      enabled: true,
+      title: "等待 1 ms",
+      params: { durationMs: 1 },
+      createdAt: nowIso()
+    };
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Fixed Delay Wait",
+      steps: [waitStep],
+      stepIntervalMs: 0,
+      recordVideo: false
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.actions).toEqual([]);
+    expect(run.stepResults[0]).toEqual(expect.objectContaining({
+      type: "wait",
+      status: "passed",
+      metadata: expect.objectContaining({
+        actionBackend: expect.objectContaining({
+          driverChannel: "runner",
+          details: expect.objectContaining({ durationMs: 1 })
+        })
+      })
+    }));
+  });
+
   it("starts android app monitor and writes metric summary artifacts before report", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new AppMonitorMockDriver();

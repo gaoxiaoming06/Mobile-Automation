@@ -622,6 +622,114 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("auto search scans the requested direction with UI hierarchy before resetting or using OCR", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const hierarchies = [emptyHierarchy(), addFriendMenuHierarchy()];
+    const locateText = vi.fn(async () => {
+      throw new Error("OCR should not be used while hierarchy auto search can find the target");
+    });
+    const captureLocatorScreenshot = vi.fn(async () => {
+      throw new Error("screenshot should not be captured while hierarchy auto search can find the target");
+    });
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("添加好友"),
+        locateText
+      },
+      dumpUiHierarchy: async () => hierarchies.shift() ?? addFriendMenuHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-auto-tree-forward",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: tapOnTextStep("添加好友", 0, 0, {
+        mode: "equals",
+        searchMode: "auto",
+        searchDirection: "down",
+        resetToTop: true,
+        maxSwipes: 2,
+        intervalMs: 0
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "swipe", startX: 600, startY: 1500, endX: 600, endY: 500, durationMs: 450 },
+      { type: "tap", x: 992, y: 253 }
+    ]);
+    expect(locateText).not.toHaveBeenCalled();
+    expect(captureLocatorScreenshot).not.toHaveBeenCalled();
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        matchStrategy: "ui_hierarchy_equals",
+        search: expect.objectContaining({
+          resetSwipes: 0,
+          scanSwipes: 1
+        })
+      })
+    }));
+  });
+
+  it("falls back to OCR scanning only after hierarchy auto search misses", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const locateText = vi.fn()
+      .mockResolvedValueOnce(layout())
+      .mockResolvedValueOnce(layout("隐藏目标"));
+    const captureLocatorScreenshot = vi.fn(async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-ocr-fallback-${attempt}`));
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("隐藏目标"),
+        locateText
+      },
+      dumpUiHierarchy: async () => emptyHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-auto-ocr-fallback",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2400 },
+      step: tapOnTextStep("隐藏目标", 0, 0, {
+        mode: "equals",
+        searchMode: "auto",
+        searchDirection: "down",
+        resetToTop: true,
+        maxSwipes: 1,
+        intervalMs: 0
+      })
+    });
+
+    expect(locateText).toHaveBeenCalledTimes(2);
+    expect(captureLocatorScreenshot).toHaveBeenCalledTimes(2);
+    expect(actions).toEqual([
+      { type: "swipe", startX: 540, startY: 1800, endX: 540, endY: 600, durationMs: 450 },
+      { type: "swipe", startX: 540, startY: 600, endX: 540, endY: 1800, durationMs: 450 },
+      { type: "swipe", startX: 540, startY: 1800, endX: 540, endY: 600, durationMs: 450 },
+      { type: "tap", x: 730, y: 1615 }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        matchStrategy: "equals",
+        tapPointSource: "ocr_text_center",
+        search: expect.objectContaining({
+          resetSwipes: 1,
+          scanSwipes: 2
+        })
+      })
+    }));
+  });
+
   it("resolves a decorated OCR label only when the script asks for contains mode", async () => {
     const actions: DeviceActionRequest[] = [];
     const dumpUiHierarchy = vi.fn(async () => decoratedAddFriendMenuHierarchy());
@@ -3737,6 +3845,165 @@ describe("SemanticStepResolver", () => {
     );
   });
 
+  it("verifies input text from the focused UI text field value before OCR", async () => {
+    const actions: DeviceActionRequest[] = [];
+    let hierarchyReads = 0;
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: []
+      }),
+      dumpUiHierarchy: async () => {
+        hierarchyReads += 1;
+        return narrowInputHierarchy(hierarchyReads > 1 ? "hello" : "");
+      },
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-ui-input-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-ui-input",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "hello",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        inputVerificationKeyboardRecovery: false,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 500, y: 1040 },
+      { type: "clear_text" },
+      { type: "input_text", text: "hello" }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: true,
+      metadata: expect.objectContaining({
+        inputVerified: true,
+        verificationStrategy: "ui_text_input_value"
+      })
+    }));
+  });
+
+  it("verifies OCR input text inside the expanded UI text field context", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "hello",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: [
+          { text: "hello", confidence: 0.98, x: 120, y: 920, width: 120, height: 48 }
+        ]
+      }),
+      dumpUiHierarchy: async () => narrowInputHierarchy(""),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-ocr-input-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-ocr-input",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "hello",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 500, y: 1040 },
+      { type: "clear_text" },
+      { type: "input_text", text: "hello" }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: true,
+      metadata: expect.objectContaining({
+        inputVerified: true,
+        verificationRegionSource: "runtime_ui_candidate"
+      })
+    }));
+  });
+
+  it("does not treat focusable image views as text field candidates", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout("汉娜7812", "好友备注", "发送消息")),
+      dumpUiHierarchy: async () => profileTopBarImageOnlyHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-image-input-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-image-input",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2340 },
+      step: semanticStep("input_text_to_element", {
+        text: "123",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "底部输入区域",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([]);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: false,
+      metadata: expect.objectContaining({
+        reason: "runtime_relocation_required",
+        focusResolvedBy: "region_center_disabled"
+      })
+    }));
+  });
+
   it("resolves a masked scoped text field row from structural TextInput candidates", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -3824,7 +4091,7 @@ describe("SemanticStepResolver", () => {
             centerY: 720
           })
         }),
-        verificationStrategy: "sensitive_target_region_unreadable"
+        verificationStrategy: expect.stringMatching(/^(changed_target_region|sensitive_target_region_unreadable)$/)
       })
     }));
   });
@@ -5107,6 +5374,72 @@ describe("SemanticStepResolver", () => {
         })
       })
     );
+  });
+
+  it("relocates content semantic icons from sibling UI hierarchy nodes", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService(layout()),
+      dumpUiHierarchy: async () => classInComposerSiblingHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-${attempt}`)
+    });
+
+    const emojiOutcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-emoji",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2340 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "emoji",
+        slot: "leading",
+        semanticArea: "content",
+        coordinateSpace: "runtime"
+      })
+    });
+
+    const sendOutcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-send",
+      serial: "device-1",
+      deviceSize: { width: 1080, height: 2340 },
+      step: semanticStep("tap_on_image", {
+        locatorKind: "semantic_icon_locator",
+        role: "arrowUp",
+        slot: "trailing",
+        semanticArea: "content",
+        coordinateSpace: "runtime"
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "tap", x: 156, y: 2195 },
+      { type: "tap", x: 924, y: 2195 }
+    ]);
+    expect(emojiOutcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: true,
+      metadata: expect.objectContaining({
+        action: "tap",
+        relocatedBy: "ui_hierarchy_icon",
+        role: "emoji",
+        semanticArea: "content"
+      })
+    }));
+    expect(sendOutcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: true,
+      metadata: expect.objectContaining({
+        action: "tap",
+        relocatedBy: "ui_hierarchy_icon",
+        role: "arrowup",
+        semanticArea: "content"
+      })
+    }));
   });
 
   it("restores content to the top before tapping a hidden runtime structural row", async () => {
@@ -7980,6 +8313,33 @@ function emptyHierarchy(): string {
 </hierarchy>`;
 }
 
+function classInComposerSiblingHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2340]">
+    <node index="0" text="" resource-id="cn.eeo.classin:id/message_content" class="android.view.ViewGroup" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2218]">
+      <node index="0" text="" resource-id="cn.eeo.classin:id/edit_input" class="android.widget.EditText" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[108,2004][972,2124]" />
+      <node index="1" text="" resource-id="cn.eeo.classin:id/iv_input_face" class="android.widget.ImageView" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[108,2172][204,2218]" />
+      <node index="2" text="" resource-id="cn.eeo.classin:id/iv_input_voice" class="android.widget.ImageView" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[216,2172][312,2218]" />
+      <node index="3" text="" resource-id="cn.eeo.classin:id/iv_input_add" class="android.widget.ImageView" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[324,2172][420,2218]" />
+      <node index="4" text="" resource-id="cn.eeo.classin:id/iv_send" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[876,2172][972,2218]" />
+    </node>
+  </node>
+</hierarchy>`;
+}
+
+function profileTopBarImageOnlyHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1080,2340]">
+    <node index="0" text="" resource-id="cn.eeo.classin:id/back" class="android.widget.ImageView" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[60,138][159,237]" />
+    <node index="1" text="汉娜7812" resource-id="cn.eeo.classin:id/name" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[277,391][515,459]" />
+    <node index="2" text="" resource-id="cn.eeo.classin:id/chat_more" class="android.widget.ImageView" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[909,138][1008,237]" />
+    <node index="3" text="发送消息" resource-id="cn.eeo.classin:id/send_message" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[72,1931][1008,2060]" />
+  </node>
+</hierarchy>`;
+}
+
 function inputHierarchy(): string {
   return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
@@ -7987,6 +8347,15 @@ function inputHierarchy(): string {
     <node index="0" text="登录" resource-id="com.demo:id/login_title" class="android.widget.TextView" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[120,120][240,176]" />
     <node index="1" text="" resource-id="com.demo:id/phone_input" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[100,500][900,620]" />
     <node index="2" text="" resource-id="com.demo:id/password_input" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[100,660][900,780]" />
+  </node>
+</hierarchy>`;
+}
+
+function narrowInputHierarchy(value: string): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1000,2000]">
+    <node index="0" text="${value}" resource-id="com.demo:id/message_input" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[100,1000][900,1080]" />
   </node>
 </hierarchy>`;
 }

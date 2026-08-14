@@ -3566,6 +3566,19 @@ export class SemanticStepResolver {
       });
     };
 
+    const resolvedViewportOutcome = async (current: Awaited<ReturnType<typeof inspectActionableViewport>>): Promise<SemanticResolutionOutcome | undefined> => {
+      if (current.uiCandidate) {
+        return tapUiCandidate(current.uiCandidate);
+      }
+      if (current.candidate && current.layout) {
+        return tapCandidate(current.candidate, current.layout, current.hierarchyXml);
+      }
+      if (current.ambiguous && !current.canScrollPastAmbiguous) {
+        return textTargetFailure();
+      }
+      return undefined;
+    };
+
     if (searchMode === "visibleOnly") {
       const started = Date.now();
       while (Date.now() - started <= timeoutMs) {
@@ -3596,62 +3609,67 @@ export class SemanticStepResolver {
       }
     } else {
       const allowOcrFallback = searchMode !== "scroll";
-      let current = await inspectActionableViewport({ allowOcrFallback });
-      if (current.uiCandidate) {
-        return tapUiCandidate(current.uiCandidate);
-      }
-      if (current.candidate && current.layout) {
-        return tapCandidate(current.candidate, current.layout, current.hierarchyXml);
-      }
-      if (current.ambiguous && !current.canScrollPastAmbiguous) {
-        return textTargetFailure();
-      }
+      const useHierarchyFastSearch = Boolean(this.deps.dumpUiHierarchy && !semanticMatch && searchMode === "auto");
+      const fastSearchOptions = { allowOcrFallback: useHierarchyFastSearch ? false : allowOcrFallback };
+      let current = await inspectActionableViewport(fastSearchOptions);
+      const initialOutcome = await resolvedViewportOutcome(current);
+      if (initialOutcome) return initialOutcome;
       let previousSignature = current.signature;
 
-      if (resetToTop) {
+      const scanViewports = async (
+        direction: "up" | "down",
+        options: { allowOcrFallback?: boolean },
+        counter: "reset" | "scan"
+      ): Promise<{ current: Awaited<ReturnType<typeof inspectActionableViewport>>; outcome?: SemanticResolutionOutcome }> => {
         for (let swipe = 0; swipe < maxSwipes; swipe += 1) {
-          await this.performAction(input, scrollSwipeAction("up", input.deviceSize));
-          resetSwipes += 1;
+          await this.performAction(input, scrollSwipeAction(direction, input.deviceSize));
+          if (counter === "reset") resetSwipes += 1;
+          else scanSwipes += 1;
           await this.wait(input, intervalMs);
-          current = await inspectActionableViewport({ allowOcrFallback });
-          if (current.uiCandidate) {
-            return tapUiCandidate(current.uiCandidate);
-          }
-          if (current.candidate && current.layout) {
-            return tapCandidate(current.candidate, current.layout, current.hierarchyXml);
-          }
-          if (current.ambiguous && !current.canScrollPastAmbiguous) {
-            return textTargetFailure();
-          }
+          current = await inspectActionableViewport(options);
+          const outcome = await resolvedViewportOutcome(current);
+          if (outcome) return { current, outcome };
           if (current.signature === previousSignature) {
             reachedBoundary = true;
             break;
           }
           previousSignature = current.signature;
         }
-      }
+        return { current };
+      };
 
       const direction = searchDirection === "up" ? "up" : "down";
+      if (useHierarchyFastSearch) {
+        reachedBoundary = false;
+        const scanned = await scanViewports(direction, fastSearchOptions, "scan");
+        if (scanned.outcome) return scanned.outcome;
+        current = scanned.current;
+      }
+
+      if (resetToTop) {
+        const reset = await scanViewports("up", fastSearchOptions, "reset");
+        if (reset.outcome) return reset.outcome;
+        current = reset.current;
+      }
+
       reachedBoundary = false;
-      for (let swipe = 0; swipe < maxSwipes; swipe += 1) {
-        await this.performAction(input, scrollSwipeAction(direction, input.deviceSize));
-        scanSwipes += 1;
-        await this.wait(input, intervalMs);
-        current = await inspectActionableViewport({ allowOcrFallback });
-        if (current.uiCandidate) {
-          return tapUiCandidate(current.uiCandidate);
-        }
-        if (current.candidate && current.layout) {
-          return tapCandidate(current.candidate, current.layout, current.hierarchyXml);
-        }
-        if (current.ambiguous && !current.canScrollPastAmbiguous) {
-          return textTargetFailure();
-        }
-        if (current.signature === previousSignature) {
-          reachedBoundary = true;
-          break;
-        }
+      if (!useHierarchyFastSearch) {
+        const scanned = await scanViewports(direction, fastSearchOptions, "scan");
+        if (scanned.outcome) return scanned.outcome;
+        current = scanned.current;
+      } else if (allowOcrFallback) {
+        const fallbackOptions = { allowOcrFallback: true };
+        const fallback = await inspectActionableViewport(fallbackOptions);
+        const fallbackOutcome = await resolvedViewportOutcome(fallback);
+        if (fallbackOutcome) return fallbackOutcome;
+        current = fallback;
         previousSignature = current.signature;
+        reachedBoundary = false;
+        if (resetToTop) {
+          const scanned = await scanViewports(direction, fallbackOptions, "scan");
+          if (scanned.outcome) return scanned.outcome;
+          current = scanned.current;
+        }
       }
     }
 
@@ -3937,6 +3955,7 @@ export class SemanticStepResolver {
         semanticArea: readSemanticArea(input.step.params.semanticArea) ?? semanticAreaForPercentRegion(region),
         percentRegion: inputVerificationRegion(region, focus, input.deviceSize),
         percentRegionSource: inputVerificationRegionSource(focus),
+        uiCandidate: focus.uiCandidate,
         allowUnreadableTargetRegion: allowUnreadableAfterInput,
         unreadableTargetRegionStrategy: allowUnreadableAfterInput ? "target_region_unreadable_after_input" : undefined
       });
@@ -4082,7 +4101,8 @@ export class SemanticStepResolver {
     const verification = await this.verifyInputText(input, text, {
       attempt: located.attempts + 1,
       percentRegion: inputVerificationRegionFromUiCandidate(located.candidate, input.deviceSize),
-      percentRegionSource: input.deviceSize ? "runtime_ui_candidate" : undefined
+      percentRegionSource: input.deviceSize ? "runtime_ui_candidate" : undefined,
+      uiCandidate: located.candidate
     });
     if (!verification.verified) {
       return {
@@ -4291,6 +4311,7 @@ export class SemanticStepResolver {
       semanticArea,
       percentRegion: inputVerificationRegion(searchRegion, focus, input.deviceSize),
       percentRegionSource: inputVerificationRegionSource(focus),
+      uiCandidate: focus.uiCandidate,
       allowUnreadableTargetRegion: allowUnreadableAfterInput,
       unreadableTargetRegionStrategy: allowUnreadableAfterInput ? "target_region_unreadable_after_input" : undefined
     });
@@ -4433,6 +4454,7 @@ export class SemanticStepResolver {
         semanticArea: options.semanticArea,
         percentRegion: inputVerificationRegion(options.region, options.focus, input.deviceSize),
         percentRegionSource: inputVerificationRegionSource(options.focus),
+        uiCandidate: options.focus.uiCandidate,
         allowUnreadableTargetRegion: true,
         unreadableTargetRegionStrategy: "target_region_unreadable_after_keyevent_retry"
       });
@@ -4491,6 +4513,7 @@ export class SemanticStepResolver {
       semanticArea?: VisualSemanticArea;
       percentRegion?: { x: number; y: number; width: number; height: number };
       percentRegionSource?: "recorded_region" | "runtime_focus_candidate" | "runtime_ui_candidate";
+      uiCandidate?: UiElementCandidate;
       allowUnreadableTargetRegion?: boolean;
       unreadableTargetRegionStrategy?: string;
     }
@@ -4524,6 +4547,16 @@ export class SemanticStepResolver {
     const delayMs = nonNegativeNumberParam(input.step.params.inputVerificationDelayMs, 350);
     if (delayMs > 0) {
       await this.wait(input, delayMs);
+    }
+    const uiVerification = await this.verifyInputTextFromUiHierarchy(input.serial, text, options.uiCandidate, input.step.params);
+    if (uiVerification?.verified) {
+      return {
+        verified: true,
+        artifacts: [],
+        actual: uiVerification.actual,
+        strategy: uiVerification.strategy,
+        percentRegionSource: options.percentRegionSource
+      };
     }
     const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, options.attempt);
     const mode = tapTextMatchMode(input.step.params.inputVerificationMode ?? "equals");
@@ -4584,6 +4617,42 @@ export class SemanticStepResolver {
     };
   }
 
+  private async verifyInputTextFromUiHierarchy(
+    serial: string,
+    text: string,
+    sourceCandidate: UiElementCandidate | undefined,
+    params: Record<string, unknown>
+  ): Promise<{ verified: boolean; actual: string; strategy: string } | undefined> {
+    if (!sourceCandidate || !this.deps.dumpUiHierarchy) {
+      return undefined;
+    }
+    let candidates: UiElementCandidate[];
+    try {
+      candidates = parseAndroidUiHierarchy(await this.deps.dumpUiHierarchy(serial));
+    } catch {
+      return undefined;
+    }
+    const updatedCandidate = findUpdatedInputUiCandidate(
+      sourceCandidate,
+      candidates.filter(isInputUiElementCandidate)
+    );
+    if (!updatedCandidate) {
+      return undefined;
+    }
+    const values = inputUiCandidateTextValues(updatedCandidate);
+    if (!values.length) {
+      return undefined;
+    }
+    const expected = normalizeOcrText(text);
+    const mode = tapTextMatchMode(params.inputVerificationMode ?? "equals");
+    const matched = values.some((value) => matchTextExpectation(value, expected, mode));
+    return {
+      verified: matched,
+      actual: values.join(" "),
+      strategy: matched ? "ui_text_input_value" : "ui_text_input_value_mismatch"
+    };
+  }
+
   private async dismissKeyboardForInputVerification(
     input: { serial: string; signal?: AbortSignal }
   ): Promise<"hide_keyboard" | "back" | undefined> {
@@ -4622,6 +4691,17 @@ export class SemanticStepResolver {
     const tapPointPercent = readTapPointPercent(input.step.params.tapPointPercent);
     const fallbackPoint = regionPoint(region, input.deviceSize, tapPointPercent);
     const allowRegionFallback = input.step.params.allowRegionFallback === true;
+    if (shouldPreferInputUiCandidate(input.step.params)) {
+      const uiCandidate = await this.resolveInputUiCandidate(input.serial, region, input.deviceSize, input.step.params);
+      if (uiCandidate) {
+        return {
+          point: { x: uiCandidate.bounds.centerX, y: uiCandidate.bounds.centerY },
+          resolvedBy: "ui_edit_text_structural",
+          uiCandidate,
+          artifacts: []
+        };
+      }
+    }
     if (this.deps.ocr.locateText) {
       const screenshot = await this.deps.captureLocatorScreenshot(input.runId, input.stepResultId, input.serial, input.step.id, 0);
       const layout = await this.deps.ocr.locateText({
@@ -4644,7 +4724,9 @@ export class SemanticStepResolver {
           signature
         };
       }
-      const uiCandidate = await this.resolveInputUiCandidate(input.serial, region, input.deviceSize, input.step.params);
+      const uiCandidate = shouldPreferInputUiCandidate(input.step.params)
+        ? undefined
+        : await this.resolveInputUiCandidate(input.serial, region, input.deviceSize, input.step.params);
       if (uiCandidate) {
         return {
           point: { x: uiCandidate.bounds.centerX, y: uiCandidate.bounds.centerY },
@@ -7009,7 +7091,7 @@ function inputVerificationRegion(
         width: (focus.uiCandidate.bounds.width / deviceSize.width) * 100,
         height: (focus.uiCandidate.bounds.height / deviceSize.height) * 100
       },
-      { x: 2, y: 1 }
+      inputUiCandidateVerificationPadding(focus.uiCandidate, deviceSize)
     );
   }
   return recordedRegion;
@@ -7042,8 +7124,20 @@ function inputVerificationRegionFromUiCandidate(
       width: (candidate.bounds.width / deviceSize.width) * 100,
       height: (candidate.bounds.height / deviceSize.height) * 100
     },
-    { x: 2, y: 1 }
+    inputUiCandidateVerificationPadding(candidate, deviceSize)
   );
+}
+
+function inputUiCandidateVerificationPadding(
+  candidate: UiElementCandidate,
+  deviceSize: { width: number; height: number }
+): { x: number; y: number } {
+  const widthPercent = deviceSize.width ? (candidate.bounds.width / deviceSize.width) * 100 : 0;
+  const heightPercent = deviceSize.height ? (candidate.bounds.height / deviceSize.height) * 100 : 0;
+  return {
+    x: Math.min(8, Math.max(3, widthPercent * 0.08)),
+    y: Math.min(8, Math.max(4, heightPercent))
+  };
 }
 
 function paddedPercentRegion(
@@ -7064,7 +7158,65 @@ function paddedPercentRegion(
 
 function isInputUiElementCandidate(candidate: UiElementCandidate): boolean {
   const className = candidate.className?.toLowerCase() ?? "";
-  return isTextInputUiClass(className) || (candidate.focusable && candidate.enabled && (candidate.clickable || candidate.longClickable));
+  return isTextInputUiClass(className);
+}
+
+function findUpdatedInputUiCandidate(
+  sourceCandidate: UiElementCandidate,
+  candidates: UiElementCandidate[]
+): UiElementCandidate | undefined {
+  return candidates
+    .map((candidate) => ({
+      candidate,
+      score: updatedInputUiCandidateScore(sourceCandidate, candidate),
+      distance: uiCandidateCenterDistance(sourceCandidate, candidate)
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.distance - right.distance)[0]?.candidate;
+}
+
+function updatedInputUiCandidateScore(sourceCandidate: UiElementCandidate, candidate: UiElementCandidate): number {
+  const sameResource = Boolean(sourceCandidate.resourceId && candidate.resourceId === sourceCandidate.resourceId);
+  const samePackage = !sourceCandidate.packageName || !candidate.packageName || candidate.packageName === sourceCandidate.packageName;
+  const sameClass = Boolean(sourceCandidate.className && candidate.className === sourceCandidate.className);
+  const overlapRatio = uiCandidateBoundsOverlapRatio(sourceCandidate, candidate);
+  const distance = uiCandidateCenterDistance(sourceCandidate, candidate);
+  const closeDistance = Math.max(48, Math.min(sourceCandidate.bounds.width, sourceCandidate.bounds.height));
+  if (sameResource && samePackage) {
+    return 100 + (sameClass ? 10 : 0) + overlapRatio * 20 - Math.min(distance / 1000, 1);
+  }
+  if (sameClass && (overlapRatio >= 0.45 || distance <= closeDistance)) {
+    return 40 + overlapRatio * 20 - Math.min(distance / 1000, 1);
+  }
+  return 0;
+}
+
+function inputUiCandidateTextValues(candidate: UiElementCandidate): string[] {
+  return Array.from(new Set([
+    textParam(candidate.text),
+    textParam(candidate.contentDesc)
+  ].map((value) => normalizeOcrText(value).trim()).filter(Boolean)));
+}
+
+function uiCandidateBoundsOverlapRatio(left: UiElementCandidate, right: UiElementCandidate): number {
+  const leftRect = uiCandidateRect(left);
+  const rightRect = uiCandidateRect(right);
+  const overlap = rectIntersectionArea(leftRect, rightRect);
+  const minArea = Math.min(leftRect.width * leftRect.height, rightRect.width * rightRect.height);
+  return minArea > 0 ? overlap / minArea : 0;
+}
+
+function uiCandidateRect(candidate: UiElementCandidate): { x: number; y: number; width: number; height: number } {
+  return {
+    x: candidate.bounds.left,
+    y: candidate.bounds.top,
+    width: candidate.bounds.width,
+    height: candidate.bounds.height
+  };
+}
+
+function uiCandidateCenterDistance(left: UiElementCandidate, right: UiElementCandidate): number {
+  return Math.hypot(left.bounds.centerX - right.bounds.centerX, left.bounds.centerY - right.bounds.centerY);
 }
 
 function inputUiCandidateScore(
@@ -7194,11 +7346,33 @@ function structuralTextFieldOrderHint(structuralLocator: Record<string, unknown>
   return Math.max(0, Math.floor(ordinal) - 1);
 }
 
+function shouldPreferInputUiCandidate(params: Record<string, unknown>): boolean {
+  const structuralLocator = readRecord(params.structuralLocator);
+  const strategy = textParam(structuralLocator?.strategy).trim();
+  return textParam(params.locatorKind).trim() === "structural_locator" &&
+    (
+      strategy === "scoped_text_field" ||
+      strategy === "ocr_or_edittext" ||
+      strategy === "ocr_or_edittext_in_region" ||
+      strategy === "ocr_relative_input"
+    );
+}
+
 function isTextInputUiClass(className: string): boolean {
-  return className.includes("edittext") ||
-    className.includes("textinput") ||
-    className.includes("textarea") ||
-    className.includes("searchinput");
+  const normalized = className.toLowerCase().replace(/[\s._-]+/g, "");
+  if (!normalized) return false;
+  return normalized.includes("edittext") ||
+    normalized.includes("textinput") ||
+    normalized.includes("textarea") ||
+    normalized.includes("searchinput") ||
+    normalized.includes("searchfield") ||
+    normalized.includes("securetextfield") ||
+    normalized.includes("editabletext") ||
+    normalized.includes("basictextfield") ||
+    normalized.includes("xcuitextfield") ||
+    normalized.includes("xcuisecuretextfield") ||
+    normalized.includes("xcuitextview") ||
+    normalized.includes("textfield") && !normalized.includes("textfieldcontainer");
 }
 
 function candidateGridCell(
@@ -8377,6 +8551,22 @@ function semanticIconDisplayName(role: string): string {
       return "筛选";
     case "sort":
       return "排序";
+    case "emoji":
+      return "表情";
+    case "mic":
+      return "麦克风";
+    case "arrowup":
+      return "上箭头";
+    case "keyboard":
+      return "键盘";
+    case "image":
+      return "图片";
+    case "camera":
+      return "相机";
+    case "file":
+      return "文件";
+    case "card":
+      return "卡片";
     case "arrow":
     case "chevron":
       return "箭头";
@@ -9017,12 +9207,12 @@ function isTopBarIconLightPixel(value: number | undefined): boolean {
   return typeof value === "number" && value >= 205;
 }
 
-const KNOWN_TOP_BAR_ICON_ROLE_LIST = ["add", "arrow", "back", "chevron", "close", "filter", "menu", "more", "report", "search", "share", "sort"] as const;
+const KNOWN_TOP_BAR_ICON_ROLE_LIST = ["add", "arrow", "arrowup", "back", "camera", "card", "chevron", "close", "emoji", "file", "filter", "image", "keyboard", "menu", "mic", "more", "report", "search", "share", "sort"] as const;
 const KNOWN_TOP_BAR_ICON_ROLES = new Set<string>(KNOWN_TOP_BAR_ICON_ROLE_LIST);
 
 const VISUAL_QUERY_ICON_ROLE_ALIASES: ReadonlyArray<{ role: string; aliases: readonly string[] }> = [
   { role: "search", aliases: ["搜索", "查找", "检索", "放大镜", "search", "magnifier", "magnifyingglass"] },
-  { role: "add", aliases: ["添加", "新增", "新建", "加号", "plus", "add"] },
+  { role: "add", aliases: ["添加", "新增", "新建", "加号", "附件", "更多面板", "plus", "add", "attach", "attachment"] },
   { role: "back", aliases: ["返回", "后退", "左箭头", "back", "arrowleft", "leftarrow"] },
   { role: "close", aliases: ["关闭", "叉号", "close", "xicon", "xbutton"] },
   { role: "share", aliases: ["分享", "share"] },
@@ -9031,6 +9221,14 @@ const VISUAL_QUERY_ICON_ROLE_ALIASES: ReadonlyArray<{ role: string; aliases: rea
   { role: "filter", aliases: ["筛选", "过滤", "filter"] },
   { role: "sort", aliases: ["排序", "上下箭头", "升序", "降序", "sort"] },
   { role: "report", aliases: ["报告", "课堂报告", "剪贴板", "看板", "report", "clipboard", "lessonreport", "lesson_report"] },
+  { role: "emoji", aliases: ["表情", "表情符号", "笑脸", "emoji", "emoticon", "emojicon", "emotion", "face", "smile"] },
+  { role: "mic", aliases: ["语音", "麦克风", "话筒", "录音", "mic", "microphone", "voice", "audio", "record"] },
+  { role: "arrowup", aliases: ["上箭头", "向上箭头", "发送", "提交", "arrowup", "uparrow", "arrowupward", "send", "submit"] },
+  { role: "keyboard", aliases: ["键盘", "输入法", "keyboard", "ime"] },
+  { role: "image", aliases: ["图片", "照片", "相册", "图册", "image", "photo", "picture", "gallery", "album"] },
+  { role: "camera", aliases: ["相机", "拍照", "camera"] },
+  { role: "file", aliases: ["文件", "文档", "folder", "file", "document"] },
+  { role: "card", aliases: ["名片", "卡片", "card", "contactcard", "profilecard"] },
   { role: "chevron", aliases: ["箭头", "右箭头", "展开", "进入", "chevron", "arrow", "arrowright", "rightarrow"] }
 ];
 
@@ -9059,9 +9257,30 @@ function isKnownTopBarIconRole(role: string): boolean {
 }
 
 function normalizeSemanticIconRole(role: string): string {
-  const normalized = role.trim().toLowerCase();
+  const normalized = compactVisualQuery(role);
   if (normalized === "left" || normalized === "right") {
     return "chevron";
+  }
+  if (normalized === "plus" || normalized === "attach" || normalized === "attachment") {
+    return "add";
+  }
+  if (normalized === "send" || normalized === "submit" || normalized === "uparrow" || normalized === "arrowupward") {
+    return "arrowup";
+  }
+  if (normalized === "voice" || normalized === "audio" || normalized === "microphone" || normalized === "record") {
+    return "mic";
+  }
+  if (normalized === "face" || normalized === "smile" || normalized === "emoticon" || normalized === "emojicon" || normalized === "emotion" || normalized === "emojipicker") {
+    return "emoji";
+  }
+  if (normalized === "photo" || normalized === "picture" || normalized === "gallery" || normalized === "album") {
+    return "image";
+  }
+  if (normalized === "document" || normalized === "folder") {
+    return "file";
+  }
+  if (normalized === "contactcard" || normalized === "profilecard") {
+    return "card";
   }
   return normalized;
 }
@@ -9107,7 +9326,11 @@ function topBarIconRoleShapeScore(component: TopBarIconVisualComponent, sample: 
   if (observed.length < 8) {
     return 0;
   }
-  return Math.max(...topBarIconRoleTemplates(normalizedRole).map((template) => binaryShapeSimilarity(observed, template)));
+  const templates = topBarIconRoleTemplates(normalizedRole);
+  if (!templates.length) {
+    return undefined;
+  }
+  return Math.max(...templates.map((template) => binaryShapeSimilarity(observed, template)));
 }
 
 function normalizedComponentMask(component: TopBarIconVisualComponent, sample: ImageSample): Array<{ x: number; y: number }> {
@@ -9195,6 +9418,70 @@ function topBarIconRoleTemplates(role: string): Array<Array<{ x: number; y: numb
           drawMaskLine(mask, 32, 16, 5, 16, 27, 2);
         })
       ];
+    case "arrowup":
+      return [create((mask) => {
+        drawMaskLine(mask, 32, 16, 5, 16, 27, 2);
+        drawMaskLine(mask, 32, 16, 5, 7, 14, 2);
+        drawMaskLine(mask, 32, 16, 5, 25, 14, 2);
+      })];
+    case "emoji":
+      return [create((mask) => {
+        drawMaskCircle(mask, 32, 16, 16, 12, 2);
+        drawMaskDot(mask, 32, 12, 13, 2);
+        drawMaskDot(mask, 32, 20, 13, 2);
+        drawMaskArc(mask, 32, 16, 17, 7, 30, 150, 2);
+      })];
+    case "mic":
+      return [create((mask) => {
+        drawMaskRoundedRect(mask, 32, 11, 4, 10, 17, 4, 2);
+        drawMaskLine(mask, 32, 8, 14, 8, 18, 2);
+        drawMaskLine(mask, 32, 24, 14, 24, 18, 2);
+        drawMaskArc(mask, 32, 16, 17, 8, 0, 180, 2);
+        drawMaskLine(mask, 32, 16, 24, 16, 29, 2);
+        drawMaskLine(mask, 32, 10, 29, 22, 29, 2);
+      })];
+    case "keyboard":
+      return [create((mask) => {
+        drawMaskRect(mask, 32, 5, 9, 22, 15, 2);
+        for (const y of [14, 19]) {
+          for (const x of [10, 15, 20]) {
+            drawMaskDot(mask, 32, x, y, 1);
+          }
+        }
+      })];
+    case "image":
+      return [create((mask) => {
+        drawMaskRect(mask, 32, 5, 8, 22, 17, 2);
+        drawMaskDot(mask, 32, 21, 13, 2);
+        drawMaskLine(mask, 32, 7, 24, 14, 17, 2);
+        drawMaskLine(mask, 32, 14, 17, 19, 22, 2);
+        drawMaskLine(mask, 32, 19, 22, 24, 16, 2);
+      })];
+    case "camera":
+      return [create((mask) => {
+        drawMaskRect(mask, 32, 5, 10, 22, 16, 2);
+        drawMaskLine(mask, 32, 11, 10, 13, 6, 2);
+        drawMaskLine(mask, 32, 13, 6, 20, 6, 2);
+        drawMaskLine(mask, 32, 20, 6, 22, 10, 2);
+        drawMaskCircle(mask, 32, 16, 18, 5, 2);
+      })];
+    case "file":
+      return [create((mask) => {
+        drawMaskLine(mask, 32, 9, 5, 20, 5, 2);
+        drawMaskLine(mask, 32, 20, 5, 25, 10, 2);
+        drawMaskLine(mask, 32, 25, 10, 25, 28, 2);
+        drawMaskLine(mask, 32, 25, 28, 9, 28, 2);
+        drawMaskLine(mask, 32, 9, 28, 9, 5, 2);
+        drawMaskLine(mask, 32, 20, 5, 20, 11, 2);
+        drawMaskLine(mask, 32, 20, 11, 25, 11, 2);
+      })];
+    case "card":
+      return [create((mask) => {
+        drawMaskRect(mask, 32, 5, 9, 22, 15, 2);
+        drawMaskCircle(mask, 32, 12, 17, 3, 1);
+        drawMaskLine(mask, 32, 18, 15, 24, 15, 1);
+        drawMaskLine(mask, 32, 18, 20, 24, 20, 1);
+      })];
     case "close":
       return [create((mask) => {
         drawMaskLine(mask, 32, 6, 6, 26, 26, 2);
@@ -9281,6 +9568,43 @@ function drawMaskCircle(mask: Uint8Array, width: number, centerX: number, center
       }
     }
   }
+}
+
+function drawMaskArc(
+  mask: Uint8Array,
+  width: number,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  startDegrees: number,
+  endDegrees: number,
+  thickness: number
+): void {
+  const start = (Math.PI * startDegrees) / 180;
+  const end = (Math.PI * endDegrees) / 180;
+  const steps = Math.max(8, Math.ceil(radius * Math.abs(end - start)));
+  for (let step = 0; step <= steps; step += 1) {
+    const angle = start + ((end - start) * step) / steps;
+    drawMaskDot(mask, width, Math.round(centerX + Math.cos(angle) * radius), Math.round(centerY + Math.sin(angle) * radius), thickness);
+  }
+}
+
+function drawMaskRect(mask: Uint8Array, width: number, x: number, y: number, rectWidth: number, rectHeight: number, thickness: number): void {
+  drawMaskLine(mask, width, x, y, x + rectWidth, y, thickness);
+  drawMaskLine(mask, width, x + rectWidth, y, x + rectWidth, y + rectHeight, thickness);
+  drawMaskLine(mask, width, x + rectWidth, y + rectHeight, x, y + rectHeight, thickness);
+  drawMaskLine(mask, width, x, y + rectHeight, x, y, thickness);
+}
+
+function drawMaskRoundedRect(mask: Uint8Array, width: number, x: number, y: number, rectWidth: number, rectHeight: number, radius: number, thickness: number): void {
+  drawMaskLine(mask, width, x + radius, y, x + rectWidth - radius, y, thickness);
+  drawMaskLine(mask, width, x + radius, y + rectHeight, x + rectWidth - radius, y + rectHeight, thickness);
+  drawMaskLine(mask, width, x, y + radius, x, y + rectHeight - radius, thickness);
+  drawMaskLine(mask, width, x + rectWidth, y + radius, x + rectWidth, y + rectHeight - radius, thickness);
+  drawMaskArc(mask, width, x + radius, y + radius, radius, 180, 270, thickness);
+  drawMaskArc(mask, width, x + rectWidth - radius, y + radius, radius, 270, 360, thickness);
+  drawMaskArc(mask, width, x + rectWidth - radius, y + rectHeight - radius, radius, 0, 90, thickness);
+  drawMaskArc(mask, width, x + radius, y + rectHeight - radius, radius, 90, 180, thickness);
 }
 
 function drawMaskDot(mask: Uint8Array, width: number, centerX: number, centerY: number, radius: number): void {

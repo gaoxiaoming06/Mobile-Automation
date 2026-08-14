@@ -697,6 +697,68 @@ steps:
     });
   });
 
+  it("accepts composer buttons as content icon targets", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: send message reaction
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open-emoji-panel
+    role: business
+    tap:
+      target:
+        icon: emoji
+        area: content
+        position: leading
+      search: { mode: visibleOnly }
+  - id: send
+    role: business
+    tap:
+      target:
+        icon: arrowUp
+        area: content
+        position: trailing
+      search: { mode: visibleOnly }
+`);
+
+    expect(flow.steps).toMatchObject([
+      {
+        tap: {
+          target: {
+            icon: "emoji",
+            area: "content",
+            position: "leading"
+          }
+        }
+      },
+      {
+        tap: {
+          target: {
+            icon: "arrowUp",
+            area: "content",
+            position: "trailing"
+          }
+        }
+      }
+    ]);
+  });
+
+  it("rejects legacy scoped control target fields", () => {
+    expect(() => parseScriptFlow(`
+version: 1
+name: invalid scoped control
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: tap-button
+    role: business
+    tap:
+      target:
+        control: iconButton
+        scope: messageComposer
+        role: emojiPicker
+`)).toThrow(/iconButton|Unknown field/i);
+  });
+
   it("accepts a content search icon target as a semantic visual target", () => {
     const flow = parseScriptFlow(`
 version: 1

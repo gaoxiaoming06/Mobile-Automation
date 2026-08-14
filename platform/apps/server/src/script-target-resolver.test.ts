@@ -68,6 +68,25 @@ describe("ScriptTargetResolver", () => {
     expect(result.params).not.toHaveProperty("maxSwipes");
   });
 
+  it("defaults scroll-until-visible text targets to downward scanning", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "scrollUntilVisible",
+      target: { text: "汉娜7812" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "scroll_until_visible",
+      strategy: "semantic_text",
+      params: {
+        locator: { text: "汉娜7812" },
+        direction: "down",
+        maxSwipes: 5
+      }
+    });
+  });
+
   it("rejects legacy semantic targets", () => {
     const resolver = new ScriptTargetResolver();
 
@@ -518,6 +537,42 @@ describe("ScriptTargetResolver", () => {
         resetToTop: true,
         allowRegionFallback: false
       }
+    });
+  });
+
+  it("resolves content icons to runtime semantic icon locators", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: { icon: "emoji", area: "content", position: "leading" },
+      search: { mode: "visibleOnly" },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "tap_on_image",
+      strategy: "semantic_icon",
+      params: {
+        locatorKind: "semantic_icon_locator",
+        role: "emoji",
+        slot: "leading",
+        semanticArea: "content",
+        searchMode: "visibleOnly",
+        allowRegionFallback: false
+      }
+    });
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: { icon: "arrowUp", area: "content", position: "trailing" },
+      appId: "cn.eeo.classin",
+      platform: "harmony"
+    }).params).toMatchObject({
+      locatorKind: "semantic_icon_locator",
+      role: "arrowup",
+      slot: "trailing",
+      semanticArea: "content",
+      allowRegionFallback: false
     });
   });
 

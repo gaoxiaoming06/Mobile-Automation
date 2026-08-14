@@ -130,6 +130,11 @@ type RepairHistoryEntry = {
   summary: string;
 };
 
+type PanelOperationError = {
+  title: string;
+  message: string;
+};
+
 type LearningSummaryResponse = {
   session: LearningSession;
   verification?: FlowVerification;
@@ -296,6 +301,7 @@ export function AiScriptFlowsPanel({
   const [autoRepairEnabled, setAutoRepairEnabled] = useState(false);
   const [repairHistory, setRepairHistory] = useState<RepairHistoryEntry[]>([]);
   const [repairAttemptRunIds, setRepairAttemptRunIds] = useState<Set<string>>(() => new Set());
+  const [panelOperationError, setPanelOperationError] = useState<PanelOperationError>();
   const [executionMode, setExecutionMode] = useState<ScriptRunExecutionMode>("once");
   const [newStepAction, setNewStepAction] = useState<EditableStepAction>("tap");
   const [scriptItemPickerOpen, setScriptItemPickerOpen] = useState(false);
@@ -376,10 +382,21 @@ export function AiScriptFlowsPanel({
     return () => window.clearInterval(timer);
   }, [lastRun?.id, lastRun?.status, draft?.status, autoRepairEnabled, repairAttemptRunIds]);
 
+  function clearPanelOperationError() {
+    setPanelOperationError(undefined);
+  }
+
+  function reportPanelOperationError(title: string, error: unknown) {
+    const message = errorMessage(error);
+    setPanelOperationError({ title, message });
+    setMessage(message);
+  }
+
   async function generate() {
     if (!prompt.trim() || (!revision && !appId.trim())) return;
     try {
       setBusyAction("generate");
+      clearPanelOperationError();
       setDraft(undefined);
       setParameterValues({});
       setLastRun(undefined);
@@ -421,7 +438,7 @@ export function AiScriptFlowsPanel({
         setMessage(nextDraft.clarification);
       }
     } catch (error) {
-      setMessage(errorMessage(error));
+      reportPanelOperationError("生成失败", error);
     } finally {
       setBusyAction(undefined);
     }
@@ -432,6 +449,7 @@ export function AiScriptFlowsPanel({
     if (!sourceYaml || revision) return;
     try {
       setBusyAction("import");
+      clearPanelOperationError();
       setDraft(undefined);
       setParameterValues({});
       setLastRun(undefined);
@@ -461,7 +479,7 @@ export function AiScriptFlowsPanel({
       setStepReviewRequired(true);
       setMessage(`已导入脚本：${imported.document.name}`);
     } catch (error) {
-      setMessage(scriptImportErrorMessage(error));
+      reportPanelOperationError("导入失败", scriptImportErrorMessage(error));
     } finally {
       setBusyAction(undefined);
     }
@@ -470,11 +488,12 @@ export function AiScriptFlowsPanel({
   async function saveDraft() {
     if (!generatedDraft) return;
     if (reviewBlocked) {
-      setMessage("请先确认所有执行步骤，再保存或执行测试。");
+      reportPanelOperationError("暂不能保存", "请先确认所有执行步骤，再保存或执行测试。");
       return;
     }
     try {
       setBusyAction("save");
+      clearPanelOperationError();
       const destination = draftSaveDestination(revision, generatedDraft.sourceFlow);
       const response = await apiFetchJson<{ flow: ScriptFlow }>(destination.url, {
         method: destination.method,
@@ -492,7 +511,7 @@ export function AiScriptFlowsPanel({
           : `已保存到用例中心：${response.flow.name}`);
       onSaved(response.flow);
     } catch (error) {
-      setMessage(errorMessage(error));
+      reportPanelOperationError("保存失败", error);
     } finally {
       setBusyAction(undefined);
     }
@@ -501,11 +520,11 @@ export function AiScriptFlowsPanel({
   async function runDraft() {
     if (!generatedDraft) return;
     if (reviewBlocked) {
-      setMessage("请先确认所有执行步骤，再保存或执行测试。");
+      reportPanelOperationError("暂不能执行", "请先确认所有执行步骤，再保存或执行测试。");
       return;
     }
     if (executionMode === "loop_body" && !loopBodyReady) {
-      setMessage(loopBodyUnavailableReason ?? "请先配置每轮复位步骤。");
+      reportPanelOperationError("暂不能执行", loopBodyUnavailableReason ?? "请先配置每轮复位步骤。");
       return;
     }
     await executeDraft(generatedDraft, parameterValues, prompt.trim() || generatedDraft.document.description || generatedDraft.document.name);
@@ -519,11 +538,12 @@ export function AiScriptFlowsPanel({
     const failure = publicExecutionFailureFromRun(run);
     if (!baseDraft || !failure) return;
     if (!repairablePanelFailure(failure)) {
-      setMessage("当前失败属于 App、设备或环境问题，不应通过修改脚本掩盖。");
+      reportPanelOperationError("暂不能自动修复", "当前失败属于 App、设备或环境问题，不应通过修改脚本掩盖。");
       return;
     }
     try {
       setBusyAction("repair");
+      clearPanelOperationError();
       const response = await apiFetchJson<{ draft: AiDraft; repair?: { runId?: string } }>("/api/script-flow-drafts/repair", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -572,7 +592,7 @@ export function AiScriptFlowsPanel({
         setMessage("已生成修复草稿，请确认步骤后重新执行。");
       }
     } catch (error) {
-      setMessage(errorMessage(error));
+      reportPanelOperationError("修复失败", error);
     } finally {
       setBusyAction(undefined);
     }
@@ -585,6 +605,7 @@ export function AiScriptFlowsPanel({
   ) {
     try {
       setBusyAction("run");
+      clearPanelOperationError();
       const preview = await apiFetchJson<{ plan: CasePlanView; planDigest: string }>("/api/script-flow-drafts/preview", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -611,7 +632,7 @@ export function AiScriptFlowsPanel({
       setMessage(`已启动测试：${response.run.id}`);
       if (!revision) setHistory(await refreshHistory(targetDraft.document.app.id));
     } catch (error) {
-      setMessage(errorMessage(error));
+      reportPanelOperationError("执行启动失败", error);
     } finally {
       setBusyAction(undefined);
     }
@@ -620,11 +641,12 @@ export function AiScriptFlowsPanel({
   async function selectTemporaryTest(item: TemporaryTest) {
     const document = readCaseDocument(item.parsed);
     if (!document) {
-      setMessage("历史测试快照已损坏，无法加载");
+      reportPanelOperationError("加载失败", "历史测试快照已损坏，无法加载");
       return;
     }
     try {
       setBusyAction("select");
+      clearPanelOperationError();
       const base: GeneratedDraft = {
         status: "trial_ready",
         sourceYaml: item.sourceYaml,
@@ -654,7 +676,7 @@ export function AiScriptFlowsPanel({
       setExecutionMode("once");
       setMessage(`已加载最近测试：${item.name}`);
     } catch (error) {
-      setMessage(errorMessage(error));
+      reportPanelOperationError("加载失败", error);
     } finally {
       setBusyAction(undefined);
     }
@@ -664,6 +686,7 @@ export function AiScriptFlowsPanel({
     if (!lastRun) return;
     try {
       setBusyAction("review");
+      clearPanelOperationError();
       const reviewed = await apiFetchJson<{ session: LearningSession; verification?: FlowVerification }>(
         `/api/trial-runs/${encodeURIComponent(lastRun.id)}/outcome-review`,
         {
@@ -683,7 +706,7 @@ export function AiScriptFlowsPanel({
       }
       setMessage("业务结果已确认，当前测试版本已验证");
     } catch (error) {
-      setMessage(errorMessage(error));
+      reportPanelOperationError("结果确认失败", error);
     } finally {
       setBusyAction(undefined);
     }
@@ -900,11 +923,12 @@ export function AiScriptFlowsPanel({
   async function runDraftStep(step: StepReviewItem, mode: "single" | "from_here") {
     if (!generatedDraft || step.structural) return;
     if (!deviceSerial) {
-      setMessage("请先选择执行设备");
+      reportPanelOperationError("暂不能试跑", "请先选择执行设备");
       return;
     }
     try {
       setBusyAction("stepRun");
+      clearPanelOperationError();
       const androidAppMonitor = androidAppMonitorForApp?.(generatedDraft.document.app.id);
       const response = await apiFetchJson<{ run: TestRun }>("/api/script-flow-drafts/step-runs", {
         method: "POST",
@@ -923,7 +947,7 @@ export function AiScriptFlowsPanel({
       setStepRunContext({ stepId: step.id, mode });
       setMessage(mode === "single" ? `正在试跑步骤 ${step.order}` : `已从步骤 ${step.order} 开始，完成每步后会暂停`);
     } catch (error) {
-      setMessage(errorMessage(error));
+      reportPanelOperationError("步骤试跑启动失败", error);
     } finally {
       setBusyAction(undefined);
     }
@@ -933,13 +957,14 @@ export function AiScriptFlowsPanel({
     if (!lastRun) return;
     try {
       setBusyAction("runControl");
+      clearPanelOperationError();
       const response = await apiFetchJson<{ run?: TestRun }>(`/api/runs/${encodeURIComponent(lastRun.id)}/${action}`, {
         method: "POST"
       });
       if (response.run) setLastRun(response.run);
       setMessage(action === "step" ? "正在执行下一步" : action === "resume" ? "已继续执行剩余步骤" : "已停止步骤试跑");
     } catch (error) {
-      setMessage(errorMessage(error));
+      reportPanelOperationError("执行控制失败", error);
     } finally {
       setBusyAction(undefined);
     }
@@ -949,13 +974,14 @@ export function AiScriptFlowsPanel({
     if (!lastRun) return;
     try {
       setBusyAction("runControl");
+      clearPanelOperationError();
       const response = await apiFetchJson<{ run?: TestRun }>(`/api/runs/${encodeURIComponent(lastRun.id)}/stop`, {
         method: "POST"
       });
       if (response.run) setLastRun(response.run);
       setMessage("已停止当前执行");
     } catch (error) {
-      setMessage(errorMessage(error));
+      reportPanelOperationError("停止执行失败", error);
     } finally {
       setBusyAction(undefined);
     }
@@ -1076,6 +1102,11 @@ export function AiScriptFlowsPanel({
           </section> : null}
         </section> : null}
         <section className="ai-script-result" aria-live="polite">
+          {panelOperationError ? <PanelOperationErrorNotice
+            title={panelOperationError.title}
+            message={panelOperationError.message}
+            onDismiss={() => setPanelOperationError(undefined)}
+          /> : null}
           {stepTrialRun && !generatedDraft ? <StepTrialRunBar
             run={stepTrialRun}
             busy={busyAction === "runControl"}
@@ -1845,6 +1876,28 @@ export function ExecutionFailureNotice({
         <button type="button" onClick={onOpenReport}>查看执行结果</button>
       </div>
     </div>
+  );
+}
+
+export function PanelOperationErrorNotice({
+  title,
+  message,
+  onDismiss
+}: {
+  title: string;
+  message: string;
+  onDismiss?: () => void;
+}) {
+  return (
+    <section className="panel-operation-error-notice" role="alert" aria-live="assertive">
+      <div>
+        <strong>{title}</strong>
+        <p>{message}</p>
+      </div>
+      {onDismiss ? <button type="button" onClick={onDismiss} title="关闭错误提示">
+        <X size={14} /><span>关闭错误提示</span>
+      </button> : null}
+    </section>
   );
 }
 

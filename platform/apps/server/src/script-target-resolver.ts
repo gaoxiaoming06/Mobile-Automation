@@ -146,7 +146,7 @@ export class ScriptTargetResolver {
       strategy,
       params: {
         locator: { text },
-        direction: input.direction ?? "up",
+        direction: input.direction ?? "down",
         maxSwipes: input.maxSwipes ?? 5
       }
     };

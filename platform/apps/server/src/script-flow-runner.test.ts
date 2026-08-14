@@ -325,6 +325,78 @@ describe("ScriptFlowRunner", () => {
     }));
   });
 
+  it("defaults script scroll-until-visible steps without direction to downward scanning", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-find-conversation",
+      flow: document([{
+        id: "find-conversation",
+        role: "business",
+        scrollUntilVisible: {
+          target: { text: "${conversationName}" }
+        }
+      }], {
+        conversationName: { type: "string", required: true }
+      }),
+      deviceSerial: "device-1",
+      parameters: { conversationName: "汉娜7812" },
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
+      id: "find-conversation",
+      type: "scroll_until_visible",
+      params: expect.objectContaining({
+        locator: { text: "汉娜7812" },
+        direction: "down",
+        maxSwipes: 5
+      })
+    }));
+  });
+
+  it("passes input text search policy through to runtime target resolution", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-input-message",
+      flow: document([{
+        id: "input-message",
+        role: "business",
+        inputText: {
+          target: {
+            control: "textField",
+            area: "content",
+            scopeText: "底部输入区域",
+            ordinal: 1
+          },
+          value: "${messageText}",
+          search: { mode: "visibleOnly" }
+        }
+      }], {
+        messageText: { type: "string", required: true }
+      }),
+      deviceSerial: "device-1",
+      parameters: { messageText: "123" },
+      recordVideo: false
+    });
+
+    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
+      id: "input-message",
+      type: "input_text_to_element",
+      params: expect.objectContaining({
+        text: "123",
+        searchMode: "visibleOnly"
+      })
+    }));
+    expect(backend.input?.steps?.[0]?.params).not.toHaveProperty("resetToTop");
+    expect(backend.input?.steps?.[0]?.params).not.toHaveProperty("searchDirection");
+  });
+
   it("does not block a generated action on an unresolved runtime-discovered expected page", async () => {
     const backend = new CapturingBackend();
     const runner = new ScriptFlowRunner({

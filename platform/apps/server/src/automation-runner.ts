@@ -652,8 +652,16 @@ export class AutomationRunner {
             if (action.type === "close_app") {
               markExpectedProcessDeath?.(action.packageName);
             }
-            const actionResult = await this.driver.performAction(config.deviceSerial, action);
-            result.metadata = mergeActionBackendMetadata(result.metadata, actionResult);
+            if (action.type === "wait") {
+              await sleepInterruptibly(action.durationMs, signal);
+              result.metadata = mergeActionBackendMetadata(result.metadata, {
+                driverChannel: "runner",
+                details: { durationMs: action.durationMs }
+              });
+            } else {
+              const actionResult = await this.driver.performAction(config.deviceSerial, action);
+              result.metadata = mergeActionBackendMetadata(result.metadata, actionResult);
+            }
           }
         }
       }

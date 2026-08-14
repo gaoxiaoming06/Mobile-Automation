@@ -12,6 +12,7 @@ import {
   draftSaveDestination,
   draftFromImportedScript,
   ExecutionFailureNotice,
+  PanelOperationErrorNotice,
   ScriptItemPicker,
   scriptImportErrorMessage,
   reusableFlowCandidates,
@@ -979,6 +980,19 @@ steps:
     expect(markup).toContain("AI 诊断修复");
     expect(markup).toContain("查看执行结果");
     expect(markup).not.toContain("SEMANTIC_TARGET_NOT_FOUND");
+  });
+
+  it("renders operation errors as a prominent alert inside the AI script workspace", () => {
+    const markup = renderToStaticMarkup(<PanelOperationErrorNotice
+      title="执行启动失败"
+      message="未找到当前操作的目标，请补充目标文字、图标特征或所在位置。"
+      onDismiss={vi.fn()}
+    />);
+
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain("执行启动失败");
+    expect(markup).toContain("未找到当前操作的目标");
+    expect(markup).toContain("关闭错误提示");
   });
   it("shows a generated draft without reading current device state", () => {
     const markup = renderToStaticMarkup(<AiScriptFlowsPanel

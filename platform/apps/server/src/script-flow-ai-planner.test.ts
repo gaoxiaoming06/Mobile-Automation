@@ -59,15 +59,18 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("明确操作是硬约束");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止元素资产 ID");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("唯一 JSON 对象");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("status 为 ready 时必须包含 document");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("status 为 needs_clarification 时只允许返回 status 和 clarification");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("具体选中值");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("selectText");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("禁止猜测固定滑动次数");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("完整当前页控件动作");
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不要补 entry、outcome、onPage、reachPage 或 runFlow");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不要补 entry、outcome、onPage、expectPage、reachPage 或 runFlow");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("表单字段动作默认使用 search: { mode: auto }");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("即使 screenContext 当前首屏没有该字段");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("可执行查找策略");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("不要生成独立 scrollUntilVisible 再 tap 同一目标");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toMatch(/\bref\b/i);
 });
 
@@ -148,6 +151,94 @@ describe("ScriptFlow AI planner", () => {
     })).toBe("medium");
     expect(scriptFlowPlannerEffort({ prompt: "把创建课堂页面所有表单都覆盖一遍" })).toBe("medium");
     expect(scriptFlowPlannerEffort({ prompt: "进入课堂报告页" })).toBe("medium");
+  });
+
+  it("keeps the planner prompt rule-based instead of embedding business step examples", () => {
+    const prompt = buildScriptFlowPlannerPrompt(
+      "点击班级四十二号，停留三分钟，然后返回",
+      "cn.eeo.classin",
+      "android",
+      buildScriptFlowPlannerCatalog(planningPageCatalog(), [], "cn.eeo.classin", "android")
+    );
+
+    expect(prompt).not.toContain("步骤格式示例");
+    expect(prompt).not.toContain("tap-content-text");
+    expect(prompt).not.toContain("tap-composer-emoji");
+    expect(prompt).toContain("每个 steps 项必须包含非空 id 和显式 role");
+  });
+
+  it("strips page constraints inferred from assets when the user only described actions", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.entry = { page: "classin.home", session: "authenticated", role: "teacher" };
+    response.document.outcome = { page: "classin.friend.add", session: "authenticated", role: "teacher" };
+
+    const result = parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "点击添加好友，停留三秒，然后返回"
+    });
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+    expect(result.document.entry).toBeUndefined();
+    expect(result.document.outcome).toBeUndefined();
+    expect(result.document.steps[0]?.onPage).toBeUndefined();
+    expect(result.document.steps[1]?.onPage).toBeUndefined();
+    expect(result.document.steps[1]).not.toHaveProperty("expectPage");
+  });
+
+  it("normalizes AI-generated fixed wait durations into milliseconds before schema validation", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.steps = [{
+      id: "wait-three-minutes",
+      role: "business",
+      wait: { durationMs: "3分钟" as unknown as number }
+    }];
+
+    const result = parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "停留3分钟"
+    });
+
+    expect(result).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [{ wait: { durationMs: 180000 } }]
+      }
+    });
+  });
+
+  it("normalizes parameterized AI wait durations from parameter values", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.document.parameters = {
+      waitDuration: { type: "string", label: "等待时长", required: true }
+    };
+    response.document.steps = [{
+      id: "wait-three-minutes",
+      role: "business",
+      wait: { durationMs: "${waitDuration}" as unknown as number }
+    }];
+    response.parameterValues = { waitDuration: "3分钟" };
+
+    const result = parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "停留3分钟"
+    });
+
+    expect(result).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [{ wait: { durationMs: 180000 } }]
+      }
+    });
   });
 
   it("requires the AI response to keep the system-classified test level", async () => {
@@ -476,7 +567,7 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it("keeps AI-selected navigation context editable instead of repairing it from prompt heuristics", async () => {
+  it("strips AI-selected navigation context when the prompt does not explicitly ground pages", async () => {
     const badResponse = readyResponse();
     badResponse.summary = "打开录制ClassIn教室开关";
     badResponse.document.purpose = "business";
@@ -530,22 +621,21 @@ describe("ScriptFlow AI planner", () => {
       }
     });
 
-    expect(callCount).toBe(2);
+    expect(callCount).toBe(3);
     expect(result.status).toBe("trial_ready");
     if (result.status === "needs_clarification") throw new Error(result.clarification);
     expect(result.document).toMatchObject({
-      entry: { page: "classin.lesson.create" },
-      outcome: { page: "classin.lesson.create" },
       steps: [
-        { reachPage: { page: "classin.lesson.create" } },
         {
-          onPage: "classin.lesson.create",
           tap: {
             target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true }
           }
         }
       ]
     });
+    expect(result.document.entry).toBeUndefined();
+    expect(result.document.outcome).toBeUndefined();
+    expect(result.document.steps[0]).not.toHaveProperty("onPage");
   });
 
   it("keeps a structurally valid text field locator even when prompt heuristics cannot ground it", () => {
@@ -1889,6 +1979,61 @@ describe("ScriptFlow AI planner", () => {
     expect(result.sourceYaml).not.toContain('value: "7小时20分钟"');
   });
 
+  it("does not expose display metadata as parameterization review evidence", async () => {
+    const metadataOnlyValue = "元数据残留班级四十二号";
+    const response = readyResponse();
+    response.summary = metadataOnlyValue;
+    response.assumptions = [metadataOnlyValue];
+    response.document.name = metadataOnlyValue;
+    response.document.description = metadataOnlyValue;
+    response.document.purpose = "business";
+    response.document.testLevel = "business_smoke";
+    response.document.parameters = {
+      className: { type: "string", label: "班级名称", required: true }
+    };
+    response.document.steps = [{
+      id: "tap-class",
+      role: "business",
+      tap: {
+        target: { text: "${className}", area: "content" },
+        search: { mode: "auto" }
+      }
+    }];
+    response.parameterValues = { className: "班级四十二号" };
+
+    const requests: string[] = [];
+    const responses = [
+      response,
+      { status: "ok", summary: "执行字段已经参数化。", issues: [] }
+    ];
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "点击班级四十二号，然后停留3分钟，然后点击左上角返回",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      pageCatalog: pageCatalog(),
+      flows: [],
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        requests.push(body.messages?.at(-1)?.content ?? "");
+        const content = responses.shift();
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(content) } }]
+        }), { status: 200 });
+      }
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toContain("参数化 review");
+    expect(requests[1]).toContain("parameterValues");
+    expect(requests[1]).not.toContain(metadataOnlyValue);
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      parameterValues: { className: "班级四十二号" }
+    });
+  });
+
   it("instructs the planner to choose text match mode from screen evidence and natural language", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "harmony");
     const prompt = buildScriptFlowPlannerPrompt(
@@ -1906,6 +2051,18 @@ describe("ScriptFlow AI planner", () => {
     expect(prompt).toContain("screenContext 原文是“确定(1/6)”而用户只说“确定”时，必须生成 target: { text: \"确定\", match: \"contains\" }");
     expect(prompt).toContain("未启用当前屏幕上下文时，根据自然语言语义选择 match");
     expect(prompt).toContain("执行器会严格按脚本 match 执行，equals 不会自动退化为 contains");
+  });
+
+  it("instructs the planner to use content icons for composer buttons", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const prompt = buildScriptFlowPlannerPrompt("点击消息输入区的表情按钮并选择任意表情", "cn.eeo.classin", "android", catalog);
+
+    expect(prompt).toContain("消息输入区、键盘工具栏、表情面板或更多/附件面板里的图标按钮当前使用 icon + area: content");
+    expect(prompt).toContain("不要生成 scope、role、selection、iconButton、submitButton 或 collectionItem");
+    expect(prompt).not.toContain("messageComposer");
+    expect(prompt).not.toContain("emojiPanel");
+    expect(prompt).not.toContain("control 可用 iconButton、submitButton 或 collectionItem");
+    expect(prompt).not.toContain("selection: any 或 ordinal");
   });
 
   it("includes external code context as non-authoritative planning hints", () => {
@@ -2148,6 +2305,23 @@ describe("ScriptFlow AI planner", () => {
     })).toThrow("未允许的外层字段");
   });
 
+  it("treats a complete ready draft as ready when the model drifts the status to needs_clarification", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = {
+      ...readyResponse(),
+      status: "needs_clarification"
+    };
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog
+    })).toMatchObject({
+      status: "ready",
+      document: { name: "打开添加好友" }
+    });
+  });
+
   it("safely unwraps a single Markdown JSON fence before strict schema validation", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = `\`\`\`json\n${JSON.stringify(readyResponse())}\n\`\`\``;
@@ -2199,6 +2373,51 @@ describe("ScriptFlow AI planner", () => {
         testLevel: "component",
         name: "设置课堂时长",
         steps: [{ id: "select-duration" }]
+      }
+    });
+  });
+
+  it("wraps a partial flattened response that only puts steps at the top level", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = {
+      status: "ready",
+      summary: "消息页输入并发送",
+      assumptions: [],
+      parameterValues: {},
+      steps: [{
+        id: "input-message",
+        role: "business",
+        inputText: {
+          target: { control: "textField", area: "content", scopeText: "消息输入区", ordinal: 1 },
+          value: "123",
+          search: { mode: "visibleOnly" }
+        }
+      }, {
+        id: "send-message",
+        role: "business",
+        tap: {
+          target: { icon: "arrowUp", area: "content", position: "trailing" },
+          search: { mode: "visibleOnly" }
+        }
+      }]
+    };
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "选中输入框输入123，然后点击发送按钮"
+    })).toMatchObject({
+      status: "ready",
+      summary: "消息页输入并发送",
+      document: {
+        version: 1,
+        kind: "case",
+        purpose: "business",
+        testLevel: "component",
+        name: "消息页输入并发送",
+        app: { id: "cn.eeo.classin" },
+        steps: [{ id: "input-message" }, { id: "send-message" }]
       }
     });
   });
@@ -2283,9 +2502,10 @@ describe("ScriptFlow AI planner", () => {
     expect(requestBodies).toHaveLength(3);
     const repairPrompt = JSON.parse(requestBodies[1]) as { messages: Array<{ content: string }> };
     expect(repairPrompt.messages[1]?.content).toContain("steps[0].action: Unknown field");
-    expect(repairPrompt.messages[1]?.content).toContain('"assertPage": "classin.home"');
-	    expect(repairPrompt.messages[1]?.content).toContain("不要输出 action 或 page 字段");
-	  });
+    expect(repairPrompt.messages[1]?.content).toContain('"action":"assertPage"');
+    expect(repairPrompt.messages[1]?.content).toContain('"page":"classin.home"');
+    expect(repairPrompt.messages[1]?.content).toContain("不要输出 action 或 page 字段");
+  });
 
 	  it("fills an empty runFlow reference from a unique reusable flow outcome without repair", async () => {
 	    let calls = 0;
@@ -2544,7 +2764,7 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it("normalizes legacy scrollUntilVisible text targets before validating explicit follow-up taps", () => {
+  it("normalizes legacy scrollUntilVisible text targets without removing explicit follow-up taps", () => {
     const catalog = buildScriptFlowPlannerCatalog(emptyPageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
     response.document.name = "打开班级详情页";
@@ -2593,6 +2813,191 @@ describe("ScriptFlow AI planner", () => {
           { scrollUntilVisible: { target: { text: "班里四十二号" }, direction: "down", maxSwipes: 6 } },
           { tap: { target: { text: "班里四十二号" } } },
           { assertText: { text: "班级详情" } }
+        ]
+      }
+    });
+  });
+
+  it("preserves a scroll-until-visible step before a following same-target tap", () => {
+    const catalog = buildScriptFlowPlannerCatalog(emptyPageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.summary = "消息会话发送文本";
+    response.document = {
+      version: 1,
+      kind: "case",
+      purpose: "business",
+      testLevel: "business_smoke",
+      name: "消息会话发送文本",
+      app: { id: "cn.eeo.classin" },
+      parameters: {
+        conversationName: { type: "string", label: "会话名称", required: true }
+      },
+      steps: [
+        {
+          id: "find-conversation",
+          role: "business",
+          scrollUntilVisible: {
+            target: { text: "${conversationName}" },
+            direction: "down",
+            maxSwipes: 8
+          }
+        },
+        {
+          id: "open-conversation",
+          role: "business",
+          tap: {
+            target: { text: "${conversationName}" },
+            search: { mode: "visibleOnly" }
+          }
+        }
+      ],
+      tags: ["ai-generated"]
+    };
+
+    const result = parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "滑动找到汉娜7812，然后点击"
+    });
+
+    expect(result).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [
+          {
+            id: "find-conversation",
+            scrollUntilVisible: {
+              target: { text: "${conversationName}" },
+              direction: "down",
+              maxSwipes: 8
+            }
+          },
+          {
+            id: "open-conversation",
+            tap: {
+              target: { text: "${conversationName}" },
+              search: { mode: "visibleOnly" }
+            }
+          }
+        ]
+      }
+    });
+  });
+
+  it("normalizes screen-grounded action field drift before schema validation", () => {
+    const catalog = buildScriptFlowPlannerCatalog(emptyPageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.summary = "消息页输入并发送";
+    response.document = {
+      version: 1,
+      kind: "case",
+      purpose: "business",
+      testLevel: "component",
+      name: "消息页输入并发送",
+      app: { id: "cn.eeo.classin" },
+      parameters: {},
+      steps: [
+        {
+          id: "find-class",
+          role: "business",
+          scrollUntilVisible: {
+            target: { text: "汉娜7812" },
+            search: { mode: "auto", direction: "down", maxSwipes: 6 }
+          }
+        } as unknown as ScriptFlowDocument["steps"][number],
+        {
+          id: "input-message",
+          role: "business",
+          inputText: {
+            target: { control: "textField", area: "content", scopeText: "消息输入区", ordinal: 1 },
+            text: "123",
+            search: { mode: "visibleOnly" }
+          }
+        } as unknown as ScriptFlowDocument["steps"][number]
+      ],
+      tags: ["ai-generated"]
+    };
+
+    expect(parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "滑动找到汉娜7812，然后选中输入框输入123"
+    })).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [
+          { scrollUntilVisible: { target: { text: "汉娜7812" }, direction: "down", maxSwipes: 6 } },
+          { inputText: { target: { control: "textField" }, value: "123", search: { mode: "auto" } } }
+        ]
+      }
+    });
+  });
+
+  it("grounds generic input-region text targets to the current screen text field and drops the redundant focus tap", () => {
+    const catalog = buildScriptFlowPlannerCatalog(emptyPageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.summary = "消息页输入并发送";
+    response.document = {
+      version: 1,
+      kind: "case",
+      purpose: "business",
+      testLevel: "component",
+      name: "消息页输入并发送",
+      app: { id: "cn.eeo.classin" },
+      parameters: {},
+      steps: [
+        {
+          id: "focus-message-input",
+          role: "business",
+          tap: {
+            target: { text: "消息输入区域", area: "content" },
+            search: { mode: "visibleOnly" }
+          }
+        },
+        {
+          id: "input-message",
+          role: "business",
+          inputText: {
+            target: { text: "消息输入区域", area: "content" },
+            value: "123",
+            search: { mode: "visibleOnly" }
+          }
+        },
+        {
+          id: "send-message",
+          role: "business",
+          tap: {
+            target: { icon: "arrowUp", area: "content" },
+            search: { mode: "visibleOnly" }
+          }
+        }
+      ],
+      tags: ["ai-generated"]
+    };
+
+    const result = parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "选中输入框输入123，然后点击发送按钮",
+      screenContext: messageInputScreenContext()
+    });
+
+    expect(result).toMatchObject({
+      status: "ready",
+      document: {
+        steps: [
+          {
+            id: "input-message",
+            inputText: {
+              target: { control: "textField", area: "content", scopeText: "消息输入区", ordinal: 1 },
+              value: "123",
+              search: { mode: "visibleOnly" }
+            }
+          },
+          { id: "send-message", tap: { target: { icon: "arrowUp" } } }
         ]
       }
     });
@@ -2966,6 +3371,29 @@ function lessonCreateScreenContext(): ScreenUnderstandingContext {
       }
     ],
     rejectedReasons: ["controlCandidates[0].currentValue removed because valueKind is dynamicValue"]
+  };
+}
+
+function messageInputScreenContext(): ScreenUnderstandingContext {
+  return {
+    used: true,
+    observationId: "observation-message-input",
+    visionUsed: true,
+    page: { key: "classin.message.detail", name: "消息详情", confidence: 0.91 },
+    visibleStableTexts: ["消息", "发送"],
+    controlCandidates: [
+      {
+        candidateId: "field.messageInput",
+        control: "textField",
+        semanticName: "messageInput",
+        scopeText: "消息输入区",
+        ordinal: 1,
+        valueKind: "dynamicValue",
+        confidence: 0.84,
+        assetEligible: false
+      }
+    ],
+    rejectedReasons: []
   };
 }
 

@@ -31,27 +31,29 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。需要表达‘进入教学方案的入口’这类文本语义目标时，使用 text + match: semantic，不能伪装成屏幕原文。",
   "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 目标默认按完整控件文字匹配：按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和 ${parameterName} 这类参数化名称不要写 match: contains；用户明确表达‘包含、带有、关键字、模糊匹配’，或受控 screenContext/读屏证据显示实际控件原文包含目标基础词但额外带动态数量、状态、后缀或前缀时，才可写 match: contains，且必须尽量补充 area、nearText、scopeText、ordinal 或容器语义。",
   "text、icon、visual 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
-  "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、onPage、reachPage 或 runFlow，也不要把页面目录当成动作前置条件。",
+  "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、onPage、expectPage、reachPage 或 runFlow，也不要把页面目录当成动作前置条件。",
   "表单字段动作默认使用 search: { mode: auto }。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或受控 screenContext 明确给出当前可见候选时，才使用 visibleOnly。",
   "用户说通过滑动、滚动、查找、找到、定位或搜索某字段/条目/控件时，这是目标动作的运行时查找策略，不是独立 swipe 步骤；即使 screenContext 当前首屏没有该字段，也应生成该字段的直接动作并使用 search: { mode: auto }，不能因此追问。",
   "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确说点击某个入口时，禁止擅自补“点击修改”或其他桥接动作；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification 询问准确字段位置或完整操作路径。",
   "text 目标默认不要猜测 topBar/bottomBar。只有用户明确说顶部、底部、左上角、右上角等位置，或目录中的已验证导航入口/原用例已经给出同一目标位置时，才可增加窄区域约束；否则省略 area，让执行器在当前屏幕查找。",
   "发布、提交、删除、支付等操作按钮可能位于顶部、内容区或底部；用户或已验证知识未提供位置时必须省略 area，禁止根据动作名称猜测区域。",
   "icon 和 visual 都是非 OCR 视觉目标；非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal。用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定；用户未提供任何限定且标准视觉 role 足够明确时才可省略。内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
-  "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象，例如 { visual: { kind: icon, query: \"课堂报告右侧箭头图标\", area: content, position: trailing, nearText: \"课堂报告\" } } 或 { visual: { kind: image, query: \"封面图片\", area: content } }。执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
+  "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象。visual 必须保留用户原始视觉描述作为 query，并按用户描述补充 kind、area、position、nearText、scopeText 或 ordinal。执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
   "用户明确说‘点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复、reachPage 或重启。",
-  "control 当前支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content，并使用 scopeText+ordinal 或 anchorText+relation：scopeText+ordinal 用于某局部区域内第几个输入框；anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text。",
+  "control 当前只支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content，并使用 scopeText+ordinal 或 anchorText+relation：scopeText+ordinal 用于某局部区域内第几个输入框；anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text。",
+  "inputText 和 clearText 会自行定位、点击并聚焦输入框；用户说选中/点击某输入框再输入或清空时，生成一个 inputText/clearText 步骤即可，不要额外生成前置 tap 输入框步骤。",
+  "消息输入区、键盘工具栏、表情面板或更多/附件面板里的图标按钮当前使用 icon + area: content，并按用户描述补 position、nearText、scopeText 或 ordinal；例如表情图标用 icon: emoji，语音/麦克风图标用 icon: mic，加号图标用 icon: add，上箭头发送图标用 icon: arrowUp。不要生成 scope、role、selection、iconButton、submitButton 或 collectionItem。",
   "textField 的 scopeText 或 anchorText 必须是局部表单区域标题、字段组标题、字段标签或控件附近稳定文字，不能使用页面标题、顶栏固定标题、App 名称等全局固定文字。用户只用“某页面标题上方/下方/左侧/右侧/第几个输入框”定位时应返回 needs_clarification，请其补充局部字段名或开启当前屏幕辅助。",
   "执行器能力合同：visual 仅支持 tap；selectText 和 scrollUntilVisible 必须使用 text；inputText 和 clearText 必须使用 text 或 control: textField。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
   "用户明确操作是硬约束：点击、输入、清空、滑动或启动等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。用户明确要求启动时生成唯一一个 role: setup 的 launchApp；没有要求启动时不要添加。",
   "ScriptFlow 的 launchApp 表示保留应用数据，先终止应用进程再重新启动；步骤名称应写为‘重启 App’，不能把它描述成仅切回前台。",
-  "用户明确要求某个动作完成后停留、暂停、等待固定时间再继续时，生成独立 wait 步骤，例如 { wait: { durationMs: 3000 } }。wait 只表示固定延时，不等待页面、文字或控件状态。",
+  "用户明确要求某个动作完成后停留、暂停、等待固定时间再继续时，生成独立 wait 步骤，使用 wait.durationMs 表达固定毫秒数。wait 只表示固定延时，不等待页面、文字或控件状态。",
   "用户描述打开选择器、滑动到具体选中值并确认时，必须把这组机械操作规范化为一个 selectText：target 保留字段入口，value 完整保留用户指定值，confirmText 保留确认文字。selectText 自身会点击并打开字段，由执行器动态查找选项；禁止保留前置 tap，也禁止猜测固定滑动次数。",
   "用户只表达进入、打开、前往或回到某页面时，这是目标状态而不是操作方式。只有目标是 navigationAnchors 中的状态入口，或 transitions 中存在到该目标的路径时，才生成 reachPage；不要因为‘回到’推断系统返回或重启。",
   "navigationEntries 是试运行验证并经用户确认的导航入口。目标型请求只能使用 navigationEntries、已验证 transitions 或 navigationAnchors；页面标签和页面名称不能作为入口推断依据。",
   "只有用户明确描述点击、返回、重启等过程时才生成对应过程；reachPage 的运行时执行器只使用已验证导航索引和受控入口恢复，不会猜测未知点击路径。",
-  "动作会进入另一个页面时，把目标页写在该动作的 expectPage；不要再紧跟一个独立 assertPage。assertPage 只用于用户明确要求单独验证当前页面的场景。",
+  "只有用户明确写出某动作完成后会进入、到达、打开或跳转到哪个页面时，才把该目标页写在该动作的 expectPage；不要再紧跟一个独立 assertPage。assertPage 只用于用户明确要求单独验证当前页面的场景。",
   "目标页面未录入时禁止引用或编造 page key。用户提供明确操作或完整操作链时必须先生成可试运行的直接动作；有独有稳定文字时用最终 assertText 验证，没有稳定文字时省略未知页面约束和结果断言，由系统标记为结果待确认，不能因此返回 needs_clarification。",
   "只能引用目录中存在的 page key 和 active ScriptFlow id。禁止元素资产 ID、坐标、bounds、region_center、圈选区域或固定屏幕区域点击。",
   "用户只说到达一个未录入页面、又没有提供操作路径时返回 needs_clarification，请用户补充从已知状态开始的完整点击过程或目标页独有稳定文字。不要要求用户先录制资产。",
@@ -62,6 +64,7 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "runFlow 会自动继承父测试中的同名参数；规划器会把复用用例和 reachPage 导航路径所需参数汇总到运行配置。",
   "常用参数直接展示；低频可选参数标记 advanced: true。枚举只有在输入目录给出合法选项时才能使用 select/options。",
   "执行器严格按照脚本中的显式命令执行，不推测前置页面，不插入返回、重启、页面恢复或结果断言。",
+  "status 为 ready 时必须包含 document、summary、assumptions 和 parameterValues；status 为 needs_clarification 时只允许返回 status 和 clarification，不能同时返回 document 或草稿字段。",
   "信息不足时返回 needs_clarification 和一个简短问题，不要猜测。只返回唯一 JSON 对象，不要 Markdown、代码围栏、解释文字或额外字段。"
 ].join("\n");
 
@@ -474,9 +477,9 @@ export function buildScriptFlowPlannerPrompt(
     "testLevel 含义：probe=临时验证单点问题，component=字段/控件能力用例，business_smoke=最小业务主链路，full_regression=全字段或全配置回归。",
     "full_regression 不允许凭页面名称自动枚举字段。用户未列出全部字段时，先根据已有上下文生成可编辑草稿，并在 assumptions 中说明当前覆盖范围；不要仅因此返回 needs_clarification。",
     "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
-    "步骤格式示例（只说明结构，页面引用必须从本次目录选择）：",
-    JSON.stringify(stepShapeExamples(appId, catalog), null, 2),
-    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal；用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 与 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content，并使用 scopeText+ordinal 或 anchorText+relation；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
+    "步骤字段合同：步骤 id 使用稳定英文短横线命名；role 只能使用 setup、navigation、business、assertion、reset、cleanup 或 recovery；动作字段只能从可用动作列表中选择一个；页面字段不是动作字段，不能用 page/action 包装动作。",
+    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号/表情/麦克风/上箭头等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal；用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 和 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content，并使用 scopeText+ordinal 或 anchorText+relation；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
+    "消息输入区、键盘工具栏、表情面板或更多/附件面板里的图标按钮当前使用 icon + area: content，并按用户描述补 position、nearText、scopeText 或 ordinal；例如表情图标用 icon: emoji，语音/麦克风图标用 icon: mic，加号图标用 icon: add，上箭头发送图标用 icon: arrowUp。不要生成 scope、role、selection、iconButton、submitButton 或 collectionItem。",
     "textField.scopeText+ordinal 用于某局部区域内第几个输入框；textField.anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置。相对锚点文字必须写入 anchorText，不能降级成 target.text；scopeText 或 anchorText 不能使用页面标题、顶栏固定标题、App 名称等全局固定文字；用户只用“某页面标题上方/下方/左侧/右侧/第几个输入框”定位时返回 needs_clarification，要求补充局部字段名或开启当前屏幕辅助。",
     "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 默认按完整控件文字匹配，按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和参数化名称不要写 match: contains。使用 screenContext 或读屏证据时，根据当前可见原文选择 match：实际原文与目标完全一致时用 exact/省略 match；screenContext 原文是“确定(1/6)”而用户只说“确定”时，必须生成 target: { text: \"确定\", match: \"contains\" }；类似“完成 2/6”“保存(已选3项)”这类动态数量或状态后缀也用 contains，并尽量补充 area、nearText、scopeText、ordinal 或容器语义。未启用当前屏幕上下文时，根据自然语言语义选择 match：用户明确表达‘包含、带有、关键字、模糊匹配’或明显只给动态状态控件的基础动作词时，才写 match: contains。",
     screenContext
@@ -702,14 +705,16 @@ async function reviewAndRepairNonOcrGrounding(input: {
 
 function buildScriptFlowParameterizationReviewPrompt(
   prompt: string,
-  parsed: Pick<ScriptFlowAiGeneratedDraft, "sourceYaml" | "summary" | "assumptions" | "parameterValues">
+  parsed: Pick<ScriptFlowAiGeneratedDraft, "document" | "parameterValues">
 ): string {
   return [
     "请对下面 ScriptFlow 草稿做参数化 review。",
     "目标：判断用户原始描述中的运行时业务值是否被错误硬编码在脚本里。你需要理解自然语言和业务语义，不要依赖固定词表，也不要因为脚本合法就直接通过。",
+    "审查范围只包括 document.parameters、document.steps 中会影响执行的字段，以及 parameterValues 是否承载用户本次给出的运行值。",
+    "不要审查 document.name、description、summary、assumptions、tags、app、purpose、testLevel 或参数 label 等展示元数据；这些可读文案可以包含用户原文，不算执行硬编码。",
     "应该参数化：inputText.value、selectText.value、搜索词、账号、密码、课堂名、班级名、老师名、学生名、课程名、文件名、群名、日期、时间、数量，以及用户要选择的具体业务实体。tap.target.text 如果是用户要选中的具体业务对象，也应该参数化。",
-    "不应该参数化：固定 UI 控件、按钮、Tab、菜单项、字段标签、页面入口、确认/取消/发布/创建/课堂信息/联席教师等产品文案。字段标签本身不是参数，字段的值才是参数；开关名通常不是参数，除非用户明确要求开关状态运行时可变。",
-    "如果发现硬编码业务值，返回 needs_repair 并给出可操作的 repairInstructions；修复时必须在 document.parameters 声明参数，脚本中改用 ${parameterName}，用户本次给出的值放入顶层 parameterValues。sensitive 参数不得写入 default、summary 或 assumptions。",
+    "不应该参数化：固定 UI 控件、按钮、Tab、菜单项、字段标签、页面入口、确认/取消/发布/创建/课堂信息/联席教师等产品文案。字段标签本身不是参数，字段的值才是参数；开关名通常不是参数，除非用户明确要求开关状态运行时可变。wait.durationMs 是固定执行延时，用户说停留或等待 n 秒/分钟时必须保留为正整数毫秒，不能改成参数、字符串或 parameterValues。",
+    "如果发现执行字段里硬编码业务值，返回 needs_repair 并给出可操作的 repairInstructions；修复时必须在 document.parameters 声明参数，脚本中改用 ${parameterName}，用户本次给出的值放入顶层 parameterValues。sensitive 参数不得写入 default、summary 或 assumptions。",
     "如果参数化已经合理，返回 ok。",
     "只返回唯一 JSON 对象，格式：",
     JSON.stringify({
@@ -720,14 +725,13 @@ function buildScriptFlowParameterizationReviewPrompt(
     }, null, 2),
     "用户原始描述：",
     prompt || "未提供",
-    "草稿摘要：",
-    parsed.summary,
-    "草稿 assumptions：",
-    JSON.stringify(parsed.assumptions, null, 2),
     "草稿 parameterValues：",
     JSON.stringify(parsed.parameterValues, null, 2),
-    "草稿 YAML：",
-    parsed.sourceYaml
+    "草稿执行相关字段：",
+    JSON.stringify({
+      parameters: parsed.document.parameters,
+      steps: parsed.document.steps
+    }, null, 2)
   ].join("\n\n");
 }
 
@@ -739,7 +743,7 @@ function buildScriptFlowParameterizationRepairPrompt(
   return [
     plannerPrompt,
     "上一稿未通过参数化 review。请只根据 review 指令修复硬编码业务值的参数化，不要改变步骤顺序、动作语义、页面约束、match/search 策略或非参数相关目标定位。",
-    "修复要求：在 document.parameters 中声明缺失参数；步骤中用 ${parameterName} 引用；用户本次已经给出的值放入顶层 parameterValues；固定 UI 文案继续保留字面量；sensitive 参数不要写 default、summary 或 assumptions。",
+    "修复要求：在 document.parameters 中声明缺失参数；步骤中用 ${parameterName} 引用；用户本次已经给出的值放入顶层 parameterValues；固定 UI 文案继续保留字面量；wait.durationMs 必须保持正整数毫秒，不能参数化；不要因为 name、description、summary、assumptions、tags 或参数 label 等展示元数据包含业务值而修改脚本；sensitive 参数不要写 default、summary 或 assumptions。",
     "review 结果：",
     JSON.stringify(review, null, 2),
     "上一稿 YAML：",
@@ -884,81 +888,6 @@ function hasEditableTextTargets(document: ScriptFlowDocument): boolean {
   });
 }
 
-function stepShapeExamples(appId: string, catalog: ScriptFlowPlannerCatalog): Record<string, unknown>[] {
-  const page = catalog.pages[0];
-  const pageReference = page?.key ?? page?.id ?? "<目录中的 page key>";
-  const examples: Record<string, unknown>[] = [
-    { id: "launch-app", role: "setup", launchApp: { appId } },
-    {
-      id: "tap-content-text",
-      role: "business",
-      onPage: pageReference,
-      tap: { target: { text: "内容文字", match: "exact", area: "content" }, search: { mode: "auto", direction: "down", maxSwipes: 6 } }
-    },
-    {
-      id: "tap-semantic-entry",
-      role: "navigation",
-      onPage: pageReference,
-      tap: { target: { text: "进入目标功能的入口", match: "semantic", area: "content" }, search: { mode: "auto", direction: "down", maxSwipes: 6 } }
-    },
-    {
-      id: "tap-standard-icon",
-      role: "navigation",
-      onPage: pageReference,
-      tap: { target: { icon: "add", area: "topBar", position: "trailing" }, search: { mode: "visibleOnly" } }
-    },
-    {
-      id: "tap-visual-icon",
-      role: "business",
-      onPage: pageReference,
-      tap: { target: { visual: { kind: "icon", query: "课堂报告右侧箭头图标", area: "content", position: "trailing", nearText: "课堂报告" } }, search: { mode: "visibleOnly" } }
-    },
-    {
-      id: "tap-floating-add",
-      role: "business",
-      onPage: pageReference,
-      tap: { target: { icon: "add", area: "content", position: "trailing" }, search: { mode: "visibleOnly" } }
-    },
-    {
-      id: "check-agreement",
-      role: "business",
-      onPage: pageReference,
-      tap: { target: { control: "checkbox", area: "content", nearText: "我已阅读并同意" }, search: { mode: "visibleOnly" } }
-    },
-    {
-      id: "enable-recording",
-      role: "business",
-      onPage: pageReference,
-      tap: { target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true }, search: { mode: "visibleOnly" } }
-    },
-    {
-      id: "fill-content-field",
-      role: "business",
-      onPage: pageReference,
-      inputText: {
-        target: { text: "课堂名称", area: "content" },
-        value: "${lessonName}",
-        search: { mode: "auto", direction: "down", maxSwipes: 6 }
-      }
-    },
-    {
-      id: "select-content-option",
-      role: "business",
-      onPage: pageReference,
-      selectText: {
-        target: { text: "课程", area: "content" },
-        value: "${course}",
-        search: { mode: "auto", direction: "down", maxSwipes: 6 }
-      }
-    },
-    { id: "wait-after-action", role: "business", wait: { durationMs: 3000 } },
-    { id: "reach-page", role: "navigation", reachPage: { page: pageReference, policy: "safe" } },
-    { id: "assert-page", role: "assertion", assertPage: pageReference },
-    { id: "assert-stable-text", role: "assertion", assertText: { text: "用户明确提供的页面独有文字", match: "contains" } }
-  ];
-  return examples;
-}
-
 function compactError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/\s+/g, " ").trim().slice(0, 1_000);
@@ -976,7 +905,7 @@ export function parseScriptFlowAiResponse(
   }
 ): ParsedScriptFlowAiDraft {
   const value = parseAiJsonObject(raw);
-  const root = normalizeScriptFlowAiResponseRoot(recordValue(value));
+  const root = normalizeScriptFlowAiResponseRoot(recordValue(value), input);
   if (root.status === "needs_clarification") {
     assertKnownResponseFields(root, ["status", "clarification"]);
     const clarification = stringValue(root.clarification);
@@ -990,13 +919,14 @@ export function parseScriptFlowAiResponse(
   assertNoLegacyGeneratedFields(root.document);
   assertGeneratedClassification(root.document, input.existingDocument?.testLevel ?? (input.prompt ? classifyScriptFlowTestLevel(input.prompt) : undefined));
   const generatedDocument = normalizeGeneratedExplicitExecution(
-    normalizeGeneratedRunFlowReferences(root.document, input.catalog),
+    normalizeGeneratedWaitDurations(normalizeGeneratedRunFlowReferences(root.document, input.catalog), root.parameterValues),
     input.appId
   );
   const validated = validateScriptFlowDocument(generatedDocument);
   const hydrated = validateScriptFlowDocument(hydrateGeneratedParameters(validated, input.catalog));
   const { document: extractedDocument, parameterValues } = extractEphemeralParameterValues(hydrated, root.parameterValues);
-  const document = validateScriptFlowDocument(normalizeGeneratedExecutableTargets(extractedDocument, input));
+  const pageConstrained = validateScriptFlowDocument(normalizeGeneratedPageConstraints(extractedDocument, input));
+  const document = validateScriptFlowDocument(normalizeGeneratedExecutableTargets(pageConstrained, input));
   validateGeneratedReferences(document, input);
   validateGeneratedActionTargetReferences(document, input.catalog);
   validateGeneratedExecutableTargetContracts(document, input.prompt);
@@ -1013,12 +943,24 @@ export function parseScriptFlowAiResponse(
   };
 }
 
-function normalizeScriptFlowAiResponseRoot(root: Record<string, unknown>): Record<string, unknown> {
+function normalizeScriptFlowAiResponseRoot(
+  root: Record<string, unknown>,
+  input: { appId: string; prompt?: string }
+): Record<string, unknown> {
+  if (root.status === "needs_clarification" && looksLikeContradictoryReadyResponse(root)) {
+    return {
+      status: "ready",
+      ...(root.summary !== undefined ? { summary: root.summary } : {}),
+      ...(root.assumptions !== undefined ? { assumptions: root.assumptions } : {}),
+      ...(root.parameterValues !== undefined ? { parameterValues: root.parameterValues } : {}),
+      document: root.document
+    };
+  }
   if ("document" in root || root.status === "needs_clarification") return root;
   if (root.status !== undefined && root.status !== "ready") return root;
   if (!Object.keys(root).every((key) => SCRIPT_FLOW_FLATTENED_READY_RESPONSE_FIELDS.has(key))) return root;
 
-  const document = pickFlattenedScriptFlowDocument(root);
+  const document = withFlattenedScriptFlowDocumentDefaults(pickFlattenedScriptFlowDocument(root), root, input);
   if (!looksLikeScriptFlowDocumentShape(document)) return root;
 
   return {
@@ -1028,6 +970,45 @@ function normalizeScriptFlowAiResponseRoot(root: Record<string, unknown>): Recor
     ...(root.parameterValues !== undefined ? { parameterValues: root.parameterValues } : {}),
     document
   };
+}
+
+function looksLikeContradictoryReadyResponse(root: Record<string, unknown>): boolean {
+  if (!Object.keys(root).every((key) => SCRIPT_FLOW_READY_RESPONSE_FIELDS.includes(key) || key === "clarification")) {
+    return false;
+  }
+  return looksLikeScriptFlowDocumentShape(recordValue(root.document));
+}
+
+function withFlattenedScriptFlowDocumentDefaults(
+  document: Record<string, unknown>,
+  root: Record<string, unknown>,
+  input: { appId: string; prompt?: string }
+): Record<string, unknown> {
+  if (!Array.isArray(document.steps)) return document;
+  const summary = stringValue(root.summary);
+  const prompt = input.prompt?.trim();
+  return {
+    version: document.version ?? 1,
+    kind: document.kind ?? "case",
+    purpose: document.purpose ?? flattenedDocumentPurpose(document.steps),
+    testLevel: document.testLevel ?? (prompt ? classifyScriptFlowTestLevel(prompt) : "business_smoke"),
+    name: document.name ?? summary ?? prompt ?? "AI 生成测试",
+    app: document.app ?? { id: input.appId },
+    parameters: document.parameters ?? {},
+    tags: document.tags ?? ["ai-generated"],
+    ...document
+  };
+}
+
+function flattenedDocumentPurpose(steps: unknown[]): ScriptFlowDocument["purpose"] {
+  const records = flattenRecords(steps);
+  if (records.length && records.every((step) => stringValue(step.role) === "navigation" || Object.hasOwn(step, "reachPage"))) {
+    return "navigation";
+  }
+  if (records.length && records.every((step) => stringValue(step.role) === "setup" || stringValue(step.role) === "recovery")) {
+    return "fixture";
+  }
+  return "business";
 }
 
 function normalizeGeneratedExplicitExecution(value: unknown, appId: string): Record<string, unknown> {
@@ -1427,6 +1408,24 @@ function normalizeRawRunFlowSteps(
       };
       delete (normalizedStep.scrollUntilVisible as Record<string, unknown>).text;
     }
+    const normalizedScrollUntilVisible = recordValue(normalizedStep.scrollUntilVisible);
+    const scrollSearch = recordValue(normalizedScrollUntilVisible.search);
+    if (normalizedScrollUntilVisible && Object.keys(scrollSearch).length) {
+      normalizedStep.scrollUntilVisible = {
+        ...normalizedScrollUntilVisible,
+        ...(normalizedScrollUntilVisible.direction === undefined && scrollSearch.direction !== undefined ? { direction: scrollSearch.direction } : {}),
+        ...(normalizedScrollUntilVisible.maxSwipes === undefined && scrollSearch.maxSwipes !== undefined ? { maxSwipes: scrollSearch.maxSwipes } : {})
+      };
+      delete (normalizedStep.scrollUntilVisible as Record<string, unknown>).search;
+    }
+    const inputText = recordValue(normalizedStep.inputText);
+    if (inputText && Object.hasOwn(inputText, "text")) {
+      normalizedStep.inputText = {
+        ...inputText,
+        ...(inputText.value === undefined ? { value: inputText.text } : {})
+      };
+      delete (normalizedStep.inputText as Record<string, unknown>).text;
+    }
     if (typeof step.runFlow === "string" && !step.runFlow.trim()) {
       if (hasRawActionOtherThanRunFlow(step)) {
         delete normalizedStep.runFlow;
@@ -1453,6 +1452,83 @@ function normalizeRawRunFlowSteps(
   });
 }
 
+function normalizeGeneratedWaitDurations(value: unknown, generatedValues?: unknown): unknown {
+  const document = recordValue(value);
+  if (!Array.isArray(document.steps)) return value;
+  return {
+    ...document,
+    steps: normalizeRawWaitDurationSteps(document.steps, recordValue(generatedValues))
+  };
+}
+
+function normalizeRawWaitDurationSteps(steps: unknown[], generatedValues: Record<string, unknown>): unknown[] {
+  return steps.map((value) => {
+    const step = recordValue(value);
+    const normalizedStep: Record<string, unknown> = { ...step };
+    const wait = recordValue(normalizedStep.wait);
+    if (Object.hasOwn(wait, "durationMs")) {
+      const durationMs = normalizedWaitDurationMs(wait.durationMs, generatedValues);
+      if (durationMs !== undefined) normalizedStep.wait = { ...wait, durationMs };
+    }
+    const repeat = recordValue(normalizedStep.repeat);
+    if (Array.isArray(repeat.steps)) {
+      normalizedStep.repeat = {
+        ...repeat,
+        steps: normalizeRawWaitDurationSteps(repeat.steps, generatedValues)
+      };
+    }
+    const when = recordValue(normalizedStep.when);
+    if (Array.isArray(when.steps)) {
+      normalizedStep.when = {
+        ...when,
+        steps: normalizeRawWaitDurationSteps(when.steps, generatedValues)
+      };
+    }
+    return normalizedStep;
+  });
+}
+
+function normalizedWaitDurationMs(value: unknown, generatedValues: Record<string, unknown> = {}): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  const text = stringValue(value);
+  if (!text) return undefined;
+  const parameterName = bindingParameterName(text);
+  if (parameterName && generatedValues[parameterName] !== undefined) {
+    return normalizedWaitDurationMs(generatedValues[parameterName]);
+  }
+  const compact = text.toLowerCase().replace(/，/g, ",").replace(/\s+/g, "");
+  if (/^\d+(?:\.\d+)?$/.test(compact)) {
+    const numeric = Number(compact);
+    return numeric > 0 ? numeric : undefined;
+  }
+  const colon = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}(?:\.\d+)?))?$/.exec(compact);
+  if (colon) {
+    const first = Number(colon[1]);
+    const second = Number(colon[2]);
+    const third = colon[3] === undefined ? undefined : Number(colon[3]);
+    const seconds = third === undefined ? first * 60 + second : first * 3600 + second * 60 + third;
+    return seconds > 0 ? Math.round(seconds * 1000) : undefined;
+  }
+  const unitPattern = /(\d+(?:\.\d+)?)(毫秒|milliseconds?|msecs?|ms|秒钟|秒|seconds?|secs?|s|分钟|分|minutes?|mins?|min|m|小时|时|hours?|hrs?|hr|h)/giu;
+  let totalMs = 0;
+  let matched = false;
+  const leftover = compact.replace(unitPattern, (_match, amount: string, unit: string) => {
+    matched = true;
+    totalMs += Number(amount) * waitDurationUnitMultiplier(unit);
+    return "";
+  }).replace(/[,+，、和又]/gu, "");
+  if (!matched || leftover) return undefined;
+  return totalMs > 0 ? Math.round(totalMs) : undefined;
+}
+
+function waitDurationUnitMultiplier(unit: string): number {
+  const normalized = unit.toLowerCase();
+  if (normalized === "毫秒" || normalized === "ms" || normalized.startsWith("msec") || normalized.startsWith("millisecond")) return 1;
+  if (normalized === "秒" || normalized === "秒钟" || normalized === "s" || normalized.startsWith("sec") || normalized.startsWith("second")) return 1000;
+  if (normalized === "分" || normalized === "分钟" || normalized === "m" || normalized === "min" || normalized.startsWith("minute")) return 60_000;
+  return 3_600_000;
+}
+
 function hasRawActionOtherThanRunFlow(step: Record<string, unknown>): boolean {
   return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "wait", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "repeat", "when"]
     .some((action) => step[action] !== undefined);
@@ -1475,6 +1551,128 @@ function uniqueReusableFlowForStep(
     return Boolean(targetPage ? outcomePage === targetPage : entryPage === onPage);
   });
   return candidates.length === 1 ? candidates[0]!.id : undefined;
+}
+
+type PromptPageConstraintGrounding = {
+  sourcePages: Set<string>;
+  targetPages: Set<string>;
+};
+
+function normalizeGeneratedPageConstraints(
+  document: ScriptFlowDocument,
+  input: {
+    prompt?: string;
+    existingDocument?: ScriptFlowDocument;
+    catalog: ScriptFlowPlannerCatalog;
+  }
+): ScriptFlowDocument {
+  if (!input.prompt || input.existingDocument) return document;
+
+  const grounding = inferPromptPageConstraintGrounding(input.prompt, input.catalog);
+  const entry = document.entry && isPromptGroundedPageReference(document.entry.page, grounding.sourcePages, input.catalog)
+    ? document.entry
+    : undefined;
+  const outcome = document.outcome && isPromptGroundedPageReference(document.outcome.page, grounding.targetPages, input.catalog)
+    ? document.outcome
+    : undefined;
+  return {
+    ...document,
+    entry,
+    outcome,
+    steps: normalizeGeneratedStepPageConstraints(document.steps, grounding, input.catalog)
+  };
+}
+
+function normalizeGeneratedStepPageConstraints(
+  steps: ScriptStep[],
+  grounding: PromptPageConstraintGrounding,
+  catalog: ScriptFlowPlannerCatalog
+): ScriptStep[] {
+  return steps.map((step) => {
+    const normalized = { ...step } as ScriptStep & { onPage?: string; expectPage?: string };
+    if (!isPromptGroundedPageReference(normalized.onPage, grounding.sourcePages, catalog)) {
+      delete normalized.onPage;
+    }
+    if (!isPromptGroundedPageReference(normalized.expectPage, grounding.targetPages, catalog)) {
+      delete normalized.expectPage;
+    }
+    if ("repeat" in normalized) {
+      return {
+        ...normalized,
+        repeat: {
+          ...normalized.repeat,
+          steps: normalizeGeneratedStepPageConstraints(normalized.repeat.steps, grounding, catalog)
+        }
+      };
+    }
+    if ("when" in normalized) {
+      return {
+        ...normalized,
+        when: {
+          ...normalized.when,
+          steps: normalizeGeneratedStepPageConstraints(normalized.when.steps, grounding, catalog)
+        }
+      };
+    }
+    return normalized;
+  });
+}
+
+function inferPromptPageConstraintGrounding(
+  prompt: string,
+  catalog: ScriptFlowPlannerCatalog
+): PromptPageConstraintGrounding {
+  const sourcePages = new Set<string>();
+  const targetPages = new Set<string>();
+  for (const page of catalog.pages) {
+    if (promptMentionsPageAsSource(prompt, page)) sourcePages.add(page.key);
+    if (promptMentionsPageAsTarget(prompt, page)) targetPages.add(page.key);
+  }
+  return { sourcePages, targetPages };
+}
+
+function isPromptGroundedPageReference(
+  reference: string | undefined,
+  groundedPages: Set<string>,
+  catalog: ScriptFlowPlannerCatalog
+): boolean {
+  if (!reference) return true;
+  const canonical = canonicalPlannerPageKey(reference, catalog);
+  return Boolean(canonical && groundedPages.has(canonical));
+}
+
+function canonicalPlannerPageKey(
+  reference: string,
+  catalog: ScriptFlowPlannerCatalog
+): string | undefined {
+  return catalog.pages.find((page) =>
+    page.id === reference || page.key === reference || page.name === reference
+  )?.key;
+}
+
+function promptMentionsPageAsSource(
+  prompt: string,
+  page: ScriptFlowPlannerCatalog["pages"][number]
+): boolean {
+  return pagePromptAliases(page).some((alias) =>
+    new RegExp(`(?:从|在|当前(?:在|位于)?|位于|处于|先到|先进入|回到|返回到)\\s*[^，,。；;]{0,12}${escapeRegExp(alias)}(?:页|页面)?`, "u").test(prompt)
+  );
+}
+
+function promptMentionsPageAsTarget(
+  prompt: string,
+  page: ScriptFlowPlannerCatalog["pages"][number]
+): boolean {
+  return pagePromptAliases(page).some((alias) =>
+    new RegExp(`(?:进入|到达|打开|前往|跳转到|跳至|回到|返回到)\\s*[^，,。；;]{0,12}${escapeRegExp(alias)}(?:页|页面)?`, "u").test(prompt)
+  );
+}
+
+function pagePromptAliases(page: ScriptFlowPlannerCatalog["pages"][number]): string[] {
+  const aliases = new Set([page.name, page.key, page.id].filter(Boolean));
+  if (page.name.endsWith("页")) aliases.add(page.name.slice(0, -1));
+  if (page.name.endsWith("页面")) aliases.add(page.name.slice(0, -2));
+  return [...aliases].filter((alias) => alias.length >= 2);
 }
 
 function normalizeGeneratedExecutableTargets(
@@ -1502,75 +1700,133 @@ function normalizeExecutableTargetSteps(
     screenContext?: ScreenUnderstandingContext;
   }
 ): ScriptStep[] {
-  return steps.map((step) => {
+  const normalized: ScriptStep[] = [];
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index]!;
+    const nextStep = steps[index + 1];
+    if (isRedundantTextFieldFocusTap(step, nextStep)) {
+      continue;
+    }
     if ("repeat" in step) {
-      return {
+      normalized.push({
         ...step,
         repeat: {
           ...step.repeat,
           steps: normalizeExecutableTargetSteps(step.repeat.steps, input)
         }
-      };
+      });
+      continue;
     }
     if ("when" in step) {
-      return {
+      normalized.push({
         ...step,
         when: {
           ...step.when,
           steps: normalizeExecutableTargetSteps(step.when.steps, input)
         }
-      };
+      });
+      continue;
     }
     if ("tap" in step) {
-      return {
+      normalized.push({
         ...step,
         tap: step.tap
-      };
+      });
+      continue;
     }
     if ("selectText" in step) {
       const target = step.selectText.target;
-      return {
+      normalized.push({
         ...step,
         selectText: {
           ...step.selectText,
           target,
           search: normalizeFormSearchPolicy(step.selectText.search, target, input)
         }
-      };
+      });
+      continue;
     }
     if ("inputText" in step) {
-      const target = step.inputText.target;
-      return {
+      const target = normalizeGenericTextFieldTextTarget(step.inputText.target, input);
+      normalized.push({
         ...step,
         inputText: {
           ...step.inputText,
           target,
           search: normalizeFormSearchPolicy(step.inputText.search, target, input)
         }
-      };
+      });
+      continue;
     }
     if ("clearText" in step) {
-      const target = step.clearText.target;
-      return {
+      const target = normalizeGenericTextFieldTextTarget(step.clearText.target, input);
+      normalized.push({
         ...step,
         clearText: {
           ...step.clearText,
           target,
           search: normalizeFormSearchPolicy(step.clearText.search, target, input)
         }
-      };
+      });
+      continue;
     }
     if ("scrollUntilVisible" in step) {
-      return {
+      normalized.push({
         ...step,
         scrollUntilVisible: {
           ...step.scrollUntilVisible,
           target: step.scrollUntilVisible.target
         }
-      };
+      });
+      continue;
     }
-    return step;
-  });
+    normalized.push(step);
+  }
+  return normalized;
+}
+
+function isRedundantTextFieldFocusTap(step: ScriptStep, nextStep: ScriptStep | undefined): boolean {
+  if (!("tap" in step) || !nextStep || !("inputText" in nextStep)) return false;
+  const tapTarget = step.tap.target;
+  const inputTarget = nextStep.inputText.target;
+  const tapText = tapTarget.text;
+  const inputText = inputTarget.text;
+  return Boolean(
+    isTextTarget(tapTarget)
+    && isTextTarget(inputTarget)
+    && tapText
+    && inputText
+    && looksLikeGenericTextFieldReference(tapText)
+    && compactGroundingText(tapText) === compactGroundingText(inputText)
+  );
+}
+
+function normalizeGenericTextFieldTextTarget(
+  target: ScriptTarget,
+  input: { screenContext?: ScreenUnderstandingContext }
+): ScriptTarget {
+  const targetText = target.text;
+  if (!isTextTarget(target) || !targetText || !looksLikeGenericTextFieldReference(targetText)) return target;
+  const candidate = uniqueScreenTextFieldCandidate(input.screenContext);
+  if (!candidate) return target;
+  return {
+    control: "textField",
+    area: "content",
+    scopeText: candidate.scopeText,
+    ordinal: candidate.ordinal
+  };
+}
+
+function uniqueScreenTextFieldCandidate(
+  screenContext: ScreenUnderstandingContext | undefined
+): { scopeText: string; ordinal: number } | undefined {
+  const candidates = screenContext?.controlCandidates.flatMap((candidate) => {
+    if (candidate.control !== "textField" || !candidate.scopeText || typeof candidate.ordinal !== "number" || candidate.ordinal <= 0) {
+      return [];
+    }
+    return [{ scopeText: candidate.scopeText, ordinal: candidate.ordinal }];
+  }) ?? [];
+  return candidates.length === 1 ? candidates[0] : undefined;
 }
 
 function normalizeFormSearchPolicy(
@@ -1736,9 +1992,14 @@ function hasExplicitVisualTargetCue(value: string): boolean {
 function looksLikePlaceholderExecutableTarget(value: string): boolean {
   const text = value.trim();
   if (!text || /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(text)) return false;
-  return /^(?:包含|带有).*(?:的)?(?:课程|班级|活动|入口|按钮|条目|记录|对象)$/u.test(text)
+  return looksLikeGenericTextFieldReference(text)
+    || /^(?:包含|带有).*(?:的)?(?:课程|班级|活动|入口|按钮|条目|记录|对象)$/u.test(text)
     || /^(?:相关|目标|对应|合适|任一|任意|某个|指定)(?:的)?(?:课程|班级|活动|入口|按钮|条目|记录|对象)$/u.test(text)
     || /(?:相关|目标|对应|合适|任一|任意|某个|指定)(?:的)?(?:入口|按钮|条目|对象)$/u.test(text);
+}
+
+function looksLikeGenericTextFieldReference(value: string): boolean {
+  return /(?:输入框|文本框|输入栏|输入区|输入区域|编辑框|编辑区域|输入控件|文本输入|text\s*field|input\s*(?:field|box|area)?)/iu.test(value.trim());
 }
 
 function isTextLikeTarget(target: ScriptTarget): boolean {
