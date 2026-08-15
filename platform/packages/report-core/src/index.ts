@@ -1,5 +1,6 @@
 import {
   androidAppMonitorDisplaySummaryFromRun,
+  extractAndroidCrashLog,
   shouldDisplayExpectationResult,
   type AndroidAppMonitorDisplaySummary,
   type ActionStep,
@@ -14,6 +15,7 @@ export function renderReportHtml(run: TestRun): string {
   const statusClass = run.status === "passed" ? "passed" : "failed";
   const screenshotArtifacts = uniqueArtifacts(run.artifacts.filter((artifact) => artifact.type === "screenshot" && !artifact.deletedAt));
   const screenshotArtifactById = new Map(screenshotArtifacts.map((artifact) => [artifact.id, artifact]));
+  const artifactById = new Map(run.artifacts.filter((artifact) => !artifact.deletedAt).map((artifact) => [artifact.id, artifact]));
   const screenshotPresentation = screenshotPresentationForRun(run, screenshotArtifacts, screenshotArtifactById);
   const videoArtifacts = run.artifacts.filter((artifact) => artifact.type === "video" && !artifact.deletedAt);
   const primaryVideo = videoArtifacts[0];
@@ -26,6 +28,7 @@ export function renderReportHtml(run: TestRun): string {
   const expectationResults = run.stepResults.flatMap((step) => visibleExpectationResults(step.expectationResults));
   const durationMs = runDurationMs(run);
   const sourceStepTitles = sourceStepTitlesForRun(run);
+  const displayEvents = dedupeDisplayEvents(run.events);
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -97,6 +100,11 @@ export function renderReportHtml(run: TestRun): string {
     .run-diagnostics div { border: 1px solid #dce4ef; background: #f8fafc; color: #475569; border-radius: 7px; padding: 8px 10px; font-size: 12px; }
     .run-diagnostics strong { color: #1d2733; display: block; margin-bottom: 3px; }
     .run-diagnostics span { display: block; word-break: break-all; }
+    .event-detail { margin-top: 7px; border: 1px solid #dce4ef; border-radius: 6px; background: #f8fafc; }
+    .event-detail summary { cursor: pointer; padding: 6px 8px; color: #475569; font-size: 12px; font-weight: 720; }
+    .event-detail pre { margin: 0; padding: 8px; border-top: 1px solid #dce4ef; white-space: pre-wrap; word-break: break-word; color: #1d2733; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .event-evidence { display: grid; gap: 4px; padding: 0 8px 8px; }
+    .event-evidence a { color: #2563eb; text-decoration: none; font-size: 12px; font-weight: 650; }
     @media (max-width: 760px) {
       main { padding: 14px; }
       .hero-top { display: grid; }
@@ -122,7 +130,7 @@ export function renderReportHtml(run: TestRun): string {
         <div class="metric"><span>Steps</span><strong>${run.stepResults.length}</strong></div>
         <div class="metric"><span>Failed Steps</span><strong>${failedSteps.length}</strong></div>
         <div class="metric"><span>Skipped Steps</span><strong>${skippedSteps.length}</strong></div>
-        <div class="metric"><span>Events</span><strong>${run.events.length}</strong></div>
+        <div class="metric"><span>Events</span><strong>${displayEvents.length}</strong></div>
         <div class="metric"><span>Artifacts</span><strong>${run.artifacts.length}</strong></div>
         <div class="metric"><span>Expectations</span><strong>${expectationResults.length ? `${passedExpectationCount(expectationResults)} / ${expectationResults.length}` : "无"}</strong></div>
         <div class="metric"><span>Battery</span><strong>${latestMetric?.batteryLevel ?? "-"}%</strong></div>
@@ -179,7 +187,7 @@ export function renderReportHtml(run: TestRun): string {
         ${run.metrics
           .map(
             (metric) => `<tr>
-              <td>${escapeHtml(metric.sampledAt)}</td>
+              <td>${escapeHtml(formatDateTime(metric.sampledAt))}</td>
               <td>${formatMaybe(metric.cpuPercent, "%")}</td>
               <td>${metric.memoryUsedKb ? `${Math.round(metric.memoryUsedKb / 1024)} MB` : "-"}</td>
               <td>${formatMaybe(metric.batteryLevel, "%")}</td>
@@ -196,13 +204,13 @@ export function renderReportHtml(run: TestRun): string {
         <tr><th>时间</th><th>类型</th><th>等级</th><th>摘要</th></tr>
       </thead>
       <tbody>
-        ${run.events
+        ${displayEvents
           .map(
             (event) => `<tr>
-              <td>${escapeHtml(event.occurredAt)}</td>
+              <td>${escapeHtml(formatDateTime(event.occurredAt))}</td>
               <td>${escapeHtml(event.type)}</td>
               <td>${escapeHtml(event.severity)}</td>
-              <td>${escapeHtml(event.summary)}</td>
+              <td>${escapeHtml(event.summary)}${renderEventDetail(event, artifactById)}</td>
             </tr>`
           )
           .join("") || '<tr><td colspan="4" class="muted">无异常事件</td></tr>'}
@@ -231,6 +239,89 @@ export function renderReportHtml(run: TestRun): string {
   </script>
 </body>
 </html>`;
+}
+
+function renderEventDetail(event: TestRun["events"][number], artifactById: Map<string, ArtifactRef>): string {
+  if (event.type === "android_app_monitor" || event.type === "process_death") {
+    return "";
+  }
+  const detail = eventDetailForDisplay(event);
+  const isCrashEvent = event.type === "crash" || event.type === "native_crash" || event.type === "anr";
+  const evidence = event.artifactIds
+    .map((artifactId) => artifactById.get(artifactId))
+    .filter((artifact): artifact is ArtifactRef => Boolean(artifact))
+    .filter((artifact) => isCrashEvent
+      ? artifact.type === "log" && (artifact.sizeBytes === undefined || artifact.sizeBytes <= 64 * 1024)
+      : true)
+    .map((artifact) => `<a href="${escapeAttr(artifact.url)}">${escapeHtml(artifact.name)}</a>`)
+    .join("");
+  if (!detail && !evidence) {
+    return "";
+  }
+  return `<details class="event-detail">
+    <summary>异常详情</summary>
+    ${detail ? `<pre>${escapeHtml(detail)}</pre>` : ""}
+    ${evidence ? `<div class="event-evidence">${evidence}</div>` : ""}
+  </details>`;
+}
+
+function eventDetailForDisplay(event: TestRun["events"][number]): string | undefined {
+  const detail = event.detail?.trim();
+  if (!detail) {
+    return undefined;
+  }
+  const crashType = event.type === "crash"
+    ? "java_crash"
+    : event.type === "native_crash" || event.type === "anr"
+      ? event.type
+      : undefined;
+  if (!crashType) {
+    return detail;
+  }
+  const capturedLogcat = detail.split("\n--- Captured logcat ---\n")[1];
+  return extractAndroidCrashLog(capturedLogcat ?? detail, crashType)
+    ?? (capturedLogcat ? extractAndroidCrashLog(detail, crashType) : undefined)
+    ?? detail.split("\n--- Captured logcat ---\n")[0].trim();
+}
+
+function dedupeDisplayEvents(events: TestRun["events"]): TestRun["events"] {
+  const displayEvents: TestRun["events"] = [];
+  for (const event of events) {
+    const duplicateIndex = displayEvents.findIndex((candidate) => areDuplicateDisplayEvents(candidate, event));
+    if (duplicateIndex < 0) {
+      displayEvents.push(event);
+      continue;
+    }
+    displayEvents[duplicateIndex] = mergeDisplayEvents(displayEvents[duplicateIndex], event);
+  }
+  return displayEvents;
+}
+
+function areDuplicateDisplayEvents(left: TestRun["events"][number], right: TestRun["events"][number]): boolean {
+  if (left.type !== right.type || left.severity !== right.severity || normalizedEventSummary(left.summary) !== normalizedEventSummary(right.summary)) {
+    return false;
+  }
+  const leftTime = Date.parse(left.occurredAt);
+  const rightTime = Date.parse(right.occurredAt);
+  return Number.isFinite(leftTime) && Number.isFinite(rightTime) && Math.abs(leftTime - rightTime) <= 1500;
+}
+
+function normalizedEventSummary(summary: string): string {
+  return summary.replace(/^\[Android App Monitor\]\s*/, "");
+}
+
+function mergeDisplayEvents(left: TestRun["events"][number], right: TestRun["events"][number]): TestRun["events"][number] {
+  const preferred = displayEventScore(right) > displayEventScore(left) ? right : left;
+  const other = preferred === left ? right : left;
+  return {
+    ...preferred,
+    artifactIds: [...new Set([...left.artifactIds, ...right.artifactIds])],
+    detail: preferred.detail ?? other.detail
+  };
+}
+
+function displayEventScore(event: TestRun["events"][number]): number {
+  return event.artifactIds.length * 10 + (event.detail?.length ?? 0);
 }
 
 function renderStabilityReport(run: TestRun): string {

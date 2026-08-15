@@ -1,6 +1,7 @@
 import {
   createId,
   nowIso,
+  extractAndroidCrashLog,
   type AndroidAppMonitorConfig,
   type AndroidAppMonitorIncident,
   type AndroidAppMonitorSummary,
@@ -16,7 +17,7 @@ type AndroidAppMonitorRunSupportOptions = {
   deviceSerial: string;
   config?: AndroidAppMonitorConfig;
   stopOnFailure: boolean;
-  driver: Pick<AutomationDeviceDriver, "startAppMonitor">;
+  driver: Pick<AutomationDeviceDriver, "collectLogs" | "startAppMonitor">;
   artifactService: RunArtifactService;
   addDeviceEvent: (event: DeviceEvent) => void;
   stopRun: () => void;
@@ -103,7 +104,7 @@ export class AndroidAppMonitorRunSupport {
     }
   }
 
-  private recordIncident(incident: AndroidAppMonitorIncident): void {
+  private async recordIncident(incident: AndroidAppMonitorIncident): Promise<void> {
     const normalizedIncident = this.normalizeIncident(incident);
     if (!normalizedIncident) {
       return;
@@ -116,6 +117,9 @@ export class AndroidAppMonitorRunSupport {
       ? normalizedIncident.severity === "error" ? "error" : "warning"
       : normalizedIncident.severity;
     this.options.addDeviceEvent({
+    const evidence = shouldCaptureCrashEvidence(normalizedIncident)
+      ? await this.captureRuntimeFailureEvidence(normalizedIncident)
+      : { artifactIds: [], detail: normalizedIncident.detail };
       id: createId("event"),
       runId: this.options.runId,
       stepResultId: this.options.getActiveStepResultId?.(),
@@ -124,8 +128,10 @@ export class AndroidAppMonitorRunSupport {
       severity,
       occurredAt: normalizedIncident.occurredAt,
       summary: `${this.options.summaryPrefix ?? "[Android App Monitor]"} ${normalizedIncident.summary}`,
-      detail: formatIncidentDetail(normalizedIncident),
-      artifactIds: [...normalizedIncident.artifactIds]
+      detail: isCrashLikeIncident(normalizedIncident) && evidence.detail
+        ? evidence.detail
+        : formatIncidentDetail({ ...normalizedIncident, detail: evidence.detail }),
+      artifactIds: [...normalizedIncident.artifactIds, ...evidence.artifactIds]
     });
     if ((runtimeFailure || severity === "error") && this.options.stopOnFailure) {
       this.options.stopRun();
@@ -136,6 +142,48 @@ export class AndroidAppMonitorRunSupport {
     if (!this.options.normalizeIncident) {
       return summary;
     }
+  private async captureRuntimeFailureEvidence(incident: AndroidAppMonitorIncident): Promise<{ artifactIds: string[]; detail?: string }> {
+    const artifactIds: string[] = [];
+    let detail = incident.detail;
+    const stepResultId = this.options.getActiveStepResultId?.();
+
+    try {
+      await sleep(300);
+      const logs = await this.options.driver.collectLogs(this.options.deviceSerial, 800);
+      const normalizedLogs = logs.trim();
+      if (normalizedLogs) {
+        const crashLog = extractCrashLog(normalizedLogs, incident) ?? incident.detail?.trim();
+        if (!crashLog) {
+          return { artifactIds, detail };
+        }
+        const artifact = await this.options.artifactService.writeLog(
+          this.options.runId,
+          `android-app-monitor-${mapIncidentType(incident.type)}-${Date.now()}.txt`,
+          crashLog,
+          stepResultId
+        );
+        artifactIds.push(artifact.id);
+        detail = crashLog;
+      }
+    } catch {
+      // The original incident remains useful when a best-effort logcat snapshot is unavailable.
+    }
+
+    try {
+      const screenshot = await this.options.artifactService.captureRunEventScreenshot(
+        this.options.runId,
+        stepResultId,
+        mapIncidentType(incident.type),
+        this.options.deviceSerial
+      );
+      artifactIds.push(screenshot.id);
+    } catch {
+      // A crash can make screenshots unavailable; do not discard the incident.
+    }
+
+    return { artifactIds, detail };
+  }
+
     const incidents = summary.incidents
       .map((incident) => this.normalizeIncident(incident))
       .filter((incident): incident is AndroidAppMonitorIncident => Boolean(incident));
@@ -235,7 +283,18 @@ function formatIncidentDetail(incident: AndroidAppMonitorIncident): string | und
   const metadata = {
     processName: incident.processName,
     pid: incident.pid,
+function shouldCaptureCrashEvidence(incident: AndroidAppMonitorIncident): boolean {
+  return isCrashLikeIncident(incident);
+}
+
+function isCrashLikeIncident(incident: AndroidAppMonitorIncident): boolean {
+  return incident.type === "java_crash" || incident.type === "native_crash" || incident.type === "anr";
+}
+
     metadata: incident.metadata
+  if (isCrashLikeIncident(incident) && incident.detail) {
+    return incident.detail;
+  }
   };
   const metadataText = JSON.stringify(metadata);
   return incident.detail ? `${incident.detail}\n\n${metadataText}` : metadataText;
@@ -243,4 +302,16 @@ function formatIncidentDetail(incident: AndroidAppMonitorIncident): string | und
 
 function errorToString(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+function extractCrashLog(logcat: string, incident: AndroidAppMonitorIncident): string | undefined {
+  if (incident.type !== "java_crash" && incident.type !== "native_crash" && incident.type !== "anr") {
+    return undefined;
+  }
+  return extractAndroidCrashLog(logcat, incident.type, incident.processName);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

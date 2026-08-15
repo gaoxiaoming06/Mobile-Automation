@@ -543,7 +543,22 @@ describe("AutomationRunner regression flow", () => {
       artifactIds: [],
       metadata: { signal: "SIGABRT" }
     };
-    const driver = new AppMonitorMockDriver({ incidents: [incident] });
+    const driver = new AppMonitorMockDriver({
+      incidents: [incident],
+      collectedLogs: [
+        "--------- beginning of main",
+        "08-15 10:57:38.400 I/Unrelated: noise before crash",
+        "--------- beginning of crash",
+        "08-15 10:57:38.425 E/AndroidRuntime(123): FATAL EXCEPTION: main",
+        "08-15 10:57:38.425 E/AndroidRuntime(123): Process: com.demo, PID: 123",
+        "08-15 10:57:38.425 E/AndroidRuntime(123): java.lang.IllegalStateException: broken state",
+        "08-15 10:57:38.425 E/AndroidRuntime(123): \tat com.demo.MainActivity.onCreate(MainActivity.kt:42)",
+        "08-15 10:57:38.425 E/AndroidRuntime(123): Caused by: java.lang.IllegalArgumentException: invalid state",
+        "08-15 10:57:38.425 E/AndroidRuntime(123): \tat com.demo.StateValidator.validate(StateValidator.kt:19)",
+        "08-15 10:57:38.500 E/AndroidRuntime(123): unrelated runtime diagnostic",
+        "08-15 10:57:38.500 I/ActivityManager: Process com.demo (pid 123) has died"
+      ].join("\n")
+    });
     driver.device.capabilities.recordVideo = false;
     const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
 
@@ -569,7 +584,74 @@ describe("AutomationRunner regression flow", () => {
           type: "crash",
           severity: "error",
           summary: expect.stringContaining("Java crash detected"),
-          detail: expect.stringContaining("\"processName\":\"com.demo\"")
+          detail: expect.stringContaining("java.lang.IllegalStateException: broken state")
+        })
+      ])
+    );
+    expect(run.events.filter((event) => event.type === "crash")).toHaveLength(1);
+    const crashEvent = run.events.find((event) => event.type === "crash");
+    expect(crashEvent?.detail).not.toContain("Unrelated: noise before crash");
+    expect(crashEvent?.detail).not.toContain("Captured logcat");
+    const crashLog = storage.writes.find((write) => write.relativePath.includes("android-app-monitor-crash-"));
+    expect(crashLog?.bytes).toContain("java.lang.IllegalStateException: broken state");
+    expect(crashLog?.bytes).not.toContain("Unrelated: noise before crash");
+    expect(crashLog?.bytes).toBe([
+      "FATAL EXCEPTION: main",
+      "Process: com.demo, PID: 123",
+      "java.lang.IllegalStateException: broken state",
+      "\tat com.demo.MainActivity.onCreate(MainActivity.kt:42)",
+      "Caused by: java.lang.IllegalArgumentException: invalid state",
+      "\tat com.demo.StateValidator.validate(StateValidator.kt:19)"
+    ].join("\n"));
+    expect(crashLog?.bytes).not.toContain("unrelated runtime diagnostic");
+    expect(crashLog?.bytes).not.toMatch(/08-15|AndroidRuntime/);
+    expect(run.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "log",
+          name: expect.stringMatching(/^android-app-monitor-crash-/)
+        }),
+        expect.objectContaining({
+          type: "screenshot",
+  it("keeps process death monitor events concise instead of attaching crash log evidence", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new AppMonitorMockDriver({
+      incidents: [{
+        id: "incident-process-death",
+        type: "process_death",
+        severity: "error",
+        occurredAt: nowIso(),
+        processName: "com.demo",
+        pid: 123,
+        summary: "Process death detected: com.demo",
+        detail: "ActivityManager: Process com.demo (pid 123) has died",
+        artifactIds: []
+      }],
+      collectedLogs: "--------- beginning of crash\nFATAL EXCEPTION: main\njava.lang.IllegalStateException: stale"
+    });
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Monitor Process Death",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      stopOnFailure: true,
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "com.demo"
+      }
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.logCollectionCount).toBe(0);
+    expect(run.events.find((event) => event.type === "process_death")?.detail).toContain("Process com.demo");
+    expect(run.artifacts.some((artifact) => artifact.name.includes("android-app-monitor-process_death"))).toBe(false);
+  });
+          name: expect.stringMatching(/^crash-/)
         })
       ])
     );
@@ -2857,6 +2939,8 @@ class AppMonitorRestartProcessDeathMockDriver extends MockDriver {
     if (action.type === "close_app") {
       const incident: AndroidAppMonitorIncident = {
         id: "incident-process-death",
+  logCollectionCount = 0;
+
         type: "process_death",
         severity: "warning",
         occurredAt: nowIso(),
@@ -2864,6 +2948,7 @@ class AppMonitorRestartProcessDeathMockDriver extends MockDriver {
         pid: 1234,
         summary: `Process death detected: ${action.packageName}`,
         detail: `ActivityManager: Process ${action.packageName} (pid 1234) has died`,
+      collectedLogs?: string;
         artifactIds: []
       };
       this.monitorIncidents.push(incident);
@@ -2871,6 +2956,14 @@ class AppMonitorRestartProcessDeathMockDriver extends MockDriver {
     }
     return result;
   }
+  override async collectLogs(serial: string, lines?: number): Promise<string> {
+    this.logCollectionCount += 1;
+    if (this.monitorData.collectedLogs !== undefined) {
+      return this.monitorData.collectedLogs;
+    }
+    return super.collectLogs(serial, lines);
+  }
+
 
   private getMonitorSummary(): AndroidAppMonitorSummary {
     const packageName = this.monitorConfig?.packageName ?? "demo.app";

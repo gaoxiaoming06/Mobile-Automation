@@ -1,6 +1,7 @@
 export type Platform = "android" | "ios" | "harmony";
 
 export * from "./public-execution-failure.js";
+export * from "./android-crash-log.js";
 
 export const DEVICE_AGENT_VERSION = "0.1.1";
 

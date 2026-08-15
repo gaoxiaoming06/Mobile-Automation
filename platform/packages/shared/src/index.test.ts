@@ -5,6 +5,7 @@ import {
   defaultAndroidCapabilities,
   defaultHarmonyCapabilities,
   defaultIosCapabilities,
+  extractAndroidCrashLog,
   normalizeAndroidAppMonitorConfig,
   stepToAction,
   type ActionStep,
@@ -59,6 +60,33 @@ describe("platform capabilities", () => {
     });
   });
 });
+describe("Android crash log extraction", () => {
+  it("keeps the ANR reason and target process stack without adjacent logcat noise", () => {
+    const anrLog = [
+      "08-15 13:00:00.000 E/ActivityManager(123): ANR in com.demo",
+      "08-15 13:00:00.000 E/ActivityManager(123): PID: 123",
+      "08-15 13:00:00.000 E/ActivityManager(123): Reason: Input dispatching timed out (Waiting because the touched window has not finished processing input events)",
+      "08-15 13:00:00.000 E/ActivityManager(123): Load: 4.2 / 3.9 / 3.7",
+      "08-15 13:00:00.000 E/ActivityManager(123): ----- pid 123 at 2026-08-15 13:00:00 -----",
+      "08-15 13:00:00.000 E/ActivityManager(123): Cmd line: com.demo",
+      "08-15 13:00:00.000 E/ActivityManager(123): \"main\" prio=5 tid=1 Native",
+      "08-15 13:00:00.000 E/ActivityManager(123):   at com.demo.MainActivity.onResume(MainActivity.kt:42)",
+      "08-15 13:00:00.000 I/ActivityManager(123): unrelated ActivityManager diagnostic"
+    ].join("\n");
+
+    expect(extractAndroidCrashLog(anrLog, "anr", "com.demo")).toBe([
+      "ANR in com.demo",
+      "PID: 123",
+      "Reason: Input dispatching timed out (Waiting because the touched window has not finished processing input events)",
+      "Load: 4.2 / 3.9 / 3.7",
+      "----- pid 123 at 2026-08-15 13:00:00 -----",
+      "Cmd line: com.demo",
+      "\"main\" prio=5 tid=1 Native",
+      "  at com.demo.MainActivity.onResume(MainActivity.kt:42)"
+    ].join("\n"));
+  });
+});
+
 
 describe("trial learning domain models", () => {
   it("round-trips verification and learning records without hidden runtime state", () => {

@@ -166,6 +166,121 @@ describe("renderReportHtml", () => {
     expect(html).not.toContain("/artifacts/runs/run-monitor/metrics/android-app-monitor-cpu.csv");
   });
 
+  it("renders exception details and linked crash evidence", () => {
+    const run: TestRun = {
+      id: "run-crash",
+      caseName: "Crash",
+      deviceSerial: "device-1",
+      status: "failed",
+      config: {
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 0,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false
+      },
+      steps: [],
+      stepResults: [],
+      metrics: [],
+      events: [
+        {
+          id: "event-monitor-crash",
+          runId: "run-crash",
+          deviceSerial: "device-1",
+          type: "crash",
+          severity: "error",
+          occurredAt: "2026-06-04T00:00:02.000Z",
+          summary: "[Android App Monitor] Java crash detected: com.demo",
+          detail: "FATAL EXCEPTION: main\nProcess: com.demo, PID: 123",
+          artifactIds: ["artifact-crash-screenshot"]
+        },
+        {
+          id: "event-crash",
+          runId: "run-crash",
+          deviceSerial: "device-1",
+          type: "crash",
+          severity: "error",
+          occurredAt: "2026-06-04T00:00:02.000Z",
+          summary: "Java crash detected: com.demo",
+          detail: [
+            "FATAL EXCEPTION: main",
+            "Process: com.demo, PID: 123",
+            "",
+            "--- Captured logcat ---",
+            "08-15 10:57:38.400 I/Unrelated: noise before crash",
+            "08-15 10:57:38.425 E/AndroidRuntime(123): FATAL EXCEPTION: main",
+          "08-15 10:57:38.425 E/AndroidRuntime(123): Process: com.demo, PID: 123",
+          "08-15 10:57:38.425 E/AndroidRuntime(123): java.lang.IllegalStateException: broken state",
+          "08-15 10:57:38.425 E/AndroidRuntime(123): \tat com.demo.MainActivity.onCreate(MainActivity.kt:42)",
+          "08-15 10:57:38.425 E/AndroidRuntime(123): unrelated runtime diagnostic"
+          ].join("\n"),
+          artifactIds: ["artifact-crash-log", "artifact-crash-full"]
+        },
+        {
+          id: "event-process-death",
+          runId: "run-crash",
+          deviceSerial: "device-1",
+          type: "process_death",
+          severity: "error",
+          occurredAt: "2026-06-04T00:00:03.000Z",
+          summary: "Process death detected: com.demo",
+          detail: "process-death-raw-detail\n\n--- Captured logcat ---\nmore unrelated logs",
+          artifactIds: []
+        }
+      ],
+      artifacts: [{
+        id: "artifact-crash-log",
+        runId: "run-crash",
+        type: "log",
+        name: "android-app-monitor-crash.log",
+        path: "runs/run-crash/logs/android-app-monitor-crash.log",
+        url: "/artifacts/runs/run-crash/logs/android-app-monitor-crash.log",
+        mimeType: "text/plain",
+        sizeBytes: 1024,
+        createdAt: "2026-06-04T00:00:02.000Z"
+      }, {
+        id: "artifact-crash-full",
+        runId: "run-crash",
+        type: "log",
+        name: "android-app-monitor-crash-full.logcat.txt",
+        path: "runs/run-crash/logs/android-app-monitor-crash-full.logcat.txt",
+        url: "/artifacts/runs/run-crash/logs/android-app-monitor-crash-full.logcat.txt",
+        mimeType: "text/plain",
+        sizeBytes: 222428,
+        createdAt: "2026-06-04T00:00:02.000Z"
+      }, {
+        id: "artifact-crash-screenshot",
+        runId: "run-crash",
+        type: "screenshot",
+        name: "crash.png",
+        path: "runs/run-crash/screenshots/crash.png",
+        url: "/artifacts/runs/run-crash/screenshots/crash.png",
+        mimeType: "image/png",
+        createdAt: "2026-06-04T00:00:02.000Z"
+      }],
+      startedAt: "2026-06-04T00:00:00.000Z",
+      endedAt: "2026-06-04T00:00:03.000Z"
+    };
+
+    const html = renderReportHtml(run);
+
+    expect(html).toContain("<summary>异常详情");
+    expect(html).toContain("java.lang.IllegalStateException: broken state");
+    expect(html).toContain("at com.demo.MainActivity.onCreate(MainActivity.kt:42)");
+    expect(html).not.toContain("Unrelated: noise before crash");
+    expect(html).not.toContain("unrelated runtime diagnostic");
+    expect(html).not.toMatch(/08-15 10:57:38\.425|AndroidRuntime/);
+    expect(html).not.toContain("Captured logcat");
+    expect(html).not.toContain("process-death-raw-detail");
+    expect(html).toContain("/artifacts/runs/run-crash/logs/android-app-monitor-crash.log");
+    expect(html).not.toContain("/artifacts/runs/run-crash/logs/android-app-monitor-crash-full.logcat.txt");
+    const eventDetail = html.slice(html.indexOf('<details class="event-detail">'), html.indexOf("</details>") + "</details>".length);
+    expect(eventDetail).not.toContain("/artifacts/runs/run-crash/screenshots/crash.png");
+    expect(html.match(/<td>crash<\/td>/g)).toHaveLength(1);
+  });
+
 
   it("renders stability exploration config and runtime summary", () => {
     const run: TestRun = {
@@ -607,7 +722,18 @@ describe("renderReportHtml", () => {
           memoryUsedKb: 1024 * 140
         }
       ],
-      events: [],
+      events: [
+        {
+          id: "event-metric-time",
+          runId: "run-2",
+          deviceSerial: "device-1",
+          type: "performance_threshold",
+          severity: "warning",
+          occurredAt: "2026-06-04T00:00:02.000Z",
+          summary: "Metric threshold reached",
+          artifactIds: []
+        }
+      ],
       artifacts: [],
       startedAt: "2026-06-04T00:00:00.000Z",
       endedAt: "2026-06-04T00:00:03.000Z"
@@ -619,6 +745,10 @@ describe("renderReportHtml", () => {
     expect(html).toContain("CPU 平均 / 峰值");
     expect(html).toContain("20% / 30%");
     expect(html).toContain('aria-label="性能趋势图"');
+    expect(html).toContain("2026-06-04 08:00:01");
+    expect(html).toContain("2026-06-04 08:00:02");
+    expect(html).not.toContain("2026-06-04T00:00:01.000Z");
+    expect(html).not.toContain("2026-06-04T00:00:02.000Z");
   });
 
   it("renders step expectation summaries, details, and evidence links", () => {
