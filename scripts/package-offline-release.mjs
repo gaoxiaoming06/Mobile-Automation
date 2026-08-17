@@ -66,11 +66,28 @@ async function packageOfflineRelease() {
 }
 
 function runPackageManager(args, options) {
-  const packageManagerEntry = process.env.npm_execpath;
-  if (packageManagerEntry) {
-    return run(process.execPath, [packageManagerEntry, ...args], options);
+  const command = packageManagerCommandFor({
+    npmExecPath: process.env.npm_execpath,
+    nodeExecPath: process.execPath,
+    platform: process.platform,
+    packageManager: "pnpm"
+  }, args);
+
+  return run(command.command, command.args, options);
+}
+
+export function packageManagerCommandFor(input, args = ["build"]) {
+  const packageManagerCommand = input.platform === "win32" ? `${input.packageManager}.cmd` : input.packageManager;
+  if (!input.npmExecPath || !isJavaScriptEntry(input.npmExecPath)) {
+    return { command: packageManagerCommand, args };
   }
-  return run(process.platform === "win32" ? "pnpm.cmd" : "pnpm", args, options);
+
+  return { command: input.nodeExecPath, args: [input.npmExecPath, ...args] };
+}
+
+function isJavaScriptEntry(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  return extension === ".js" || extension === ".cjs" || extension === ".mjs";
 }
 
 async function copyIntoRelease(relativePath) {

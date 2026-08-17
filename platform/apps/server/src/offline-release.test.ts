@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 type OfflineReleaseModule = {
+  packageManagerCommandFor: (input: {
+    npmExecPath?: string;
+    nodeExecPath: string;
+    platform: NodeJS.Platform;
+    packageManager: string;
+  }) => { command: string; args: string[] };
   releaseManifestFor: (input: {
     packageName: string;
     packageVersion: string;
@@ -32,6 +38,22 @@ describe("offline release package", () => {
         "scripts/ensure-lan-https-cert.mjs",
         "requirements-ocr.txt"
       ]
+    });
+  });
+
+  it("runs pnpm directly when npm_execpath points to pnpm's native binary", async () => {
+    const { packageManagerCommandFor } = await import(
+      new URL("../../../../scripts/package-offline-release.mjs", import.meta.url).href
+    ) as OfflineReleaseModule;
+
+    expect(packageManagerCommandFor({
+      npmExecPath: "/root/.local/share/pnpm/store/v11/links/@pnpm/exe/9.15.4/pnpm",
+      nodeExecPath: "/root/.nvm/versions/node/v24.19.0/bin/node",
+      platform: "linux",
+      packageManager: "pnpm"
+    })).toEqual({
+      command: "pnpm",
+      args: ["build"]
     });
   });
 });
