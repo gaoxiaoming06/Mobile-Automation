@@ -3188,6 +3188,11 @@ export class SemanticStepResolver {
     const maxSwipes = Math.max(1, Math.floor(positiveNumberParam(input.step.params.maxSwipes, 6)));
     const semanticArea = readSemanticArea(input.step.params.semanticArea);
     const resetToTop = searchMode !== "visibleOnly" && input.step.params.resetToTop !== false && searchDirection !== "up";
+    const currentViewportSettleTimeoutMs = Math.max(
+      0,
+      Math.min(timeoutMs, nonNegativeNumberParam(input.step.params.currentViewportSettleTimeoutMs, searchMode === "visibleOnly" ? timeoutMs : 2000))
+    );
+    const currentViewportSettleMaxAttempts = Math.max(1, Math.floor(positiveNumberParam(input.step.params.currentViewportSettleMaxAttempts, 4)));
     let attempt = 0;
     let latestLayout: OcrLayoutResult | undefined;
     let latestCandidate: TextLocatorCandidate | undefined;
@@ -3202,6 +3207,61 @@ export class SemanticStepResolver {
     const runtimeInterceptorRecords: RuntimeInterceptorRunOutcome["records"] = [];
     const runtimeInterceptorWarnings: string[] = [];
     let latestBlockedByRuntimeInterceptor = false;
+
+    type TextViewportTraceContext = {
+      phase: "visible" | "current" | "settle" | "current_ocr" | "pre_scroll" | "reset" | "scan" | "ocr_fallback";
+      direction?: "up" | "down";
+      scrollIndex?: number;
+    };
+    type TextViewportInspection = {
+      layout?: OcrLayoutResult;
+      hierarchyXml?: string;
+      uiCandidate?: UiHierarchyTextResolution;
+      candidate?: TextLocatorCandidate;
+      ambiguous: boolean;
+      canScrollPastAmbiguous: boolean;
+      intercepted: boolean;
+      signature: string;
+    };
+    const searchAttemptTrace: Array<Record<string, unknown>> = [];
+
+    const searchMetadata = (): Record<string, unknown> => ({
+      mode: searchMode,
+      direction: searchDirection,
+      resetToTop,
+      maxSwipes,
+      resetSwipes,
+      scanSwipes,
+      reachedBoundary,
+      ...(searchAttemptTrace.length ? { attemptTrace: searchAttemptTrace } : {})
+    });
+
+    const recordSearchAttempt = (context: TextViewportTraceContext, current: TextViewportInspection): void => {
+      if (searchAttemptTrace.length >= 40) {
+        return;
+      }
+      const source = current.intercepted
+        ? "runtime_interceptor"
+        : current.layout && current.hierarchyXml
+          ? "ui_hierarchy_ocr"
+          : current.hierarchyXml
+            ? "ui_hierarchy"
+            : current.layout
+              ? "ocr"
+              : "none";
+      searchAttemptTrace.push({
+        attempt,
+        phase: context.phase,
+        ...(context.direction ? { direction: context.direction } : {}),
+        ...(context.scrollIndex !== undefined ? { scrollIndex: context.scrollIndex } : {}),
+        source,
+        signature: compactSearchSignature(current.signature),
+        candidateCount: latestCandidateCount,
+        ambiguous: current.ambiguous,
+        found: Boolean(current.uiCandidate || current.candidate),
+        intercepted: current.intercepted
+      });
+    };
 
     const attachRuntimeInterceptors = (outcome: SemanticResolutionOutcome): SemanticResolutionOutcome => {
       if (!runtimeInterceptorRecords.length && !runtimeInterceptorWarnings.length) {
@@ -3264,17 +3324,11 @@ export class SemanticStepResolver {
       };
     }
 
-    const inspectViewport = async (options: { allowOcrFallback?: boolean } = {}): Promise<{
-      layout?: OcrLayoutResult;
-      hierarchyXml?: string;
-      uiCandidate?: UiHierarchyTextResolution;
-      candidate?: TextLocatorCandidate;
-      ambiguous: boolean;
-      canScrollPastAmbiguous: boolean;
-      intercepted: boolean;
-      signature: string;
-    }> => {
+    const inspectViewport = async (options: { allowOcrFallback?: boolean } = {}): Promise<TextViewportInspection> => {
       attempt += 1;
+      latestCandidate = undefined;
+      latestAmbiguous = false;
+      latestCandidateCount = 0;
       if (await handleLocatorRuntimeInterceptors()) {
         return {
           ambiguous: false,
@@ -3470,7 +3524,10 @@ export class SemanticStepResolver {
           semanticArea,
           deviceSize: input.deviceSize
         });
-        if (latestCandidate) latestMatchStrategy = "semantic_fallback";
+        if (latestCandidate) {
+          latestCandidateCount = 1;
+          latestMatchStrategy = "semantic_fallback";
+        }
       }
       return {
         layout: latestLayout,
@@ -3483,9 +3540,13 @@ export class SemanticStepResolver {
       };
     };
 
-    const inspectActionableViewport = async (options: { allowOcrFallback?: boolean } = {}): Promise<Awaited<ReturnType<typeof inspectViewport>>> => {
+    const inspectActionableViewport = async (
+      options: { allowOcrFallback?: boolean } = {},
+      context: TextViewportTraceContext = { phase: "current" }
+    ): Promise<TextViewportInspection> => {
       const started = Date.now();
       let current = await inspectViewport(options);
+      recordSearchAttempt(context, current);
       while (current.intercepted && Date.now() - started <= timeoutMs) {
         const elapsed = Date.now() - started;
         if (elapsed >= timeoutMs) {
@@ -3493,6 +3554,7 @@ export class SemanticStepResolver {
         }
         await this.wait(input, Math.min(intervalMs, timeoutMs - elapsed));
         current = await inspectViewport(options);
+        recordSearchAttempt(context, current);
       }
       return current;
     };
@@ -3525,15 +3587,7 @@ export class SemanticStepResolver {
             visibilityFilteredCandidateCount: candidate.visibilityFilteredCandidateCount,
             visibilityOriginalCandidateCount: candidate.visibilityOriginalCandidateCount
           } : {}),
-          search: {
-            mode: searchMode,
-            direction: searchDirection,
-            resetToTop,
-            maxSwipes,
-            resetSwipes,
-            scanSwipes,
-            reachedBoundary
-          },
+          search: searchMetadata(),
           evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
         }
       });
@@ -3567,21 +3621,13 @@ export class SemanticStepResolver {
             tapPointSource: "ui_clickable_ancestor",
             uiCandidate: hierarchyTap.candidate
           } : { tapPointSource: "ocr_text_center" }),
-          search: {
-            mode: searchMode,
-            direction: searchDirection,
-            resetToTop,
-            maxSwipes,
-            resetSwipes,
-            scanSwipes,
-            reachedBoundary
-          },
+          search: searchMetadata(),
           evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
         }
       });
     };
 
-    const resolvedViewportOutcome = async (current: Awaited<ReturnType<typeof inspectActionableViewport>>): Promise<SemanticResolutionOutcome | undefined> => {
+    const resolvedViewportOutcome = async (current: TextViewportInspection): Promise<SemanticResolutionOutcome | undefined> => {
       if (current.uiCandidate) {
         return tapUiCandidate(current.uiCandidate);
       }
@@ -3594,10 +3640,49 @@ export class SemanticStepResolver {
       return undefined;
     };
 
+    const isResolvedOrBlockingAmbiguous = (current: TextViewportInspection): boolean => {
+      return Boolean(current.uiCandidate || current.candidate || current.ambiguous && !current.canScrollPastAmbiguous);
+    };
+
+    const inspectCurrentViewportUntilSettled = async (options: { allowOcrFallback?: boolean }): Promise<TextViewportInspection> => {
+      // After app launch a first miss can be just a still-rendering viewport, not proof that scrolling is needed.
+      const started = Date.now();
+      let current = await inspectActionableViewport(options, { phase: "current" });
+      if (isResolvedOrBlockingAmbiguous(current)) {
+        return current;
+      }
+      let previousSignature = current.signature;
+      let stableSamples = stableSearchSignature(current.signature) ? 1 : 0;
+      let inspected = 1;
+      while (inspected < currentViewportSettleMaxAttempts && Date.now() - started < currentViewportSettleTimeoutMs) {
+        const elapsed = Date.now() - started;
+        const remaining = currentViewportSettleTimeoutMs - elapsed;
+        if (remaining <= 0) {
+          break;
+        }
+        await this.wait(input, Math.min(intervalMs, remaining));
+        current = await inspectActionableViewport(options, { phase: "settle" });
+        inspected += 1;
+        if (isResolvedOrBlockingAmbiguous(current)) {
+          return current;
+        }
+        if (stableSearchSignature(current.signature) && current.signature === previousSignature) {
+          stableSamples += 1;
+        } else {
+          stableSamples = stableSearchSignature(current.signature) ? 1 : 0;
+        }
+        previousSignature = current.signature;
+        if (stableSamples >= 2) {
+          break;
+        }
+      }
+      return current;
+    };
+
     if (searchMode === "visibleOnly") {
       const started = Date.now();
       while (Date.now() - started <= timeoutMs) {
-        const current = await inspectViewport();
+        const current = await inspectActionableViewport({}, { phase: "visible" });
         if (current.intercepted) {
           const elapsed = Date.now() - started;
           if (elapsed >= timeoutMs) {
@@ -3626,22 +3711,38 @@ export class SemanticStepResolver {
       const allowOcrFallback = searchMode !== "scroll";
       const useHierarchyFastSearch = Boolean(this.deps.dumpUiHierarchy && !semanticMatch && searchMode === "auto");
       const fastSearchOptions = { allowOcrFallback: useHierarchyFastSearch ? false : allowOcrFallback };
-      let current = await inspectActionableViewport(fastSearchOptions);
+      let current = await inspectCurrentViewportUntilSettled(fastSearchOptions);
       const initialOutcome = await resolvedViewportOutcome(current);
       if (initialOutcome) return initialOutcome;
+
+      if (useHierarchyFastSearch && allowOcrFallback && !stableSearchSignature(current.signature)) {
+        const fallback = await inspectActionableViewport({ allowOcrFallback: true }, { phase: "current_ocr" });
+        const fallbackOutcome = await resolvedViewportOutcome(fallback);
+        if (fallbackOutcome) return fallbackOutcome;
+        current = fallback;
+      }
+
       let previousSignature = current.signature;
 
       const scanViewports = async (
         direction: "up" | "down",
         options: { allowOcrFallback?: boolean },
         counter: "reset" | "scan"
-      ): Promise<{ current: Awaited<ReturnType<typeof inspectActionableViewport>>; outcome?: SemanticResolutionOutcome }> => {
+      ): Promise<{ current: TextViewportInspection; outcome?: SemanticResolutionOutcome }> => {
         for (let swipe = 0; swipe < maxSwipes; swipe += 1) {
+          // Re-check before swiping so a target that appeared during the wait is not scrolled away.
+          const preScroll = await inspectActionableViewport(options, { phase: "pre_scroll", direction, scrollIndex: swipe + 1 });
+          const preScrollOutcome = await resolvedViewportOutcome(preScroll);
+          if (preScrollOutcome) return { current: preScroll, outcome: preScrollOutcome };
+          if (preScroll.signature) {
+            previousSignature = preScroll.signature;
+          }
+
           await this.performAction(input, scrollSwipeAction(direction, input.deviceSize));
           if (counter === "reset") resetSwipes += 1;
           else scanSwipes += 1;
           await this.wait(input, intervalMs);
-          current = await inspectActionableViewport(options);
+          current = await inspectActionableViewport(options, { phase: counter, direction, scrollIndex: swipe + 1 });
           const outcome = await resolvedViewportOutcome(current);
           if (outcome) return { current, outcome };
           if (current.signature === previousSignature) {
@@ -3654,13 +3755,6 @@ export class SemanticStepResolver {
       };
 
       const direction = searchDirection === "up" ? "up" : "down";
-      if (useHierarchyFastSearch) {
-        reachedBoundary = false;
-        const scanned = await scanViewports(direction, fastSearchOptions, "scan");
-        if (scanned.outcome) return scanned.outcome;
-        current = scanned.current;
-      }
-
       if (resetToTop) {
         const reset = await scanViewports("up", fastSearchOptions, "reset");
         if (reset.outcome) return reset.outcome;
@@ -3668,23 +3762,28 @@ export class SemanticStepResolver {
       }
 
       reachedBoundary = false;
-      if (!useHierarchyFastSearch) {
-        const scanned = await scanViewports(direction, fastSearchOptions, "scan");
-        if (scanned.outcome) return scanned.outcome;
-        current = scanned.current;
-      } else if (allowOcrFallback) {
+      const scanned = await scanViewports(direction, fastSearchOptions, "scan");
+      if (scanned.outcome) return scanned.outcome;
+      current = scanned.current;
+
+      if (useHierarchyFastSearch && allowOcrFallback) {
         const fallbackOptions = { allowOcrFallback: true };
-        const fallback = await inspectActionableViewport(fallbackOptions);
+        const fallback = await inspectActionableViewport(fallbackOptions, { phase: "ocr_fallback" });
         const fallbackOutcome = await resolvedViewportOutcome(fallback);
         if (fallbackOutcome) return fallbackOutcome;
         current = fallback;
         previousSignature = current.signature;
-        reachedBoundary = false;
         if (resetToTop) {
-          const scanned = await scanViewports(direction, fallbackOptions, "scan");
-          if (scanned.outcome) return scanned.outcome;
-          current = scanned.current;
+          reachedBoundary = false;
+          const reset = await scanViewports("up", fallbackOptions, "reset");
+          if (reset.outcome) return reset.outcome;
+          current = reset.current;
         }
+        reachedBoundary = false;
+        previousSignature = current.signature;
+        const scanned = await scanViewports(direction, fallbackOptions, "scan");
+        if (scanned.outcome) return scanned.outcome;
+        current = scanned.current;
       }
     }
 
@@ -3709,15 +3808,7 @@ export class SemanticStepResolver {
           candidateCount: latestCandidateCount || latestLayout?.boxes.length || 0,
           nearestCandidate: latestCandidate,
           ...(fallbackSemanticQuery ? { fallbackSemanticQuery } : {}),
-          search: {
-            mode: searchMode,
-            direction: searchDirection,
-            resetToTop,
-            maxSwipes,
-            resetSwipes,
-            scanSwipes,
-            reachedBoundary
-          },
+          search: searchMetadata(),
           evidenceArtifactIds: artifacts.map((artifact) => artifact.id)
         }
       });
@@ -6841,6 +6932,14 @@ function textSearchLayoutSignature(
     .filter(Boolean)
     .sort()
     .join("|");
+}
+
+function stableSearchSignature(signature: string): boolean {
+  return signature.trim().length > 0 && !signature.startsWith("runtime-interceptor:");
+}
+
+function compactSearchSignature(signature: string): string {
+  return signature.length <= 240 ? signature : `${signature.slice(0, 240)}...`;
 }
 
 function normalizeToggleState(value: unknown): "on" | "off" | undefined {

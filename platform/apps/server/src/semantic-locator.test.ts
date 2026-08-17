@@ -571,7 +571,6 @@ describe("SemanticStepResolver", () => {
 
   it("scrolls with UI hierarchy snapshots before using OCR", async () => {
     const actions: DeviceActionRequest[] = [];
-    const hierarchies = [emptyHierarchy(), addFriendMenuHierarchy()];
     const locateText = vi.fn(async () => {
       throw new Error("OCR should not be used when scrolling hierarchy finds the text");
     });
@@ -583,7 +582,7 @@ describe("SemanticStepResolver", () => {
         recognize: async () => layout("添加好友"),
         locateText
       },
-      dumpUiHierarchy: async () => hierarchies.shift() ?? addFriendMenuHierarchy(),
+      dumpUiHierarchy: async () => hasSwipeAction(actions) ? addFriendMenuHierarchy() : textOnlyHierarchy("页面中部"),
       performAction: async (_serial, action) => {
         actions.push(action);
       },
@@ -622,14 +621,14 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
-  it("auto search scans the requested direction with UI hierarchy before resetting or using OCR", async () => {
+  it("waits for the current viewport before auto scrolling", async () => {
     const actions: DeviceActionRequest[] = [];
     const hierarchies = [emptyHierarchy(), addFriendMenuHierarchy()];
     const locateText = vi.fn(async () => {
-      throw new Error("OCR should not be used while hierarchy auto search can find the target");
+      throw new Error("OCR should not be used while the current hierarchy settles to the target");
     });
     const captureLocatorScreenshot = vi.fn(async () => {
-      throw new Error("screenshot should not be captured while hierarchy auto search can find the target");
+      throw new Error("screenshot should not be captured while the current hierarchy settles to the target");
     });
     const resolver = new SemanticStepResolver({
       ocr: {
@@ -654,12 +653,68 @@ describe("SemanticStepResolver", () => {
         searchDirection: "down",
         resetToTop: true,
         maxSwipes: 2,
+        timeoutMs: 50,
+        intervalMs: 0
+      })
+    });
+
+    expect(actions).toEqual([{ type: "tap", x: 992, y: 253 }]);
+    expect(locateText).not.toHaveBeenCalled();
+    expect(captureLocatorScreenshot).not.toHaveBeenCalled();
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        matchStrategy: "ui_hierarchy_equals",
+        search: expect.objectContaining({
+          resetSwipes: 0,
+          scanSwipes: 0,
+          attemptTrace: expect.arrayContaining([
+            expect.objectContaining({ phase: "current", found: false }),
+            expect.objectContaining({ phase: "settle", found: true })
+          ])
+        })
+      })
+    }));
+  });
+
+  it("waits for the current viewport before scroll search moves the page", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const hierarchies = [emptyHierarchy(), addFriendMenuHierarchy()];
+    const locateText = vi.fn(async () => {
+      throw new Error("OCR should not be used while the current hierarchy settles to the target");
+    });
+    const captureLocatorScreenshot = vi.fn(async () => {
+      throw new Error("screenshot should not be captured while the current hierarchy settles to the target");
+    });
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("添加好友"),
+        locateText
+      },
+      dumpUiHierarchy: async () => hierarchies.shift() ?? addFriendMenuHierarchy(),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-scroll-settle",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: tapOnTextStep("添加好友", 0, 0, {
+        mode: "equals",
+        searchMode: "scroll",
+        searchDirection: "down",
+        resetToTop: false,
+        maxSwipes: 2,
+        timeoutMs: 50,
         intervalMs: 0
       })
     });
 
     expect(actions).toEqual([
-      { type: "swipe", startX: 600, startY: 1500, endX: 600, endY: 500, durationMs: 450 },
       { type: "tap", x: 992, y: 253 }
     ]);
     expect(locateText).not.toHaveBeenCalled();
@@ -670,7 +725,65 @@ describe("SemanticStepResolver", () => {
         matchStrategy: "ui_hierarchy_equals",
         search: expect.objectContaining({
           resetSwipes: 0,
-          scanSwipes: 1
+          scanSwipes: 0
+        })
+      })
+    }));
+  });
+
+  it("auto search resets to the top before scanning down", async () => {
+    const actions: DeviceActionRequest[] = [];
+    const locateText = vi.fn(async () => {
+      throw new Error("OCR should not be used while hierarchy auto search can find the target");
+    });
+    const captureLocatorScreenshot = vi.fn(async () => {
+      throw new Error("screenshot should not be captured while hierarchy auto search can find the target");
+    });
+    const resolver = new SemanticStepResolver({
+      ocr: {
+        recognize: async () => layout("添加好友"),
+        locateText
+      },
+      dumpUiHierarchy: async () => hasDownSwipeAction(actions) ? addFriendMenuHierarchy() : textOnlyHierarchy("页面中部"),
+      performAction: async (_serial, action) => {
+        actions.push(action);
+      },
+      captureLocatorScreenshot
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-auto-tree-reset-first",
+      serial: "device-1",
+      deviceSize: { width: 1200, height: 2000 },
+      step: tapOnTextStep("添加好友", 0, 0, {
+        mode: "equals",
+        searchMode: "auto",
+        searchDirection: "down",
+        resetToTop: true,
+        maxSwipes: 2,
+        intervalMs: 0
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "swipe", startX: 600, startY: 500, endX: 600, endY: 1500, durationMs: 450 },
+      { type: "swipe", startX: 600, startY: 1500, endX: 600, endY: 500, durationMs: 450 },
+      { type: "tap", x: 992, y: 253 }
+    ]);
+    expect(locateText).not.toHaveBeenCalled();
+    expect(captureLocatorScreenshot).not.toHaveBeenCalled();
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        matchStrategy: "ui_hierarchy_equals",
+        search: expect.objectContaining({
+          resetSwipes: 1,
+          scanSwipes: 1,
+          attemptTrace: expect.arrayContaining([
+            expect.objectContaining({ phase: "reset", direction: "up" }),
+            expect.objectContaining({ phase: "scan", direction: "down", found: true })
+          ])
         })
       })
     }));
@@ -712,7 +825,6 @@ describe("SemanticStepResolver", () => {
     expect(locateText).toHaveBeenCalledTimes(2);
     expect(captureLocatorScreenshot).toHaveBeenCalledTimes(2);
     expect(actions).toEqual([
-      { type: "swipe", startX: 540, startY: 1800, endX: 540, endY: 600, durationMs: 450 },
       { type: "swipe", startX: 540, startY: 600, endX: 540, endY: 1800, durationMs: 450 },
       { type: "swipe", startX: 540, startY: 1800, endX: 540, endY: 600, durationMs: 450 },
       { type: "tap", x: 730, y: 1615 }
@@ -724,7 +836,7 @@ describe("SemanticStepResolver", () => {
         tapPointSource: "ocr_text_center",
         search: expect.objectContaining({
           resetSwipes: 1,
-          scanSwipes: 2
+          scanSwipes: 1
         })
       })
     }));
@@ -849,32 +961,34 @@ describe("SemanticStepResolver", () => {
 
   it("scrolls past ambiguous contains matches to find an exact text target", async () => {
     const actions: DeviceActionRequest[] = [];
+    const ambiguousLayout = {
+      text: "汇聚\n霍昌峰2号的在线课堂\n哭哭啼啼\n霍昌峰2号的在线课堂\n拖拖拉拉\n霍昌峰2号的在线课堂",
+      engine: "fake-layout",
+      lang: "test",
+      width: 1200,
+      height: 2000,
+      boxes: [
+        { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 468, y: 581, width: 240, height: 32 },
+        { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 850, y: 581, width: 240, height: 32 },
+        { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 84, y: 981, width: 240, height: 32 }
+      ]
+    };
+    const exactLayout = {
+      text: "2号\n霍昌峰2号的在线课堂",
+      engine: "fake-layout",
+      lang: "test",
+      width: 1200,
+      height: 2000,
+      boxes: [
+        { text: "2号", confidence: 0.99, x: 84, y: 681, width: 50, height: 36 },
+        { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 84, y: 731, width: 240, height: 32 }
+      ]
+    };
     const resolver = new SemanticStepResolver({
-      ocr: new QueueLayoutOcrService([
-        {
-          text: "汇聚\n霍昌峰2号的在线课堂\n哭哭啼啼\n霍昌峰2号的在线课堂\n拖拖拉拉\n霍昌峰2号的在线课堂",
-          engine: "fake-layout",
-          lang: "test",
-          width: 1200,
-          height: 2000,
-          boxes: [
-            { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 468, y: 581, width: 240, height: 32 },
-            { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 850, y: 581, width: 240, height: 32 },
-            { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 84, y: 981, width: 240, height: 32 }
-          ]
-        },
-        {
-          text: "2号\n霍昌峰2号的在线课堂",
-          engine: "fake-layout",
-          lang: "test",
-          width: 1200,
-          height: 2000,
-          boxes: [
-            { text: "2号", confidence: 0.99, x: 84, y: 681, width: 50, height: 36 },
-            { text: "霍昌峰2号的在线课堂", confidence: 0.98, x: 84, y: 731, width: 240, height: 32 }
-          ]
-        }
-      ]),
+      ocr: {
+        recognize: async () => exactLayout,
+        locateText: async () => hasSwipeAction(actions) ? exactLayout : ambiguousLayout
+      },
       performAction: async (_serial, action) => {
         actions.push(action);
       },
@@ -944,12 +1058,14 @@ describe("SemanticStepResolver", () => {
   it("searches a scrollable page from the top until a text target becomes visible", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
-      ocr: new QueueLayoutOcrService([
-        layout("页面中部"),
-        layout("页面顶部"),
-        layout("页面顶部"),
-        layout("创建教学方案")
-      ]),
+      ocr: {
+        recognize: async () => layout("创建教学方案"),
+        locateText: async () => {
+          if (countDownSwipeActions(actions) > 0) return layout("创建教学方案");
+          if (countUpSwipeActions(actions) > 0) return layout("页面顶部");
+          return layout("页面中部");
+        }
+      },
       performAction: async (_serial, action) => {
         actions.push(action);
       },
@@ -1026,11 +1142,14 @@ describe("SemanticStepResolver", () => {
       boxes: top.boxes.map((box) => ({ ...box, y: box.y - 96 }))
     };
     const resolver = new SemanticStepResolver({
-      ocr: new QueueLayoutOcrService([
-        top,
-        shiftedTop,
-        layout("教学方案")
-      ]),
+      ocr: {
+        recognize: async () => layout("教学方案"),
+        locateText: async () => {
+          if (countDownSwipeActions(actions) > 0) return layout("教学方案");
+          if (countUpSwipeActions(actions) > 0) return shiftedTop;
+          return top;
+        }
+      },
       performAction: async (_serial, action) => {
         actions.push(action);
       },
@@ -8243,6 +8362,31 @@ function decoratedAddFriendMenuHierarchy(): string {
     <node index="0" text="8+添加好友" resource-id="cn.eeo.classin:id/menu_item" class="android.view.ViewGroup" package="cn.eeo.classin" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="false" scrollable="false" bounds="[884,220][1100,286]" />
   </node>
 </hierarchy>`;
+}
+
+function textOnlyHierarchy(text: string): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1200,2000]">
+    <node index="0" text="${text}" resource-id="cn.eeo.classin:id/other_text" class="android.widget.TextView" package="cn.eeo.classin" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[80,780][420,840]" />
+  </node>
+</hierarchy>`;
+}
+
+function hasSwipeAction(actions: DeviceActionRequest[]): boolean {
+  return actions.some((action) => action.type === "swipe");
+}
+
+function hasDownSwipeAction(actions: DeviceActionRequest[]): boolean {
+  return actions.some((action) => action.type === "swipe" && action.startY > action.endY);
+}
+
+function countDownSwipeActions(actions: DeviceActionRequest[]): number {
+  return actions.filter((action) => action.type === "swipe" && action.startY > action.endY).length;
+}
+
+function countUpSwipeActions(actions: DeviceActionRequest[]): number {
+  return actions.filter((action) => action.type === "swipe" && action.startY < action.endY).length;
 }
 
 function androidContentAddButtonHierarchy(): string {
