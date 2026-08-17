@@ -1249,7 +1249,45 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it("normalizes generated corner position aliases for icon targets before validation", () => {
+  it.each(["bottomRight", "bottomTrailing", "bottomEnd"])(
+    "normalizes generated corner position alias %s for icon targets before validation",
+    (positionAlias) => {
+      const catalog = buildScriptFlowPlannerCatalog(emptyPageCatalog(), [], "classin", "mobile");
+      const response = readyResponse() as unknown as {
+        status: "ready";
+        summary: string;
+        assumptions: string[];
+        parameterValues?: Record<string, string | number | boolean>;
+        document: Record<string, unknown>;
+      };
+      response.document.app = { id: "classin" };
+      response.document.name = "打开新建课堂";
+      response.document.purpose = "business";
+      response.document.testLevel = "component";
+      response.document.steps = [
+        { id: "launch-app", role: "setup", launchApp: { appId: "classin" } },
+        { id: "open-class", role: "navigation", tap: { target: { text: "班级四十二号", area: "content" }, search: { mode: "auto" } } },
+        { id: "tap-add", role: "navigation", tap: { target: { icon: "add", area: "content", position: positionAlias }, search: { mode: "visibleOnly" } } },
+        { id: "tap-lesson", role: "navigation", tap: { target: { text: "课堂", area: "content" }, search: { mode: "visibleOnly" } } },
+        { id: "tap-duration", role: "business", tap: { target: { text: "课堂时长", area: "content" }, search: { mode: "auto" } } }
+      ];
+
+      const result = parseScriptFlowAiResponse(JSON.stringify(response), {
+        appId: "classin",
+        platform: "mobile",
+        catalog,
+        prompt: "重启app，然后滑动列表找到班级四十二号并点击，然后点击右下角加号按钮，在点击课堂，进入新建课堂页面，再点击课堂时长"
+      });
+
+      expect(result.status).toBe("ready");
+      if (result.status !== "ready") return;
+      expect(result.document.steps[2]).toMatchObject({
+        tap: { target: { icon: "add", area: "content", position: "trailing" } }
+      });
+    }
+  );
+
+  it("drops generated vertical-only position aliases for icon targets before validation", () => {
     const catalog = buildScriptFlowPlannerCatalog(emptyPageCatalog(), [], "classin", "mobile");
     const response = readyResponse() as unknown as {
       status: "ready";
@@ -1265,7 +1303,7 @@ describe("ScriptFlow AI planner", () => {
     response.document.steps = [
       { id: "launch-app", role: "setup", launchApp: { appId: "classin" } },
       { id: "open-class", role: "navigation", tap: { target: { text: "班级四十二号", area: "content" }, search: { mode: "auto" } } },
-      { id: "tap-add", role: "navigation", tap: { target: { icon: "add", area: "content", position: "bottomRight" }, search: { mode: "visibleOnly" } } },
+      { id: "tap-add", role: "navigation", tap: { target: { icon: "add", area: "content", position: "bottom" }, search: { mode: "visibleOnly" } } },
       { id: "tap-lesson", role: "navigation", tap: { target: { text: "课堂", area: "content" }, search: { mode: "visibleOnly" } } },
       { id: "tap-duration", role: "business", tap: { target: { text: "课堂时长", area: "content" }, search: { mode: "auto" } } }
     ];
@@ -1280,7 +1318,10 @@ describe("ScriptFlow AI planner", () => {
     expect(result.status).toBe("ready");
     if (result.status !== "ready") return;
     expect(result.document.steps[2]).toMatchObject({
-      tap: { target: { icon: "add", area: "content", position: "trailing" } }
+      tap: { target: { icon: "add", area: "content" } }
+    });
+    expect(result.document.steps[2]).not.toMatchObject({
+      tap: { target: { position: expect.any(String) } }
     });
   });
 

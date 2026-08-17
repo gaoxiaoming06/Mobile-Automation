@@ -1072,6 +1072,7 @@ function normalizeGeneratedPositionAliasesInValue(value: unknown): unknown {
   );
   const position = generatedTargetPositionAlias(normalized.position);
   if (position) normalized.position = position;
+  else if (generatedTargetPositionShouldBeDropped(normalized.position)) delete normalized.position;
   return normalized;
 }
 
@@ -1082,13 +1083,34 @@ function generatedTargetPositionAlias(value: unknown): "leading" | "trailing" | 
   const compact = text.toLowerCase().replace(/[\s_-]+/g, "");
   if (compact.includes("右") || compact.includes("后")) return "trailing";
   if (compact.includes("左") || compact.includes("前")) return "leading";
-  if (["trailing", "right", "end"].includes(compact) || compact.startsWith("right") || compact.endsWith("right")) {
+  if (["trailing", "right", "end"].includes(compact)
+    || compact.includes("trailing")
+    || compact.startsWith("right")
+    || compact.endsWith("right")
+    || compact.startsWith("end")
+    || compact.endsWith("end")) {
     return "trailing";
   }
-  if (["leading", "left", "start"].includes(compact) || compact.startsWith("left") || compact.endsWith("left")) {
+  if (["leading", "left", "start"].includes(compact)
+    || compact.includes("leading")
+    || compact.startsWith("left")
+    || compact.endsWith("left")
+    || compact.startsWith("start")
+    || compact.endsWith("start")) {
     return "leading";
   }
   return undefined;
+}
+
+function generatedTargetPositionShouldBeDropped(value: unknown): boolean {
+  const text = stringValue(value);
+  if (!text) return false;
+  if (text === "leading" || text === "trailing") return false;
+  const compact = text.toLowerCase().replace(/[\s_-]+/g, "");
+  return ["top", "bottom", "upper", "lower", "middle", "center", "centre"].includes(compact)
+    || compact.includes("上")
+    || compact.includes("下")
+    || compact.includes("中");
 }
 
 function stripLegacyRiskFields(steps: unknown[]): void {
