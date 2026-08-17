@@ -699,7 +699,9 @@ async function reviewAndRepairNonOcrGrounding(input: {
     effort: "low"
   }, input.fetchImpl), { channel: input.channel, model: input.model });
   const assessment = parseScriptFlowGroundingReview(review.content);
-  if (assessment.status === "ok") return input.parsed;
+  if (assessment.status === "ok" || acceptsCurrentLowerCornerIconContract(assessment, input.parsed.document, input.parseInput.prompt)) {
+    return input.parsed;
+  }
 
   const repaired = await timedScriptFlowAiStage(input.timingContext, "grounding_repair_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
@@ -716,7 +718,10 @@ async function reviewAndRepairNonOcrGrounding(input: {
     effort: "low"
   }, input.fetchImpl), { channel: input.channel, model: input.model });
   const repairedAssessment = parseScriptFlowGroundingReview(repairedReview.content);
-  if (repairedAssessment.status === "needs_repair") {
+  if (
+    repairedAssessment.status === "needs_repair"
+    && !acceptsCurrentLowerCornerIconContract(repairedAssessment, repairedParsed.document, input.parseInput.prompt)
+  ) {
     throw new Error(`AI 修复后仍未通过非 OCR 目标 grounding review：${repairedAssessment.summary}`);
   }
   return repairedParsed;
@@ -823,6 +828,7 @@ function buildScriptFlowGroundingReviewPrompt(
   return [
     "请对下面 ScriptFlow 草稿做 grounding review。",
     "只审查 icon/visual 这类非 OCR 视觉目标是否充分保留了用户原始描述中的跨平台定位线索，例如位置、顺序、附近文字、所属区域或范围。",
+    "ScriptFlow 当前没有 bottomRight 这类二维角落字段：右下角/左下角的标准悬浮 icon 用 area: content + position: trailing/leading 表达；不要仅因缺少 bottom 或 bottomRight 字段要求修复。",
     "由你根据自然语言灵活判断用户是否提供了这些线索；不要依赖固定词表，也不要因为脚本合法就直接通过。",
     "如果脚本丢失了重要线索，返回 needs_repair 并给出可操作的 repairInstructions；否则返回 ok。",
     "只返回唯一 JSON 对象，格式：",
@@ -852,6 +858,7 @@ function buildScriptFlowGroundingRepairPrompt(
     plannerPrompt,
     "上一稿未通过非 OCR 目标 grounding review。请只根据 review 指令修复脚本中缺失的跨平台限定，不要引入坐标、resourceId、accessibilityId 或平台私有 selector。",
     "修复时必须保持 target 的类别；icon/visual 非 OCR 目标不能改成 text。只能补充或调整 area、position、nearText、scopeText、ordinal、visual.query 等跨平台限定。",
+    "当前不支持 bottomRight 这类二维角落字段；右下角/左下角标准悬浮 icon 应表达为 area: content + position: trailing/leading。",
     "review 结果：",
     JSON.stringify(review, null, 2),
     "上一稿 YAML：",
@@ -898,6 +905,42 @@ function parseScriptFlowReviewAssessment(raw: string, label: string): ScriptFlow
 
 function hasNonOcrTapTargets(document: ScriptFlowDocument): boolean {
   return flattenSteps(document.steps).some((step) => "tap" in step && Boolean(step.tap.target.icon || step.tap.target.visual));
+}
+
+function acceptsCurrentLowerCornerIconContract(
+  assessment: ScriptFlowReviewAssessment,
+  document: ScriptFlowDocument,
+  prompt?: string
+): boolean {
+  if (assessment.status !== "needs_repair" || !mentionsLowerCorner(prompt)) return false;
+  if (!groundingAssessmentOnlyAsksForVerticalCorner(assessment)) return false;
+  return flattenSteps(document.steps).some((step) => {
+    if (!("tap" in step)) return false;
+    return iconTargetUsesCurrentLowerCornerContract(step.tap.target);
+  });
+}
+
+function groundingAssessmentOnlyAsksForVerticalCorner(assessment: ScriptFlowReviewAssessment): boolean {
+  const text = [
+    assessment.summary,
+    assessment.repairInstructions,
+    ...assessment.issues.flatMap((issue) => [issue.stepId, issue.reason])
+  ].filter(Boolean).join(" ");
+  return /底部|下方|下角|bottom|lower/i.test(text)
+    && !/附近文字|文字锚点|nearText|scopeText|ordinal|第[一二三四五六七八九十\d]+个|范围|区域/u.test(text);
+}
+
+function iconTargetUsesCurrentLowerCornerContract(target: ScriptTarget): boolean {
+  const visual = target.visual?.kind === "icon" ? target.visual : undefined;
+  const area = visual?.area ?? target.area;
+  const position = visual?.position ?? target.position;
+  return Boolean(target.icon || visual)
+    && area === "content"
+    && (position === "leading" || position === "trailing");
+}
+
+function mentionsLowerCorner(value?: string): boolean {
+  return Boolean(value && /右下|左下|下角|bottom|lower/i.test(value));
 }
 
 function hasEditableTextTargets(document: ScriptFlowDocument): boolean {

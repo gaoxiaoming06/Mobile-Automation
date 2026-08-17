@@ -1927,6 +1927,93 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
+  it("does not fail when grounding review asks for an unsupported lower-corner position already represented by content trailing", async () => {
+    const first = readyResponse();
+    first.summary = "点击右下角加号按钮";
+    first.document.app = { id: "classin" };
+    first.document.name = "点击右下角加号";
+    first.document.purpose = "business";
+    first.document.testLevel = "component";
+    first.document.steps = [
+      { id: "launch-app", role: "setup", launchApp: { appId: "classin" } },
+      {
+        id: "tap-add",
+        role: "navigation",
+        tap: {
+          target: { icon: "add", area: "content" },
+          search: { mode: "visibleOnly" }
+        }
+      }
+    ];
+    const repaired = readyResponse();
+    repaired.summary = first.summary;
+    repaired.document.app = { id: "classin" };
+    repaired.document.name = first.document.name;
+    repaired.document.purpose = "business";
+    repaired.document.testLevel = "component";
+    repaired.document.steps = [
+      { id: "launch-app", role: "setup", launchApp: { appId: "classin" } },
+      {
+        id: "tap-add",
+        role: "navigation",
+        tap: {
+          target: { icon: "add", area: "content", position: "trailing" },
+          search: { mode: "visibleOnly" }
+        }
+      }
+    ];
+    const requests: string[] = [];
+    const verticalOnlyReview = {
+      status: "needs_repair",
+      summary: "草稿对非OCR视觉目标的补强不完整。用户原始描述明确给了“右下角加号按钮”的位置线索，但当前脚本只保留了右侧信息，缺失了底部定位，跨平台约束不足。",
+      issues: [{
+        stepId: "tap-add",
+        reason: "用户描述包含右下角，但 target 只有 position: trailing，缺少 bottom/bottomRight 信息。"
+      }],
+      repairInstructions: "补充底部定位。"
+    };
+    const responses: unknown[] = [
+      first,
+      { status: "ok", summary: "无硬编码业务值需要修复。", issues: [] },
+      {
+        status: "needs_repair",
+        summary: "右下角加号按钮缺少右侧位置线索。",
+        issues: [{ stepId: "tap-add", reason: "用户说右下角，但 icon target 缺少 position: trailing。" }],
+        repairInstructions: "为 tap-add 增加 position: trailing。"
+      },
+      repaired,
+      verticalOnlyReview
+    ];
+
+    const result = await generateScriptFlowDraft({
+      config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
+      prompt: "重启app，然后滑动列表找到班级四十二号并点击，然后点击右下角加号按钮，在点击课堂，进入新建课堂页面，再点击课堂时长",
+      appId: "classin",
+      platform: "mobile",
+      pageCatalog: emptyPageCatalog(),
+      flows: [],
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        requests.push(body.messages?.at(-1)?.content ?? "");
+        const content = responses.shift();
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(content) } }]
+        }), { status: 200 });
+      }
+    });
+
+    expect(requests).toHaveLength(5);
+    expect(result).toMatchObject({
+      status: "trial_ready",
+      document: {
+        steps: [
+          { launchApp: { appId: "classin" } },
+          { tap: { target: { icon: "add", area: "content", position: "trailing" } } }
+        ]
+      }
+    });
+  });
+
   it("rejects AI drafts that encode an explicit visual request as a semantic text target", () => {
     const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
     const response = readyResponse();
