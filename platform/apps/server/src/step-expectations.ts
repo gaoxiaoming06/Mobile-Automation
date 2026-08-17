@@ -8,6 +8,7 @@ import {
   type ActionStep,
   type ArtifactRef,
   type DeviceActionRequest,
+  type ExecutionProfileSnapshot,
   type MetricSample,
   type StepExpectation,
   type StepExpectationResult
@@ -42,9 +43,10 @@ export type PageStateExpectationVerifier = (input: {
   serial: string;
   appId: string;
   platform: "android" | "ios" | "harmony" | "flutter";
-  pageId: string;
+  screenRef: string;
   timeoutMs: number;
   screenshot?: Buffer;
+  executionProfile?: ExecutionProfileSnapshot;
 }) => Promise<PageStateExpectationOutcome>;
 
 type StepExpectationEvaluatorDeps = {
@@ -78,6 +80,7 @@ export class StepExpectationEvaluator {
     afterScreenshot?: ScreenshotCapture;
     metric?: MetricSample;
     runtimeFailure: boolean;
+    executionProfile?: ExecutionProfileSnapshot;
   }): Promise<StepExpectationResult[]> {
     const expectations = enabledExpectations(input.step);
     if (!expectations.length) {
@@ -150,7 +153,14 @@ export class StepExpectationEvaluator {
       }
 
       if (expectation.type === "state_is") {
-        results.push(await this.evaluateStateExpectation(expectation, input.serial, input.afterScreenshot, input.runId, input.stepResultId));
+        results.push(await this.evaluateStateExpectation(
+          expectation,
+          input.serial,
+          input.afterScreenshot,
+          input.runId,
+          input.stepResultId,
+          input.executionProfile
+        ));
         continue;
       }
 
@@ -504,17 +514,18 @@ export class StepExpectationEvaluator {
     serial: string,
     screenshot: ScreenshotCapture | undefined,
     runId: string,
-    stepResultId: string
+    stepResultId: string,
+    executionProfile?: ExecutionProfileSnapshot
   ): Promise<StepExpectationResult> {
     const appId = stringParam(expectation.params.appId);
-    const pageId = stringParam(expectation.params.pageId ?? expectation.params.nodeId);
+    const screenRef = stringParam(expectation.params.screenRef);
     const platform = pageStatePlatform(expectation.params.platform);
-    if (!this.deps.verifyPageState || !appId || !pageId || !platform) {
+    if (!this.deps.verifyPageState || !appId || !screenRef || !platform) {
       return this.createExpectationResult(expectation, {
         status: "unsupported",
-        expected: pageId ? `Page ${pageId}` : stateExpectedDescription(expectation),
-        actual: "Page-state verifier or required page identity fields are unavailable.",
-        reason: "state_is requires verifyPageState, appId, platform, and pageId.",
+        expected: screenRef ? `Screen ${screenRef}` : stateExpectedDescription(expectation),
+        actual: "Screen verifier or required screen identity fields are unavailable.",
+        reason: "state_is requires verifyPageState, appId, platform, and screenRef.",
         evidenceArtifactIds: screenshot ? [screenshot.artifact.id] : []
       });
     }
@@ -523,9 +534,10 @@ export class StepExpectationEvaluator {
       serial,
       appId,
       platform,
-      pageId,
+      screenRef,
       timeoutMs: expectationTimeoutMs(expectation, 8_000),
-      screenshot: activeScreenshot?.png
+      screenshot: activeScreenshot?.png,
+      executionProfile
     });
     const evidenceArtifactIds = activeScreenshot ? [activeScreenshot.artifact.id] : [];
     let recoveredFromProtectedScreenshot = false;
@@ -542,9 +554,10 @@ export class StepExpectationEvaluator {
           serial,
           appId,
           platform,
-          pageId,
+          screenRef,
           timeoutMs: expectationTimeoutMs(expectation, 8_000),
-          screenshot: activeScreenshot.png
+          screenshot: activeScreenshot.png,
+          executionProfile
         });
         recoveredFromProtectedScreenshot = true;
       }
@@ -557,7 +570,7 @@ export class StepExpectationEvaluator {
       ?? outcome.status;
     return this.createExpectationResult(expectation, {
       status: passed ? "passed" : "failed",
-      expected: `Page ${pageId}`,
+      expected: `Screen ${screenRef}`,
       actual,
       reason: passed
         ? recoveredFromProtectedScreenshot ? "Recovered after keyboard dismissal from a protected or empty screenshot." : undefined

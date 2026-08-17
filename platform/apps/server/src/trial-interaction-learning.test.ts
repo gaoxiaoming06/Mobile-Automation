@@ -41,11 +41,11 @@ describe("trial interaction learning", () => {
     const run = trialRun();
     run.stepResults = [
       { ...run.stepResults[0]!, status: "failed" },
-      { ...run.stepResults[0]!, id: "raw", stepId: "raw", metadata: { onPage: "classin.home" } },
+      { ...run.stepResults[0]!, id: "raw", stepId: "raw", metadata: { before: { screenRef: "classin.home" } } },
       { ...run.stepResults[0]!, id: "ownerless", stepId: "ownerless", metadata: { semantic: { type: "ocr_text", action: "tap" } } }
     ];
     (run.sourceSnapshot!.parsed.steps as Array<Record<string, unknown>>).push(
-      { id: "raw", onPage: "classin.home", tap: { target: { text: "设置" } } },
+      { id: "raw", before: { screenRef: "classin.home" }, tap: { target: { text: "设置" } } },
       { id: "ownerless", tap: { target: { text: "消息" } } }
     );
 
@@ -57,18 +57,18 @@ describe("trial interaction learning", () => {
     const parsedSteps = run.sourceSnapshot!.parsed.steps as Array<Record<string, unknown>>;
     parsedSteps[0] = {
       id: "toggle-student-report",
-      onPage: "classin.settings",
+      before: { screenRef: "classin.settings" },
       tap: { target: { control: "开关", nearText: "允许学生查看报告" } }
     };
     parsedSteps.push({
       id: "toggle-recording",
-      onPage: "classin.settings",
+      before: { screenRef: "classin.settings" },
       tap: { target: { control: "开关", nearText: "录制课堂" } }
     });
     run.stepResults[0] = {
       ...run.stepResults[0]!,
       stepId: "toggle-student-report",
-      metadata: { onPage: "classin.settings", semantic: { type: "control", action: "tap" } }
+      metadata: { before: { screenRef: "classin.settings" }, semantic: { type: "control", action: "tap" } }
     };
     run.stepResults.push({
       ...run.stepResults[0]!,
@@ -112,7 +112,7 @@ function trialRun(): TestRun {
       afterScreenshotId: "artifact-after",
       artifacts: [],
       metadata: {
-        onPage: "classin.home",
+        before: { screenRef: "classin.home" },
         semantic: {
           type: "ocr_text",
           action: "tap",
@@ -150,7 +150,7 @@ function trialRun(): TestRun {
       dependencies: [],
       parsed: {
         app: { id: "cn.eeo.classin" },
-        steps: [{ id: "open-add-friend", onPage: "classin.home", tap: { target: { text: "添加好友" } } }]
+        steps: [{ id: "open-add-friend", before: { screenRef: "classin.home" }, tap: { target: { text: "添加好友" } } }]
       }
     },
     startedAt: "2026-07-30T00:00:00.000Z",

@@ -251,7 +251,7 @@ steps:
           name: "从主页进入添加好友",
           app: { id: "cn.eeo.classin" },
           parameters: {},
-          steps: [{ id: "reach", role: "navigation", reachPage: { page: "classin.friend.add" } }],
+          steps: [{ id: "reach", role: "navigation", reachPage: { screenRef: "classin.friend.add" } }],
           tags: []
         },
         summary: "从主页进入添加好友",
@@ -855,21 +855,49 @@ steps:
       prompt: "当前页面第一个输入框改成自动化课堂",
       appId: "cn.eeo.classin",
       useCurrentScreen: false,
+      useAssetEnhancedGeneration: false,
       deviceSerial: "device-1"
     })).toEqual({
       prompt: "当前页面第一个输入框改成自动化课堂",
-      appId: "cn.eeo.classin"
+      appId: "cn.eeo.classin",
+      generationContext: {
+        mode: "strict",
+        useCurrentScreen: false,
+        useCaseKnowledge: false
+      }
     });
 
     expect(buildAiGenerateRequestBody({
       prompt: "当前页面第一个输入框改成自动化课堂",
       appId: "cn.eeo.classin",
       useCurrentScreen: true,
+      useAssetEnhancedGeneration: false,
       deviceSerial: "device-1"
     })).toEqual({
       prompt: "当前页面第一个输入框改成自动化课堂",
       appId: "cn.eeo.classin",
+      generationContext: {
+        mode: "strict",
+        useCurrentScreen: true,
+        useCaseKnowledge: false
+      },
       screenAssist: { mode: "current", deviceSerial: "device-1" }
+    });
+
+    expect(buildAiGenerateRequestBody({
+      prompt: "从首页进入班级",
+      appId: "cn.eeo.classin",
+      useCurrentScreen: false,
+      useAssetEnhancedGeneration: true,
+      deviceSerial: "device-1"
+    })).toEqual({
+      prompt: "从首页进入班级",
+      appId: "cn.eeo.classin",
+      generationContext: {
+        mode: "knowledge_enhanced",
+        useCurrentScreen: false,
+        useCaseKnowledge: true
+      }
     });
   });
 
@@ -880,6 +908,7 @@ steps:
       prompt: "点击搜索图标",
       appId: "cn.eeo.classin",
       useCurrentScreen: true,
+      useAssetEnhancedGeneration: false,
       deviceSerial: "device-1",
       scriptPlatform: "android"
     })).toEqual({
@@ -888,6 +917,11 @@ steps:
       instruction: "点击搜索图标",
       appId: "cn.eeo.classin",
       scriptPlatform: "android",
+      generationContext: {
+        mode: "strict",
+        useCurrentScreen: true,
+        useCaseKnowledge: false
+      },
       screenAssist: { mode: "current", deviceSerial: "device-1" }
     });
   });
@@ -903,6 +937,7 @@ steps:
     />);
 
     expect(markup).toContain("结合当前屏幕生成");
+    expect(markup).toContain("参考用例中心生成");
     expect(markup).toContain("请选择设备后可用");
     expect(markup).toContain("type=\"checkbox\"");
     expect(markup).toContain("disabled=\"\"");

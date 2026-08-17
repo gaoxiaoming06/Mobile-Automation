@@ -1,4 +1,4 @@
-import type { ActionStep, InteractionAsset } from "@mobile-automation/shared";
+import type { ActionStep } from "@mobile-automation/shared";
 import type { ScriptParameterValue, ScriptSearchPolicy, ScriptTarget } from "@mobile-automation/script-flow";
 import type { PageAssetPlatform } from "./page-asset-catalog.js";
 
@@ -9,7 +9,6 @@ export type ScriptTargetResolutionInput = {
   target: ScriptTarget;
   appId: string;
   platform: PageAssetPlatform;
-  onPage?: string;
   value?: string;
   confirmText?: string;
   direction?: "up" | "down";
@@ -18,7 +17,6 @@ export type ScriptTargetResolutionInput = {
   valueParamKey?: string;
   sensitiveInput?: boolean;
   parameters?: Record<string, ScriptParameterValue>;
-  interactionAsset?: InteractionAsset;
 };
 
 export type ResolvedScriptTarget = {
@@ -36,9 +34,6 @@ export class ScriptTargetResolutionError extends Error {
 
 export class ScriptTargetResolver {
   resolve(input: ScriptTargetResolutionInput): ResolvedScriptTarget {
-    if (input.interactionAsset) {
-      return this.resolveInteractionAsset(input, input.interactionAsset);
-    }
     return this.resolveUnbound(input);
   }
 
@@ -56,32 +51,6 @@ export class ScriptTargetResolver {
       return this.resolveSemanticControl(input);
     }
     throw new ScriptTargetResolutionError("Target has no executable text, visual query, icon, or control");
-  }
-
-  private resolveInteractionAsset(
-    input: ScriptTargetResolutionInput,
-    asset: InteractionAsset
-  ): ResolvedScriptTarget {
-    validateInteractionAsset(input, asset);
-    const variant = [...asset.locatorVariants]
-      .filter((candidate) => candidate.platform === input.platform)
-      .sort((left, right) => right.confidence - left.confidence)[0];
-    if (!variant) {
-      return this.resolveUnbound({ ...input, interactionAsset: undefined });
-    }
-    const target = targetFromInteractionAsset(input.target, asset, variant.descriptor);
-    const resolved = this.resolveUnbound({ ...input, target, interactionAsset: undefined });
-    return {
-      ...resolved,
-      strategy: `interaction_asset:${resolved.strategy}`,
-      params: {
-        ...resolved.params,
-        interactionAssetId: asset.id,
-        interactionAssetKey: asset.key,
-        interactionAssetVersion: asset.version,
-        allowRegionFallback: false
-      }
-    };
   }
 
   private resolveRuntimeText(input: ScriptTargetResolutionInput, text: string): ResolvedScriptTarget {
@@ -348,57 +317,6 @@ function runtimePickerMode(targetText: string, selectedValue: string): "duration
     return "date_time";
   }
   return undefined;
-}
-
-function validateInteractionAsset(input: ScriptTargetResolutionInput, asset: InteractionAsset): void {
-  if (asset.status !== "active") {
-    throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} is not active`);
-  }
-  if (asset.appId !== input.appId) {
-    throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} belongs to another App`);
-  }
-  if (asset.platformScope !== "mobile-both" && asset.platformScope !== input.platform) {
-    throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} does not support ${input.platform}`);
-  }
-  if (asset.owner.kind !== "page" || !input.onPage || asset.owner.key !== input.onPage) {
-    throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} does not belong to the current step page`);
-  }
-  if (!asset.supportedActions.includes(input.action as InteractionAsset["supportedActions"][number])) {
-    throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} does not support ${input.action}`);
-  }
-}
-
-function targetFromInteractionAsset(
-  original: ScriptTarget,
-  asset: InteractionAsset,
-  descriptor: Record<string, unknown>
-): ScriptTarget {
-  const selectedText = nonEmptyString(descriptor.selectedText) ?? nonEmptyString(asset.semanticContract.text);
-  if (selectedText) {
-    return {
-      ...original,
-      text: selectedText,
-      icon: undefined,
-      visual: undefined,
-      control: undefined
-    };
-  }
-  const icon = nonEmptyString(asset.semanticContract.icon);
-  if (icon) {
-    return { ...original, text: undefined, icon, visual: undefined, control: undefined };
-  }
-  const control = nonEmptyString(asset.semanticContract.control);
-  if (control) {
-    return {
-      ...original,
-      text: undefined,
-      icon: undefined,
-      visual: undefined,
-      control: control as ScriptTarget["control"],
-      nearText: nonEmptyString(asset.semanticContract.nearText) ?? original.nearText
-    };
-  }
-  throw new ScriptTargetResolutionError(`Interaction asset ${asset.key} has no executable locator`);
 }
 
 function nonEmptyString(value: unknown): string | undefined {

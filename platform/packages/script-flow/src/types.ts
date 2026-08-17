@@ -13,9 +13,13 @@ export type ScriptFlowLoop = {
 export type ScriptSessionState = "authenticated" | "unauthenticated";
 
 export type ScriptFlowState = {
-  page?: string;
+  screenRef?: string;
   session?: ScriptSessionState;
   role?: string;
+};
+
+export type ScriptScreenContract = {
+  screenRef: string;
 };
 
 export type ScriptFlowStartStrategy = "keepCurrent" | "goHome" | "launchApp" | "restartApp" | "clearDataAndLaunch";
@@ -89,8 +93,8 @@ export type ScriptStepBase = {
   id: string;
   name?: string;
   role?: ScriptStepRole;
-  onPage?: string;
-  expectPage?: string;
+  before?: ScriptScreenContract;
+  after?: ScriptScreenContract;
   timeoutMs?: number;
   /** @deprecated Accepted only when reading legacy ScriptFlow v1 documents. */
   risk?: string;
@@ -156,17 +160,17 @@ export type ScriptScrollUntilVisibleStep = ScriptStepBase & {
 
 export type ScriptReachPageStep = ScriptStepBase & {
   reachPage: {
-    page: string;
+    screenRef: string;
     policy?: "safe";
   };
 };
 
 export type ScriptWaitForPageStep = ScriptStepBase & {
-  waitForPage: string;
+  waitForPage: ScriptScreenContract;
 };
 
 export type ScriptAssertPageStep = ScriptStepBase & {
-  assertPage: string;
+  assertPage: ScriptScreenContract;
 };
 
 export type ScriptAssertTextStep = ScriptStepBase & {
@@ -256,8 +260,8 @@ export type ScriptExecutionPlanStep = {
   name?: string;
   action: ScriptExecutableAction;
   input: Record<string, unknown>;
-  onPage?: string;
-  expectPage?: string;
+  before?: ScriptScreenContract;
+  after?: ScriptScreenContract;
   timeoutMs?: number;
   source: {
     flowName: string;

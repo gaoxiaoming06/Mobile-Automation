@@ -298,6 +298,7 @@ export function AiScriptFlowsPanel({
   const [learning, setLearning] = useState<LearningSummaryResponse>();
   const [busyAction, setBusyAction] = useState<"generate" | "import" | "save" | "run" | "review" | "select" | "stepRun" | "runControl" | "repair">();
   const [useCurrentScreen, setUseCurrentScreen] = useState(false);
+  const [useAssetEnhancedGeneration, setUseAssetEnhancedGeneration] = useState(false);
   const [autoRepairEnabled, setAutoRepairEnabled] = useState(false);
   const [repairHistory, setRepairHistory] = useState<RepairHistoryEntry[]>([]);
   const [repairAttemptRunIds, setRepairAttemptRunIds] = useState<Set<string>>(() => new Set());
@@ -415,6 +416,7 @@ export function AiScriptFlowsPanel({
         appId: appId.trim(),
         revision,
         useCurrentScreen,
+        useAssetEnhancedGeneration,
         deviceSerial
       });
       const response = await apiFetchJson<{ draft: AiDraft }>("/api/script-flow-drafts/generate", {
@@ -553,6 +555,7 @@ export function AiScriptFlowsPanel({
           prompt: prompt.trim() || baseDraft.document.description || baseDraft.document.name,
           appId: baseDraft.document.app.id,
           useCurrentScreen,
+          useAssetEnhancedGeneration,
           deviceSerial,
           scriptPlatform: run.sourceSnapshot?.executionPlatform
         }))
@@ -1022,7 +1025,17 @@ export function AiScriptFlowsPanel({
                 onChange={(event) => setUseCurrentScreen(event.target.checked)}
               />
               <span>结合当前屏幕生成</span>
-              <small>{deviceSerial ? "默认优先使用资产库" : "请选择设备后可用"}</small>
+              <small>{deviceSerial ? "仅本次生成读取当前屏幕" : "请选择设备后可用"}</small>
+            </label>
+            <label className="screen-assist-toggle">
+              <input
+                type="checkbox"
+                checked={useAssetEnhancedGeneration}
+                disabled={busy}
+                onChange={(event) => setUseAssetEnhancedGeneration(event.target.checked)}
+              />
+              <span>参考用例中心生成</span>
+              <small>只复用业务路径，不读取页面资产</small>
             </label>
             <button className="primary-button ai-script-generate" type="button" onClick={() => void generate()} disabled={busy || !prompt.trim()}>
               <Sparkles size={17} /><span>{busyAction === "generate" ? "生成中" : "生成修改方案"}</span>
@@ -1059,7 +1072,17 @@ export function AiScriptFlowsPanel({
                   onChange={(event) => setUseCurrentScreen(event.target.checked)}
                 />
                 <span>结合当前屏幕生成</span>
-                <small>{deviceSerial ? "默认优先使用资产库" : "请选择设备后可用"}</small>
+                <small>{deviceSerial ? "仅本次生成读取当前屏幕" : "请选择设备后可用"}</small>
+              </label>
+              <label className="screen-assist-toggle">
+                <input
+                  type="checkbox"
+                  checked={useAssetEnhancedGeneration}
+                  disabled={busy}
+                  onChange={(event) => setUseAssetEnhancedGeneration(event.target.checked)}
+                />
+                <span>参考用例中心生成</span>
+                <small>只复用业务路径，不读取页面资产</small>
               </label>
               <button className="primary-button ai-script-generate" type="button" onClick={() => void generate()} disabled={busy || !prompt.trim() || !appId.trim()}>
                 <Sparkles size={17} /><span>{busyAction === "generate" ? "生成中" : "生成测试"}</span>
@@ -1823,11 +1846,11 @@ function stepActionValue(step: CaseSourceStep, action: string): string {
 
 function stepActionPage(step: CaseSourceStep, action: string): string {
   if (action === "reachPage") {
-    const value = recordValue(step.reachPage)?.page;
+    const value = recordValue(step.reachPage)?.screenRef;
     return typeof value === "string" ? value : "";
   }
-  const value = action === "waitForPage" ? step.waitForPage : step.assertPage;
-  return typeof value === "string" ? value : "";
+  const value = action === "waitForPage" ? recordValue(step.waitForPage) : recordValue(step.assertPage);
+  return typeof value?.screenRef === "string" ? value.screenRef : "";
 }
 
 function stepActionDirection(step: CaseSourceStep, action: string): string {
@@ -2192,21 +2215,25 @@ export function buildAiGenerateRequestBody(input: {
   appId: string;
   revision?: CaseRevision;
   useCurrentScreen: boolean;
+  useAssetEnhancedGeneration: boolean;
   deviceSerial: string;
 }): Record<string, unknown> {
   const screenAssist = input.useCurrentScreen && input.deviceSerial
     ? { screenAssist: { mode: "current" as const, deviceSerial: input.deviceSerial } }
     : {};
+  const generationContext = generationContextPayload(input.useCurrentScreen && Boolean(input.deviceSerial), input.useAssetEnhancedGeneration);
   return input.revision
     ? {
         prompt: input.prompt,
         flowId: input.revision.flowId,
         expectedVersion: input.revision.version,
+        generationContext,
         ...screenAssist
       }
     : {
         prompt: input.prompt,
         appId: input.appId,
+        generationContext,
         ...screenAssist
       };
 }
@@ -2217,18 +2244,29 @@ export function buildRepairDraftRequestBody(input: {
   prompt: string;
   appId: string;
   useCurrentScreen: boolean;
+  useAssetEnhancedGeneration: boolean;
   deviceSerial: string;
   scriptPlatform?: "android" | "ios" | "harmony" | "flutter" | "mobile";
 }): Record<string, unknown> {
+  const useScreenAssist = input.useCurrentScreen && Boolean(input.deviceSerial);
   return {
     sourceYaml: input.sourceYaml,
     runId: input.runId,
     instruction: input.prompt,
     appId: input.appId,
     ...(input.scriptPlatform ? { scriptPlatform: input.scriptPlatform } : {}),
-    ...(input.useCurrentScreen && input.deviceSerial
+    generationContext: generationContextPayload(useScreenAssist, input.useAssetEnhancedGeneration),
+    ...(useScreenAssist
       ? { screenAssist: { mode: "current" as const, deviceSerial: input.deviceSerial } }
       : {})
+  };
+}
+
+function generationContextPayload(useCurrentScreen: boolean, useAssetEnhancedGeneration: boolean) {
+  return {
+    mode: useAssetEnhancedGeneration ? "knowledge_enhanced" : "strict",
+    useCurrentScreen,
+    useCaseKnowledge: useAssetEnhancedGeneration
   };
 }
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  type AndroidAppMonitorConfig,
+  type AndroidAppMonitorIncident,
+  type AndroidAppMonitorSummary,
+  type AndroidProcessLifecycleEvent,
+  type AndroidProcessMetricSample,
   defaultAndroidCapabilities,
   nowIso,
   type DeviceActionRequest,
@@ -273,6 +278,159 @@ describe("ServerAgentDeviceDriver", () => {
     await expect(metric).resolves.toEqual({ id: "metric-1", runId: "run-1", stepResultId: "step-1", deviceSerial: "pixel-1", sampledAt: now });
     await expect(foreground).resolves.toEqual({ packageName: "cn.eeo.classin", activityName: ".MainActivity" });
   });
+
+  it("proxies agent app monitor sessions and routes incidents by monitor id", async () => {
+    const registry = new ServerAgentRegistry({
+      now: () => now,
+      requestIdGenerator: sequentialIds("request-start", "request-stop")
+    });
+    registry.registerAgent({
+      agentId: "agent-a",
+      shared: true,
+      devices: [
+        {
+          serial: "pixel-1",
+          platform: "android",
+          status: "online",
+          capabilities: {
+            ...defaultAndroidCapabilities(),
+            events: { crash: true, anr: true, logs: true }
+          }
+        }
+      ]
+    });
+    const driver = new ServerAgentDeviceDriver(new FakeLocalDriver(), registry);
+    const config: AndroidAppMonitorConfig = { enabled: true, packageName: "cn.eeo.classin" };
+    const incidents: AndroidAppMonitorIncident[] = [];
+    const samples: Array<{ kind: "cpu" | "memory"; sample: AndroidProcessMetricSample }> = [];
+    const lifecycleEvents: AndroidProcessLifecycleEvent[] = [];
+
+    const sessionPromise = driver.startAppMonitor(
+      "agent-a:android:pixel-1",
+      "run-1",
+      config,
+      async () => ({ id: "artifact-1" }),
+      {
+        onIncident: (incident) => {
+          incidents.push(incident);
+        },
+        onSample: (sample, kind) => {
+          samples.push({ kind, sample });
+        },
+        onLifecycleEvent: (event) => {
+          lifecycleEvents.push(event);
+        }
+      }
+    );
+    const [startCommand] = registry.takePendingCommands("agent-a");
+    expect(startCommand).toEqual(expect.objectContaining({
+      requestId: "request-start",
+      command: "startAppMonitor",
+      payload: expect.objectContaining({
+        runId: "run-1",
+        config,
+        monitorId: expect.any(String)
+      })
+    }));
+    const monitorId = String(startCommand?.payload?.monitorId);
+    registry.completeCommand("agent-a", "request-start", {
+      ok: true,
+      result: {
+        monitorId,
+        summary: summary({ packageName: "cn.eeo.classin" })
+      }
+    });
+
+    const session = await sessionPromise;
+    await session.start();
+    registry.recordAppMonitorIncident("agent-a", {
+      deviceKey: "agent-a:android:pixel-1",
+      monitorId,
+      runId: "run-1",
+      incident: incident({ id: "incident-1", type: "java_crash" })
+    });
+
+    expect(incidents).toEqual([
+      expect.objectContaining({ id: "incident-1", type: "java_crash" })
+    ]);
+
+    const stopPromise = session.stop();
+    expect(registry.takePendingCommands("agent-a")).toEqual([
+      expect.objectContaining({
+        requestId: "request-stop",
+        command: "stopAppMonitor",
+        payload: { monitorId }
+      })
+    ]);
+    registry.completeCommand("agent-a", "request-stop", {
+      ok: true,
+      result: {
+        monitorId,
+        summary: summary({
+          packageName: "cn.eeo.classin",
+          incidents: [incident({ id: "incident-1", type: "java_crash" })]
+        }),
+        samples: {
+          cpu: [{ sampledAt: now, pid: 1234, processName: "cn.eeo.classin", cpuPercent: 12 }],
+          memory: [{ sampledAt: now, pid: 1234, processName: "cn.eeo.classin", pssKb: 4096 }],
+          lifecycle: [{ occurredAt: now, type: "process_started", pid: 1234, processName: "cn.eeo.classin" }]
+        }
+      }
+    });
+
+    await expect(stopPromise).resolves.toEqual(expect.objectContaining({
+      packageName: "cn.eeo.classin",
+      incidents: [expect.objectContaining({ id: "incident-1" })]
+    }));
+    expect(samples).toEqual([
+      { kind: "cpu", sample: expect.objectContaining({ processName: "cn.eeo.classin", cpuPercent: 12 }) },
+      { kind: "memory", sample: expect.objectContaining({ processName: "cn.eeo.classin", pssKb: 4096 }) }
+    ]);
+    expect(lifecycleEvents).toEqual([
+      expect.objectContaining({ type: "process_started", processName: "cn.eeo.classin" })
+    ]);
+    expect(session.getSummary()).toEqual(expect.objectContaining({
+      packageName: "cn.eeo.classin",
+      incidents: [expect.objectContaining({ id: "incident-1" })]
+    }));
+  });
+
+  it("maps agent app monitor incidents into watchDeviceEvents subscriptions", async () => {
+    const registry = new ServerAgentRegistry({ now: () => now });
+    registry.registerAgent({
+      agentId: "agent-a",
+      shared: true,
+      devices: [
+        {
+          serial: "pixel-1",
+          platform: "android",
+          status: "online",
+          capabilities: defaultAndroidCapabilities()
+        }
+      ]
+    });
+    const driver = new ServerAgentDeviceDriver(new FakeLocalDriver(), registry);
+    const events: Array<{ type: string; summary: string }> = [];
+    const watcher = await driver.watchDeviceEvents("agent-a:android:pixel-1", (event) => {
+      events.push({ type: event.type, summary: event.summary });
+    });
+
+    registry.recordAppMonitorIncident("agent-a", {
+      deviceKey: "agent-a:android:pixel-1",
+      monitorId: "monitor-1",
+      runId: "run-1",
+      incident: incident({ id: "incident-1", type: "java_crash", summary: "FATAL EXCEPTION" })
+    });
+    await watcher.stop();
+    registry.recordAppMonitorIncident("agent-a", {
+      deviceKey: "agent-a:android:pixel-1",
+      monitorId: "monitor-1",
+      runId: "run-1",
+      incident: incident({ id: "incident-2", type: "anr", summary: "ANR after stop" })
+    });
+
+    expect(events).toEqual([{ type: "crash", summary: "FATAL EXCEPTION" }]);
+  });
 });
 
 class FakeLocalDriver implements AutomationDeviceDriver {
@@ -338,4 +496,26 @@ class FakeLocalDriver implements AutomationDeviceDriver {
 function sequentialIds(...ids: string[]): () => string {
   let index = 0;
   return () => ids[index++] ?? `request-${index}`;
+}
+
+function summary(input: { packageName: string; incidents?: AndroidAppMonitorIncident[] }): AndroidAppMonitorSummary {
+  return {
+    packageName: input.packageName,
+    startedAt: now,
+    endedAt: now,
+    processes: [],
+    sampleCounts: { cpu: 0, memory: 0, lifecycle: 0 },
+    incidents: input.incidents ?? [],
+    artifacts: {}
+  };
+}
+
+function incident(input: Partial<AndroidAppMonitorIncident> & Pick<AndroidAppMonitorIncident, "id" | "type">): AndroidAppMonitorIncident {
+  return {
+    severity: "error",
+    occurredAt: now,
+    summary: "incident",
+    artifactIds: [],
+    ...input
+  };
 }

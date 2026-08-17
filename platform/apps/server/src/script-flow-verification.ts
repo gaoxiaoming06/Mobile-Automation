@@ -5,6 +5,7 @@ import type { ScriptFlowVerificationAssessment } from "@mobile-automation/shared
 export type ScriptFlowVerificationAssessmentInput = {
   document: ScriptFlowDocument;
   sourceYaml: string;
+  planDigest?: string;
   verifiedSourceHashes?: Iterable<string>;
   blockedReasons?: string[];
 };
@@ -24,6 +25,7 @@ export function assessScriptFlowVerification(
     return {
       status: "verified",
       sourceHash,
+      ...(input.planDigest ? { planDigest: input.planDigest } : {}),
       reasons: [],
       unresolvedStepIds: [],
       unresolvedOutcome: false
@@ -33,6 +35,7 @@ export function assessScriptFlowVerification(
   return {
     status: blockedReasons.length ? "blocked" : "needs_trial",
     sourceHash,
+    ...(input.planDigest ? { planDigest: input.planDigest } : {}),
     reasons: blockedReasons.length ? blockedReasons : ["当前脚本版本尚未通过试运行"],
     unresolvedStepIds: flattenSteps(input.document.steps)
       .filter(isTrialAction)
@@ -42,10 +45,10 @@ export function assessScriptFlowVerification(
 }
 
 function hasResultOracle(document: ScriptFlowDocument): boolean {
-  if (document.outcome?.page) return true;
+  if (document.outcome?.screenRef) return true;
   const finalStep = document.steps.at(-1);
   if (!finalStep || "repeat" in finalStep || "when" in finalStep || "runFlow" in finalStep) return false;
-  return Boolean(finalStep.expectPage)
+  return Boolean(finalStep.after?.screenRef)
     || "assertPage" in finalStep
     || "assertText" in finalStep
     || "waitForPage" in finalStep

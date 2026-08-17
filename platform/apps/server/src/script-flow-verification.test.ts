@@ -12,11 +12,11 @@ describe("ScriptFlow verification assessment", () => {
       { id: "launch", launchApp: { appId: "cn.eeo.classin" } },
       {
         id: "open-add-friend",
-        onPage: "classin.home",
+        before: { screenRef: "classin.home" },
         tap: { target: { text: "添加好友" } },
-        expectPage: "classin.friend.add"
+        after: { screenRef: "classin.friend.add" }
       }
-    ], { page: "classin.friend.add" });
+    ], { screenRef: "classin.friend.add" });
 
     expect(assessScriptFlowVerification({ document, sourceYaml })).toEqual({
       status: "needs_trial",
@@ -32,7 +32,7 @@ describe("ScriptFlow verification assessment", () => {
     const sourceHash = scriptFlowSourceHash(sourceYaml);
 
     expect(assessScriptFlowVerification({
-      document: flow([{ id: "verify-home", assertPage: "classin.home" }], { page: "classin.home" }),
+      document: flow([{ id: "verify-home", assertPage: { screenRef: "classin.home" } }], { screenRef: "classin.home" }),
       sourceYaml,
       verifiedSourceHashes: [sourceHash]
     })).toEqual({
@@ -42,6 +42,22 @@ describe("ScriptFlow verification assessment", () => {
       unresolvedStepIds: [],
       unresolvedOutcome: false
     });
+  });
+
+  it("carries the parent-child verification digest separately from the source hash", () => {
+    const sourceYaml = "version: 1\nname: 组合流程";
+    const sourceHash = scriptFlowSourceHash(sourceYaml);
+
+    expect(assessScriptFlowVerification({
+      document: flow([{ id: "child", runFlow: "case-child" }], { screenRef: "classin.lesson.create" }),
+      sourceYaml,
+      planDigest: "combo-digest",
+      verifiedSourceHashes: [sourceHash]
+    })).toEqual(expect.objectContaining({
+      status: "verified",
+      sourceHash,
+      planDigest: "combo-digest"
+    }));
   });
 
   it("blocks a draft when deterministic validation reports a hard reason", () => {
@@ -66,7 +82,7 @@ describe("ScriptFlow verification assessment", () => {
     });
     const intermediateAssertion = assessScriptFlowVerification({
       document: flow([
-        { id: "verify-home", assertPage: "classin.home" },
+        { id: "verify-home", assertPage: { screenRef: "classin.home" } },
         { id: "open-settings", tap: { target: { text: "设置" } } }
       ]),
       sourceYaml: "version: 1\nname: intermediate assertion"

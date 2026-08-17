@@ -1,5 +1,7 @@
 # AI 试运行与资产学习闭环实现方案
 
+> 2026-08-14 更新：学习沉淀与使用沉淀的边界已收紧。沉淀资产只能作为生成阶段的显式增强输入和人工修复建议；执行器不得主动读取资产库或历史脚本，普通执行只按 ScriptFlow 和当前设备实时状态执行。详见 `docs/superpowers/plans/2026-08-14-scriptflow-generation-context-policy.md`。本文中关于 InteractionAsset 作为执行器记忆、预览冻结资产定位策略等早期设计，以 2026-08-14 新边界为准。
+
 > 2026-07-30 更新：本方案中“用户逐项确认候选后沉淀”的设计已被 ADR 0004 的自动学习状态机取代。普通用户只确认无法自动判定的测试结果；资产需要多次成功证据，并由后台确定性规则或受约束的 AI 提议完成晋级。
 
 > 2026-08-01 更新：阶段 1.5 引入“显式看屏辅助生成”，它只让 AI 在生成前理解当前截图并产出受控 ScreenUnderstandingContext，不创建 LearningCandidate，也不写 PageAsset、InteractionAsset 或 NavigationEntry。本文的资产学习仍只从试运行成功且结果已验证后的 Run、StepResult 和 Artifact 中产生候选。

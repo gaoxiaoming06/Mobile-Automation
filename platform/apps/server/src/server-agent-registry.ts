@@ -1,5 +1,6 @@
 import {
   AGENT_PROTOCOL_VERSION,
+  type AgentAppMonitorIncidentEnvelope,
   type AgentCommandEnvelope,
   type AgentCommandName,
   type AgentCommandResultEnvelope,
@@ -11,6 +12,7 @@ import {
   type DeviceLeaseType,
   type DeviceSession,
   type DeviceStatus,
+  type AndroidAppMonitorIncident,
   type Platform,
   type ToolStatus
 } from "@mobile-automation/shared";
@@ -71,6 +73,7 @@ type PendingCommand = {
 };
 
 type AgentCommandSubscriber = () => void;
+type AgentAppMonitorIncidentSubscriber = (incident: AgentAppMonitorIncidentEnvelope) => void;
 
 type RegisteredDeviceLease = DeviceLease & {
   deviceKey: string;
@@ -98,6 +101,7 @@ export class ServerAgentRegistry {
   private readonly commandQueues = new Map<string, Map<string, AgentCommandEnvelope[]>>();
   private readonly pendingCommands = new Map<string, PendingCommand>();
   private readonly commandSubscribers = new Map<string, Set<AgentCommandSubscriber>>();
+  private readonly appMonitorIncidentSubscribers = new Map<string, Set<AgentAppMonitorIncidentSubscriber>>();
   private readonly pairingCodes = new Map<string, PairingCode>();
   private readonly deviceLeases = new Map<string, RegisteredDeviceLease>();
 
@@ -413,6 +417,56 @@ export class ServerAgentRegistry {
     return result;
   }
 
+  subscribeAppMonitorIncidents(
+    filter: { monitorId?: string; deviceKey?: string },
+    subscriber: AgentAppMonitorIncidentSubscriber
+  ): () => void {
+    const keys = [
+      filter.monitorId ? appMonitorSubscriberKey("monitor", filter.monitorId) : undefined,
+      filter.deviceKey ? appMonitorSubscriberKey("device", filter.deviceKey) : undefined
+    ].filter((key): key is string => Boolean(key));
+    for (const key of keys) {
+      const subscribers = this.appMonitorIncidentSubscribers.get(key) ?? new Set<AgentAppMonitorIncidentSubscriber>();
+      subscribers.add(subscriber);
+      this.appMonitorIncidentSubscribers.set(key, subscribers);
+    }
+    return () => {
+      for (const key of keys) {
+        const subscribers = this.appMonitorIncidentSubscribers.get(key);
+        subscribers?.delete(subscriber);
+        if (subscribers && subscribers.size === 0) {
+          this.appMonitorIncidentSubscribers.delete(key);
+        }
+      }
+    };
+  }
+
+  recordAppMonitorIncident(agentIdValue: unknown, input: unknown): AgentAppMonitorIncidentEnvelope {
+    this.cleanupRuntimeState();
+    const agentId = requiredTrimmedString(agentIdValue, "agentId");
+    const payload = recordValue(input);
+    if (!payload) {
+      throw new Error("app monitor incident payload is required");
+    }
+    const deviceKey = requiredTrimmedString(payload.deviceKey, "deviceKey");
+    const device = this.devices.get(deviceKey);
+    if (!device || device.agentId !== agentId) {
+      throw new Error(`Agent device not found for incident: ${deviceKey}`);
+    }
+    const envelope: AgentAppMonitorIncidentEnvelope = {
+      type: "appMonitorIncident",
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      agentId,
+      deviceKey,
+      monitorId: requiredTrimmedString(payload.monitorId, "monitorId"),
+      runId: requiredTrimmedString(payload.runId, "runId"),
+      timestamp: this.now(),
+      incident: androidAppMonitorIncidentValue(payload.incident)
+    };
+    this.publishAppMonitorIncident(envelope);
+    return envelope;
+  }
+
   deviceInfoForKey(deviceKey: string, visibility: AgentDeviceVisibility = "public"): AgentDeviceInfo | undefined {
     this.cleanupRuntimeState();
     const device = this.devices.get(deviceKey);
@@ -452,6 +506,16 @@ export class ServerAgentRegistry {
   private notifyAgentCommandSubscribers(agentId: string): void {
     for (const subscriber of this.commandSubscribers.get(agentId) ?? []) {
       subscriber();
+    }
+  }
+
+  private publishAppMonitorIncident(incident: AgentAppMonitorIncidentEnvelope): void {
+    const subscribers = new Set<AgentAppMonitorIncidentSubscriber>([
+      ...(this.appMonitorIncidentSubscribers.get(appMonitorSubscriberKey("monitor", incident.monitorId)) ?? []),
+      ...(this.appMonitorIncidentSubscribers.get(appMonitorSubscriberKey("device", incident.deviceKey)) ?? [])
+    ]);
+    for (const subscriber of subscribers) {
+      subscriber(incident);
     }
   }
 
@@ -794,6 +858,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
 function randomPairingCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -802,6 +870,9 @@ function agentCommandPriority(command: AgentCommandEnvelope): number {
   if (command.command === "performAction" || command.command === "performSemanticAction") {
     return 100;
   }
+  if (command.command === "startAppMonitor" || command.command === "stopAppMonitor") {
+    return 95;
+  }
   if (command.command === "startScrcpyStream" || command.command === "startHarmonyStream") {
     return 90;
   }
@@ -809,4 +880,43 @@ function agentCommandPriority(command: AgentCommandEnvelope): number {
     return 0;
   }
   return 50;
+}
+
+function appMonitorSubscriberKey(kind: "monitor" | "device", id: string): string {
+  return `${kind}:${id}`;
+}
+
+function androidAppMonitorIncidentValue(value: unknown): AndroidAppMonitorIncident {
+  const incident = recordValue(value);
+  if (!incident) {
+    throw new Error("incident is required");
+  }
+  const type = incident.type;
+  if (
+    type !== "cpu_threshold" &&
+    type !== "memory_threshold" &&
+    type !== "java_crash" &&
+    type !== "native_crash" &&
+    type !== "anr" &&
+    type !== "process_death" &&
+    type !== "watcher_error"
+  ) {
+    throw new Error("incident.type is invalid");
+  }
+  const severity = incident.severity;
+  if (severity !== "info" && severity !== "warning" && severity !== "error") {
+    throw new Error("incident.severity is invalid");
+  }
+  return {
+    id: requiredTrimmedString(incident.id, "incident.id"),
+    type,
+    severity,
+    occurredAt: requiredTrimmedString(incident.occurredAt, "incident.occurredAt"),
+    ...(optionalTrimmedString(incident.processName) ? { processName: optionalTrimmedString(incident.processName) } : {}),
+    ...(typeof incident.pid === "number" && Number.isFinite(incident.pid) ? { pid: incident.pid } : {}),
+    summary: requiredTrimmedString(incident.summary, "incident.summary"),
+    ...(optionalTrimmedString(incident.detail) ? { detail: optionalTrimmedString(incident.detail) } : {}),
+    artifactIds: Array.isArray(incident.artifactIds) ? incident.artifactIds.filter((item): item is string => typeof item === "string") : [],
+    ...(recordValue(incident.metadata) ? { metadata: recordValue(incident.metadata) } : {})
+  };
 }

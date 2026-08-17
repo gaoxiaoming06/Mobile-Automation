@@ -1,93 +1,122 @@
-import type { BusinessGraphVersion, Observation } from "@mobile-automation/graph-core";
+import type { BusinessGraphVersion, BusinessNode, Observation } from "@mobile-automation/graph-core";
 import { CROSS_PLATFORM_SCRIPT_SCOPE } from "@mobile-automation/shared";
 import { matchCurrentPage, type PageMatcherBaselineReader, type PageMatcherDiagnostics } from "./page-matcher.js";
 import type { ObservationOptions } from "./observation-service.js";
-import type { PageAsset, PageAssetCatalog, PageAssetPlatform, PageAssetSummary } from "./page-asset-catalog.js";
+import type { PageAssetPlatform, PageAssetSummary } from "./page-asset-catalog.js";
+import type { ExecutionProfileScreen, ExecutionProfileSnapshot } from "./execution-profile.js";
 import { isObservationInsideTargetApp, type RuntimeAppEnv } from "./target-app-runtime.js";
 
 export type PageObservationCollector = {
   collect(serial: string, options: ObservationOptions): Promise<Observation>;
 };
 
-export type IdentifyPageInput = {
+export type IdentifyScreenInput = {
   serial: string;
   appId: string;
   platform: PageAssetPlatform;
   observation?: Observation;
   screenshot?: Buffer;
+  executionProfile: ExecutionProfileSnapshot;
 };
 
-export type VerifyExpectedPageInput = IdentifyPageInput & {
-  pageId: string;
+export type VerifyExpectedScreenInput = IdentifyScreenInput & {
+  screenRef: string;
 };
 
-export type WaitForExpectedPageInput = VerifyExpectedPageInput & {
+export type WaitForExpectedScreenInput = VerifyExpectedScreenInput & {
   timeoutMs?: number;
   intervalMs?: number;
+};
+
+export type ScreenStateSummary = PageAssetSummary & {
+  screenRef: string;
 };
 
 export type PageStateResult = {
   status: "matched" | "multiple_candidates" | "unknown" | "outside_app" | "capture_failed";
   page?: PageAssetSummary;
+  screen?: ScreenStateSummary;
   candidates: PageAssetSummary[];
   observation?: Observation;
   diagnostics?: PageMatcherDiagnostics;
   actualAppId?: string;
-  reason?: "page_asset_not_found" | "observation_failed" | "screenshot_missing" | "page_not_matched" | "ambiguous_evidence";
+  reason?:
+    | "page_asset_not_found"
+    | "profile_not_found"
+    | "observation_failed"
+    | "screenshot_missing"
+    | "page_not_matched"
+    | "ambiguous_evidence";
   error?: string;
 };
 
 export interface PageStateService {
-  identifyCurrentPage(input: IdentifyPageInput): Promise<PageStateResult>;
-  verifyExpectedPage(input: VerifyExpectedPageInput): Promise<PageStateResult>;
-  waitForExpectedPage(input: WaitForExpectedPageInput): Promise<PageStateResult>;
+  identifyCurrentScreen(input: IdentifyScreenInput): Promise<PageStateResult>;
+  verifyExpectedScreen(input: VerifyExpectedScreenInput): Promise<PageStateResult>;
+  waitForExpectedScreen(input: WaitForExpectedScreenInput): Promise<PageStateResult>;
 }
 
-export class DefaultPageStateService implements PageStateService {
-  constructor(
-    private readonly catalog: PageAssetCatalog,
-    private readonly observations: PageObservationCollector,
-    private readonly baselineReader?: PageMatcherBaselineReader,
-    private readonly env?: RuntimeAppEnv
-  ) {}
+type ProfilePage = {
+  screen: ExecutionProfileScreen;
+  node: BusinessNode;
+};
 
-  async identifyCurrentPage(input: IdentifyPageInput): Promise<PageStateResult> {
-    const pages = this.catalog.listPages(input.appId, input.platform)
-      .map((page) => this.catalog.getPage(page.id))
-      .filter((page): page is PageAsset => Boolean(page));
+export class DefaultPageStateService implements PageStateService {
+  private readonly observations: PageObservationCollector;
+  private readonly baselineReader?: PageMatcherBaselineReader;
+  private readonly env?: RuntimeAppEnv;
+
+  constructor(
+    observations: PageObservationCollector,
+    baselineReader?: PageMatcherBaselineReader,
+    env?: RuntimeAppEnv
+  ) {
+    this.observations = observations;
+    this.baselineReader = baselineReader;
+    this.env = env;
+  }
+
+  async identifyCurrentScreen(input: IdentifyScreenInput): Promise<PageStateResult> {
+    const pages = profilePages(input.executionProfile);
     return this.matchPages(input, pages);
   }
 
-  async verifyExpectedPage(input: VerifyExpectedPageInput): Promise<PageStateResult> {
-    const target = this.catalog.resolvePage(input.pageId, input.appId, input.platform);
-    const eligiblePageIds = new Set(this.catalog.listPages(input.appId, input.platform).map((page) => page.id));
-    if (!target || target.appId !== input.appId || !eligiblePageIds.has(target.id)) {
-      return { status: "unknown", candidates: [], reason: "page_asset_not_found" };
+  async verifyExpectedScreen(input: VerifyExpectedScreenInput): Promise<PageStateResult> {
+    const target = resolveProfileScreen(input.executionProfile, input.screenRef);
+    if (!target) {
+      return { status: "unknown", candidates: [], reason: "profile_not_found" };
     }
-    const confusable = this.catalog.findConfusablePages(target.id)
-      .filter((page) => page.appId === input.appId && eligiblePageIds.has(page.id))
-      .map((page) => this.catalog.getPage(page.id))
-      .filter((page): page is PageAsset => Boolean(page));
-    return this.matchPages(input, [target, ...confusable], target.id);
+    const pages = profilePages(input.executionProfile);
+    const confusable = pages.filter((page) => page.screen.assetId !== target.screen.assetId && sharesEvidence(target, page));
+    return this.matchPages(input, [target, ...confusable], target.screen.assetId);
   }
 
-  async waitForExpectedPage(input: WaitForExpectedPageInput): Promise<PageStateResult> {
+  async waitForExpectedScreen(input: WaitForExpectedScreenInput): Promise<PageStateResult> {
     const timeoutMs = input.timeoutMs ?? 10_000;
     const intervalMs = input.intervalMs ?? 300;
     const deadline = Date.now() + timeoutMs;
-    let latest = await this.verifyExpectedPage({ ...input, observation: input.observation });
-    while (latest.status !== "matched" && latest.status !== "outside_app" && latest.status !== "capture_failed" && Date.now() < deadline) {
+    let latest = await this.verifyExpectedScreen({ ...input, observation: input.observation });
+    while (
+      latest.status !== "matched"
+      && latest.status !== "outside_app"
+      && latest.status !== "capture_failed"
+      && Date.now() < deadline
+    ) {
       if (intervalMs > 0) {
         await delay(intervalMs);
       }
-      latest = await this.verifyExpectedPage({ ...input, observation: undefined, screenshot: undefined });
+      latest = await this.verifyExpectedScreen({ ...input, observation: undefined, screenshot: undefined });
     }
     return latest;
   }
 
-  private async matchPages(input: IdentifyPageInput, pages: PageAsset[], expectedPageId?: string): Promise<PageStateResult> {
+  private async matchPages(
+    input: IdentifyScreenInput,
+    pages: ProfilePage[],
+    expectedPageId?: string
+  ): Promise<PageStateResult> {
     if (pages.length === 0) {
-      return { status: "unknown", candidates: [], reason: "page_asset_not_found" };
+      return { status: "unknown", candidates: [], reason: "profile_not_found" };
     }
     const observationResult = await this.readObservation(input);
     if ("failure" in observationResult) {
@@ -113,13 +142,13 @@ export class DefaultPageStateService implements PageStateService {
       graphVersion,
       observation,
       baselineReader: this.baselineReader,
-      candidateNodeIds: pages.map((page) => page.id),
+      candidateNodeIds: pages.map((page) => page.node.id),
       promoteLocalState: false
     });
     const candidates = result.match.candidates
-      .map((candidate) => pages.find((page) => page.id === candidate.node.id))
-      .filter((page): page is PageAsset => Boolean(page))
-      .map(stripNode);
+      .map((candidate) => pages.find((page) => page.node.id === candidate.node.id))
+      .filter((page): page is ProfilePage => Boolean(page))
+      .map((page) => summaryForScreen(page, input.appId));
     if (result.match.status === "multiple_candidates") {
       return {
         status: "multiple_candidates",
@@ -129,21 +158,25 @@ export class DefaultPageStateService implements PageStateService {
         reason: "ambiguous_evidence"
       };
     }
-    const matched = result.match.node ? pages.find((page) => page.id === result.match.node?.id) : undefined;
-    if (result.match.status === "matched" && matched && (!expectedPageId || matched.id === expectedPageId)) {
+    const matched = result.match.node
+      ? pages.find((page) => page.node.id === result.match.node?.id)
+      : undefined;
+    if (result.match.status === "matched" && matched && (!expectedPageId || matched.node.id === expectedPageId)) {
       const conflicts = pagesWithSharedOnlyMatchedEvidence(matched, pages, result.diagnostics);
       if (conflicts.length > 0) {
         return {
           status: "multiple_candidates",
-          candidates: [matched, ...conflicts].map(stripNode),
+          candidates: [matched, ...conflicts].map((page) => summaryForScreen(page, input.appId)),
           observation: result.observation,
           diagnostics: result.diagnostics,
           reason: "ambiguous_evidence"
         };
       }
+      const screen = summaryForScreen(matched, input.appId);
       return {
         status: "matched",
-        page: stripNode(matched),
+        page: screen,
+        screen,
         candidates,
         observation: result.observation,
         diagnostics: result.diagnostics
@@ -158,13 +191,15 @@ export class DefaultPageStateService implements PageStateService {
     };
   }
 
-  private async readObservation(input: IdentifyPageInput): Promise<{ observation: Observation } | { failure: PageStateResult }> {
+  private async readObservation(
+    input: IdentifyScreenInput
+  ): Promise<{ observation: Observation } | { failure: PageStateResult }> {
     let observation: Observation;
     try {
       observation = input.observation ?? await this.observations.collect(input.serial, {
         includeScreenshot: true,
         includeOcr: true,
-        includeUiTree: false,
+        includeUiTree: true,
         ...(input.screenshot ? { screenshotOverride: input.screenshot } : {})
       });
     } catch (error) {
@@ -177,7 +212,7 @@ export class DefaultPageStateService implements PageStateService {
         }
       };
     }
-    if (!observation.screenshot || typeof observation.raw?.screenshotBase64 !== "string") {
+    if (!observationHasEvidence(observation)) {
       return {
         failure: {
           status: "capture_failed",
@@ -191,11 +226,71 @@ export class DefaultPageStateService implements PageStateService {
   }
 }
 
+function profilePages(profile: ExecutionProfileSnapshot): ProfilePage[] {
+  return profile.screens.map((screen) => ({
+    screen,
+    node: {
+      id: screen.assetId,
+      graphVersionId: screen.graphVersionId,
+      key: screen.screenRef,
+      name: screen.name,
+      nodeType: "page",
+      tags: ["execution-profile"],
+      status: "active",
+      matchers: screen.evidence,
+      defaultExpectations: [],
+      platformScope: profile.platform,
+      metadata: { assetRecordingConfirmed: true }
+    }
+  }));
+}
+
+function resolveProfileScreen(profile: ExecutionProfileSnapshot, reference: string): ProfilePage | undefined {
+  return profilePages(profile).find((page) => page.screen.screenRef === reference);
+}
+
+function graphForPages(pages: ProfilePage[]): BusinessGraphVersion {
+  return {
+    id: pages[0]!.screen.graphVersionId,
+    graphId: pages[0]!.screen.assetId,
+    version: 1,
+    sourceSummary: ["execution-profile"],
+    status: "active",
+    nodes: pages.map((page) => page.node),
+    createdAt: new Date(0).toISOString()
+  };
+}
+
+function summaryForScreen(page: ProfilePage, appId: string): ScreenStateSummary {
+  return {
+    id: page.screen.assetId,
+    key: page.screen.screenRef,
+    screenRef: page.screen.screenRef,
+    name: page.screen.name,
+    appId,
+    graphVersionId: page.screen.graphVersionId,
+    matcherCount: page.screen.evidence.length,
+    platformScope: page.node.platformScope
+  };
+}
+
+function sharesEvidence(left: ProfilePage, right: ProfilePage): boolean {
+  const rightEvidence = new Set(
+    right.screen.evidence
+      .filter((matcher) => matcher.type !== "package" && matcher.type !== "bundle_id")
+      .map((matcher) => identitySignature(matcher.type, matcher.value))
+      .filter(Boolean)
+  );
+  return left.screen.evidence
+    .filter((matcher) => matcher.type !== "package" && matcher.type !== "bundle_id")
+    .some((matcher) => rightEvidence.has(identitySignature(matcher.type, matcher.value)));
+}
+
 function pagesWithSharedOnlyMatchedEvidence(
-  matched: PageAsset,
-  pages: PageAsset[],
+  matched: ProfilePage,
+  pages: ProfilePage[],
   diagnostics: PageMatcherDiagnostics
-): PageAsset[] {
+): ProfilePage[] {
   const matchedSignatures = new Set(
     diagnostics.matchedEvidence
       .filter((evidence) => evidence.type !== "package" && evidence.type !== "bundle_id")
@@ -205,11 +300,11 @@ function pagesWithSharedOnlyMatchedEvidence(
   if (matchedSignatures.size === 0) {
     return [];
   }
-  const others = pages.filter((page) => page.id !== matched.id);
+  const others = pages.filter((page) => page.node.id !== matched.node.id);
   const signaturesByPage = others.map((page) => ({
     page,
     signatures: new Set(
-      page.node.matchers
+      page.screen.evidence
         .filter((matcher) => matcher.type !== "package" && matcher.type !== "bundle_id")
         .map((matcher) => identitySignature(matcher.type, matcher.value))
         .filter(Boolean)
@@ -231,27 +326,22 @@ function identitySignature(type: string, value: string): string {
   try {
     decoded = decodeURIComponent(value);
   } catch {
-    // Keep malformed legacy values comparable without failing page recognition.
+    // Keep malformed evidence comparable without failing page recognition.
   }
   const normalized = decoded.trim().toLocaleLowerCase().replace(/\s+/g, "");
   return normalized ? `${type}:${normalized}` : "";
 }
 
-function graphForPages(pages: PageAsset[]): BusinessGraphVersion {
-  return {
-    id: pages[0].graphVersionId,
-    graphId: pages[0].appId,
-    version: 1,
-    sourceSummary: ["page-state-service"],
-    status: "active",
-    nodes: pages.map((page) => page.node),
-    createdAt: new Date(0).toISOString()
-  };
-}
-
-function stripNode(page: PageAsset): PageAssetSummary {
-  const { node: _node, ...summary } = page;
-  return summary;
+function observationHasEvidence(observation: Observation): boolean {
+  return Boolean(
+    observation.screenshot
+    || observation.uiElements.length > 0
+    || observation.ocrTexts.length > 0
+    || observation.packageName
+    || observation.bundleId
+    || observation.activityName
+    || observation.routeName
+  );
 }
 
 function delay(ms: number): Promise<void> {

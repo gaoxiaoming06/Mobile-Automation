@@ -86,8 +86,8 @@ function trialRun(): TestRun {
         checkedAt: "2026-07-30T00:00:01.000Z"
       }],
       metadata: {
-        onPage: "classin.home",
-        expectPage: "classin.growth",
+        before: { screenRef: "classin.home" },
+        after: { screenRef: "classin.growth" },
         semantic: {
           type: "ocr_text",
           action: "tap",
@@ -117,8 +117,8 @@ function trialRun(): TestRun {
         app: { id: "cn.eeo.classin" },
         steps: [{
           id: "open-growth",
-          onPage: "classin.home",
-          expectPage: "classin.growth",
+          before: { screenRef: "classin.home" },
+          after: { screenRef: "classin.growth" },
           risk: "interaction",
           tap: {
             target: { text: "成长", area: "bottomBar" },

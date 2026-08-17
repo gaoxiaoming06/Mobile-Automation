@@ -1,5 +1,6 @@
 import {
   compileScriptFlow,
+  ScriptFlowCompileError,
   type CompileScriptFlowOptions,
   type ScriptExecutionPlan,
   type ScriptExecutionPlanStep,
@@ -14,7 +15,6 @@ import {
   type AndroidAppMonitorConfig,
   type FlowStartSetupScope,
   type FlowStartStrategy,
-  type InteractionAsset,
   type RunLoopScope,
   type RunMode,
   type ScriptFlowExecutionPurpose,
@@ -23,8 +23,7 @@ import {
   type Platform
 } from "@mobile-automation/shared";
 import type { AutomationDeviceDriver } from "./device-driver.js";
-import type { PageAssetCatalog, PageAssetPlatform } from "./page-asset-catalog.js";
-import type { PageNavigationEdge, PageNavigationSegmentSnapshot } from "./page-navigation.js";
+import type { PageAssetPlatform } from "./page-asset-catalog.js";
 import type { PageStateService } from "./page-state-service.js";
 import type { PageStateExpectationVerifier } from "./step-expectations.js";
 import { ScriptTargetResolver } from "./script-target-resolver.js";
@@ -54,19 +53,15 @@ export interface ScriptFlowRunBackend {
   start(input: ScriptFlowBackendStartInput): TestRun;
 }
 
-export type ScriptInteractionAssetBinding = {
-  stepId: string;
-  asset: InteractionAsset;
-};
-
 export type StartScriptFlowRunInput = {
   flowId: string;
   scriptVersion?: number;
   planDigest: string;
   dependencies: NonNullable<TestRun["sourceSnapshot"]>["dependencies"];
-  navigationSegments?: PageNavigationSegmentSnapshot[];
+  /** @deprecated Navigation is no longer part of ScriptFlow execution. */
+  navigationSegments?: unknown[];
+  /** @deprecated Navigation is no longer part of ScriptFlow execution. */
   navigationRootPages?: string[];
-  interactionAssets?: ScriptInteractionAssetBinding[];
   sourceYaml?: string;
   sourceHash?: string;
   executionPurpose?: ScriptFlowExecutionPurpose;
@@ -98,7 +93,6 @@ export type ScriptFlowRunnerDeps = {
   backend: ScriptFlowRunBackend;
   driver: Pick<AutomationDeviceDriver, "getDeviceInfo">;
   targetResolver: ScriptTargetResolver;
-  pageCatalog?: Pick<PageAssetCatalog, "resolvePage">;
 };
 
 export class ScriptFlowRunner {
@@ -106,12 +100,10 @@ export class ScriptFlowRunner {
 
   validatePlan(
     plan: ScriptExecutionPlan,
-    interactionAssets: ScriptInteractionAssetBinding[] = [],
     platform: PageAssetPlatform = CROSS_PLATFORM_SCRIPT_SCOPE
   ): void {
-    const assetsByStep = interactionAssetMap(interactionAssets);
     for (const step of plan.steps) {
-      this.resolveAction(step, plan.app.id, plan.app.id, platform, plan.parameters, assetsByStep.get(step.id));
+      this.resolveAction(step, plan.app.id, plan.app.id, platform, plan.parameters);
     }
   }
 
@@ -133,7 +125,7 @@ export class ScriptFlowRunner {
       ? selectScriptExecutionSteps(compiledPersistedPlan, input.stepSelection)
       : compiledPersistedPlan;
     const device = await this.deps.driver.getDeviceInfo(input.deviceSerial);
-    this.validatePlan(plan, input.interactionAssets, device.platform);
+    this.validatePlan(plan, device.platform);
     const runtimeAppIdentifier = resolveRuntimeAppIdentifier({
       appId: input.flow.app.id,
       platform: device.platform,
@@ -154,24 +146,17 @@ export class ScriptFlowRunner {
       resolutionParameters: persistedPlan.parameters
     };
     const createdAt = nowIso();
-    const interactionAssetsByStep = interactionAssetMap(input.interactionAssets ?? []);
-    const navigationEdges = this.buildNavigationEdges(input.navigationSegments ?? [], stepContext, createdAt, false);
-    const persistedNavigationEdges = this.buildNavigationEdges(input.navigationSegments ?? [], persistedStepContext, createdAt, true);
     const steps = plan.steps.map((step) => this.toActionStep(
       step,
       stepContext,
       createdAt,
-      navigationEdges,
-      interactionAssetsByStep.get(step.id)
     ));
     const persistedCandidates = persistedPlan.steps.map((step, index) =>
       this.toActionStep(
         step,
         persistedStepContext,
         steps[index]?.createdAt ?? createdAt,
-        persistedNavigationEdges,
-        interactionAssetsByStep.get(step.id)
-      )
+    )
     );
     const persistedSteps = maskPlanDifferences(steps, persistedCandidates);
     return this.deps.backend.start({
@@ -190,7 +175,7 @@ export class ScriptFlowRunner {
       startSetupScope: input.mode === "loop_until_stop" && input.loopScope === "all_steps"
         ? "before_each_iteration"
         : "before_run",
-      androidAppMonitor: input.androidAppMonitor,
+      androidAppMonitor: androidAppMonitorForScriptExecution(input.androidAppMonitor, device.platform, runtimeAppIdentifier),
       startStrategy: input.startStrategy ?? executionStartStrategy(input.flow, plan),
       startAppPackageName: runtimeAppIdentifier,
       sourceSnapshot: {
@@ -202,14 +187,6 @@ export class ScriptFlowRunner {
         executionPurpose: input.executionPurpose ?? "normal",
         ...(input.sourceHash ? { sourceHash: input.sourceHash } : {}),
         ...(input.verificationAssessment ? { verificationAssessment: input.verificationAssessment } : {}),
-        ...(input.interactionAssets?.length ? {
-          interactionAssets: input.interactionAssets.map((binding) => ({
-            stepId: binding.stepId,
-            assetId: binding.asset.id,
-            key: binding.asset.key,
-            version: binding.asset.version
-          }))
-        } : {}),
         dependencies: input.dependencies,
         ...(input.sourceYaml ? { sourceYaml: input.sourceYaml } : {}),
         parsed: input.flow as unknown as Record<string, unknown>
@@ -228,17 +205,14 @@ export class ScriptFlowRunner {
       scriptParameters: Record<string, ScriptParameterValue>;
       resolutionParameters: Record<string, ScriptParameterValue>;
     },
-    createdAt: string,
-    navigationEdges: PageNavigationEdge[] = [],
-    interactionAsset?: InteractionAsset
+    createdAt: string
   ): ActionStep {
     const resolved = this.resolveAction(
       step,
       context.appId,
       context.runtimeAppIdentifier,
       context.platform,
-      context.resolutionParameters,
-      interactionAsset
+      context.resolutionParameters
     );
     const metadata = {
       scriptFlowId: context.flowId,
@@ -248,25 +222,13 @@ export class ScriptFlowRunner {
       platform: context.platform,
       executionPhase: step.phase,
       sourceFlowName: step.source.flowName,
-      ...(step.onPage ? { onPage: step.onPage } : {}),
-      ...(step.expectPage ? { expectPage: step.expectPage } : {}),
       ...(resolved.strategy ? { locatorStrategy: resolved.strategy } : {}),
       scriptParameters: context.scriptParameters
     };
-    const expectedPage = step.action === "waitForPage" || step.action === "assertPage" || step.action === "reachPage"
-      ? stringInput(step.input, "pageId")
-      : step.expectPage;
     const timeoutMs = step.timeoutMs ?? 15_000;
-    const expectedPageExpectation = expectedPage
-      ? this.pageExpectationFor(`after:${step.id}`, expectedPage, context, timeoutMs, createdAt)
-      : undefined;
     const expectations = [
-      ...(expectedPageExpectation ? [expectedPageExpectation] : []),
       ...(step.action === "assertText" ? [textExpectation(`after:${step.id}`, step.input, timeoutMs, createdAt)] : [])
     ];
-    const onPagePrecondition = step.onPage
-      ? this.pageExpectationFor(`before:${step.id}`, step.onPage, context, timeoutMs, createdAt)
-      : undefined;
     return {
       id: step.id,
       order: step.order,
@@ -275,40 +237,22 @@ export class ScriptFlowRunner {
       title: step.name ?? defaultStepTitle(step),
       params: {
         ...resolved.params,
-        ...(step.action === "reachPage" ? {
-          navigationEdges
-        } : {}),
         ...metadata
       },
       ...(resolved.coordinate ? { coordinate: resolved.coordinate } : {}),
-      ...(onPagePrecondition ? { preconditions: [onPagePrecondition] } : {}),
       ...(expectations.length ? { expectations } : {}),
       ...(step.timeoutMs ? { timing: { timeoutMs: step.timeoutMs } } : {}),
       createdAt
     };
   }
 
-  private pageExpectationFor(
-    id: string,
-    pageId: string,
-    context: { appId: string; platform: PageAssetPlatform },
-    timeoutMs: number,
-    createdAt: string
-  ): NonNullable<ActionStep["expectations"]>[number] | undefined {
-    if (isRuntimeUnknownPageReference(pageId)) {
-      return undefined;
-    }
-    return pageExpectation(id, pageId, context, timeoutMs, createdAt);
-  }
-
   private resolveAction(
     step: ScriptExecutionPlanStep,
     appId: string,
     runtimeAppIdentifier: string,
-    platform: PageAssetPlatform,
-    parameters: Record<string, ScriptParameterValue>,
-    interactionAsset?: InteractionAsset
-  ): {
+	    platform: PageAssetPlatform,
+	    parameters: Record<string, ScriptParameterValue>
+	  ): {
     type: ActionStep["type"];
     params: Record<string, unknown>;
     coordinate?: ActionStep["coordinate"];
@@ -334,20 +278,7 @@ export class ScriptFlowRunner {
       };
     }
     if (step.action === "reachPage") {
-      const pageReference = stringInput(step.input, "pageId");
-      const targetPage = this.deps.pageCatalog?.resolvePage(pageReference, appId, platform);
-      return {
-        type: "reach_page",
-        params: {
-          pageId: pageReference,
-          targetPageId: targetPage?.id ?? pageReference,
-          ...(targetPage?.name ? { targetPageName: targetPage.name } : {}),
-          appId,
-          platform,
-          policy: stringInput(step.input, "policy") || "safe"
-        },
-        strategy: "runtime_page_navigation"
-      };
+      throw new ScriptFlowCompileError("reachPage is no longer supported in ScriptFlow execution; use runFlow or explicit actions");
     }
     if (step.action === "waitForPage" || step.action === "assertPage") {
       return { type: "wait", params: { durationMs: 0 }, strategy: "page_state" };
@@ -361,11 +292,9 @@ export class ScriptFlowRunner {
         action: "tap",
         target,
         search: searchInput(step.input),
-        onPage: step.onPage,
         appId,
         platform,
-        parameters,
-        interactionAsset
+        parameters
       });
     }
     if (step.action === "inputText") {
@@ -373,14 +302,12 @@ export class ScriptFlowRunner {
         action: "inputText",
         target,
         search: searchInput(step.input),
-        onPage: step.onPage,
         appId,
         platform,
         parameters,
         value: stringInput(step.input, "value"),
         valueParamKey: optionalStringInput(step.input, "valueParamKey"),
-        sensitiveInput: booleanInput(step.input, "sensitiveInput"),
-        interactionAsset
+        sensitiveInput: booleanInput(step.input, "sensitiveInput")
       });
     }
     if (step.action === "clearText") {
@@ -388,11 +315,9 @@ export class ScriptFlowRunner {
         action: "clearText",
         target,
         search: searchInput(step.input),
-        onPage: step.onPage,
         appId,
         platform,
-        parameters,
-        interactionAsset
+        parameters
       });
     }
     if (step.action === "selectText") {
@@ -400,104 +325,23 @@ export class ScriptFlowRunner {
         action: "selectText",
         target,
         search: searchInput(step.input),
-        onPage: step.onPage,
         appId,
         platform,
         parameters,
         value: stringInput(step.input, "value"),
-        confirmText: optionalStringInput(step.input, "confirmText"),
-        interactionAsset
+        confirmText: optionalStringInput(step.input, "confirmText")
       });
     }
     return this.deps.targetResolver.resolve({
       action: "scrollUntilVisible",
       target,
-      onPage: step.onPage,
       appId,
       platform,
       parameters,
       direction: verticalDirectionInput(step.input),
       maxSwipes: numberInput(step.input, "maxSwipes"),
-      interactionAsset
+      search: searchInput(step.input)
     });
-  }
-
-  private buildNavigationEdges(
-    segments: PageNavigationSegmentSnapshot[],
-    context: {
-      flowId: string;
-      scriptVersion: number;
-      appId: string;
-      runtimeAppIdentifier: string;
-      platform: PageAssetPlatform;
-      scriptParameters: Record<string, ScriptParameterValue>;
-      resolutionParameters: Record<string, ScriptParameterValue>;
-    },
-    createdAt: string,
-    redactSensitiveParameters: boolean
-  ): PageNavigationEdge[] {
-    if (!this.deps.pageCatalog) return [];
-    const result: PageNavigationEdge[] = [];
-    const seen = new Set<string>();
-    for (const segment of segments) {
-      let plan: ScriptExecutionPlan;
-      try {
-        if (segment.appId !== context.appId || !navigationSegmentSupportsPlatform(segment.platform, context.platform as Platform)) continue;
-        const document: ScriptFlowDocument = {
-          version: 1,
-          kind: "case",
-          name: segment.flowName,
-          app: { id: segment.appId },
-          start: { strategy: "keepCurrent" },
-          parameters: segment.parameters,
-          steps: segment.steps,
-          tags: []
-        };
-        const parameters = Object.fromEntries(Object.keys(segment.parameters).flatMap((key) => {
-          const value = context.resolutionParameters[key];
-          return value === undefined ? [] : [[key, value]];
-        }));
-        plan = compileScriptFlow(document, { parameters, redactSensitiveParameters });
-      } catch {
-        continue;
-      }
-      if (!plan.steps.length) continue;
-      const fromPage = this.deps.pageCatalog.resolvePage(segment.fromPage, context.appId, context.platform);
-      const toPage = this.deps.pageCatalog.resolvePage(segment.toPage, context.appId, context.platform);
-      if (!fromPage || !toPage) continue;
-      try {
-        const segmentContext = {
-          ...context,
-          flowId: segment.flowId,
-          scriptVersion: segment.flowVersion,
-          scriptParameters: visibleParameters({
-            version: 1,
-            kind: "case",
-            name: segment.flowName,
-            app: { id: segment.appId },
-            parameters: segment.parameters,
-            steps: segment.steps,
-            tags: []
-          }, plan.parameters)
-        };
-        const actions = plan.steps.map((step) => this.toActionStep(step, segmentContext, createdAt));
-        const key = `${fromPage.id}:${toPage.id}:${JSON.stringify(actions.map((action) => [action.type, action.params, action.coordinate]))}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        result.push({
-          fromPageId: fromPage.id,
-          toPageId: toPage.id,
-          flowId: segment.flowId,
-          flowName: segment.flowName,
-          segmentId: segment.id,
-          stepIds: segment.stepIds,
-          actions
-        });
-      } catch {
-        continue;
-      }
-    }
-    return result;
   }
 
 }
@@ -587,17 +431,21 @@ function maskPlanDifferences<T>(runtime: T, redacted: T): T {
 
 export function pageStateExpectationVerifier(pageState: PageStateService): PageStateExpectationVerifier {
   return async (request) => {
-    const result = await pageState.waitForExpectedPage({
+    if (!request.executionProfile) {
+      throw new Error("ScriptFlow screen verification requires a frozen execution profile");
+    }
+    const result = await pageState.waitForExpectedScreen({
       serial: request.serial,
       appId: request.appId,
       platform: request.platform,
-      pageId: request.pageId,
+      screenRef: request.screenRef,
+      executionProfile: request.executionProfile,
       timeoutMs: request.timeoutMs,
       screenshot: request.screenshot
     });
     return {
       status: result.status,
-      pageName: result.page?.name,
+      pageName: result.screen?.name,
       candidateNames: result.candidates.map((candidate) => candidate.name),
       observedText: observationTextSummary(result.observation?.ocrTexts.map((item) => item.text) ?? []),
       actualAppId: result.actualAppId,
@@ -612,32 +460,6 @@ function observationTextSummary(values: string[]): string | undefined {
     return undefined;
   }
   return unique.slice(0, 10).join("、").slice(0, 240);
-}
-
-function pageExpectation(
-  id: string,
-  pageId: string,
-  context: { appId: string; platform: PageAssetPlatform },
-  timeoutMs: number,
-  createdAt: string
-): NonNullable<ActionStep["expectations"]>[number] {
-  return {
-    id,
-    type: "state_is",
-    enabled: true,
-    params: {
-      appId: context.appId,
-      platform: context.platform,
-      pageId,
-      timeoutMs,
-      blocking: true
-    },
-    createdAt
-  };
-}
-
-function isRuntimeUnknownPageReference(reference: string): boolean {
-  return reference.trim().startsWith("runtime.unknown.");
 }
 
 function textExpectation(
@@ -690,17 +512,6 @@ function targetInput(input: Record<string, unknown>): ScriptTarget {
   return target as ScriptTarget;
 }
 
-function interactionAssetMap(bindings: ScriptInteractionAssetBinding[]): Map<string, InteractionAsset> {
-  const result = new Map<string, InteractionAsset>();
-  for (const binding of bindings) {
-    if (result.has(binding.stepId)) {
-      throw new Error(`Multiple interaction assets are bound to script step ${binding.stepId}`);
-    }
-    result.set(binding.stepId, binding.asset);
-  }
-  return result;
-}
-
 function searchInput(input: Record<string, unknown>): import("@mobile-automation/script-flow").ScriptSearchPolicy | undefined {
   const search = input.search;
   if (search === undefined) {
@@ -717,10 +528,6 @@ function visibleParameters(
   parameters: Record<string, ScriptParameterValue>
 ): Record<string, ScriptParameterValue> {
   return Object.fromEntries(Object.entries(parameters).filter(([key]) => flow.parameters[key]?.sensitive !== true));
-}
-
-function navigationSegmentSupportsPlatform(segmentPlatform: PageNavigationSegmentSnapshot["platform"], devicePlatform: Platform): boolean {
-  return segmentPlatform === CROSS_PLATFORM_SCRIPT_SCOPE || segmentPlatform === "flutter" || segmentPlatform === devicePlatform;
 }
 
 function startStrategy(flow: ScriptFlowDocument): FlowStartStrategy {
@@ -740,18 +547,36 @@ function executionStartStrategy(flow: ScriptFlowDocument, plan: ScriptExecutionP
   return startStrategy(flow);
 }
 
+function androidAppMonitorForScriptExecution(
+  config: AndroidAppMonitorConfig | undefined,
+  platform: PageAssetPlatform,
+  packageName: string
+): AndroidAppMonitorConfig | undefined {
+  if (config) {
+    return config;
+  }
+  if (platform !== "android" || !packageName.trim()) {
+    return undefined;
+  }
+  return {
+    enabled: true,
+    packageName,
+    includeSubprocesses: true
+  };
+}
+
 function defaultStepTitle(step: ScriptExecutionPlanStep): string {
   if (step.action === "waitForPage") {
-    return `等待页面 ${stringInput(step.input, "pageId")}`;
+    return `等待页面 ${stringInput(step.input, "screenRef")}`;
   }
   if (step.action === "assertPage") {
-    return `确认页面 ${stringInput(step.input, "pageId")}`;
+    return `确认页面 ${stringInput(step.input, "screenRef")}`;
   }
   if (step.action === "assertText") {
     return `确认出现 ${stringInput(step.input, "text")}`;
   }
   if (step.action === "reachPage") {
-    return `到达页面 ${stringInput(step.input, "pageId")}`;
+    return `到达页面 ${stringInput(step.input, "screenRef")}`;
   }
   if (step.action === "wait") {
     return `等待 ${formatDurationMs(numberInput(step.input, "durationMs") ?? 1000)}`;

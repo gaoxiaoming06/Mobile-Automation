@@ -12,6 +12,7 @@ import {
   type AndroidProcessMetricSample,
   type ArtifactRef,
   type DeviceEvent,
+  type ExecutionProfileSnapshot,
   type MetricSample,
   nowIso,
   type SemanticDeviceActionRequest,
@@ -37,6 +38,7 @@ describe("AutomationRunner regression flow", () => {
     const started = runner.start({
       deviceSerial: driver.device.serial,
       steps: [reachPageStep("page-home", [])],
+      sourceSnapshot: navigationSourceSnapshot(),
       stepIntervalMs: 0,
       recordVideo: false
     });
@@ -46,7 +48,7 @@ describe("AutomationRunner regression flow", () => {
     expect(driver.actions).toEqual([]);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
       status: "already_on_target",
-      targetPageId: "page-home",
+      targetScreenRef: "page-home",
       route: []
     }));
   });
@@ -86,6 +88,7 @@ describe("AutomationRunner regression flow", () => {
         stepIds: ["open-menu", "open-home"],
         actions: [openMenu, openHome]
       }])],
+      sourceSnapshot: navigationSourceSnapshot(),
       stepIntervalMs: 0,
       recordVideo: false
     });
@@ -106,14 +109,15 @@ describe("AutomationRunner regression flow", () => {
     let identifyCount = 0;
     const runner = new AutomationRunner(storage, driver, undefined, {
       pageStateService: {
-        identifyCurrentPage: async () => {
+        identifyCurrentScreen: async () => {
           identifyCount += 1;
           if (identifyCount === 1) return { status: "unknown", candidates: [] };
           return {
             status: "matched",
-            page: {
+            screen: {
               id: "page-home",
               key: "page-home",
+              screenRef: "page-home",
               name: "主页",
               appId: "cn.eeo.classin",
               graphVersionId: "v1",
@@ -122,14 +126,15 @@ describe("AutomationRunner regression flow", () => {
             candidates: []
           };
         },
-        verifyExpectedPage: async () => ({ status: "unknown", candidates: [] }),
-        waitForExpectedPage: async () => ({ status: "unknown", candidates: [] })
+        verifyExpectedScreen: async () => ({ status: "unknown", candidates: [] }),
+        waitForExpectedScreen: async () => ({ status: "unknown", candidates: [] })
       }
     });
 
     const started = runner.start({
       deviceSerial: driver.device.serial,
       steps: [reachPageStep("page-home", [])],
+      sourceSnapshot: navigationSourceSnapshot(),
       stepIntervalMs: 0,
       recordVideo: false
     });
@@ -157,6 +162,7 @@ describe("AutomationRunner regression flow", () => {
     const started = runner.start({
       deviceSerial: driver.device.serial,
       steps: [step],
+      sourceSnapshot: navigationSourceSnapshot(),
       stepIntervalMs: 0,
       recordVideo: false
     });
@@ -166,7 +172,7 @@ describe("AutomationRunner regression flow", () => {
     expect(driver.actions).toEqual([]);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
       status: "no_reliable_path",
-      currentPageId: "page-class-detail"
+      currentScreenRef: "page-class-detail"
     }));
   });
 
@@ -177,9 +183,10 @@ describe("AutomationRunner regression flow", () => {
     let identifyCount = 0;
     const page = (id: string, name: string) => ({
       status: "matched" as const,
-      page: {
+      screen: {
         id,
         key: id,
+        screenRef: id,
         name,
         appId: "cn.eeo.classin",
         graphVersionId: "v1",
@@ -189,14 +196,14 @@ describe("AutomationRunner regression flow", () => {
     });
     const runner = new AutomationRunner(storage, driver, undefined, {
       pageStateService: {
-        identifyCurrentPage: async () => {
+        identifyCurrentScreen: async () => {
           identifyCount += 1;
           return identifyCount === 1
             ? page("page-class-detail", "班级详情")
             : page("page-home", "主页");
         },
-        verifyExpectedPage: async () => page("page-growth", "成长"),
-        waitForExpectedPage: async () => page("page-growth", "成长")
+        verifyExpectedScreen: async () => page("page-growth", "成长"),
+        waitForExpectedScreen: async () => page("page-growth", "成长")
       }
     });
     const openGrowth: ActionStep = {
@@ -223,6 +230,7 @@ describe("AutomationRunner regression flow", () => {
     const started = runner.start({
       deviceSerial: driver.device.serial,
       steps: [step],
+      sourceSnapshot: navigationSourceSnapshot(),
       stepIntervalMs: 0,
       recordVideo: false
     });
@@ -233,7 +241,7 @@ describe("AutomationRunner regression flow", () => {
     expect(identifyCount).toBe(1);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
       status: "no_reliable_path",
-      currentPageId: "page-class-detail",
+      currentScreenRef: "page-class-detail",
       route: []
     }));
   });
@@ -245,14 +253,15 @@ describe("AutomationRunner regression flow", () => {
     let identifyCount = 0;
     const runner = new AutomationRunner(storage, driver, undefined, {
       pageStateService: {
-        identifyCurrentPage: async () => {
+        identifyCurrentScreen: async () => {
           identifyCount += 1;
           const id = identifyCount === 1 ? "page-class-detail" : "page-home";
           return {
             status: "matched",
-            page: {
+            screen: {
               id,
               key: id,
+              screenRef: id,
               name: id === "page-home" ? "主页" : "班级详情",
               appId: "cn.eeo.classin",
               graphVersionId: "v1",
@@ -261,8 +270,8 @@ describe("AutomationRunner regression flow", () => {
             candidates: []
           };
         },
-        verifyExpectedPage: async () => ({ status: "unknown", candidates: [] }),
-        waitForExpectedPage: async () => ({ status: "unknown", candidates: [] })
+        verifyExpectedScreen: async () => ({ status: "unknown", candidates: [] }),
+        waitForExpectedScreen: async () => ({ status: "unknown", candidates: [] })
       }
     });
     const step = reachPageStep("page-home", []);
@@ -273,6 +282,7 @@ describe("AutomationRunner regression flow", () => {
     const started = runner.start({
       deviceSerial: driver.device.serial,
       steps: [step],
+      sourceSnapshot: navigationSourceSnapshot(),
       stepIntervalMs: 0,
       recordVideo: false
     });
@@ -283,7 +293,7 @@ describe("AutomationRunner regression flow", () => {
     expect(identifyCount).toBe(1);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
       status: "no_reliable_path",
-      currentPageId: "page-class-detail"
+      currentScreenRef: "page-class-detail"
     }));
   });
 
@@ -301,6 +311,7 @@ describe("AutomationRunner regression flow", () => {
     const started = runner.start({
       deviceSerial: driver.device.serial,
       steps: [step],
+      sourceSnapshot: navigationSourceSnapshot(),
       stepIntervalMs: 0,
       recordVideo: false
     });
@@ -310,7 +321,7 @@ describe("AutomationRunner regression flow", () => {
     expect(driver.actions).toEqual([]);
     expect(run.stepResults[0]?.metadata?.pageNavigation).toEqual(expect.objectContaining({
       status: "no_reliable_path",
-      currentPageId: "page-login"
+      currentScreenRef: "page-login"
     }));
   });
 
@@ -321,7 +332,7 @@ describe("AutomationRunner regression flow", () => {
     let identifyCount = 0;
     const runner = new AutomationRunner(storage, driver, undefined, {
       pageStateService: {
-        identifyCurrentPage: async () => {
+        identifyCurrentScreen: async () => {
           identifyCount += 1;
           if (identifyCount === 1) return { status: "unknown", candidates: [] };
           return {
@@ -330,8 +341,8 @@ describe("AutomationRunner regression flow", () => {
             candidates: []
           };
         },
-        verifyExpectedPage: async () => ({ status: "unknown", candidates: [] }),
-        waitForExpectedPage: async () => ({ status: "unknown", candidates: [] })
+        verifyExpectedScreen: async () => ({ status: "unknown", candidates: [] }),
+        waitForExpectedScreen: async () => ({ status: "unknown", candidates: [] })
       }
     });
     const step = reachPageStep("page-growth", []);
@@ -340,6 +351,7 @@ describe("AutomationRunner regression flow", () => {
     const started = runner.start({
       deviceSerial: driver.device.serial,
       steps: [step],
+      sourceSnapshot: navigationSourceSnapshot(),
       stepIntervalMs: 0,
       recordVideo: false
     });
@@ -529,6 +541,30 @@ describe("AutomationRunner regression flow", () => {
     );
   });
 
+  it("does not run per-step foreground exit fallback when android app monitor is active", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new ForegroundCountingAppMonitorMockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Monitor Foreground Cost",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startAppPackageName: "com.demo",
+      androidAppMonitor: {
+        enabled: true,
+        packageName: "com.demo"
+      }
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(driver.foregroundReadCount).toBe(2);
+  });
+
   it("records android app monitor crash incidents and stops on failure", async () => {
     const storage = new MemoryRunnerStorage();
     const incident: AndroidAppMonitorIncident = {
@@ -578,6 +614,8 @@ describe("AutomationRunner regression flow", () => {
 
     expect(run.status).toBe("failed");
     expect(driver.actions).toEqual([]);
+    expect(driver.eventWatcherStartCount).toBe(0);
+    expect(driver.logCollectionCount).toBe(1);
     expect(run.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -613,6 +651,12 @@ describe("AutomationRunner regression flow", () => {
         }),
         expect.objectContaining({
           type: "screenshot",
+          name: expect.stringMatching(/^crash-/)
+        })
+      ])
+    );
+  });
+
   it("keeps process death monitor events concise instead of attaching crash log evidence", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new AppMonitorMockDriver({
@@ -650,11 +694,6 @@ describe("AutomationRunner regression flow", () => {
     expect(driver.logCollectionCount).toBe(0);
     expect(run.events.find((event) => event.type === "process_death")?.detail).toContain("Process com.demo");
     expect(run.artifacts.some((artifact) => artifact.name.includes("android-app-monitor-process_death"))).toBe(false);
-  });
-          name: expect.stringMatching(/^crash-/)
-        })
-      ])
-    );
   });
 
   it("continues and records a warning when android app monitor stop fails", async () => {
@@ -1441,6 +1480,44 @@ describe("AutomationRunner regression flow", () => {
     expect(run.artifacts.some((artifact) => artifact.type === "screenshot" && artifact.name.includes("process_death"))).toBe(true);
   });
 
+  it("fails the step when a successful action leaves the target app foreground", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new ForegroundExitMockDriver(["demo.app", "demo.app", "com.android.launcher", "com.android.launcher"]);
+    driver.device.capabilities.recordVideo = false;
+    const runner = new AutomationRunner(storage, driver, new EmptyOcrService());
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Foreground Exit Flow",
+      steps: [driver.createTapStep(120, 240)],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      startAppPackageName: "demo.app"
+    });
+
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("failed");
+    expect(driver.actions).toEqual([{ type: "tap", x: 120, y: 240 }]);
+    expect(run.stepResults[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        errorCode: "DEVICE_EVENT_FAILED",
+        errorMessage: "Run stopped after target app left the foreground."
+      })
+    );
+    expect(run.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "app_exit",
+          severity: "error",
+          stepResultId: run.stepResults[0]?.id,
+          summary: "Target app left foreground",
+          detail: "expected=demo.app; foreground=com.android.launcher"
+        })
+      ])
+    );
+  });
+
   it("does not record process deaths caused by a restart launch step as abnormal events", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new RestartProcessDeathMockDriver();
@@ -1761,10 +1838,10 @@ describe("AutomationRunner regression flow", () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const requests: Array<{ pageId: string; appId: string }> = [];
+    const requests: Array<{ screenRef: string; appId: string }> = [];
     const runner = new AutomationRunner(storage, driver, undefined, {
       verifyPageState: async (request) => {
-        requests.push({ pageId: request.pageId, appId: request.appId });
+        requests.push({ screenRef: request.screenRef, appId: request.appId });
         return { status: "unknown", reason: "page evidence did not match" };
       }
     });
@@ -1780,7 +1857,7 @@ describe("AutomationRunner regression flow", () => {
       createExpectation("state_is", {
         appId: "cn.eeo.classin",
         platform: "android",
-        pageId: "classin.home",
+        screenRef: "classin.home",
         timeoutMs: 1
       })
     ]);
@@ -1796,7 +1873,7 @@ describe("AutomationRunner regression flow", () => {
 
     expect(run.status).toBe("failed");
     expect(driver.actions).toEqual([]);
-    expect(requests).toEqual([{ pageId: "classin.home", appId: "cn.eeo.classin" }]);
+    expect(requests).toEqual([{ screenRef: "classin.home", appId: "cn.eeo.classin" }]);
     expect(run.stepResults[0]).toEqual(expect.objectContaining({
       errorCode: "PRECONDITION_FAILED",
       metadata: expect.objectContaining({
@@ -1807,14 +1884,72 @@ describe("AutomationRunner regression flow", () => {
     }));
   });
 
+  it("passes the frozen execution profile to screen-state preconditions", async () => {
+    const storage = new MemoryRunnerStorage();
+    const driver = new MockDriver();
+    driver.device.capabilities.recordVideo = false;
+    const profile: ExecutionProfileSnapshot = {
+      id: "execution-profile:classin:android:graph-v1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      version: 1,
+      status: "verified",
+      digest: "profile-digest",
+      createdAt: "2026-08-15T00:00:00.000Z",
+      screens: []
+    };
+    const requests: unknown[] = [];
+    const runner = new AutomationRunner(storage, driver, undefined, {
+      verifyPageState: async (request) => {
+        requests.push(request);
+        return { status: "matched", pageName: "班级列表" };
+      }
+    });
+    const recordedTap = driver.createTapStep(120, 240);
+    const step = withPreconditions(recordedTap, [
+      createExpectation("state_is", {
+        appId: "cn.eeo.classin",
+        platform: "android",
+        screenRef: "classin.teacher.classes",
+        timeoutMs: 1
+      })
+    ]);
+
+    const started = runner.start({
+      deviceSerial: driver.device.serial,
+      caseName: "Frozen profile precondition",
+      steps: [step],
+      stepIntervalMs: 0,
+      recordVideo: false,
+      sourceSnapshot: {
+        kind: "script_flow",
+        flowId: "flow-profile",
+        version: 1,
+        planDigest: "profile-digest",
+        executionProfile: profile,
+        dependencies: [],
+        parsed: {}
+      }
+    });
+    const run = await waitForRun(runner, storage, started.id);
+
+    expect(run.status).toBe("passed");
+    expect(requests).toEqual([
+      expect.objectContaining({
+        screenRef: "classin.teacher.classes",
+        executionProfile: profile
+      })
+    ]);
+  });
+
   it("synthesizes expected-page verification from script metadata when expectations are missing", async () => {
     const storage = new MemoryRunnerStorage();
     const driver = new MockDriver();
     driver.device.capabilities.recordVideo = false;
-    const requests: Array<{ pageId: string; appId: string }> = [];
+    const requests: Array<{ screenRef: string; appId: string }> = [];
     const runner = new AutomationRunner(storage, driver, undefined, {
       verifyPageState: async (request) => {
-        requests.push({ pageId: request.pageId, appId: request.appId });
+        requests.push({ screenRef: request.screenRef, appId: request.appId });
         return { status: "unknown", reason: "page evidence did not match" };
       }
     });
@@ -1827,7 +1962,7 @@ describe("AutomationRunner regression flow", () => {
         scriptStepId: "open-lesson",
         appId: "cn.eeo.classin",
         platform: "android",
-        expectPage: "classin.lesson.create"
+        afterScreenRef: "classin.lesson.create"
       }
     };
 
@@ -1842,7 +1977,7 @@ describe("AutomationRunner regression flow", () => {
 
     expect(run.status).toBe("failed");
     expect(driver.actions).toEqual([{ type: "tap", x: 120, y: 240 }]);
-    expect(requests).toEqual([{ pageId: "classin.lesson.create", appId: "cn.eeo.classin" }]);
+    expect(requests).toEqual([{ screenRef: "classin.lesson.create", appId: "cn.eeo.classin" }]);
     expect(run.stepResults[0]).toEqual(expect.objectContaining({
       errorCode: "EXPECTATION_FAILED",
       expectationResults: [expect.objectContaining({
@@ -2439,7 +2574,7 @@ describe("AutomationRunner regression flow", () => {
   });
 });
 
-function reachPageStep(targetPageId: string, navigationEdges: unknown[]): ActionStep {
+function reachPageStep(targetScreenRef: string, navigationEdges: unknown[]): ActionStep {
   return {
     id: "reach-page",
     order: 1,
@@ -2449,8 +2584,8 @@ function reachPageStep(targetPageId: string, navigationEdges: unknown[]): Action
     params: {
       appId: "cn.eeo.classin",
       platform: "android",
-      pageId: targetPageId,
-      targetPageId,
+      screenRef: targetScreenRef,
+      targetScreenRef,
       policy: "safe",
       navigationEdges
     },
@@ -2464,9 +2599,10 @@ function pageStateSequence(pageIds: string[]): PageStateService {
     const pageId = pageIds[Math.min(current, pageIds.length - 1)] ?? "page-unknown";
     return {
       status: "matched" as const,
-      page: {
+      screen: {
         id: pageId,
         key: pageId,
+        screenRef: pageId,
         name: pageId,
         appId: "cn.eeo.classin",
         graphVersionId: "v1",
@@ -2476,12 +2612,34 @@ function pageStateSequence(pageIds: string[]): PageStateService {
     };
   };
   return {
-    identifyCurrentPage: async () => result(),
-    verifyExpectedPage: async () => result(),
-    waitForExpectedPage: async () => {
+    identifyCurrentScreen: async () => result(),
+    verifyExpectedScreen: async () => result(),
+    waitForExpectedScreen: async () => {
       current += 1;
       return result();
     }
+  };
+}
+
+function navigationSourceSnapshot(): NonNullable<TestRun["sourceSnapshot"]> {
+  return {
+    kind: "script_flow",
+    flowId: "navigation-test-flow",
+    version: 1,
+    planDigest: "navigation-test-plan",
+    executionPlatform: "android",
+    executionProfile: {
+      id: "execution-profile:navigation-test:android",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      version: 1,
+      status: "verified",
+      digest: "navigation-test-profile",
+      createdAt: nowIso(),
+      screens: []
+    },
+    dependencies: [],
+    parsed: {}
   };
 }
 
@@ -2900,6 +3058,27 @@ class RestartProcessDeathMockDriver extends MockDriver {
   }
 }
 
+class ForegroundExitMockDriver extends MockDriver {
+  private callCount = 0;
+
+  constructor(private readonly foregroundPackages: string[]) {
+    super();
+  }
+
+  override async getForegroundApp(serial: string): Promise<{ packageName?: string; activityName?: string; componentName?: string }> {
+    await this.getDeviceInfo(serial);
+    const packageName = this.foregroundPackages[Math.min(this.callCount, this.foregroundPackages.length - 1)];
+    this.callCount += 1;
+    return packageName
+      ? {
+          packageName,
+          activityName: `${packageName}.MainActivity`,
+          componentName: `${packageName}/.MainActivity`
+        }
+      : {};
+  }
+}
+
 class AppMonitorRestartProcessDeathMockDriver extends MockDriver {
   private monitorCallbacks?: {
     onLifecycleEvent?: (event: AndroidProcessLifecycleEvent) => void | Promise<void>;
@@ -2939,8 +3118,6 @@ class AppMonitorRestartProcessDeathMockDriver extends MockDriver {
     if (action.type === "close_app") {
       const incident: AndroidAppMonitorIncident = {
         id: "incident-process-death",
-  logCollectionCount = 0;
-
         type: "process_death",
         severity: "warning",
         occurredAt: nowIso(),
@@ -2948,7 +3125,6 @@ class AppMonitorRestartProcessDeathMockDriver extends MockDriver {
         pid: 1234,
         summary: `Process death detected: ${action.packageName}`,
         detail: `ActivityManager: Process ${action.packageName} (pid 1234) has died`,
-      collectedLogs?: string;
         artifactIds: []
       };
       this.monitorIncidents.push(incident);
@@ -2956,14 +3132,6 @@ class AppMonitorRestartProcessDeathMockDriver extends MockDriver {
     }
     return result;
   }
-  override async collectLogs(serial: string, lines?: number): Promise<string> {
-    this.logCollectionCount += 1;
-    if (this.monitorData.collectedLogs !== undefined) {
-      return this.monitorData.collectedLogs;
-    }
-    return super.collectLogs(serial, lines);
-  }
-
 
   private getMonitorSummary(): AndroidAppMonitorSummary {
     const packageName = this.monitorConfig?.packageName ?? "demo.app";
@@ -2994,6 +3162,8 @@ class AppMonitorRestartProcessDeathMockDriver extends MockDriver {
 class AppMonitorMockDriver extends MockDriver {
   readonly monitorStarts: Array<{ serial: string; runId: string; config: AndroidAppMonitorConfig }> = [];
   monitorStopCount = 0;
+  eventWatcherStartCount = 0;
+  logCollectionCount = 0;
 
   constructor(
     private readonly monitorData: {
@@ -3001,11 +3171,31 @@ class AppMonitorMockDriver extends MockDriver {
       memory?: AndroidProcessMetricSample[];
       lifecycle?: AndroidProcessLifecycleEvent[];
       incidents?: AndroidAppMonitorIncident[];
+      collectedLogs?: string;
       startError?: Error;
       stopError?: Error;
     } = {}
   ) {
     super();
+  }
+
+  override async collectLogs(serial: string, lines?: number): Promise<string> {
+    this.logCollectionCount += 1;
+    if (this.monitorData.collectedLogs !== undefined) {
+      return this.monitorData.collectedLogs;
+    }
+    return super.collectLogs(serial, lines);
+  }
+
+  async watchDeviceEvents(
+    _serial: string,
+    _onEvent: (event: ObservedDeviceEvent) => void,
+    _options?: { since?: Date; packageName?: string }
+  ): Promise<DeviceEventWatcher> {
+    this.eventWatcherStartCount += 1;
+    return {
+      stop: async () => undefined
+    };
   }
 
   async startAppMonitor(
@@ -3075,6 +3265,20 @@ class AppMonitorMockDriver extends MockDriver {
       },
       incidents: this.monitorData.incidents ?? [],
       artifacts: {}
+    };
+  }
+}
+
+class ForegroundCountingAppMonitorMockDriver extends AppMonitorMockDriver {
+  foregroundReadCount = 0;
+
+  override async getForegroundApp(serial: string): Promise<{ packageName?: string; activityName?: string; componentName?: string }> {
+    await this.getDeviceInfo(serial);
+    this.foregroundReadCount += 1;
+    return {
+      packageName: "com.demo",
+      activityName: "com.demo.MainActivity",
+      componentName: "com.demo/.MainActivity"
     };
   }
 }

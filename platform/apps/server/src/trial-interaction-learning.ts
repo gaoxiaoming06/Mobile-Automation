@@ -27,7 +27,7 @@ export function interactionCandidatesFromTrial(run: TestRun): LearnedInteraction
     if (result.status !== "passed") return [];
     const step = steps.get(result.stepId);
     const action = step ? actionTarget(step) : undefined;
-    const ownerPage = nonEmptyString(step?.onPage) ?? nonEmptyString(result.metadata?.onPage);
+    const ownerPage = nonEmptyString(step?.before?.screenRef) ?? nonEmptyString(result.metadata?.beforeScreenRef);
     const semanticMetadata = record(result.metadata?.semantic);
     if (!step || !action || !ownerPage || !semanticMetadata) return [];
 

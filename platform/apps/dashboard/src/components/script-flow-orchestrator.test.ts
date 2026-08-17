@@ -153,7 +153,7 @@ describe("script-flow orchestrator", () => {
     });
     expect(pageStep.document.steps[0]).toEqual(expect.objectContaining({
       id: "tap-target",
-      assertPage: "classroom.create"
+      assertPage: { screenRef: "classroom.create" }
     }));
     expect(pageStep.document.steps[0]).not.toHaveProperty("risk");
 

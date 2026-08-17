@@ -206,16 +206,20 @@ function compileExecutableStep(
   context: ExpansionContext
 ): CompiledBodyStep {
   const { action, input } = executableAction(step, context);
-  const onPage = step.onPage ? interpolateString(step.onPage, context.renderedParameters) : undefined;
-  const expectPage = step.expectPage ? interpolateString(step.expectPage, context.renderedParameters) : undefined;
+  const before = step.before
+    ? { screenRef: interpolateString(step.before.screenRef, context.renderedParameters) }
+    : undefined;
+  const after = step.after
+    ? { screenRef: interpolateString(step.after.screenRef, context.renderedParameters) }
+    : undefined;
   return {
     id,
     ...(step.name ? { name: interpolateString(step.name, context.renderedParameters) } : {}),
     role: step.role ?? "business",
     action,
     input,
-    ...(onPage ? { onPage } : {}),
-    ...(expectPage ? { expectPage } : {}),
+    ...(before ? { before } : {}),
+    ...(after ? { after } : {}),
     ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
     source: {
       flowName: context.flow.name,
@@ -261,7 +265,7 @@ function executableAction(
     return {
       action: "reachPage",
       input: {
-        pageId: interpolateString(step.reachPage.page, parameters),
+        screenRef: interpolateString(step.reachPage.screenRef, parameters),
         policy: step.reachPage.policy ?? "safe"
       }
     };
@@ -270,7 +274,7 @@ function executableAction(
     return {
       action: "waitForPage",
       input: {
-        pageId: interpolateString(step.waitForPage, parameters),
+        screenRef: interpolateString(step.waitForPage.screenRef, parameters),
         ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {})
       }
     };
@@ -280,7 +284,7 @@ function executableAction(
   }
   return {
     action: "assertPage",
-    input: { pageId: interpolateString(step.assertPage, parameters) }
+    input: { screenRef: interpolateString(step.assertPage.screenRef, parameters) }
   };
 }
 

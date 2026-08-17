@@ -55,8 +55,8 @@ version: 1
 kind: case
 name: teacher login
 app: { id: cn.eeo.classin, platform: android }
-entry: { page: classin.teacher.login, session: unauthenticated }
-outcome: { page: classin.teacher.classes, session: authenticated, role: teacher }
+entry: { screenRef: classin.teacher.login, session: unauthenticated }
+outcome: { screenRef: classin.teacher.classes, session: authenticated, role: teacher }
 parameters:
   account: { type: string, required: true }
 steps:
@@ -70,8 +70,8 @@ steps:
 
     expect(plan).toMatchObject({
       kind: "case",
-      entry: { page: "classin.teacher.login", session: "unauthenticated" },
-      outcome: { page: "classin.teacher.classes", session: "authenticated", role: "teacher" }
+      entry: { screenRef: "classin.teacher.login", session: "unauthenticated" },
+      outcome: { screenRef: "classin.teacher.classes", session: "authenticated", role: "teacher" }
     });
     expect(plan.steps).toEqual([
       expect.objectContaining({ id: "input-account", phase: "business", action: "inputText" })
@@ -83,7 +83,7 @@ steps:
 version: 1
 name: open settings
 app: { id: cn.eeo.classin, platform: android }
-outcome: { page: classin.settings }
+outcome: { screenRef: classin.settings }
 steps:
   - id: open-settings
     tap: { target: { text: 设置 } }
@@ -105,11 +105,11 @@ parameters:
   duration: { type: number, default: 30 }
 steps:
   - id: open-class
-    onPage: home
+    before: { screenRef: home }
     tap: { target: { text: "\${className}" }, search: { mode: auto } }
-    expectPage: class-detail
+    after: { screenRef: class-detail }
   - id: select-duration
-    onPage: lesson-create
+    before: { screenRef: lesson-create }
     risk: interaction
     selectText:
       target: { text: 课堂时长, area: content }
@@ -125,8 +125,8 @@ steps:
       order: 1,
       id: "open-class",
       action: "tap",
-      onPage: "home",
-      expectPage: "class-detail",
+      before: { screenRef: "home" },
+      after: { screenRef: "class-detail" },
       input: { target: { text: "班级四十二号" }, search: { mode: "auto" } }
     });
     expect(plan.steps[1]).toMatchObject({
@@ -170,7 +170,7 @@ app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: reach-home
     name: 到达主页
-    reachPage: { page: classin.home, policy: safe }
+    reachPage: { screenRef: classin.home, policy: safe }
 `);
 
     const plan = compileScriptFlow(flow);
@@ -179,7 +179,7 @@ steps:
       expect.objectContaining({
         id: "reach-home",
         action: "reachPage",
-        input: { pageId: "classin.home", policy: "safe" }
+        input: { screenRef: "classin.home", policy: "safe" }
       })
     ]);
     expect(plan).not.toHaveProperty("riskConfirmations");
@@ -476,7 +476,7 @@ steps:
 version: 1
 name: open class detail
 app: { id: cn.eeo.classin, platform: android }
-outcome: { page: classin.class.detail }
+outcome: { screenRef: classin.class.detail }
 steps:
   - id: tap-class
     tap: { target: { text: 班级四十二号 } }
@@ -640,7 +640,7 @@ parameters:
   count: { type: number, required: true }
 steps:
   - id: wait-home
-    waitForPage: home
+    waitForPage: { screenRef: home }
 `);
 
     expect(() => compileScriptFlow(flow)).toThrowError(ScriptFlowCompileError);
@@ -675,7 +675,7 @@ app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: publish-lesson
     name: 发布课堂
-    onPage: lesson-create
+    before: { screenRef: lesson-create }
     risk: publish
     tap: { target: { text: 发布, area: content, match: exact } }
 `);
@@ -684,5 +684,38 @@ steps:
 
     expect(plan.steps[0]).not.toHaveProperty("risk");
     expect(plan).not.toHaveProperty("riskConfirmations");
+  });
+
+  it("compiles platform-neutral screen contracts into screenRef inputs", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: screen contract
+app: { id: cn.eeo.classin }
+steps:
+  - id: open-detail
+    before: { screenRef: classin.home }
+    after: { screenRef: classin.class.detail }
+    tap: { target: { text: 班级详情 } }
+  - id: wait-home
+    waitForPage: { screenRef: classin.home }
+  - id: return-home
+    reachPage: { screenRef: classin.home, policy: safe }
+`);
+
+    expect(compileScriptFlow(flow).steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "open-detail",
+        before: { screenRef: "classin.home" },
+        after: { screenRef: "classin.class.detail" }
+      }),
+      expect.objectContaining({
+        id: "wait-home",
+        input: { screenRef: "classin.home" }
+      }),
+      expect.objectContaining({
+        id: "return-home",
+        input: { screenRef: "classin.home", policy: "safe" }
+      })
+    ]));
   });
 });

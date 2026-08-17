@@ -71,7 +71,7 @@ describe("step expectation helpers", () => {
 });
 
 describe("StepExpectationEvaluator", () => {
-  it("evaluates state_is through the injected page verifier", async () => {
+  it("evaluates state_is through the injected screen verifier", async () => {
     const evaluator = new StepExpectationEvaluator({
       ocr: new FakeOcrService(""),
       collectLogs: async () => "",
@@ -82,7 +82,7 @@ describe("StepExpectationEvaluator", () => {
           serial: "device-1",
           appId: "cn.eeo.classin",
           platform: "android",
-          pageId: "classin.home",
+          screenRef: "classin.home",
           timeoutMs: 1200,
           screenshot: Buffer.from("after")
         }));
@@ -96,7 +96,7 @@ describe("StepExpectationEvaluator", () => {
       step: actionStep([expectation("state_is", {
         appId: "cn.eeo.classin",
         platform: "android",
-        pageId: "classin.home",
+        screenRef: "classin.home",
         timeoutMs: 1200
       })]),
       afterScreenshot: screenshot("artifact-after", "after"),
@@ -107,7 +107,7 @@ describe("StepExpectationEvaluator", () => {
       expect.objectContaining({
         type: "state_is",
         status: "passed",
-        expected: "Page classin.home",
+        expected: "Screen classin.home",
         actual: "主页",
         evidenceArtifactIds: ["artifact-after"]
       })
@@ -133,7 +133,7 @@ describe("StepExpectationEvaluator", () => {
       step: actionStep([expectation("state_is", {
         appId: "cn.eeo.classin",
         platform: "android",
-        pageId: "classin.home"
+        screenRef: "classin.home"
       })]),
       afterScreenshot: screenshot("artifact-after", "after"),
       runtimeFailure: false
@@ -167,7 +167,7 @@ describe("StepExpectationEvaluator", () => {
       step: actionStep([expectation("state_is", {
         appId: "cn.eeo.classin",
         platform: "android",
-        pageId: "classin.home"
+        screenRef: "classin.home"
       })]),
       afterScreenshot: screenshot("artifact-after", "after"),
       runtimeFailure: false
@@ -209,7 +209,7 @@ describe("StepExpectationEvaluator", () => {
       step: actionStep([expectation("state_is", {
         appId: "classin",
         platform: "harmony",
-        pageId: "classin.teacher.login"
+        screenRef: "classin.teacher.login"
       })]),
       afterScreenshot: {
         artifact: artifact("artifact-protected", "screenshot"),

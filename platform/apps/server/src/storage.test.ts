@@ -129,6 +129,58 @@ describe("Storage", () => {
     expect(context.storage.getRun(run.id)?.sourceSnapshot).toEqual(expect.objectContaining({ sourceYaml: secondYaml }));
   });
 
+  it("round-trips the frozen execution profile in a ScriptFlow run snapshot", async () => {
+    context = await createStorageContext();
+    const document = scriptFlowDocument("校验班级主页");
+    const flow = context.storage.createScriptFlow({
+      sourceYaml: JSON.stringify(document),
+      document
+    });
+    const executionProfile = {
+      id: "execution-profile:classin:android:graph-v7",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      version: 7,
+      status: "verified",
+      digest: "f".repeat(64),
+      createdAt: "2026-08-15T00:00:00.000Z",
+      screens: [{
+        screenRef: "classin.home",
+        name: "班级主页",
+        assetId: "page-home",
+        graphVersionId: "graph-v7",
+        evidence: [{
+          id: "home-title",
+          type: "resource_id",
+          value: "cn.eeo.classin:id/home_title",
+          weight: 1,
+          critical: true
+        }]
+      }]
+    };
+    const run = context.storage.createRun({
+      caseName: flow.name,
+      deviceSerial: "device-1",
+      configJson: JSON.stringify({ deviceSerial: "device-1", mode: "once", repeatCount: 1, stepIntervalMs: 0, stopOnFailure: true }),
+      runSnapshotJson: JSON.stringify({
+        steps: [],
+        sourceSnapshot: {
+          kind: "script_flow",
+          flowId: flow.id,
+          version: flow.version,
+          planDigest: "a".repeat(64),
+          executionPlatform: "android",
+          executionProfile,
+          dependencies: [],
+          parsed: document
+        }
+      }),
+      steps: []
+    });
+
+    expect(context.storage.getRun(run.id)?.sourceSnapshot?.executionProfile).toEqual(executionProfile);
+  });
+
   it("keeps reusable temporary test history isolated by app and updates the latest run", async () => {
     context = await createStorageContext();
     const document = {
@@ -569,13 +621,13 @@ function navigationFlowDocument(targetPage: string): ScriptFlowDocument {
     steps: [
       {
         id: "open-more-menu",
-        onPage: "classin.home",
+        before: { screenRef: "classin.home" },
         tap: { target: { icon: "add", area: "topBar", position: "trailing" } }
       },
       {
         id: "open-target",
         tap: { target: { text: targetPage === "classin.settings" ? "设置" : "添加好友" } },
-        expectPage: targetPage
+        after: { screenRef: targetPage }
       }
     ],
     tags: []

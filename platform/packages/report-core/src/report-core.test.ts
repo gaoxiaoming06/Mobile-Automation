@@ -30,6 +30,63 @@ describe("renderReportHtml", () => {
     expect(renderReportHtml(run)).toContain("passed");
   });
 
+  it("renders the frozen execution profile used by the run", () => {
+    const run: TestRun = {
+      id: "run-profile",
+      caseName: "Profile Evidence",
+      deviceSerial: "device-1",
+      status: "failed",
+      config: {
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 0,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false
+      },
+      steps: [],
+      stepResults: [],
+      metrics: [],
+      events: [],
+      artifacts: [],
+      sourceSnapshot: {
+        kind: "script_flow",
+        flowId: "flow-profile",
+        version: 2,
+        planDigest: "a".repeat(64),
+        executionPlatform: "android",
+        executionProfile: {
+          id: "execution-profile:classin:android:graph-v7",
+          appId: "cn.eeo.classin",
+          platform: "android",
+          version: 7,
+          status: "verified",
+          digest: "f".repeat(64),
+          createdAt: "2026-08-15T00:00:00.000Z",
+          screens: [{
+            screenRef: "classin.home",
+            name: "班级主页",
+            assetId: "page-home",
+            graphVersionId: "graph-v7",
+            evidence: [{ id: "home-title", type: "resource_id", value: "home_title", weight: 1 }]
+          }]
+        },
+        dependencies: [],
+        parsed: {}
+      },
+      startedAt: "2026-08-15T00:00:00.000Z"
+    };
+
+    const html = renderReportHtml(run);
+
+    expect(html).toContain("执行校验标准");
+    expect(html).toContain("execution-profile:classin:android:graph-v7");
+    expect(html).toContain("版本 7");
+    expect(html).toContain("已冻结 1 个页面校验合同");
+    expect(html).toContain("ffffffffffffffff");
+  });
+
   it("renders fixed delay wait source steps with a readable title", () => {
     const run: TestRun = {
       id: "run-wait",
@@ -92,6 +149,68 @@ describe("renderReportHtml", () => {
     };
 
     expect(renderReportHtml(run)).toContain("等待 3 秒");
+  });
+
+  it("renders screen contract source steps with their logical screen refs", () => {
+    const run: TestRun = {
+      id: "run-screen-contract",
+      caseName: "Screen contract",
+      deviceSerial: "device-1",
+      status: "passed",
+      config: {
+        deviceSerial: "device-1",
+        mode: "once",
+        repeatCount: 1,
+        stepIntervalMs: 0,
+        stopOnFailure: true,
+        recordVideo: false,
+        keepVideoOnSuccess: false
+      },
+      steps: [{
+        id: "assert-home",
+        order: 1,
+        type: "wait",
+        enabled: true,
+        title: "确认页面",
+        params: { scriptStepId: "assert-home" },
+        createdAt: "2026-08-15T00:00:00.000Z"
+      }],
+      stepResults: [{
+        id: "step-result-assert-home",
+        runId: "run-screen-contract",
+        iterationIndex: 1,
+        stepId: "assert-home",
+        stepOrder: 1,
+        type: "wait",
+        status: "passed",
+        startedAt: "2026-08-15T00:00:01.000Z",
+        endedAt: "2026-08-15T00:00:02.000Z",
+        durationMs: 1000,
+        artifacts: []
+      }],
+      metrics: [],
+      events: [],
+      artifacts: [],
+      sourceSnapshot: {
+        kind: "script_flow",
+        flowId: "flow-screen-contract",
+        version: 1,
+        planDigest: "b".repeat(64),
+        dependencies: [],
+        parsed: {
+          version: 1,
+          kind: "case",
+          name: "Screen contract",
+          app: { id: "cn.eeo.classin" },
+          parameters: {},
+          steps: [{ id: "assert-home", assertPage: { screenRef: "classin.home" } }],
+          tags: []
+        }
+      },
+      startedAt: "2026-08-15T00:00:00.000Z"
+    };
+
+    expect(renderReportHtml(run)).toContain("确认已进入页面“classin.home”");
   });
 
   it("renders android app monitor summary as a readable report section without raw csv links", () => {

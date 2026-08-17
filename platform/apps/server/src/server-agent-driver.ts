@@ -1,5 +1,9 @@
 import type {
   AndroidAppMonitorConfig,
+  AndroidAppMonitorIncident,
+  AndroidAppMonitorSummary,
+  AndroidProcessLifecycleEvent,
+  AndroidProcessMetricSample,
   AgentCommandResultEnvelope,
   AgentDeviceInfo,
   DeviceActionRequest,
@@ -10,6 +14,7 @@ import type {
   SemanticDeviceActionRequest,
   ToolStatus
 } from "@mobile-automation/shared";
+import { createId as createSharedId } from "@mobile-automation/shared";
 import type {
   AutomationDeviceDriver,
   DeviceEventWatcher,
@@ -175,7 +180,14 @@ export class ServerAgentDeviceDriver implements AutomationDeviceDriver {
     options?: { since?: Date; packageName?: string }
   ): Promise<DeviceEventWatcher> {
     if (this.isAgentDevice(serial)) {
-      return { stop: async () => undefined };
+      const unsubscribe = this.agents.subscribeAppMonitorIncidents({ deviceKey: serial }, (envelope) => {
+        const event = observedEventFromIncident(envelope.incident);
+        if (!event || !isObservedEventInWindow(event, options?.since) || !matchesPackageFilter(envelope.incident, options?.packageName)) {
+          return;
+        }
+        onEvent(event);
+      });
+      return { stop: async () => unsubscribe() };
     }
     return this.localDriver().watchDeviceEvents?.(serial, onEvent, options) ?? { stop: async () => undefined };
   }
@@ -199,7 +211,17 @@ export class ServerAgentDeviceDriver implements AutomationDeviceDriver {
     callbacks?: Parameters<NonNullable<AutomationDeviceDriver["startAppMonitor"]>>[4]
   ): Promise<MobileAppMonitorSession> {
     if (this.isAgentDevice(serial)) {
-      throw new Error("Agent app monitor is not enabled in this MVP");
+      const monitorId = createSharedId("agent_monitor");
+      const session = new AgentProxyAppMonitorSession({
+        agents: this.agents,
+        deviceKey: serial,
+        runId,
+        monitorId,
+        config,
+        callbacks
+      });
+      await session.startRemote();
+      return session;
     }
     const local = this.localDriver();
     if (!local.startAppMonitor) {
@@ -228,6 +250,106 @@ export class ServerAgentDeviceDriver implements AutomationDeviceDriver {
       throw new Error("Server local device access is disabled; use a registered device agent");
     }
     return this.local;
+  }
+}
+
+type AgentProxyAppMonitorSessionOptions = {
+  agents: ServerAgentRegistry;
+  deviceKey: string;
+  runId: string;
+  monitorId: string;
+  config: AndroidAppMonitorConfig;
+  callbacks?: Parameters<NonNullable<AutomationDeviceDriver["startAppMonitor"]>>[4];
+};
+
+type AgentAppMonitorSamples = {
+  cpu: AndroidProcessMetricSample[];
+  memory: AndroidProcessMetricSample[];
+  lifecycle: AndroidProcessLifecycleEvent[];
+};
+
+class AgentProxyAppMonitorSession implements MobileAppMonitorSession {
+  private summary: AndroidAppMonitorSummary;
+  private readonly seenIncidentIds = new Set<string>();
+  private unsubscribe?: () => void;
+  private stopPromise?: Promise<AndroidAppMonitorSummary>;
+
+  constructor(private readonly options: AgentProxyAppMonitorSessionOptions) {
+    this.summary = emptyAppMonitorSummary(options.config.packageName);
+  }
+
+  async startRemote(): Promise<void> {
+    this.unsubscribe = this.options.agents.subscribeAppMonitorIncidents({ monitorId: this.options.monitorId }, (envelope) => {
+      void this.recordIncident(envelope.incident);
+    });
+    const result = await this.options.agents.sendCommand(this.options.deviceKey, "startAppMonitor", {
+      runId: this.options.runId,
+      monitorId: this.options.monitorId,
+      config: this.options.config
+    });
+    this.summary = appMonitorSummaryFromResult(result.result) ?? this.summary;
+  }
+
+  async start(): Promise<void> {
+    return undefined;
+  }
+
+  async stop(): Promise<AndroidAppMonitorSummary> {
+    if (this.stopPromise) {
+      return this.stopPromise;
+    }
+    this.stopPromise = this.stopRemote();
+    return this.stopPromise;
+  }
+
+  getSummary(): AndroidAppMonitorSummary {
+    return cloneAppMonitorSummary(this.summary);
+  }
+
+  private async stopRemote(): Promise<AndroidAppMonitorSummary> {
+    try {
+      const result = await this.options.agents.sendCommand(this.options.deviceKey, "stopAppMonitor", {
+        monitorId: this.options.monitorId
+      });
+      const stopResult = appMonitorStopResultFromResult(result.result);
+      await this.replaySamples(stopResult.samples);
+      await this.replayMissingIncidents(stopResult.summary.incidents);
+      this.summary = stopResult.summary;
+      return this.getSummary();
+    } finally {
+      this.unsubscribe?.();
+      this.unsubscribe = undefined;
+    }
+  }
+
+  private async recordIncident(incident: AndroidAppMonitorIncident): Promise<void> {
+    if (this.seenIncidentIds.has(incident.id)) {
+      return;
+    }
+    this.seenIncidentIds.add(incident.id);
+    this.summary = {
+      ...this.summary,
+      incidents: [...this.summary.incidents, incident]
+    };
+    await this.options.callbacks?.onIncident?.(incident);
+  }
+
+  private async replayMissingIncidents(incidents: AndroidAppMonitorIncident[]): Promise<void> {
+    for (const incident of incidents) {
+      await this.recordIncident(incident);
+    }
+  }
+
+  private async replaySamples(samples: AgentAppMonitorSamples): Promise<void> {
+    for (const sample of samples.cpu) {
+      await this.options.callbacks?.onSample?.(sample, "cpu");
+    }
+    for (const sample of samples.memory) {
+      await this.options.callbacks?.onSample?.(sample, "memory");
+    }
+    for (const event of samples.lifecycle) {
+      await this.options.callbacks?.onLifecycleEvent?.(event);
+    }
   }
 }
 
@@ -316,6 +438,234 @@ function metricFromResult(result: unknown): MetricSample {
     ...(numberFromRecord(metric, "batteryTemperatureC") !== undefined ? { batteryTemperatureC: numberFromRecord(metric, "batteryTemperatureC") } : {}),
     ...(recordValue(metric.raw) ? { raw: recordValue(metric.raw) } : {})
   };
+}
+
+function observedEventFromIncident(incident: AndroidAppMonitorIncident): ObservedDeviceEvent | undefined {
+  const type = observedEventTypeFromIncident(incident.type);
+  if (!type) {
+    return undefined;
+  }
+  return {
+    type,
+    severity: incident.severity,
+    occurredAt: incident.occurredAt,
+    summary: incident.summary,
+    ...(incident.detail ? { detail: incident.detail } : {}),
+    ...(incident.processName ? { processName: incident.processName } : {}),
+    ...(incident.pid !== undefined ? { pid: incident.pid } : {})
+  };
+}
+
+function observedEventTypeFromIncident(type: AndroidAppMonitorIncident["type"]): ObservedDeviceEvent["type"] | undefined {
+  switch (type) {
+    case "java_crash":
+      return "crash";
+    case "native_crash":
+    case "anr":
+    case "process_death":
+      return type;
+    case "watcher_error":
+      return "command_failed";
+    case "cpu_threshold":
+    case "memory_threshold":
+      return undefined;
+  }
+}
+
+function isObservedEventInWindow(event: ObservedDeviceEvent, since: Date | undefined): boolean {
+  if (!since || !event.occurredAt) {
+    return true;
+  }
+  const occurredAtMs = Date.parse(event.occurredAt);
+  return Number.isFinite(occurredAtMs) && occurredAtMs >= since.getTime();
+}
+
+function matchesPackageFilter(incident: AndroidAppMonitorIncident, packageName: string | undefined): boolean {
+  if (!packageName || !incident.processName) {
+    return true;
+  }
+  return incident.processName === packageName || incident.processName.startsWith(`${packageName}:`);
+}
+
+function emptyAppMonitorSummary(packageName: string): AndroidAppMonitorSummary {
+  return {
+    packageName,
+    startedAt: new Date().toISOString(),
+    processes: [],
+    sampleCounts: { cpu: 0, memory: 0, lifecycle: 0 },
+    incidents: [],
+    artifacts: {}
+  };
+}
+
+function appMonitorStopResultFromResult(result: unknown): { summary: AndroidAppMonitorSummary; samples: AgentAppMonitorSamples } {
+  const payload = recordValue(result);
+  const summary = appMonitorSummaryFromResult(result);
+  if (!summary) {
+    throw new Error("Agent app monitor response did not include summary");
+  }
+  return {
+    summary,
+    samples: appMonitorSamplesFromRecord(recordValue(payload?.samples))
+  };
+}
+
+function appMonitorSummaryFromResult(result: unknown): AndroidAppMonitorSummary | undefined {
+  const payload = recordValue(result);
+  const summary = recordValue(payload?.summary) ?? payload;
+  if (!summary) {
+    return undefined;
+  }
+  const packageName = stringFromRecord(summary, "packageName");
+  const startedAt = stringFromRecord(summary, "startedAt");
+  if (!packageName || !startedAt) {
+    return undefined;
+  }
+  const sampleCounts = recordValue(summary.sampleCounts);
+  const artifacts = recordValue(summary.artifacts);
+  return {
+    packageName,
+    startedAt,
+    ...(stringFromRecord(summary, "endedAt") ? { endedAt: stringFromRecord(summary, "endedAt") } : {}),
+    processes: Array.isArray(summary.processes) ? summary.processes.flatMap(androidProcessInfoFromValue) : [],
+    sampleCounts: {
+      cpu: numberFromRecord(sampleCounts ?? {}, "cpu") ?? 0,
+      memory: numberFromRecord(sampleCounts ?? {}, "memory") ?? 0,
+      lifecycle: numberFromRecord(sampleCounts ?? {}, "lifecycle") ?? 0
+    },
+    incidents: Array.isArray(summary.incidents) ? summary.incidents.flatMap(androidAppMonitorIncidentFromValue) : [],
+    artifacts: {
+      ...(stringFromRecord(artifacts, "cpuCsvArtifactId") ? { cpuCsvArtifactId: stringFromRecord(artifacts, "cpuCsvArtifactId") } : {}),
+      ...(stringFromRecord(artifacts, "memoryCsvArtifactId") ? { memoryCsvArtifactId: stringFromRecord(artifacts, "memoryCsvArtifactId") } : {}),
+      ...(stringFromRecord(artifacts, "lifecycleCsvArtifactId") ? { lifecycleCsvArtifactId: stringFromRecord(artifacts, "lifecycleCsvArtifactId") } : {}),
+      ...(stringFromRecord(artifacts, "summaryJsonArtifactId") ? { summaryJsonArtifactId: stringFromRecord(artifacts, "summaryJsonArtifactId") } : {})
+    }
+  };
+}
+
+function cloneAppMonitorSummary(summary: AndroidAppMonitorSummary): AndroidAppMonitorSummary {
+  return {
+    ...summary,
+    processes: summary.processes.map((process) => ({ ...process })),
+    sampleCounts: { ...summary.sampleCounts },
+    incidents: summary.incidents.map((incident) => ({
+      ...incident,
+      artifactIds: [...incident.artifactIds],
+      ...(incident.metadata ? { metadata: { ...incident.metadata } } : {})
+    })),
+    artifacts: { ...summary.artifacts }
+  };
+}
+
+function appMonitorSamplesFromRecord(record: Record<string, unknown> | undefined): AgentAppMonitorSamples {
+  return {
+    cpu: Array.isArray(record?.cpu) ? record.cpu.flatMap(androidProcessMetricSampleFromValue) : [],
+    memory: Array.isArray(record?.memory) ? record.memory.flatMap(androidProcessMetricSampleFromValue) : [],
+    lifecycle: Array.isArray(record?.lifecycle) ? record.lifecycle.flatMap(androidProcessLifecycleEventFromValue) : []
+  };
+}
+
+function androidProcessInfoFromValue(value: unknown): AndroidAppMonitorSummary["processes"] {
+  const process = recordValue(value);
+  const pid = numberFromRecord(process ?? {}, "pid");
+  const processName = stringFromRecord(process, "processName");
+  const packageName = stringFromRecord(process, "packageName");
+  const discoveredAt = stringFromRecord(process, "discoveredAt");
+  if (pid === undefined || !processName || !packageName || !discoveredAt) {
+    return [];
+  }
+  return [{
+    pid,
+    processName,
+    packageName,
+    isMainProcess: process?.isMainProcess === true,
+    discoveredAt
+  }];
+}
+
+function androidProcessMetricSampleFromValue(value: unknown): AndroidProcessMetricSample[] {
+  const sample = recordValue(value);
+  if (!sample) {
+    return [];
+  }
+  const sampledAt = stringFromRecord(sample, "sampledAt");
+  const pid = numberFromRecord(sample, "pid");
+  const processName = stringFromRecord(sample, "processName");
+  if (!sampledAt || pid === undefined || !processName) {
+    return [];
+  }
+  return [{
+    sampledAt,
+    pid,
+    processName,
+    ...(numberFromRecord(sample, "cpuPercent") !== undefined ? { cpuPercent: numberFromRecord(sample, "cpuPercent") } : {}),
+    ...(numberFromRecord(sample, "pssKb") !== undefined ? { pssKb: numberFromRecord(sample, "pssKb") } : {}),
+    ...(numberFromRecord(sample, "rssKb") !== undefined ? { rssKb: numberFromRecord(sample, "rssKb") } : {}),
+    ...(recordValue(sample?.raw) ? { raw: recordValue(sample?.raw) } : {})
+  }];
+}
+
+function androidProcessLifecycleEventFromValue(value: unknown): AndroidProcessLifecycleEvent[] {
+  const event = recordValue(value);
+  if (!event) {
+    return [];
+  }
+  const occurredAt = stringFromRecord(event, "occurredAt");
+  const type = event?.type;
+  const processName = stringFromRecord(event, "processName");
+  if (!occurredAt || !processName || (type !== "process_started" && type !== "process_exited" && type !== "process_restarted")) {
+    return [];
+  }
+  return [{
+    occurredAt,
+    type,
+    ...(numberFromRecord(event, "pid") !== undefined ? { pid: numberFromRecord(event, "pid") } : {}),
+    ...(numberFromRecord(event, "previousPid") !== undefined ? { previousPid: numberFromRecord(event, "previousPid") } : {}),
+    processName
+  }];
+}
+
+function androidAppMonitorIncidentFromValue(value: unknown): AndroidAppMonitorIncident[] {
+  const incident = recordValue(value);
+  if (!incident) {
+    return [];
+  }
+  const id = stringFromRecord(incident, "id");
+  const type = androidAppMonitorIncidentType(incident?.type);
+  const severity = androidAppMonitorIncidentSeverity(incident?.severity);
+  const occurredAt = stringFromRecord(incident, "occurredAt");
+  const summary = stringFromRecord(incident, "summary");
+  if (!id || !type || !severity || !occurredAt || !summary) {
+    return [];
+  }
+  return [{
+    id,
+    type,
+    severity,
+    occurredAt,
+    ...(stringFromRecord(incident, "processName") ? { processName: stringFromRecord(incident, "processName") } : {}),
+    ...(numberFromRecord(incident, "pid") !== undefined ? { pid: numberFromRecord(incident, "pid") } : {}),
+    summary,
+    ...(stringFromRecord(incident, "detail") ? { detail: stringFromRecord(incident, "detail") } : {}),
+    artifactIds: Array.isArray(incident?.artifactIds) ? incident.artifactIds.filter((item): item is string => typeof item === "string") : [],
+    ...(recordValue(incident?.metadata) ? { metadata: recordValue(incident?.metadata) } : {})
+  }];
+}
+
+function androidAppMonitorIncidentType(value: unknown): AndroidAppMonitorIncident["type"] | undefined {
+  return value === "cpu_threshold" ||
+    value === "memory_threshold" ||
+    value === "java_crash" ||
+    value === "native_crash" ||
+    value === "anr" ||
+    value === "process_death" ||
+    value === "watcher_error"
+    ? value
+    : undefined;
+}
+
+function androidAppMonitorIncidentSeverity(value: unknown): AndroidAppMonitorIncident["severity"] | undefined {
+  return value === "info" || value === "warning" || value === "error" ? value : undefined;
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {

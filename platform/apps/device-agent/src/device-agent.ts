@@ -3,6 +3,12 @@ import {
   type AgentCommandChannelMessage,
   type AgentCommandEnvelope,
   type AgentCommandResultEnvelope,
+  type AgentAppMonitorIncidentEnvelope,
+  AGENT_PROTOCOL_VERSION,
+  type AndroidAppMonitorConfig,
+  type AndroidAppMonitorIncident,
+  type AndroidProcessLifecycleEvent,
+  type AndroidProcessMetricSample,
   type DeviceActionRequest,
   type DeviceActionResult,
   type DeviceInfo,
@@ -13,6 +19,7 @@ import {
   type ToolStatus
 } from "@mobile-automation/shared";
 import { WebSocket } from "ws";
+import { MonitorSessionManager, type AgentMonitorSession } from "./monitor-session-manager.js";
 
 export type AgentLocalDeviceDriver = {
   getToolStatus(): Promise<ToolStatus[]>;
@@ -26,6 +33,16 @@ export type AgentLocalDeviceDriver = {
   clearAppData?(serial: string, packageName: string): Promise<void>;
   collectLogs(serial: string, lines?: number): Promise<string>;
   samplePerformance(serial: string, runId: string, stepResultId?: string): Promise<MetricSample>;
+  startAppMonitor?(
+    serial: string,
+    runId: string,
+    config: AndroidAppMonitorConfig,
+    callbacks?: {
+      onIncident?: (incident: AndroidAppMonitorIncident) => void | Promise<void>;
+      onSample?: (sample: AndroidProcessMetricSample, kind: "cpu" | "memory") => void | Promise<void>;
+      onLifecycleEvent?: (event: AndroidProcessLifecycleEvent) => void | Promise<void>;
+    }
+  ): Promise<AgentMonitorSession>;
 };
 
 export type DeviceAgentConfig = {
@@ -84,6 +101,7 @@ export class DeviceAgentRuntime {
   private readonly harmonyStream?: AgentHarmonyStreamer;
   private readonly commandSocketFactory: AgentCommandSocketFactory;
   private readonly backgroundCommands = new Set<Promise<void>>();
+  private readonly monitorSessions: MonitorSessionManager;
   private commandSocket?: AgentCommandSocket;
   private commandSocketAvailable = false;
   private readonly config: Required<Pick<DeviceAgentConfig, "serverUrl" | "agentId" | "shared" | "pollIntervalMs" | "heartbeatIntervalMs" | "maxConcurrentRuns">> & {
@@ -103,6 +121,16 @@ export class DeviceAgentRuntime {
     this.scrcpy = deps.scrcpy;
     this.harmonyStream = deps.harmonyStream;
     this.commandSocketFactory = deps.commandSocketFactory ?? ((url) => new WebSocket(url));
+    this.monitorSessions = new MonitorSessionManager({
+      driver: {
+        startAppMonitor: (serial, runId, monitorConfig, callbacks) => {
+          if (!this.driver.startAppMonitor) {
+            throw new Error("startAppMonitor is not supported by this agent");
+          }
+          return this.driver.startAppMonitor(serial, runId, monitorConfig, callbacks);
+        }
+      }
+    });
   }
 
   async registerOnce(): Promise<void> {
@@ -183,6 +211,9 @@ export class DeviceAgentRuntime {
       }
     } finally {
       this.closeCommandChannel();
+      await this.monitorSessions.cleanupAll().catch((error: unknown) => {
+        this.write?.(`agent monitor cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
     }
   }
 
@@ -230,7 +261,7 @@ export class DeviceAgentRuntime {
       maxConcurrentRuns: this.config.maxConcurrentRuns,
       currentRunCount: 0,
       toolStatus,
-      devices: this.withAgentStreamCapabilities(devices)
+      devices: this.withAgentRuntimeCapabilities(devices)
     };
   }
 
@@ -285,6 +316,58 @@ export class DeviceAgentRuntime {
         }
       };
     }
+    if (command.command === "startAppMonitor") {
+      if (command.platform !== "android") {
+        throw new Error("startAppMonitor is only supported for Android devices");
+      }
+      if (!this.driver.startAppMonitor) {
+        throw new Error("startAppMonitor is not supported by this agent");
+      }
+      const monitorId = requiredString(command.payload?.monitorId, "startAppMonitor payload.monitorId");
+      const runId = requiredString(command.payload?.runId, "startAppMonitor payload.runId");
+      const config = readAndroidAppMonitorConfig(command.payload?.config);
+      const session = await this.monitorSessions.start({
+        monitorId,
+        runId,
+        deviceKey: command.deviceKey,
+        localSerial: serial,
+        config,
+        callbacks: {
+          onIncident: (incident) => this.postAppMonitorIncident(command, monitorId, runId, incident)
+        }
+      });
+      return {
+        ok: true,
+        result: {
+          monitorId,
+          runId,
+          summary: session.getSummary()
+        }
+      };
+    }
+    if (command.command === "stopAppMonitor") {
+      const monitorId = requiredString(command.payload?.monitorId, "stopAppMonitor payload.monitorId");
+      const summary = await this.monitorSessions.stop(monitorId);
+      return {
+        ok: true,
+        result: {
+          monitorId,
+          ...(summary ? { summary } : {}),
+          samples: this.monitorSessions.samplesFor(monitorId)
+        }
+      };
+    }
+    if (command.command === "getAppMonitorSummary") {
+      const monitorId = requiredString(command.payload?.monitorId, "getAppMonitorSummary payload.monitorId");
+      return {
+        ok: true,
+        result: {
+          monitorId,
+          summary: this.monitorSessions.getSummary(monitorId),
+          samples: this.monitorSessions.samplesFor(monitorId)
+        }
+      };
+    }
     if (command.command === "startScrcpyStream") {
       if (!this.scrcpy) {
         throw new Error("scrcpy streaming is not enabled on this agent");
@@ -314,6 +397,46 @@ export class DeviceAgentRuntime {
       return { ok: true, result: { streamId } };
     }
     return { ok: false, error: `Unsupported agent command: ${command.command}` };
+  }
+
+  private async postAppMonitorIncident(
+    command: AgentCommandEnvelope,
+    monitorId: string,
+    runId: string,
+    incident: AndroidAppMonitorIncident
+  ): Promise<void> {
+    const payload: AgentAppMonitorIncidentEnvelope = {
+      type: "appMonitorIncident",
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      agentId: command.agentId,
+      deviceKey: command.deviceKey,
+      monitorId,
+      runId,
+      timestamp: new Date().toISOString(),
+      incident
+    };
+    await this.postJson(`/api/agents/${encodeURIComponent(command.agentId)}/app-monitor-incidents`, payload);
+  }
+
+  private withAgentRuntimeCapabilities(devices: DeviceInfo[]): DeviceInfo[] {
+    const streamDevices = this.withAgentStreamCapabilities(devices);
+    const supportsAppMonitor = typeof this.driver.startAppMonitor === "function";
+    return streamDevices.map((device) => {
+      if (device.platform !== "android") {
+        return device;
+      }
+      return {
+        ...device,
+        capabilities: {
+          ...device.capabilities,
+          events: {
+            crash: supportsAppMonitor && device.capabilities.events?.crash === true,
+            anr: supportsAppMonitor && device.capabilities.events?.anr === true,
+            logs: device.capabilities.events?.logs === true
+          }
+        }
+      };
+    });
   }
 
   private withAgentStreamCapabilities(devices: DeviceInfo[]): DeviceInfo[] {
@@ -439,6 +562,9 @@ function prioritizeAgentCommands(commands: AgentCommandEnvelope[]): AgentCommand
 function agentCommandPriority(command: AgentCommandEnvelope): number {
   if (command.command === "performAction" || command.command === "performSemanticAction") {
     return 100;
+  }
+  if (command.command === "startAppMonitor" || command.command === "stopAppMonitor") {
+    return 95;
   }
   if (command.command === "startScrcpyStream" || command.command === "startHarmonyStream") {
     return 90;
@@ -623,6 +749,48 @@ function readSemanticDeviceAction(value: unknown, name: string): SemanticDeviceA
     };
   }
   throw new Error(`${name} is invalid`);
+}
+
+function readAndroidAppMonitorConfig(value: unknown): AndroidAppMonitorConfig {
+  const config = recordValue(value);
+  if (!config) {
+    throw new Error("startAppMonitor payload.config is required");
+  }
+  const enabled = config.enabled === true;
+  const packageName = requiredString(config.packageName, "startAppMonitor payload.config.packageName");
+  const thresholds = recordValue(config.thresholds);
+  return {
+    enabled,
+    packageName,
+    ...(typeof config.includeSubprocesses === "boolean" ? { includeSubprocesses: config.includeSubprocesses } : {}),
+    ...(Array.isArray(config.processFilters) ? { processFilters: config.processFilters.filter((item): item is string => typeof item === "string") } : {}),
+    ...(positiveInteger(config.cpuIntervalMs) ? { cpuIntervalMs: positiveInteger(config.cpuIntervalMs) } : {}),
+    ...(positiveInteger(config.memoryIntervalMs) ? { memoryIntervalMs: positiveInteger(config.memoryIntervalMs) } : {}),
+    ...(positiveInteger(config.lifecycleIntervalMs) ? { lifecycleIntervalMs: positiveInteger(config.lifecycleIntervalMs) } : {}),
+    ...(typeof config.enableHeapDump === "boolean" ? { enableHeapDump: config.enableHeapDump } : {}),
+    ...(thresholds ? { thresholds: androidAppMonitorThresholds(thresholds) } : {})
+  };
+}
+
+function androidAppMonitorThresholds(thresholds: Record<string, unknown>): AndroidAppMonitorConfig["thresholds"] {
+  const cpuPercent = androidAppMonitorThreshold(recordValue(thresholds.cpuPercent));
+  const pssMb = androidAppMonitorThreshold(recordValue(thresholds.pssMb));
+  return {
+    ...(cpuPercent ? { cpuPercent } : {}),
+    ...(pssMb ? { pssMb } : {})
+  };
+}
+
+function androidAppMonitorThreshold(value: Record<string, unknown> | undefined): NonNullable<AndroidAppMonitorConfig["thresholds"]>["cpuPercent"] | undefined {
+  if (!value || !isFiniteNumber(value.value)) {
+    return undefined;
+  }
+  return {
+    enabled: value.enabled === true,
+    value: value.value,
+    sustainMs: positiveInteger(value.sustainMs) ?? 5000,
+    cooldownMs: positiveInteger(value.cooldownMs) ?? 30000
+  };
 }
 
 function semanticLocatorValue(locator: Record<string, unknown>): SemanticElementLocator {

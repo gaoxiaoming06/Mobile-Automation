@@ -181,7 +181,7 @@ function flow(): ScriptFlow {
       description: "进入指定班级并填写新课堂信息，不执行发布。",
       app: { id: "cn.eeo.classin" },
       parameters: { lessonName: { type: "string", label: "课堂名称", required: true } },
-      steps: [{ id: "verify", name: "确认已进入新建课堂页", assertPage: "classin.lesson.create" }],
+      steps: [{ id: "verify", name: "确认已进入新建课堂页", assertPage: { screenRef: "classin.lesson.create" } }],
       tags: ["课堂"]
     },
     status: "active",

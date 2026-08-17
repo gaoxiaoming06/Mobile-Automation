@@ -11,6 +11,7 @@ import type {
   ScriptParameterType,
   ScriptParameterValue,
   ScriptSearchPolicy,
+  ScriptScreenContract,
   ScriptStep,
   ScriptStepRole,
   ScriptTarget,
@@ -30,7 +31,7 @@ export class ScriptFlowValidationError extends Error {
 }
 
 const rootFields = new Set(["version", "kind", "purpose", "testLevel", "name", "description", "app", "start", "entry", "outcome", "loop", "parameters", "steps", "tags"]);
-const stepBaseFields = new Set(["id", "name", "role", "onPage", "expectPage", "timeoutMs", "risk", "with"]);
+const stepBaseFields = new Set(["id", "name", "role", "before", "after", "timeoutMs", "risk", "with"]);
 const actionFields = [
   "launchApp",
   "tap",
@@ -150,21 +151,21 @@ function readFlowState(value: unknown, path: "entry" | "outcome", issues: Script
     return undefined;
   }
   const state = recordAt(value, path, issues);
-  rejectUnknownFields(state, new Set(["page", "session", "role"]), path, issues);
-  const page = optionalString(state.page, `${path}.page`, issues);
+  rejectUnknownFields(state, new Set(["screenRef", "session", "role"]), path, issues);
+  const screenRef = optionalString(state.screenRef, `${path}.screenRef`, issues);
   const session = optionalString(state.session, `${path}.session`, issues);
   const role = optionalString(state.role, `${path}.role`, issues);
   if (session && session !== "authenticated" && session !== "unauthenticated") {
     issues.push({ path: `${path}.session`, message: "Session must be authenticated or unauthenticated" });
   }
-  if (!page && !session) {
-    issues.push({ path, message: "State requires a page or session" });
+  if (!screenRef && !session) {
+    issues.push({ path, message: "State requires a screenRef or session" });
   }
   if (role && session !== "authenticated") {
     issues.push({ path: `${path}.role`, message: "Role requires an authenticated session" });
   }
   return {
-    ...(page ? { page } : {}),
+    ...(screenRef ? { screenRef } : {}),
     ...(session === "authenticated" || session === "unauthenticated" ? { session } : {}),
     ...(role ? { role } : {})
   };
@@ -307,8 +308,8 @@ function readStep(
   rejectUnknownFields(step, new Set([...stepBaseFields, ...actionFields]), path, issues);
   const id = requiredString(step.id, `${path}.id`, issues);
   const name = optionalString(step.name, `${path}.name`, issues);
-  const onPage = optionalString(step.onPage, `${path}.onPage`, issues);
-  const expectPage = optionalString(step.expectPage, `${path}.expectPage`, issues);
+  const before = readScreenContract(step.before, `${path}.before`, issues);
+  const after = readScreenContract(step.after, `${path}.after`, issues);
   const timeoutMs = optionalPositiveNumber(step.timeoutMs, `${path}.timeoutMs`, issues);
   const actions = actionFields.filter((field) => step[field] !== undefined);
   if (actions.length !== 1) {
@@ -316,13 +317,13 @@ function readStep(
   }
   const action = actions[0] ?? "assertPage";
   const role = readStepRole(step.role, `${path}.role`, issues)
-    ?? inferStepRole(purpose, action, Boolean(expectPage));
+    ?? inferStepRole(purpose, action, Boolean(after));
   const base = {
     id,
     ...(name ? { name } : {}),
     role,
-    ...(onPage ? { onPage } : {}),
-    ...(expectPage ? { expectPage } : {}),
+    ...(before ? { before } : {}),
+    ...(after ? { after } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {})
   };
 
@@ -346,9 +347,9 @@ function readStep(
     case "reachPage":
       return { ...base, reachPage: readReachPage(step.reachPage, `${path}.reachPage`, issues) };
     case "waitForPage":
-      return { ...base, waitForPage: requiredString(step.waitForPage, `${path}.waitForPage`, issues) };
+      return { ...base, waitForPage: readRequiredScreenContract(step.waitForPage, `${path}.waitForPage`, issues) };
     case "assertPage":
-      return { ...base, assertPage: requiredString(step.assertPage, `${path}.assertPage`, issues) };
+      return { ...base, assertPage: readRequiredScreenContract(step.assertPage, `${path}.assertPage`, issues) };
     case "assertText":
       return { ...base, assertText: readAssertText(step.assertText, `${path}.assertText`, issues) };
     case "runFlow":
@@ -362,6 +363,29 @@ function readStep(
     case "when":
       return { ...base, when: readWhen(step.when, `${path}.when`, issues, purpose) };
   }
+}
+
+function readScreenContract(
+  value: unknown,
+  path: string,
+  issues: ScriptFlowValidationIssue[]
+): ScriptScreenContract | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return readRequiredScreenContract(value, path, issues);
+}
+
+function readRequiredScreenContract(
+  value: unknown,
+  path: string,
+  issues: ScriptFlowValidationIssue[]
+): ScriptScreenContract {
+  const contract = recordAt(value, path, issues);
+  rejectUnknownFields(contract, new Set(["screenRef"]), path, issues);
+  return {
+    screenRef: requiredString(contract.screenRef, `${path}.screenRef`, issues)
+  };
 }
 
 function readStepRole(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): ScriptStepRole | undefined {
@@ -494,16 +518,16 @@ function readScroll(value: unknown, path: string, issues: ScriptFlowValidationIs
   };
 }
 
-function readReachPage(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { page: string; policy?: "safe" } {
+function readReachPage(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { screenRef: string; policy?: "safe" } {
   const action = recordAt(value, path, issues);
-  rejectUnknownFields(action, new Set(["page", "policy"]), path, issues);
-  const page = requiredString(action.page, `${path}.page`, issues);
+  rejectUnknownFields(action, new Set(["screenRef", "policy"]), path, issues);
+  const screenRef = requiredString(action.screenRef, `${path}.screenRef`, issues);
   const policy = optionalString(action.policy, `${path}.policy`, issues);
   if (policy && policy !== "safe") {
     issues.push({ path: `${path}.policy`, message: "reachPage policy must be safe" });
   }
   return {
-    page,
+    screenRef,
     ...(policy === "safe" ? { policy } : {})
   };
 }

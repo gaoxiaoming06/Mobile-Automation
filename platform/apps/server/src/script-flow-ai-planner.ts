@@ -14,24 +14,28 @@ import type { NavigationEntry, ScreenUnderstandingContext, ScriptFlow, ScriptFlo
 import { isCodexAppServerProvider, runAiJsonRequest, type AiClientFetch } from "./ai-client.js";
 import type { AiModelConfig } from "./ai-model-settings.js";
 import type { PageAssetCatalog, PageAssetPlatform } from "./page-asset-catalog.js";
+import {
+  normalizeScriptFlowGenerationContext,
+  type ScriptFlowGenerationContextPolicy
+} from "./script-flow-generation-context.js";
 import type { ScriptFlowAiTimingContext } from "./script-flow-ai-timing.js";
 import { timedScriptFlowAiStage } from "./script-flow-ai-timing.js";
 import { assessScriptFlowVerification } from "./script-flow-verification.js";
 
 export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "你是移动自动化 ScriptFlow 规划器，只生成可审查的脚本草稿，不操作设备。",
-  "规划阶段默认不读取实时设备页面；只有用户显式开启看屏时，才能使用服务端提供的受控 screenContext。onPage 和 expectPage 只表达显式步骤自身的页面约束。",
+  "规划阶段默认不读取实时设备页面；只有用户显式开启看屏时，才能使用服务端提供的受控 screenContext。before.screenRef 和 after.screenRef 只表达显式步骤自身的页面约束。",
   "先判断测试类型：单一业务目标标记为 case；多个可独立成立的业务目标标记为 scenario。导航、登录态准备和结果验证不算额外业务目标。",
   "必须用顶层 purpose 标记测试主要目的：navigation、fixture、business 或 recovery。navigation 只到达状态，fixture 准备测试环境，business 验证业务行为，recovery 恢复可执行状态。",
   "每个步骤必须显式标记 role：setup、navigation、business、assertion、reset、cleanup 或 recovery。role 按该步骤在整个测试中的语义填写，不能仅根据动作类型猜测。",
   "新草稿使用显式步骤表达前置准备、业务操作、结果验证和每轮复位：setup 步骤属于前置准备，business 步骤属于业务操作，assertion 步骤属于结果验证，reset 步骤属于循环业务与验证时每轮结束后回到业务起点的动作。不要使用 entry、outcome 或 start 让执行器补动作。",
   "每轮复位不得自动推断。只有用户明确描述循环时每轮结束后的返回路径，才生成 role: reset 的步骤；只有用户明确说明业务执行后自然回到起点、无需复位时，才输出顶层 loop: { reset: \"none\" }；其他情况省略 loop 和 reset 步骤，交给用户在编排器确认。",
-  "页面目录只负责页面身份。动作目标必须且只能使用 text、icon、visual 或 control：已知屏幕原文用 text；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual；通用表单控件用 control。禁止生成 semantic 目标字段。",
+  "页面描述只负责业务上下文，不是动作定位依据。动作目标必须且只能使用 text、icon、visual 或 control：已知屏幕原文用 text；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual；通用表单控件用 control。禁止生成 semantic 目标字段。",
   "页面 key、页面 id、ScriptFlow id 和类似 classin.teacher.xxx 的内部引用不能作为 tap、inputText、clearText、selectText 或 scrollUntilVisible 的动作目标。",
   "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。需要表达‘进入教学方案的入口’这类文本语义目标时，使用 text + match: semantic，不能伪装成屏幕原文。",
   "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 目标默认按完整控件文字匹配：按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和 ${parameterName} 这类参数化名称不要写 match: contains；用户明确表达‘包含、带有、关键字、模糊匹配’，或受控 screenContext/读屏证据显示实际控件原文包含目标基础词但额外带动态数量、状态、后缀或前缀时，才可写 match: contains，且必须尽量补充 area、nearText、scopeText、ordinal 或容器语义。",
   "text、icon、visual 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
-  "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、onPage、expectPage、reachPage 或 runFlow，也不要把页面目录当成动作前置条件。",
+  "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、before、after、reachPage 或 runFlow，也不要把页面目录当成动作前置条件。",
   "表单字段动作默认使用 search: { mode: auto }。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或受控 screenContext 明确给出当前可见候选时，才使用 visibleOnly。",
   "用户说通过滑动、滚动、查找、找到、定位或搜索某字段/条目/控件时，这是目标动作的运行时查找策略，不是独立 swipe 步骤；即使 screenContext 当前首屏没有该字段，也应生成该字段的直接动作并使用 search: { mode: auto }，不能因此追问。",
   "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确说点击某个入口时，禁止擅自补“点击修改”或其他桥接动作；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification 询问准确字段位置或完整操作路径。",
@@ -50,18 +54,18 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "ScriptFlow 的 launchApp 表示保留应用数据，先终止应用进程再重新启动；步骤名称应写为‘重启 App’，不能把它描述成仅切回前台。",
   "用户明确要求某个动作完成后停留、暂停、等待固定时间再继续时，生成独立 wait 步骤，使用 wait.durationMs 表达固定毫秒数。wait 只表示固定延时，不等待页面、文字或控件状态。",
   "用户描述打开选择器、滑动到具体选中值并确认时，必须把这组机械操作规范化为一个 selectText：target 保留字段入口，value 完整保留用户指定值，confirmText 保留确认文字。selectText 自身会点击并打开字段，由执行器动态查找选项；禁止保留前置 tap，也禁止猜测固定滑动次数。",
-  "用户只表达进入、打开、前往或回到某页面时，这是目标状态而不是操作方式。只有目标是 navigationAnchors 中的状态入口，或 transitions 中存在到该目标的路径时，才生成 reachPage；不要因为‘回到’推断系统返回或重启。",
-  "navigationEntries 是试运行验证并经用户确认的导航入口。目标型请求只能使用 navigationEntries、已验证 transitions 或 navigationAnchors；页面标签和页面名称不能作为入口推断依据。",
-  "只有用户明确描述点击、返回、重启等过程时才生成对应过程；reachPage 的运行时执行器只使用已验证导航索引和受控入口恢复，不会猜测未知点击路径。",
-  "只有用户明确写出某动作完成后会进入、到达、打开或跳转到哪个页面时，才把该目标页写在该动作的 expectPage；不要再紧跟一个独立 assertPage。assertPage 只用于用户明确要求单独验证当前页面的场景。",
-  "目标页面未录入时禁止引用或编造 page key。用户提供明确操作或完整操作链时必须先生成可试运行的直接动作；有独有稳定文字时用最终 assertText 验证，没有稳定文字时省略未知页面约束和结果断言，由系统标记为结果待确认，不能因此返回 needs_clarification。",
-  "只能引用目录中存在的 page key 和 active ScriptFlow id。禁止元素资产 ID、坐标、bounds、region_center、圈选区域或固定屏幕区域点击。",
-  "用户只说到达一个未录入页面、又没有提供操作路径时返回 needs_clarification，请用户补充从已知状态开始的完整点击过程或目标页独有稳定文字。不要要求用户先录制资产。",
-  "目标型请求生成 reachPage；过程型请求按用户描述保留每个动作，不擅自扩展成创建、发布、提交或删除。场景编排命中完全匹配的启用用例时自动使用 runFlow，不要求用户再确认复用；用户明确描述具体操作过程时则保留该过程。",
+  "用户只表达进入、打开、前往或回到某页面时，这是业务目标，不是运行时导航命令。优先从用例中心匹配完整业务路径并生成 runFlow；没有匹配的完整路径时返回 needs_clarification，请用户补充从当前状态开始的操作链。不要因为页面名称、页面资产或‘回到’推断点击、返回或重启。",
+  "用例中心中的 active ScriptFlow 是唯一可复用的业务路径知识。目标型请求不要生成 reachPage，也不要读取 navigationEntries、页面目录或导航索引。",
+  "只有用户明确描述点击、返回、重启等过程时才生成对应过程；不要依赖页面资产或导航索引猜测未知点击路径。",
+  "只有用户明确写出某动作完成后会进入、到达、打开或跳转到哪个页面时，才把该目标页写在该动作的 after.screenRef；不要再紧跟一个独立 assertPage。assertPage 只用于用户明确要求单独验证当前页面的场景。",
+  "页面名称或业务页面描述可以直接保留为语义上下文，不要求先录入页面资产。用户提供明确操作或完整操作链时必须先生成可试运行的直接动作；有独有稳定文字时用最终 assertText 验证，没有稳定文字时省略未知页面约束和结果断言，由系统标记为结果待确认，不能因此返回 needs_clarification。",
+  "只能引用 active ScriptFlow id；禁止元素资产 ID、坐标、bounds、region_center、圈选区域或固定屏幕区域点击。",
+  "用户只说到达一个页面、又没有提供操作路径时返回 needs_clarification，请用户补充从当前状态开始的完整点击过程或目标页独有稳定文字。不要要求用户先录制资产。",
+  "目标型请求命中用例中心的完整业务路径时生成 runFlow；过程型请求按用户描述保留每个动作，不擅自扩展成创建、发布、提交或删除。没有完整可复用路径时返回 needs_clarification；用户明确描述具体操作过程时则保留该过程。",
   "runFlow 只复用子用例的业务步骤与结果验证，不继承子用例的前置准备和每轮复位。引用用于登录或环境准备时标记 role: setup，引用作为被测流程时标记 role: business，作为结果验证时标记 role: assertion，作为每轮复位时标记 role: reset；父测试必须显式维护自己的启动、环境准备和复位步骤。",
   "动态业务值必须声明为 parameters 并在步骤中使用 ${parameterName}。用户已给出的值放入顶层 parameterValues，仅用于本次运行；未给出但执行必需的值设 required: true。字段标签、按钮、Tab、菜单项和固定入口文案不是参数；输入值、选中值、搜索词以及班级、老师、学生、课程、文件、群、日期、时间、数量等业务实体才是参数。",
   "账号、密码等 sensitive 参数禁止写入 parameters.default、summary 或 assumptions，必须只放入顶层 parameterValues。",
-  "runFlow 会自动继承父测试中的同名参数；规划器会把复用用例和 reachPage 导航路径所需参数汇总到运行配置。",
+  "runFlow 会自动继承父测试中的同名参数；规划器会把复用用例所需参数汇总到运行配置。",
   "常用参数直接展示；低频可选参数标记 advanced: true。枚举只有在输入目录给出合法选项时才能使用 select/options。",
   "执行器严格按照脚本中的显式命令执行，不推测前置页面，不插入返回、重启、页面恢复或结果断言。",
   "status 为 ready 时必须包含 document、summary、assumptions 和 parameterValues；status 为 needs_clarification 时只允许返回 status 和 clarification，不能同时返回 document 或草稿字段。",
@@ -128,6 +132,13 @@ const SCRIPT_FLOW_FLATTENED_READY_RESPONSE_FIELDS = new Set([
   ...SCRIPT_FLOW_DOCUMENT_RESPONSE_FIELDS
 ]);
 
+const EMPTY_GENERATION_PAGE_CATALOG: PageAssetCatalog = {
+  listPages: () => [],
+  getPage: () => undefined,
+  resolvePage: () => undefined,
+  findConfusablePages: () => []
+};
+
 export async function generateScriptFlowDraft(input: {
   config: AiModelConfig;
   prompt: string;
@@ -139,22 +150,29 @@ export async function generateScriptFlowDraft(input: {
   existingFlow?: ScriptFlow;
   screenContext?: ScreenUnderstandingContext;
   externalContext?: ScriptFlowExternalContext;
+  generationContext?: ScriptFlowGenerationContextPolicy;
   timingContext?: ScriptFlowAiTimingContext;
   fetchImpl?: AiClientFetch;
 }): Promise<ScriptFlowAiDraft> {
   if (!input.config.enabled) {
     throw new Error(input.config.reason === "missing_config" ? "AI 配置不完整" : "AI 生成未启用");
   }
-  const matchedDraft = input.existingFlow
+  const generationContext = normalizeScriptFlowGenerationContext(input.generationContext, {
+    hasScreenAssist: Boolean(input.screenContext)
+  });
+  const pageCatalog = EMPTY_GENERATION_PAGE_CATALOG;
+  const reusableFlows = generationContext.useCaseKnowledge ? input.flows : [];
+  const navigationEntries: NavigationEntry[] = [];
+  const matchedDraft = input.existingFlow || !generationContext.useCaseKnowledge
     ? undefined
-    : findMatchingDraftFlow(input.prompt, input.flows, input.pageCatalog, input.appId, input.platform);
+    : findMatchingDraftFlow(input.prompt, reusableFlows, pageCatalog, input.appId, input.platform);
   const existingFlow = input.existingFlow ?? matchedDraft;
   const catalog = buildScriptFlowPlannerCatalog(
-    input.pageCatalog,
-    existingFlow ? input.flows.filter((flow) => flow.id !== existingFlow.id) : input.flows,
+    pageCatalog,
+    existingFlow ? reusableFlows.filter((flow) => flow.id !== existingFlow.id) : reusableFlows,
     input.appId,
     input.platform,
-    input.navigationEntries ?? []
+    navigationEntries
   );
   const channel = isCodexAppServerProvider(input.config.baseURL) ? "codex" as const : "openai-compatible" as const;
   const requestConfig = {
@@ -184,7 +202,16 @@ export async function generateScriptFlowDraft(input: {
       model: input.config.model
     };
   }
-  const plannerPrompt = buildScriptFlowPlannerPrompt(input.prompt, input.appId, input.platform, catalog, existingDocument, input.screenContext, input.externalContext);
+  const plannerPrompt = buildScriptFlowPlannerPrompt(
+    input.prompt,
+    input.appId,
+    input.platform,
+    catalog,
+    existingDocument,
+    input.screenContext,
+    input.externalContext,
+    generationContext
+  );
   const plannerEffort = scriptFlowPlannerEffort({
     prompt: input.prompt,
     existingDocument,
@@ -295,6 +322,14 @@ export async function generateScriptFlowDraft(input: {
           model: input.config.model
         };
       }
+      if (repairError instanceof GeneratedReachPageError) {
+        return {
+          status: "needs_clarification",
+          clarification: generatedReachPageClarification(input.prompt, repairError.screenRef),
+          channel,
+          model: input.config.model
+        };
+      }
       if (repairError instanceof UnreachableReachPageError) {
         return {
           status: "needs_clarification",
@@ -400,37 +435,15 @@ export function buildScriptFlowPlannerCatalog(
         ...(Object.keys(outcome).length ? { outcome } : {})
       };
     });
-  const navigationEntries = learnedNavigationEntries
-    .filter((entry) => entry.appId === appId
-      && entry.status === "active"
-      && (entry.platformScope === platform || entry.platformScope === "mobile-both"))
-    .map((entry) => ({
-      id: entry.id,
-      key: entry.key,
-      name: entry.name,
-      from: entry.from,
-      toPage: entry.toPage,
-      action: entry.action,
-      confidence: entry.confidence,
-      version: entry.version
-    }));
+  void learnedNavigationEntries;
+  const navigationEntries: NavigationEntry[] = [];
   const transitions = [
     ...flows
     .filter((flow) => flow.appId === appId && flow.platform === platform && flow.status === "active")
-    .flatMap((flow) => transitionEntries(flow)),
-    ...navigationEntries.flatMap((entry) => entry.from.kind === "page" ? [{
-      onPage: entry.from.key,
-      expectPage: entry.toPage,
-      flowId: `navigation-entry:${entry.id}`,
-      flowName: entry.name,
-      stepId: `navigate-with-${entry.id}`,
-      action: entry.action.kind,
-      parameters: {},
-      source: "navigation_entry" as const
-    }] : [])
+    .flatMap((flow) => transitionEntries(flow))
   ];
   const navigationAnchors = reusableFlows.flatMap((flow) => {
-    const page = stringValue(flow.entry?.page);
+    const page = stringValue(flow.entry?.screenRef);
     const session = stringValue(flow.entry?.session);
     if (!page || !session) return [];
     return [{ page, session, ...(stringValue(flow.entry?.role) ? { role: stringValue(flow.entry?.role) } : {}) }];
@@ -445,7 +458,10 @@ export function buildScriptFlowPlannerPrompt(
   catalog: ScriptFlowPlannerCatalog,
   existingDocument?: ScriptFlowDocument,
   screenContext?: ScreenUnderstandingContext,
-  externalContext?: ScriptFlowExternalContext
+  externalContext?: ScriptFlowExternalContext,
+  generationContext: ScriptFlowGenerationContextPolicy = normalizeScriptFlowGenerationContext(undefined, {
+    hasScreenAssist: Boolean(screenContext)
+  })
 ): string {
   const systemTestLevel = existingDocument?.testLevel ?? classifyScriptFlowTestLevel(prompt);
   return [
@@ -472,10 +488,13 @@ export function buildScriptFlowPlannerPrompt(
         tags: ["ai-generated"]
       }
     }, null, 2),
-    "可用动作：launchApp、tap、inputText、clearText、selectText、swipe、wait、scrollUntilVisible、reachPage、waitForPage、assertPage、assertText、runFlow、repeat、when。",
+    "可用动作：launchApp、tap、inputText、clearText、selectText、swipe、wait、scrollUntilVisible、waitForPage、assertPage、assertText、runFlow、repeat、when。",
     `系统判定的 testLevel：${systemTestLevel}。document.testLevel 必须保持这个值，不能由模型自行改成其它层级。`,
     "testLevel 含义：probe=临时验证单点问题，component=字段/控件能力用例，business_smoke=最小业务主链路，full_regression=全字段或全配置回归。",
     "full_regression 不允许凭页面名称自动枚举字段。用户未列出全部字段时，先根据已有上下文生成可编辑草稿，并在 assumptions 中说明当前覆盖范围；不要仅因此返回 needs_clarification。",
+    generationContext.mode === "knowledge_enhanced"
+      ? "生成上下文模式：knowledge_enhanced。可以参考用例中心中的业务路径和参数契约，并优先输出 runFlow 复用完整子用例；不得读取或生成 PageAsset、InteractionAsset、页面导航索引或平台控件标识。"
+      : "生成上下文模式：strict。不要使用沉淀资产、历史脚本、页面目录或导航知识；只按照用户当前描述和显式开启的当前屏幕上下文生成。用户没有明确页面前置或页面结果时，不要生成 entry、outcome、before 或 after。",
     "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
     "步骤字段合同：步骤 id 使用稳定英文短横线命名；role 只能使用 setup、navigation、business、assertion、reset、cleanup 或 recovery；动作字段只能从可用动作列表中选择一个；页面字段不是动作字段，不能用 page/action 包装动作。",
     "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号/表情/麦克风/上箭头等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal；用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 和 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content，并使用 scopeText+ordinal 或 anchorText+relation；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
@@ -501,17 +520,17 @@ export function buildScriptFlowPlannerPrompt(
         ].join("\n")
       : "未提供外部代码上下文。",
     "tap、inputText、clearText 和 selectText 使用同一 search 合同，search.mode 可用 auto、visibleOnly 或 scroll。普通内容目标默认用 auto；瞬时菜单和顶栏/底栏目标用 visibleOnly。执行器负责在允许时逐屏查找，脚本不要展开成机械滑动步骤。",
-    "用户已经给出字段/控件名以及状态或输入值、且没有明确要求页面导航时，这是完整当前页控件动作。必须只生成直接动作，省略 entry、outcome、onPage、expectPage、reachPage、runFlow、waitForPage 和 assertPage；如果字段标签不确定或开关缺少开启/关闭状态，再返回 needs_clarification。",
+    "用户已经给出字段/控件名以及状态或输入值、且没有明确要求页面导航时，这是完整当前页控件动作。必须只生成直接动作，省略 entry、outcome、before、after、reachPage、runFlow、waitForPage 和 assertPage；如果字段标签不确定或开关缺少开启/关闭状态，再返回 needs_clarification。",
     "表单字段动作默认使用 search: { mode: auto }，避免当前屏幕滚动位置变化后找错控件。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或使用 screenContext 中明确可见的受控候选时，才使用 visibleOnly。",
     "用户说通过滑动、滚动、查找、找到、定位或搜索某字段/条目/控件时，这是目标动作的运行时查找策略，不是独立 swipe 步骤；即使 screenContext 当前首屏没有该字段，也应生成该字段的直接动作并使用 search: { mode: auto }，不能因此追问。",
     "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确点击某个入口时，不得补充“点击修改”等桥接步骤；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification。",
     "用户为选择器给出具体选中值时，把“点击字段、滑动选择该值、点击确定/完成”合并为一个 selectText，value 必须精确保留，confirmText 使用用户说出的确认文字；selectText 自身会打开字段，前面禁止再生成 tap，也禁止生成固定次数 swipe 来猜选项位置。",
-    "只表达目标页面时，仅当目标属于 navigationAnchors，或能通过 navigationEntries、已验证 transitions 到达时使用 reachPage: { page: <目录页面>, policy: safe }。不要因为“回到”推断系统返回或重启，也不要根据页面名称或标签猜测导航入口。reachPage 自身会验证目标页，不要追加 assertPage。",
+    "只表达目标页面时，优先输出 runFlow 复用用例中心中的完整业务路径；没有完整可复用路径时返回 needs_clarification，请用户补充从当前状态开始的完整操作路径或目标页独有稳定文字。不要因为页面名称、页面资产、导航索引或“回到”推断点击、返回、重启或 reachPage。",
     "不要输出 risk 字段。用户点击执行即表示授权运行当前可见脚本，系统不根据按钮文案推断业务风险。",
-    "直接理解用户的完整意图和操作顺序，不依赖服务端预先拆出的中文动作契约。用户明确描述的过程应逐步保留；只描述目标时可以使用已验证导航知识补全。",
-    "明确操作即使缺少当前页面 key、目标页面资产或自动结果判据，也应返回 ready 并生成可试运行动作；省略无法确定的 onPage、expectPage、outcome 和断言，系统会将结果标记为待确认。只有缺少班级名、账号、输入值等实际执行参数时才能返回 needs_clarification。",
+    "直接理解用户的完整意图和操作顺序，不依赖服务端预先拆出的中文动作契约。用户明确描述的过程应逐步保留；只描述目标时只能复用用例中心的完整 runFlow，否则追问完整路径。",
+    "明确操作即使缺少当前页面 key、目标页面资产或自动结果判据，也应返回 ready 并生成可试运行动作；省略无法确定的 before、after、outcome 和断言，系统会将结果标记为待确认。只有缺少班级名、账号、输入值等实际执行参数时才能返回 needs_clarification。",
     existingDocument ? "修改现有用例：" : "输入：",
-    JSON.stringify({ prompt, appId, ...(existingDocument ? { existingDocument } : {}), catalog }, null, 2)
+    JSON.stringify({ prompt, appId, generationContext, ...(existingDocument ? { existingDocument } : {}), catalog }, null, 2)
   ].join("\n\n");
 }
 
@@ -918,11 +937,12 @@ export function parseScriptFlowAiResponse(
   assertKnownResponseFields(root, ["status", "summary", "assumptions", "parameterValues", "document"]);
   assertNoLegacyGeneratedFields(root.document);
   assertGeneratedClassification(root.document, input.existingDocument?.testLevel ?? (input.prompt ? classifyScriptFlowTestLevel(input.prompt) : undefined));
-  const generatedDocument = normalizeGeneratedExplicitExecution(
+  const generatedDocument = normalizeGeneratedTargetPositionAliases(normalizeGeneratedExplicitExecution(
     normalizeGeneratedWaitDurations(normalizeGeneratedRunFlowReferences(root.document, input.catalog), root.parameterValues),
     input.appId
-  );
+  ));
   const validated = validateScriptFlowDocument(generatedDocument);
+  validateNoGeneratedReachPage(validated);
   const hydrated = validateScriptFlowDocument(hydrateGeneratedParameters(validated, input.catalog));
   const { document: extractedDocument, parameterValues } = extractEphemeralParameterValues(hydrated, root.parameterValues);
   const pageConstrained = validateScriptFlowDocument(normalizeGeneratedPageConstraints(extractedDocument, input));
@@ -931,6 +951,7 @@ export function parseScriptFlowAiResponse(
   validateGeneratedActionTargetReferences(document, input.catalog);
   validateGeneratedExecutableTargetContracts(document, input.prompt);
   validateGeneratedTextFieldScopes(document, input);
+  validateNoGeneratedReachPage(document);
   validateGeneratedNavigationReachability(document, input.catalog);
   return {
     status: "ready",
@@ -1034,6 +1055,40 @@ function normalizeGeneratedExplicitExecution(value: unknown, appId: string): Rec
   }
   document.steps = steps;
   return document;
+}
+
+function normalizeGeneratedTargetPositionAliases(value: unknown): Record<string, unknown> {
+  return normalizeGeneratedPositionAliasesInValue(recordValue(value)) as Record<string, unknown>;
+}
+
+function normalizeGeneratedPositionAliasesInValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => normalizeGeneratedPositionAliasesInValue(item));
+  if (!value || typeof value !== "object") return value;
+  const normalized = Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+      key,
+      normalizeGeneratedPositionAliasesInValue(child)
+    ])
+  );
+  const position = generatedTargetPositionAlias(normalized.position);
+  if (position) normalized.position = position;
+  return normalized;
+}
+
+function generatedTargetPositionAlias(value: unknown): "leading" | "trailing" | undefined {
+  const text = stringValue(value);
+  if (!text) return undefined;
+  if (text === "leading" || text === "trailing") return text;
+  const compact = text.toLowerCase().replace(/[\s_-]+/g, "");
+  if (compact.includes("右") || compact.includes("后")) return "trailing";
+  if (compact.includes("左") || compact.includes("前")) return "leading";
+  if (["trailing", "right", "end"].includes(compact) || compact.startsWith("right") || compact.endsWith("right")) {
+    return "trailing";
+  }
+  if (["leading", "left", "start"].includes(compact) || compact.startsWith("left") || compact.endsWith("left")) {
+    return "leading";
+  }
+  return undefined;
 }
 
 function stripLegacyRiskFields(steps: unknown[]): void {
@@ -1150,7 +1205,7 @@ function assertGeneratedStepRoles(steps: unknown[], path: string): void {
 function findMatchingDraftFlow(
   prompt: string,
   flows: ScriptFlow[],
-  pageCatalog: PageAssetCatalog,
+  _pageCatalog: PageAssetCatalog,
   appId: string,
   platform: PageAssetPlatform
 ): ScriptFlow | undefined {
@@ -1161,19 +1216,12 @@ function findMatchingDraftFlow(
   const exact = candidates.filter((flow) => compactGroundingText(flow.name) === normalizedPrompt);
   if (exact.length === 1) return exact[0];
 
-  const pages = pageCatalog.listPages(appId, platform);
-  const pageNames = new Map<string, string>();
-  for (const page of pages) {
-    pageNames.set(page.id, page.name);
-    pageNames.set(page.key, page.name);
-    pageNames.set(page.name, page.name);
-  }
   const endpointMatches = candidates.filter((flow) => {
     const endpoints = flowPageEndpoints(flow.parsed);
-    const targetName = endpoints.target ? pageNames.get(endpoints.target) : undefined;
-    const sourceName = endpoints.source ? pageNames.get(endpoints.source) : undefined;
-    if (!targetName || !normalizedPrompt.includes(compactGroundingText(targetName))) return false;
-    return !sourceName || normalizedPrompt.includes(compactGroundingText(sourceName));
+    const endpointText = [endpoints.source, endpoints.target]
+      .filter(Boolean)
+      .map((value) => compactGroundingText(value!));
+    return endpointText.some((value) => normalizedPrompt.includes(value));
   });
   return endpointMatches.length === 1 ? endpointMatches[0] : undefined;
 }
@@ -1183,15 +1231,15 @@ function flowPageEndpoints(parsed: Record<string, unknown>): { source?: string; 
   const outcome = recordValue(parsed.outcome);
   const steps = flattenRecords(Array.isArray(parsed.steps) ? parsed.steps : []);
   const first = steps[0];
-  const source = stringValue(entry.page)
-    ?? stringValue(first?.waitForPage)
-    ?? stringValue(first?.onPage);
-  const target = stringValue(outcome.page)
+  const source = stringValue(entry.screenRef)
+    ?? screenRefOf(first?.waitForPage)
+    ?? screenRefOf(first?.before);
+  const target = stringValue(outcome.screenRef)
     ?? [...steps].reverse().flatMap((step) => [
-      stringValue(step.expectPage),
-      stringValue(recordValue(step.reachPage).page),
-      stringValue(step.assertPage),
-      stringValue(step.waitForPage)
+      screenRefOf(step.after),
+      screenRefOf(step.reachPage),
+      screenRefOf(step.assertPage),
+      screenRefOf(step.waitForPage)
     ]).find(Boolean);
   return { ...(source ? { source } : {}), ...(target ? { target } : {}) };
 }
@@ -1297,7 +1345,6 @@ function hydrateGeneratedParameters(
 ): ScriptFlowDocument {
   const parameters = { ...document.parameters };
   const flows = new Map(catalog.reusableFlows.map((flow) => [flow.id, flow]));
-  let currentPage = document.entry?.page;
 
   for (const step of document.steps) {
     if ("runFlow" in step) {
@@ -1312,22 +1359,8 @@ function hydrateGeneratedParameters(
           const parentKey = bindingParameterName(binding);
           if (parentKey) addParameter(parameters, parentKey, definition);
         }
-        currentPage = stringValue(flow.outcome?.page) ?? currentPage;
       }
-      continue;
     }
-    if ("reachPage" in step) {
-      const targetPage = step.reachPage.page;
-      const path = currentPage ? findPlannerTransitionPath(catalog.transitions, currentPage, targetPage) : undefined;
-      for (const transition of path ?? []) {
-        for (const [key, definition] of Object.entries(transition.parameters)) {
-          addParameter(parameters, key, definition);
-        }
-      }
-      currentPage = targetPage;
-      continue;
-    }
-    if (step.expectPage) currentPage = step.expectPage;
   }
 
   return { ...document, parameters };
@@ -1349,33 +1382,6 @@ function bindingParameterName(value: unknown): string | undefined {
   return /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value)?.[1];
 }
 
-function findPlannerTransitionPath(
-  transitions: ScriptFlowPlannerCatalog["transitions"],
-  fromPage: string,
-  toPage: string
-): ScriptFlowPlannerCatalog["transitions"] | undefined {
-  if (fromPage === toPage) return [];
-  const outgoing = new Map<string, ScriptFlowPlannerCatalog["transitions"]>();
-  for (const transition of transitions) {
-    const items = outgoing.get(transition.onPage) ?? [];
-    items.push(transition);
-    outgoing.set(transition.onPage, items);
-  }
-  const visited = new Set([fromPage]);
-  const queue: Array<{ page: string; path: ScriptFlowPlannerCatalog["transitions"] }> = [{ page: fromPage, path: [] }];
-  while (queue.length) {
-    const current = queue.shift()!;
-    for (const transition of outgoing.get(current.page) ?? []) {
-      const path = [...current.path, transition];
-      if (transition.expectPage === toPage) return path;
-      if (visited.has(transition.expectPage)) continue;
-      visited.add(transition.expectPage);
-      queue.push({ page: transition.expectPage, path });
-    }
-  }
-  return undefined;
-}
-
 function normalizeGeneratedRunFlowReferences(
   value: unknown,
   catalog: ScriptFlowPlannerCatalog
@@ -1385,8 +1391,8 @@ function normalizeGeneratedRunFlowReferences(
   return {
     ...document,
     steps: normalizeRawRunFlowSteps(document.steps, catalog, {
-      entryPage: stringValue(recordValue(document.entry).page),
-      outcomePage: stringValue(recordValue(document.outcome).page)
+      entryPage: screenRefOf(recordValue(document.entry)),
+      outcomePage: screenRefOf(recordValue(document.outcome))
     })
   };
 }
@@ -1539,13 +1545,13 @@ function uniqueReusableFlowForStep(
   catalog: ScriptFlowPlannerCatalog,
   documentPages: { entryPage?: string; outcomePage?: string }
 ): string | undefined {
-  const onPage = stringValue(step.onPage) ?? documentPages.entryPage;
-  const targetPage = stringValue(step.expectPage) ?? documentPages.outcomePage;
+  const onPage = screenRefOf(recordValue(step.before)) ?? documentPages.entryPage;
+  const targetPage = screenRefOf(recordValue(step.after)) ?? documentPages.outcomePage;
   const candidates = catalog.reusableFlows.filter((flow) => {
     const entry = recordValue(flow.entry);
     const outcome = recordValue(flow.outcome);
-    const entryPage = stringValue(entry.page);
-    const outcomePage = stringValue(outcome.page);
+    const entryPage = stringValue(entry.screenRef);
+    const outcomePage = stringValue(outcome.screenRef);
     if (onPage && entryPage && onPage !== entryPage) return false;
     if (targetPage && outcomePage && targetPage !== outcomePage) return false;
     return Boolean(targetPage ? outcomePage === targetPage : entryPage === onPage);
@@ -1569,10 +1575,10 @@ function normalizeGeneratedPageConstraints(
   if (!input.prompt || input.existingDocument) return document;
 
   const grounding = inferPromptPageConstraintGrounding(input.prompt, input.catalog);
-  const entry = document.entry && isPromptGroundedPageReference(document.entry.page, grounding.sourcePages, input.catalog)
+  const entry = document.entry && isPromptGroundedPageReference(document.entry.screenRef, grounding.sourcePages, input.catalog)
     ? document.entry
     : undefined;
-  const outcome = document.outcome && isPromptGroundedPageReference(document.outcome.page, grounding.targetPages, input.catalog)
+  const outcome = document.outcome && isPromptGroundedPageReference(document.outcome.screenRef, grounding.targetPages, input.catalog)
     ? document.outcome
     : undefined;
   return {
@@ -1589,12 +1595,12 @@ function normalizeGeneratedStepPageConstraints(
   catalog: ScriptFlowPlannerCatalog
 ): ScriptStep[] {
   return steps.map((step) => {
-    const normalized = { ...step } as ScriptStep & { onPage?: string; expectPage?: string };
-    if (!isPromptGroundedPageReference(normalized.onPage, grounding.sourcePages, catalog)) {
-      delete normalized.onPage;
+    const normalized = { ...step };
+    if (normalized.before && !isPromptGroundedPageReference(normalized.before.screenRef, grounding.sourcePages, catalog)) {
+      delete normalized.before;
     }
-    if (!isPromptGroundedPageReference(normalized.expectPage, grounding.targetPages, catalog)) {
-      delete normalized.expectPage;
+    if (normalized.after && !isPromptGroundedPageReference(normalized.after.screenRef, grounding.targetPages, catalog)) {
+      delete normalized.after;
     }
     if ("repeat" in normalized) {
       return {
@@ -1856,21 +1862,8 @@ function validateGeneratedReferences(
   if (document.app.id !== input.appId) {
     throw new Error("AI 草稿修改了指定 App");
   }
-  const pagesByReference = new Map<string, ScriptFlowPlannerCatalog["pages"][number]>();
-  for (const page of input.catalog.pages) {
-    pagesByReference.set(page.id, page);
-    pagesByReference.set(page.key, page);
-    pagesByReference.set(page.name, page);
-  }
-  validatePageReference(document.entry?.page, "entry.page", pagesByReference);
-  validatePageReference(document.outcome?.page, "outcome.page", pagesByReference);
   const flowIds = new Set(input.catalog.reusableFlows.map((flow) => flow.id));
   for (const step of flattenSteps(document.steps)) {
-    validatePageReference(step.onPage, "onPage", pagesByReference);
-    validatePageReference(step.expectPage, "expectPage", pagesByReference);
-    if ("reachPage" in step) validatePageReference(step.reachPage.page, "reachPage.page", pagesByReference);
-    if ("assertPage" in step) validatePageReference(step.assertPage, "assertPage", pagesByReference);
-    if ("waitForPage" in step) validatePageReference(step.waitForPage, "waitForPage", pagesByReference);
     if ("runFlow" in step && !flowIds.has(step.runFlow)) {
       throw new Error(`AI 草稿引用了不存在或未启用的子流程：${step.runFlow}`);
     }
@@ -1878,6 +1871,12 @@ function validateGeneratedReferences(
       throw new Error(`AI 草稿尝试启动其他 App：${step.launchApp.appId}`);
     }
   }
+}
+
+function validateNoGeneratedReachPage(document: ScriptFlowDocument): void {
+  const reachPageStep = flattenSteps(document.steps).find((step) => "reachPage" in step);
+  if (!reachPageStep || !("reachPage" in reachPageStep)) return;
+  throw new GeneratedReachPageError(reachPageStep.reachPage.screenRef);
 }
 
 function validateGeneratedActionTargetReferences(
@@ -2034,47 +2033,8 @@ function validateGeneratedNavigationReachability(
   document: ScriptFlowDocument,
   catalog: ScriptFlowPlannerCatalog
 ): void {
-  const pagesByReference = new Map<string, ScriptFlowPlannerCatalog["pages"][number]>();
-  for (const page of catalog.pages) {
-    pagesByReference.set(page.id, page);
-    pagesByReference.set(page.key, page);
-    pagesByReference.set(page.name, page);
-  }
-  const canonicalPage = (reference: string | undefined) => reference ? pagesByReference.get(reference)?.key : undefined;
-  const transitions = catalog.transitions.flatMap((transition) => {
-    const onPage = canonicalPage(transition.onPage);
-    const expectPage = canonicalPage(transition.expectPage);
-    return onPage && expectPage ? [{ ...transition, onPage, expectPage }] : [];
-  });
-  const navigationAnchors = new Set([
-    ...catalog.navigationAnchors.flatMap((anchor) => canonicalPage(anchor.page) ?? []),
-    ...catalog.pages.filter((page) => page.tags.some((tag) => tag === "navigation-root" || tag === "session-root")).map((page) => page.key)
-  ]);
-  const flows = new Map(catalog.reusableFlows.map((flow) => [flow.id, flow]));
-  let currentPage = canonicalPage(document.entry?.page);
-
-  for (const step of flattenSteps(document.steps)) {
-    if ("runFlow" in step) {
-      currentPage = canonicalPage(stringValue(flows.get(step.runFlow)?.outcome?.page)) ?? currentPage;
-      continue;
-    }
-    if ("reachPage" in step) {
-      const targetPage = canonicalPage(step.reachPage.page);
-      if (!targetPage) continue;
-      const reachableFromCurrent = currentPage === targetPage
-        || Boolean(currentPage && findPlannerTransitionPath(transitions, currentPage, targetPage));
-      const reachableFromIndex = transitions.some((transition) =>
-        Boolean(findPlannerTransitionPath(transitions, transition.onPage, targetPage))
-      );
-      if (!reachableFromCurrent && !reachableFromIndex && !navigationAnchors.has(targetPage)) {
-        const target = pagesByReference.get(step.reachPage.page);
-        throw new UnreachableReachPageError(target?.name ?? step.reachPage.page);
-      }
-      currentPage = targetPage;
-      continue;
-    }
-    if (step.expectPage) currentPage = canonicalPage(step.expectPage) ?? currentPage;
-  }
+  void document;
+  void catalog;
 }
 
 function screenControlCandidateMatchesTarget(
@@ -2127,6 +2087,13 @@ function placeholderExecutableTargetClarification(target: string): string {
 
 function unstableTextFieldScopeClarification(scopeText: string): string {
   return `“${scopeText}”像是固定页面标题，不能作为可滚动页面中输入框的稳定限定范围或相对锚点。请补充该输入框附近的局部字段名或区域名，或开启“结合当前屏幕生成”让我读取当前可见控件。`;
+}
+
+function generatedReachPageClarification(prompt: string | undefined, screenRef: string): string {
+  const target = prompt?.trim()
+    ? prompt.replace(/\s+/g, " ").trim().slice(0, 80)
+    : screenRef;
+  return `当前不能用 reachPage 作为运行时导航命令。请补充从当前状态到“${target}”的完整操作过程，或提供目标页独有稳定文字用于 assertText；如果用例中心已有完整业务路径，请改用 runFlow 复用。`;
 }
 
 function validatePageReference(
@@ -2182,15 +2149,22 @@ class UnstableTextFieldScopeError extends Error {
   }
 }
 
+class GeneratedReachPageError extends Error {
+  constructor(readonly screenRef: string) {
+    super("reachPage 已退出新脚本生成；请改用用例中心 runFlow，或补充完整操作路径。");
+    this.name = "GeneratedReachPageError";
+  }
+}
+
 function transitionEntries(flow: ScriptFlow) {
   const steps = Array.isArray(flow.parsed.steps) ? flow.parsed.steps : [];
   return flattenRecords(steps).flatMap((step) => {
-    const onPage = stringValue(step.onPage);
-    const expectPage = stringValue(step.expectPage);
-    if (!onPage || !expectPage) return [];
+    const fromScreenRef = screenRefOf(recordValue(step.before));
+    const toScreenRef = screenRefOf(recordValue(step.after));
+    if (!fromScreenRef || !toScreenRef) return [];
     return [{
-      onPage,
-      expectPage,
+      fromScreenRef,
+      toScreenRef,
       flowId: flow.id,
       flowName: flow.name,
       stepId: stringValue(step.id) ?? "unknown",
@@ -2256,6 +2230,10 @@ function assertNoLegacyGeneratedFields(value: unknown, path = "document"): void 
 
 function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function screenRefOf(value: unknown): string | undefined {
+  return stringValue(recordValue(value).screenRef);
 }
 
 function stringValue(value: unknown): string | undefined {

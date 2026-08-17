@@ -137,6 +137,8 @@ export function renderReportHtml(run: TestRun): string {
       </section>
     </section>
 
+    ${renderExecutionProfile(run)}
+
     ${renderStabilityReport(run)}
 
     <h2>性能摘要</h2>
@@ -224,7 +226,7 @@ export function renderReportHtml(run: TestRun): string {
 
 	    <h2>步骤截图</h2>
 	    ${renderScreenshotThumbs(screenshotPresentation.primary, "无主步骤截图")}
-	    ${renderDiagnosticScreenshots(screenshotPresentation.diagnostic)}
+    ${renderDiagnosticScreenshots(screenshotPresentation.diagnostic)}
 	  </main>
   <script>
     document.querySelectorAll("[data-video-time]").forEach((button) => {
@@ -322,6 +324,26 @@ function mergeDisplayEvents(left: TestRun["events"][number], right: TestRun["eve
 
 function displayEventScore(event: TestRun["events"][number]): number {
   return event.artifactIds.length * 10 + (event.detail?.length ?? 0);
+}
+
+function renderExecutionProfile(run: TestRun): string {
+  const profile = run.sourceSnapshot?.executionProfile;
+  if (!profile) {
+    return "";
+  }
+  return `<h2>执行校验标准</h2>
+    <section class="run-summary-panel">
+      <section class="summary">
+        <div class="metric"><span>Profile</span><strong>${escapeHtml(profile.id)}</strong></div>
+        <div class="metric"><span>状态</span><strong>${escapeHtml(profile.status)}</strong></div>
+        <div class="metric"><span>版本</span><strong>版本 ${profile.version}</strong></div>
+        <div class="metric"><span>页面合同</span><strong>已冻结 ${profile.screens.length} 个页面校验合同</strong></div>
+      </section>
+      <div class="run-diagnostics">
+        <div><strong>摘要</strong><span>${escapeHtml(profile.digest)}</span></div>
+        <div><strong>创建时间</strong><span>${escapeHtml(formatDateTime(profile.createdAt))}</span></div>
+      </div>
+    </section>`;
 }
 
 function renderStabilityReport(run: TestRun): string {
@@ -462,15 +484,15 @@ function sourceActionSummary(step: Record<string, unknown>, action: string): str
     return durationMs === undefined ? undefined : `等待 ${formatDurationMs(durationMs)}`;
   }
   if (action === "reachPage") {
-    const page = nonEmptyString(recordValue(step.reachPage)?.page);
+    const page = nonEmptyString(recordValue(step.reachPage)?.screenRef);
     return page ? `到达页面“${page}”` : undefined;
   }
   if (action === "waitForPage") {
-    const page = nonEmptyString(step.waitForPage);
+    const page = nonEmptyString(recordValue(step.waitForPage)?.screenRef);
     return page ? `等待进入页面“${page}”` : undefined;
   }
   if (action === "assertPage") {
-    const page = nonEmptyString(step.assertPage);
+    const page = nonEmptyString(recordValue(step.assertPage)?.screenRef);
     return page ? `确认已进入页面“${page}”` : undefined;
   }
   if (action === "assertText") {

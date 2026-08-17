@@ -9,8 +9,8 @@ export type CaseDocumentView = {
   description?: string;
   app: { id: string };
   start?: { strategy: "keepCurrent" | "goHome" | "launchApp" | "restartApp" | "clearDataAndLaunch" };
-  entry?: { page?: string; session?: "authenticated" | "unauthenticated"; role?: string };
-  outcome?: { page?: string; session?: "authenticated" | "unauthenticated"; role?: string };
+  entry?: { screenRef?: string; session?: "authenticated" | "unauthenticated"; role?: string };
+  outcome?: { screenRef?: string; session?: "authenticated" | "unauthenticated"; role?: string };
   loop?: { reset: "none" };
   parameters: Record<string, ScriptParameterDefinitionView>;
   steps: CaseSourceStep[];
@@ -21,8 +21,8 @@ export type CaseSourceStep = Record<string, unknown> & {
   id: string;
   name?: string;
   role?: "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery" | "reset";
-  onPage?: string;
-  expectPage?: string;
+  before?: { screenRef?: string };
+  after?: { screenRef?: string };
 };
 
 export type CasePlanView = {
@@ -32,8 +32,8 @@ export type CasePlanView = {
     name?: string;
     action: string;
     input?: Record<string, unknown>;
-    onPage?: string;
-    expectPage?: string;
+    before?: { screenRef?: string };
+    after?: { screenRef?: string };
     phase?: "preparation" | "business" | "verification" | "reset";
     role?: "setup" | "navigation" | "business" | "assertion" | "cleanup" | "recovery" | "reset";
     source?: {
@@ -209,25 +209,25 @@ function sourceAction(step: CaseSourceStep): string {
   return actions.find((action) => action in step) ?? "unknown";
 }
 
-function pageContext(onPage: string | undefined, expectPage: string | undefined): string | undefined {
-  if (onPage && expectPage) return `${onPage} → ${expectPage}`;
-  return onPage ?? expectPage;
+function screenContext(before: { screenRef?: string } | undefined, after: { screenRef?: string } | undefined): string | undefined {
+  if (before?.screenRef && after?.screenRef) return `${before.screenRef} → ${after.screenRef}`;
+  return before?.screenRef ?? after?.screenRef;
 }
 
 function planStepContext(step: CasePlanView["steps"][number]): string | undefined {
-  if (step.action === "reachPage" && typeof step.input?.pageId === "string") {
-    return `目标页面：${step.input.pageId}`;
+  if (step.action === "reachPage" && typeof step.input?.screenRef === "string") {
+    return `目标页面：${step.input.screenRef}`;
   }
   if (step.action === "assertText" && typeof step.input?.text === "string") {
     return step.input.text;
   }
-  return pageContext(step.onPage, step.expectPage);
+  return screenContext(step.before, step.after);
 }
 
 function sourceStepContext(step: CaseSourceStep, display: StepDisplayContext): string | undefined {
   const reachPage = recordValue(step.reachPage);
-  if (typeof reachPage?.page === "string") {
-    return `目标页面：${reachPage.page}`;
+  if (typeof reachPage?.screenRef === "string") {
+    return `目标页面：${reachPage.screenRef}`;
   }
   const assertText = recordValue(step.assertText);
   if (typeof assertText?.text === "string") {
@@ -253,7 +253,7 @@ function sourceStepContext(step: CaseSourceStep, display: StepDisplayContext): s
   if (scrollUntilVisible) return targetLabel(scrollUntilVisible.target, display);
   const waitDurationMs = durationMsValue(recordValue(step.wait)?.durationMs);
   if (waitDurationMs !== undefined) return `${waitDurationMs} ms`;
-  return pageContext(step.onPage, step.expectPage);
+  return screenContext(recordValue(step.before), recordValue(step.after));
 }
 
 function sourceStepDisplayName(step: CaseSourceStep, action: string, display: StepDisplayContext): string {
@@ -306,15 +306,15 @@ function sourceActionSummary(step: CaseSourceStep, action: string, display: Step
     return durationMs === undefined ? undefined : `等待 ${formatDurationMs(durationMs)}`;
   }
   if (action === "reachPage") {
-    const page = stringValue(recordValue(step.reachPage)?.page);
+    const page = stringValue(recordValue(step.reachPage)?.screenRef);
     return page ? `到达页面“${page}”` : undefined;
   }
   if (action === "waitForPage") {
-    const page = stringValue(step.waitForPage);
+    const page = stringValue(recordValue(step.waitForPage)?.screenRef);
     return page ? `等待进入页面“${page}”` : undefined;
   }
   if (action === "assertPage") {
-    const page = stringValue(step.assertPage);
+    const page = stringValue(recordValue(step.assertPage)?.screenRef);
     return page ? `确认已进入页面“${page}”` : undefined;
   }
   if (action === "assertText") {

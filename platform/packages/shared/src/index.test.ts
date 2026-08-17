@@ -60,6 +60,7 @@ describe("platform capabilities", () => {
     });
   });
 });
+
 describe("Android crash log extraction", () => {
   it("keeps the ANR reason and target process stack without adjacent logcat noise", () => {
     const anrLog = [
@@ -86,7 +87,6 @@ describe("Android crash log extraction", () => {
     ].join("\n"));
   });
 });
-
 
 describe("trial learning domain models", () => {
   it("round-trips verification and learning records without hidden runtime state", () => {

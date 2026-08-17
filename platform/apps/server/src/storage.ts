@@ -20,6 +20,7 @@ import {
   type ActionStep,
   type ArtifactRef,
   type DeviceEvent,
+  type ExecutionProfileSnapshot,
   type FlowVerification,
   type FlowVerificationStatus,
   type InteractionAsset,
@@ -1770,7 +1771,10 @@ export class Storage {
           (sourceSnapshot.interactionAssets ?? []).map((binding) => binding.assetId)
         ),
         pageAssetIds: [],
-        humanConfirmedOutcome: false
+        humanConfirmedOutcome: false,
+        ...(sourceSnapshot.verificationAssessment.planDigest
+          ? { planDigest: sourceSnapshot.verificationAssessment.planDigest }
+          : {})
       }
     });
     if (verificationStatus === "verified") this.refreshPageNavigationIndex();
@@ -2956,8 +2960,8 @@ function navigationEntryToSegment(entry: NavigationEntry, platform: ScriptFlow["
   const step: ScriptStep = {
     id: `navigate-with-${entry.id}`,
     name: entry.name,
-    onPage: entry.from.key,
-    expectPage: entry.toPage,
+    before: { screenRef: entry.from.key },
+    after: { screenRef: entry.toPage },
     tap: {
       target: entry.action.target as ScriptTarget,
       ...(entry.action.search ? { search: entry.action.search } : {})
@@ -3208,6 +3212,7 @@ function scriptFlowSourceSnapshot(runSnapshot: Record<string, unknown>): Pick<Te
     return {};
   }
   const interactionAssets = interactionAssetSnapshotRefs(snapshot.interactionAssets);
+  const executionProfile = executionProfileSnapshot(snapshot.executionProfile);
   return {
     sourceSnapshot: {
       kind: "script_flow",
@@ -3222,12 +3227,75 @@ function scriptFlowSourceSnapshot(runSnapshot: Record<string, unknown>): Pick<Te
       ...(isVerificationAssessment(snapshot.verificationAssessment)
         ? { verificationAssessment: snapshot.verificationAssessment }
         : {}),
+      ...(executionProfile ? { executionProfile } : {}),
       ...(interactionAssets.length ? { interactionAssets } : {}),
       dependencies: snapshot.dependencies as NonNullable<TestRun["sourceSnapshot"]>["dependencies"],
       ...(typeof snapshot.sourceYaml === "string" ? { sourceYaml: snapshot.sourceYaml } : {}),
       parsed: snapshot.parsed as Record<string, unknown>
     }
   };
+}
+
+function executionProfileSnapshot(value: unknown): ExecutionProfileSnapshot | undefined {
+  const record = plainRecord(value);
+  if (
+    !record
+    || typeof record.id !== "string"
+    || typeof record.appId !== "string"
+    || (record.platform !== "android" && record.platform !== "ios" && record.platform !== "harmony")
+    || typeof record.version !== "number"
+    || !Number.isInteger(record.version)
+    || record.version < 1
+    || (record.status !== "draft" && record.status !== "verified" && record.status !== "degraded" && record.status !== "deprecated")
+    || typeof record.digest !== "string"
+    || typeof record.createdAt !== "string"
+    || !Array.isArray(record.screens)
+  ) {
+    return undefined;
+  }
+  const screens = record.screens.flatMap((value) => {
+    const screen = plainRecord(value);
+    if (
+      !screen
+      || typeof screen.screenRef !== "string"
+      || typeof screen.name !== "string"
+      || typeof screen.assetId !== "string"
+      || typeof screen.graphVersionId !== "string"
+      || !Array.isArray(screen.evidence)
+    ) {
+      return [];
+    }
+    const evidence = screen.evidence.flatMap((value) => {
+      const item = plainRecord(value);
+      if (
+        !item
+        || typeof item.id !== "string"
+        || typeof item.type !== "string"
+        || typeof item.value !== "string"
+        || typeof item.weight !== "number"
+      ) {
+        return [];
+      }
+      return [item];
+    });
+    return [{
+      screenRef: screen.screenRef,
+      name: screen.name,
+      assetId: screen.assetId,
+      graphVersionId: screen.graphVersionId,
+      evidence
+    }];
+  });
+  return {
+    id: record.id,
+    appId: record.appId,
+    platform: record.platform,
+    version: record.version,
+    status: record.status,
+    digest: record.digest,
+    createdAt: record.createdAt,
+    screens
+  } as ExecutionProfileSnapshot;
 }
 
 function interactionAssetSnapshotRefs(
@@ -3259,6 +3327,7 @@ function isVerificationAssessment(value: unknown): value is NonNullable<TestRun[
   const assessment = value as Record<string, unknown>;
   return (assessment.status === "verified" || assessment.status === "needs_trial" || assessment.status === "blocked")
     && typeof assessment.sourceHash === "string"
+    && (assessment.planDigest === undefined || typeof assessment.planDigest === "string")
     && Array.isArray(assessment.reasons)
     && Array.isArray(assessment.unresolvedStepIds)
     && typeof assessment.unresolvedOutcome === "boolean";

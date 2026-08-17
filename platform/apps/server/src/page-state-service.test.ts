@@ -1,34 +1,37 @@
 import { describe, expect, it } from "vitest";
 import type { BusinessGraph, BusinessGraphVersion, BusinessNode, Observation, StateMatcher } from "@mobile-automation/graph-core";
 import { StoragePageAssetCatalog } from "./page-asset-catalog.js";
+import { createPageAssetExecutionProfileProvider, type ExecutionProfileSnapshot } from "./execution-profile.js";
 import { DefaultPageStateService } from "./page-state-service.js";
 
 describe("DefaultPageStateService", () => {
-  it("collects screenshot and OCR without UI tree, then verifies the expected page", async () => {
+  it("collects screenshot, OCR, and UI tree, then verifies the expected frozen screen", async () => {
     const collector = new QueueObservationCollector([observation("主页")]);
     const service = serviceFor([page("home", "classin.home", "主页")], collector);
 
-    const result = await service.verifyExpectedPage({
+    const result = await service.verifyExpectedScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
       platform: "android",
-      pageId: "home"
+      screenRef: "classin.home",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("matched");
     expect(result.page?.id).toBe("home");
-    expect(collector.options).toEqual([{ includeScreenshot: true, includeOcr: true, includeUiTree: false }]);
+    expect(collector.options).toEqual([{ includeScreenshot: true, includeOcr: true, includeUiTree: true }]);
   });
 
-  it("verifies a page referenced by its stable key", async () => {
+  it("verifies a screen referenced by its logical screen ref", async () => {
     const collector = new QueueObservationCollector([observation("主页")]);
     const service = serviceFor([page("node-home", "classin.home", "主页")], collector);
 
-    const result = await service.verifyExpectedPage({
+    const result = await service.verifyExpectedScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
       platform: "android",
-      pageId: "classin.home"
+      screenRef: "classin.home",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("matched");
@@ -40,11 +43,12 @@ describe("DefaultPageStateService", () => {
     const duplicate = page("home-copy", "classin.home.copy", "主页副本", "全部班级");
     const service = serviceFor([home, duplicate], new QueueObservationCollector([observation("全部班级")]));
 
-    const result = await service.verifyExpectedPage({
+    const result = await service.verifyExpectedScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
       platform: "android",
-      pageId: "home"
+      screenRef: "classin.home",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("multiple_candidates");
@@ -59,11 +63,12 @@ describe("DefaultPageStateService", () => {
       new QueueObservationCollector([observation("教学方案")])
     );
 
-    const result = await service.verifyExpectedPage({
+    const result = await service.verifyExpectedScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
       platform: "android",
-      pageId: "teaching-plan"
+      screenRef: "classin.teaching.plan",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("multiple_candidates");
@@ -77,10 +82,11 @@ describe("DefaultPageStateService", () => {
       new QueueObservationCollector([observation("班级详情 班级四十三号")])
     );
 
-    const result = await service.identifyCurrentPage({
+    const result = await service.identifyCurrentScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
-      platform: "android"
+      platform: "android",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("unknown");
@@ -95,10 +101,11 @@ describe("DefaultPageStateService", () => {
       new QueueObservationCollector([observation("主页 权限申请")])
     );
 
-    const result = await service.identifyCurrentPage({
+    const result = await service.identifyCurrentScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
-      platform: "android"
+      platform: "android",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("multiple_candidates");
@@ -110,11 +117,12 @@ describe("DefaultPageStateService", () => {
     const settings = page("settings", "classin.settings", "设置");
     const service = serviceFor([home, settings], new QueueObservationCollector([observation("设置")]));
 
-    const result = await service.verifyExpectedPage({
+    const result = await service.verifyExpectedScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
       platform: "android",
-      pageId: "home"
+      screenRef: "classin.home",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("unknown");
@@ -129,11 +137,12 @@ describe("DefaultPageStateService", () => {
     };
     const service = serviceFor([home, iosDuplicate], new QueueObservationCollector([observation("全部班级")]));
 
-    const result = await service.verifyExpectedPage({
+    const result = await service.verifyExpectedScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
       platform: "android",
-      pageId: "home"
+      screenRef: "classin.home",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("matched");
@@ -145,10 +154,11 @@ describe("DefaultPageStateService", () => {
     const settings = page("settings", "classin.settings", "设置");
     const service = serviceFor([home, settings], new QueueObservationCollector([observation("设置")]));
 
-    const result = await service.identifyCurrentPage({
+    const result = await service.identifyCurrentScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
-      platform: "android"
+      platform: "android",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("matched");
@@ -161,10 +171,11 @@ describe("DefaultPageStateService", () => {
       new QueueObservationCollector([observation("系统桌面", "com.android.launcher")])
     );
 
-    const result = await service.identifyCurrentPage({
+    const result = await service.identifyCurrentScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
-      platform: "android"
+      platform: "android",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("outside_app");
@@ -181,14 +192,16 @@ describe("DefaultPageStateService", () => {
       [login],
       new QueueObservationCollector([harmonyObservation("登录", "com.eeo.classin.harmony")]),
       "classin",
-      { CLASSIN_HARMONY_BUNDLE_ID: "com.eeo.classin.harmony" }
+      { CLASSIN_HARMONY_BUNDLE_ID: "com.eeo.classin.harmony" },
+      "harmony"
     );
 
-    const result = await service.verifyExpectedPage({
+    const result = await service.verifyExpectedScreen({
       serial: "HARMONY",
       appId: "classin",
       platform: "harmony",
-      pageId: "login"
+      screenRef: "classin.login",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("matched");
@@ -201,11 +214,12 @@ describe("DefaultPageStateService", () => {
       "classin"
     );
 
-    const result = await service.verifyExpectedPage({
+    const result = await service.verifyExpectedScreen({
       serial: "device-1",
       appId: "classin",
       platform: "android",
-      pageId: "home"
+      screenRef: "classin.home",
+      executionProfile: service.profile
     });
 
     expect(result.status).toBe("matched");
@@ -218,21 +232,32 @@ describe("DefaultPageStateService", () => {
       new QueueObservationCollector([{ ...observation("主页"), screenshot: undefined, raw: {} }])
     );
 
-    await expect(failed.identifyCurrentPage({ serial: "device-1", appId: "cn.eeo.classin", platform: "android" }))
-      .resolves.toEqual(expect.objectContaining({ status: "capture_failed", reason: "observation_failed" }));
-    await expect(missingScreenshot.identifyCurrentPage({ serial: "device-1", appId: "cn.eeo.classin", platform: "android" }))
-      .resolves.toEqual(expect.objectContaining({ status: "capture_failed", reason: "screenshot_missing" }));
-  });
-
-  it("waits until the expected page is stable", async () => {
-    const collector = new QueueObservationCollector([observation("加载中"), observation("主页")]);
-    const service = serviceFor([page("home", "classin.home", "主页")], collector);
-
-    const result = await service.waitForExpectedPage({
+    await expect(failed.identifyCurrentScreen({
       serial: "device-1",
       appId: "cn.eeo.classin",
       platform: "android",
-      pageId: "home",
+      executionProfile: failed.profile
+    }))
+      .resolves.toEqual(expect.objectContaining({ status: "capture_failed", reason: "observation_failed" }));
+    await expect(missingScreenshot.identifyCurrentScreen({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      executionProfile: missingScreenshot.profile
+    }))
+      .resolves.toEqual(expect.objectContaining({ status: "matched" }));
+  });
+
+  it("waits until the expected frozen screen is stable", async () => {
+    const collector = new QueueObservationCollector([observation("加载中"), observation("主页")]);
+    const service = serviceFor([page("home", "classin.home", "主页")], collector);
+
+    const result = await service.waitForExpectedScreen({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      screenRef: "classin.home",
+      executionProfile: service.profile,
       timeoutMs: 100,
       intervalMs: 0
     });
@@ -240,16 +265,28 @@ describe("DefaultPageStateService", () => {
     expect(result.status).toBe("matched");
     expect(collector.calls).toBe(2);
   });
+
+  it("exposes only the profile-backed screen API", () => {
+    const service = serviceFor([page("home", "classin.home", "主页")], new QueueObservationCollector([observation("主页")]));
+
+    expect("identifyCurrentPage" in service).toBe(false);
+    expect("verifyExpectedPage" in service).toBe(false);
+    expect("waitForExpectedPage" in service).toBe(false);
+  });
 });
 
 function serviceFor(
   nodes: BusinessNode[],
   collector: QueueObservationCollector | ThrowingObservationCollector,
   appId = "cn.eeo.classin",
-  env?: { CLASSIN_HARMONY_BUNDLE_ID?: string }
-): DefaultPageStateService {
+  env?: { CLASSIN_HARMONY_BUNDLE_ID?: string },
+  platform: "android" | "harmony" = "android"
+): DefaultPageStateService & { profile: ExecutionProfileSnapshot } {
   const storage = new MemoryCatalogStorage(graph(nodes), appId);
-  return new DefaultPageStateService(new StoragePageAssetCatalog(storage), collector, undefined, env);
+  const catalog = new StoragePageAssetCatalog(storage);
+  return Object.assign(new DefaultPageStateService(collector, undefined, env), {
+    profile: createPageAssetExecutionProfileProvider(catalog).createSnapshot(appId, platform)
+  });
 }
 
 class QueueObservationCollector {

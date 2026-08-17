@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import {
   AGENT_PROTOCOL_VERSION,
+  type AndroidAppMonitorConfig,
+  type AndroidAppMonitorIncident,
+  type AndroidAppMonitorSummary,
   defaultAndroidCapabilities,
   defaultHarmonyCapabilities,
   type AgentCommandEnvelope,
@@ -59,6 +62,33 @@ describe("DeviceAgentRuntime", () => {
     ]);
   });
 
+  it("does not advertise Android crash or ANR events until app monitor commands are supported", async () => {
+    const server = new FakeAgentServer();
+    const driver = new FakeAgentDriver();
+    const runtime = new DeviceAgentRuntime({
+      serverUrl: "http://server/",
+      agentId: "agent-a",
+      shared: true
+    }, driver, { fetch: server.fetch });
+
+    await runtime.registerOnce();
+
+    expect(server.posts[0]?.body).toEqual(expect.objectContaining({
+      devices: [
+        expect.objectContaining({
+          serial: "pixel-1",
+          capabilities: expect.objectContaining({
+            events: {
+              crash: false,
+              anr: false,
+              logs: true
+            }
+          })
+        })
+      ]
+    }));
+  });
+
   it("polls server commands, executes them on the local driver, and posts command results", async () => {
     const server = new FakeAgentServer();
     const driver = new FakeAgentDriver();
@@ -99,6 +129,103 @@ describe("DeviceAgentRuntime", () => {
           }
         }
       }
+    });
+  });
+
+  it("starts, stops, summarizes, and reports incidents for agent app monitor sessions", async () => {
+    const server = new FakeAgentServer();
+    const driver = new MonitorAgentDriver();
+    const runtime = new DeviceAgentRuntime({
+      serverUrl: "http://server",
+      agentId: "agent-a",
+      shared: true
+    }, driver, { fetch: server.fetch });
+    const config: AndroidAppMonitorConfig = {
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      cpuIntervalMs: 1000
+    };
+    server.commands.push(command("start-monitor", "startAppMonitor", {
+      monitorId: "monitor-1",
+      runId: "run-1",
+      config
+    }));
+
+    await expect(runtime.pollOnce()).resolves.toBe(1);
+
+    expect(driver.monitorStarts).toEqual([{
+      serial: "pixel-1",
+      runId: "run-1",
+      config
+    }]);
+    expect(server.results).toEqual([{
+      requestId: "start-monitor",
+      body: {
+        ok: true,
+        result: {
+          monitorId: "monitor-1",
+          runId: "run-1",
+          summary: expect.objectContaining({
+            packageName: "cn.eeo.classin",
+            sampleCounts: { cpu: 0, memory: 0, lifecycle: 0 }
+          })
+        }
+      }
+    }]);
+
+    await driver.session.emitIncident({
+      id: "incident-1",
+      type: "java_crash",
+      severity: "error",
+      occurredAt: now,
+      processName: "cn.eeo.classin",
+      pid: 1234,
+      summary: "FATAL EXCEPTION",
+      detail: "java.lang.IllegalStateException",
+      artifactIds: []
+    });
+
+    expect(server.incidents).toEqual([
+      expect.objectContaining({
+        type: "appMonitorIncident",
+        protocolVersion: AGENT_PROTOCOL_VERSION,
+        agentId: "agent-a",
+        deviceKey: "agent-a:android:pixel-1",
+        monitorId: "monitor-1",
+        runId: "run-1",
+        incident: expect.objectContaining({ id: "incident-1", type: "java_crash" })
+      })
+    ]);
+
+    server.commands.push(command("summary-monitor", "getAppMonitorSummary", { monitorId: "monitor-1" }));
+    await expect(runtime.pollOnce()).resolves.toBe(1);
+    expect(server.results.at(-1)).toEqual({
+      requestId: "summary-monitor",
+      body: expect.objectContaining({
+        ok: true,
+        result: expect.objectContaining({
+          monitorId: "monitor-1",
+          summary: expect.objectContaining({ incidents: [expect.objectContaining({ id: "incident-1" })] })
+        })
+      })
+    });
+
+    server.commands.push(command("stop-monitor", "stopAppMonitor", { monitorId: "monitor-1" }));
+    await expect(runtime.pollOnce()).resolves.toBe(1);
+
+    expect(driver.session.stopCount).toBe(1);
+    expect(server.results.at(-1)).toEqual({
+      requestId: "stop-monitor",
+      body: expect.objectContaining({
+        ok: true,
+        result: expect.objectContaining({
+          monitorId: "monitor-1",
+          summary: expect.objectContaining({
+            endedAt: now,
+            incidents: [expect.objectContaining({ id: "incident-1" })]
+          })
+        })
+      })
     });
   });
 
@@ -356,6 +483,38 @@ describe("DeviceAgentRuntime", () => {
 
     expect(messages).toEqual(["agent registered", "agent sync failed: fetch failed"]);
   });
+
+  it("stops active app monitor sessions when the runtime exits", async () => {
+    const server = new FakeAgentServer();
+    const driver = new MonitorAgentDriver();
+    const controller = new AbortController();
+    const runtime = new DeviceAgentRuntime({
+      serverUrl: "http://server",
+      agentId: "agent-a",
+      shared: true,
+      pollIntervalMs: 1,
+      heartbeatIntervalMs: 1000
+    }, driver, {
+      fetch: server.fetch,
+      commandSocketFactory: () => {
+        const socket = new FakeCommandSocket("ws://server/api/agents/agent-a/commands/ws");
+        socket.readyState = WebSocket.CLOSED;
+        return socket;
+      },
+      sleep: async () => {
+        controller.abort();
+      }
+    });
+    server.commands.push(command("start-monitor", "startAppMonitor", {
+      monitorId: "monitor-1",
+      runId: "run-1",
+      config: { enabled: true, packageName: "cn.eeo.classin" }
+    }));
+
+    await runtime.start(controller.signal);
+
+    expect(driver.session.stopCount).toBe(1);
+  });
 });
 
 describe("parseHarmonyStreamEnabled", () => {
@@ -397,6 +556,7 @@ class FakeAgentServer {
   readonly posts: Array<{ path: string; body: unknown }> = [];
   readonly commands: AgentCommandEnvelope[] = [];
   readonly results: Array<{ requestId: string; body: unknown }> = [];
+  readonly incidents: unknown[] = [];
   failNextHeartbeatWithMissingAgent = false;
   failNextHeartbeatWithNetworkError = false;
 
@@ -415,6 +575,10 @@ class FakeAgentServer {
       const requestId = path.split("/").at(-2) ?? "";
       const body = JSON.parse(String(init.body ?? "{}"));
       this.results.push({ requestId, body });
+      return jsonResponse({ accepted: true });
+    }
+    if (init.method === "POST" && path.endsWith("/app-monitor-incidents")) {
+      this.incidents.push(JSON.parse(String(init.body ?? "{}")));
       return jsonResponse({ accepted: true });
     }
     if (init.method === "POST") {
@@ -481,6 +645,58 @@ class FakeAgentDriver implements AgentLocalDeviceDriver {
 
   async samplePerformance(serial: string, runId: string, stepResultId?: string): Promise<MetricSample> {
     return { id: "metric-1", runId, stepResultId, deviceSerial: serial, sampledAt: now };
+  }
+}
+
+class MonitorAgentDriver extends FakeAgentDriver {
+  readonly monitorStarts: Array<{ serial: string; runId: string; config: AndroidAppMonitorConfig }> = [];
+  readonly session = new FakeAgentMonitorSession("cn.eeo.classin");
+
+  async startAppMonitor(
+    serial: string,
+    runId: string,
+    config: AndroidAppMonitorConfig,
+    callbacks?: { onIncident?: (incident: AndroidAppMonitorIncident) => void | Promise<void> }
+  ): Promise<FakeAgentMonitorSession> {
+    this.monitorStarts.push({ serial, runId, config });
+    this.session.callbacks = callbacks;
+    return this.session;
+  }
+}
+
+class FakeAgentMonitorSession {
+  callbacks?: { onIncident?: (incident: AndroidAppMonitorIncident) => void | Promise<void> };
+  readonly incidents: AndroidAppMonitorIncident[] = [];
+  stopCount = 0;
+
+  constructor(private readonly packageName: string) {}
+
+  async start(): Promise<void> {
+    return undefined;
+  }
+
+  async stop(): Promise<AndroidAppMonitorSummary> {
+    this.stopCount += 1;
+    return {
+      ...this.getSummary(),
+      endedAt: now
+    };
+  }
+
+  getSummary(): AndroidAppMonitorSummary {
+    return {
+      packageName: this.packageName,
+      startedAt: now,
+      processes: [],
+      sampleCounts: { cpu: 0, memory: 0, lifecycle: 0 },
+      incidents: [...this.incidents],
+      artifacts: {}
+    };
+  }
+
+  async emitIncident(incident: AndroidAppMonitorIncident): Promise<void> {
+    this.incidents.push(incident);
+    await this.callbacks?.onIncident?.(incident);
   }
 }
 

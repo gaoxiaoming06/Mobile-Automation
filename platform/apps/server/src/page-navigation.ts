@@ -32,7 +32,7 @@ export function derivePageNavigationSegments(input: {
       active = undefined;
       continue;
     }
-    const onPage = normalizedPageReference(step.onPage);
+    const onPage = normalizedScreenRef(step.before?.screenRef);
     if (!active) {
       if (!onPage) continue;
       active = { fromPage: onPage, steps: [] };
@@ -40,7 +40,7 @@ export function derivePageNavigationSegments(input: {
       active = { fromPage: onPage, steps: [] };
     }
     active.steps.push(step);
-    const toPage = normalizedPageReference(step.expectPage);
+    const toPage = normalizedScreenRef(step.after?.screenRef);
     if (!toPage) continue;
     if (toPage !== active.fromPage) {
       const segmentNumber = result.length + 1;
@@ -68,7 +68,7 @@ function isSafeNavigationAction(step: ScriptStep): boolean {
   return "tap" in step || "swipe" in step || "scrollUntilVisible" in step;
 }
 
-function normalizedPageReference(value: string | undefined): string | undefined {
+function normalizedScreenRef(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized || undefined;
 }

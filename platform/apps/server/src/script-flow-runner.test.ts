@@ -3,6 +3,7 @@ import { compileScriptFlow, type ScriptFlowDocument } from "@mobile-automation/s
 import type { DeviceInfo, InteractionAsset, TestRun } from "@mobile-automation/shared";
 import type { PageAssetCatalog, PageAssetSummary } from "./page-asset-catalog.js";
 import type { PageStateService } from "./page-state-service.js";
+import type { ExecutionProfileSnapshot } from "./execution-profile.js";
 import {
   ScriptFlowRunner,
   pageStateExpectationVerifier,
@@ -12,6 +13,35 @@ import {
 import { ScriptTargetResolver } from "./script-target-resolver.js";
 
 describe("ScriptFlowRunner", () => {
+  it("does not freeze a platform execution profile into the run snapshot", async () => {
+    const backend = new CapturingBackend();
+    const profile: ExecutionProfileSnapshot = {
+      id: "execution-profile:classin:android:graph-v1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      version: 3,
+      status: "verified",
+      digest: "profile-digest",
+      createdAt: "2026-08-15T00:00:00.000Z",
+      screens: []
+    };
+    const runner = new ScriptFlowRunner({
+      backend,
+      driver: { getDeviceInfo: async () => device("android") },
+      targetResolver: new ScriptTargetResolver(),
+      profileProvider: { createSnapshot: () => profile }
+    } as never);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-profile-snapshot",
+      flow: document([{ id: "tap-home", tap: { target: { text: "主页" } } }]),
+      deviceSerial: "device-1"
+    });
+
+    expect(backend.input?.sourceSnapshot).not.toHaveProperty("executionProfile");
+  });
+
   it("selects one source step without entry preparation or outcome assertions", () => {
     const flow: ScriptFlowDocument = {
       ...document([
@@ -19,8 +49,8 @@ describe("ScriptFlowRunner", () => {
         { id: "fill-name", inputText: { target: { text: "课堂名称" }, value: "自动化课堂" } },
         { id: "assert-created", assertText: { text: "创建成功" } }
       ]),
-      entry: { page: "classin.home" },
-      outcome: { page: "classin.classroom.detail" }
+      entry: { screenRef: "classin.home" },
+      outcome: { screenRef: "classin.classroom.detail" }
     };
 
     const selected = selectScriptExecutionSteps(compileScriptFlow(flow), {
@@ -113,8 +143,8 @@ describe("ScriptFlowRunner", () => {
         { id: "assert-created", assertText: { text: "创建成功" } }
       ]),
       start: { strategy: "restartApp" },
-      entry: { page: "classin.home" },
-      outcome: { page: "classin.classroom.detail" }
+      entry: { screenRef: "classin.home" },
+      outcome: { screenRef: "classin.classroom.detail" }
     };
 
     await runner.start({
@@ -242,10 +272,20 @@ describe("ScriptFlowRunner", () => {
   });
 
   it("includes observed OCR text when an expected page does not match", async () => {
+    const profile: ExecutionProfileSnapshot = {
+      id: "execution-profile:classin:android:graph-v1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      version: 1,
+      status: "verified",
+      digest: "profile-digest",
+      createdAt: "2026-08-15T00:00:00.000Z",
+      screens: []
+    };
     const pageState: PageStateService = {
-      identifyCurrentPage: async () => ({ status: "unknown", candidates: [], reason: "page_not_matched" }),
-      verifyExpectedPage: async () => ({ status: "unknown", candidates: [], reason: "page_not_matched" }),
-      waitForExpectedPage: async () => ({
+      identifyCurrentScreen: async () => ({ status: "unknown", candidates: [], reason: "page_not_matched" }),
+      verifyExpectedScreen: async () => ({ status: "unknown", candidates: [], reason: "page_not_matched" }),
+      waitForExpectedScreen: async () => ({
         status: "unknown",
         candidates: [{ id: "page-home", key: "classin.home", name: "主页", appId: "cn.eeo.classin", graphVersionId: "v1", matcherCount: 2 }],
         observation: {
@@ -263,14 +303,64 @@ describe("ScriptFlowRunner", () => {
       serial: "device-1",
       appId: "cn.eeo.classin",
       platform: "android",
-      pageId: "classin.home",
-      timeoutMs: 1
+      screenRef: "classin.home",
+      timeoutMs: 1,
+      executionProfile: profile
     })).resolves.toMatchObject({
       status: "unknown",
       candidateNames: ["主页"],
       observedText: "搜索、请输入搜索内容",
       reason: "page_not_matched"
     });
+  });
+
+  it("uses the frozen profile when evaluating a screen contract", async () => {
+    const profile: ExecutionProfileSnapshot = {
+      id: "execution-profile:classin:android:graph-v1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      version: 1,
+      status: "verified",
+      digest: "profile-digest",
+      createdAt: "2026-08-15T00:00:00.000Z",
+      screens: []
+    };
+    const waitForExpectedScreen = vi.fn(async () => ({
+      status: "matched" as const,
+      candidates: [],
+      screen: {
+        id: "page-classes",
+        key: "classin.teacher.classes",
+        screenRef: "classin.teacher.classes",
+        name: "班级列表",
+        appId: "cn.eeo.classin",
+        graphVersionId: "graph-v1",
+        matcherCount: 2
+      }
+    }));
+    const pageState = {
+      identifyCurrentScreen: async () => ({ status: "unknown" as const, candidates: [] }),
+      verifyExpectedScreen: async () => ({ status: "unknown" as const, candidates: [] }),
+      waitForExpectedScreen
+    } satisfies PageStateService;
+    const verifier = pageStateExpectationVerifier(pageState);
+
+    await expect(verifier({
+      serial: "device-1",
+      appId: "cn.eeo.classin",
+      platform: "android",
+      screenRef: "classin.teacher.classes",
+      timeoutMs: 1,
+      executionProfile: profile
+    })).resolves.toMatchObject({
+      status: "matched",
+      pageName: "班级列表"
+    });
+
+    expect(waitForExpectedScreen).toHaveBeenCalledWith(expect.objectContaining({
+      screenRef: "classin.teacher.classes",
+      executionProfile: profile
+    }));
   });
 
   it("compiles one business action with page precondition and result verification", async () => {
@@ -280,8 +370,8 @@ describe("ScriptFlowRunner", () => {
       {
         id: "open-class",
         name: "打开指定班级",
-        onPage: "classin.home",
-        expectPage: "classin.class.detail",
+        before: { screenRef: "classin.home" },
+        after: { screenRef: "classin.class.detail" },
         tap: { target: { text: "${className}" } }
       }
     ], {
@@ -316,13 +406,53 @@ describe("ScriptFlowRunner", () => {
         scriptFlowId: "flow-1",
         scriptStepId: "open-class",
         locatorStrategy: "semantic_text"
-      }),
-      preconditions: [expect.objectContaining({ type: "state_is", params: expect.objectContaining({ pageId: "classin.home" }) })],
-      expectations: [expect.objectContaining({
-        type: "state_is",
-        params: expect.objectContaining({ pageId: "classin.class.detail", timeoutMs: 15_000 })
-      })]
+      })
     }));
+    expect(backend.input?.steps?.[0]).not.toHaveProperty("preconditions");
+    expect(backend.input?.steps?.[0]).not.toHaveProperty("expectations");
+  });
+
+  it("enables Android app monitor by default for script execution", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-monitor-default",
+      flow: document([{ id: "open-class", tap: { target: { text: "班级四十二号" } } }]),
+      deviceSerial: "device-1",
+      recordVideo: false
+    });
+
+    expect(backend.input?.androidAppMonitor).toEqual({
+      enabled: true,
+      packageName: "cn.eeo.classin",
+      includeSubprocesses: true
+    });
+  });
+
+  it("keeps Android app monitor disabled when execution explicitly opts out", async () => {
+    const backend = new CapturingBackend();
+    const runner = runnerWith(backend);
+
+    await runner.start({
+      ...previewBinding,
+      flowId: "flow-monitor-disabled",
+      flow: document([{ id: "open-class", tap: { target: { text: "班级四十二号" } } }]),
+      deviceSerial: "device-1",
+      recordVideo: false,
+      androidAppMonitor: {
+        enabled: false,
+        packageName: "",
+        includeSubprocesses: true
+      }
+    });
+
+    expect(backend.input?.androidAppMonitor).toEqual({
+      enabled: false,
+      packageName: "",
+      includeSubprocesses: true
+    });
   });
 
   it("defaults script scroll-until-visible steps without direction to downward scanning", async () => {
@@ -402,8 +532,7 @@ describe("ScriptFlowRunner", () => {
     const runner = new ScriptFlowRunner({
       backend,
       driver: { getDeviceInfo: async () => device("harmony") },
-      targetResolver: new ScriptTargetResolver(),
-      pageCatalog: new EmptyCatalog()
+      targetResolver: new ScriptTargetResolver()
     });
 
     await runner.start({
@@ -411,7 +540,7 @@ describe("ScriptFlowRunner", () => {
       flowId: "flow-runtime-unknown-target",
       flow: document([{
         id: "tap-create-public-lesson",
-        expectPage: "runtime.unknown.1u41ebp",
+        after: { screenRef: "runtime.unknown.1u41ebp" },
         tap: { target: { text: "创建公开课" } }
       }]),
       deviceSerial: "device-1",
@@ -422,8 +551,7 @@ describe("ScriptFlowRunner", () => {
       id: "tap-create-public-lesson",
       type: "tap_on_text",
       params: expect.objectContaining({
-        text: "创建公开课",
-        expectPage: "runtime.unknown.1u41ebp"
+        text: "创建公开课"
       })
     }));
     expect(backend.input?.steps?.[0]?.expectations).toBeUndefined();
@@ -434,8 +562,7 @@ describe("ScriptFlowRunner", () => {
     const runner = new ScriptFlowRunner({
       backend,
       driver: { getDeviceInfo: async () => device("harmony") },
-      targetResolver: new ScriptTargetResolver(),
-      pageCatalog: new RuntimeUnknownCatalog()
+      targetResolver: new ScriptTargetResolver()
     });
 
     await runner.start({
@@ -443,7 +570,7 @@ describe("ScriptFlowRunner", () => {
       flowId: "flow-runtime-confirmed-target",
       flow: document([{
         id: "tap-create-public-lesson",
-        expectPage: "runtime.unknown.1u41ebp",
+        after: { screenRef: "runtime.unknown.1u41ebp" },
         tap: { target: { text: "创建公开课" } }
       }]),
       deviceSerial: "device-1",
@@ -454,8 +581,7 @@ describe("ScriptFlowRunner", () => {
       id: "tap-create-public-lesson",
       type: "tap_on_text",
       params: expect.objectContaining({
-        text: "创建公开课",
-        expectPage: "runtime.unknown.1u41ebp"
+        text: "创建公开课"
       })
     }));
     expect(backend.input?.steps?.[0]?.expectations).toBeUndefined();
@@ -466,8 +592,7 @@ describe("ScriptFlowRunner", () => {
     const runner = new ScriptFlowRunner({
       backend,
       driver: { getDeviceInfo: async () => device("harmony") },
-      targetResolver: new ScriptTargetResolver(),
-      pageCatalog: new EmptyCatalog()
+      targetResolver: new ScriptTargetResolver()
     });
 
     await runner.start({
@@ -475,7 +600,7 @@ describe("ScriptFlowRunner", () => {
       flowId: "flow-runtime-unknown-source",
       flow: document([{
         id: "tap-publish",
-        onPage: "runtime.unknown.1u41ebp",
+        before: { screenRef: "runtime.unknown.1u41ebp" },
         tap: { target: { text: "发布" } }
       }]),
       deviceSerial: "device-1",
@@ -486,14 +611,13 @@ describe("ScriptFlowRunner", () => {
       id: "tap-publish",
       type: "tap_on_text",
       params: expect.objectContaining({
-        text: "发布",
-        onPage: "runtime.unknown.1u41ebp"
+        text: "发布"
       })
     }));
     expect(backend.input?.steps?.[0]?.preconditions).toBeUndefined();
   });
 
-  it("executes with the frozen interaction asset version and records its reference", async () => {
+  it("ignores interaction assets and executes the script target as the only source of truth", async () => {
     const backend = new CapturingBackend();
     const runner = runnerWith(backend);
     const asset = learnedInteractionAsset();
@@ -503,39 +627,32 @@ describe("ScriptFlowRunner", () => {
       flowId: "flow-learned",
       flow: document([{
         id: "open-add-friend",
-        onPage: "classin.home",
+        before: { screenRef: "classin.home" },
         tap: { target: { text: "进入添加好友页面", match: "semantic" } }
       }]),
-      interactionAssets: [{ stepId: "open-add-friend", asset }],
       deviceSerial: "device-1",
-      recordVideo: false
-    });
+      recordVideo: false,
+      ...({ interactionAssets: [{ stepId: "open-add-friend", asset }] } as Record<string, unknown>)
+    } as any);
 
     expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
       params: expect.objectContaining({
-        text: "添加好友",
-        locatorStrategy: "interaction_asset:semantic_text",
-        interactionAssetId: asset.id,
-        interactionAssetVersion: asset.version,
-        allowRegionFallback: false
+        text: "进入添加好友页面",
+        locatorStrategy: "semantic_text"
       })
     }));
-    expect(backend.input?.sourceSnapshot?.interactionAssets).toEqual([{
-      stepId: "open-add-friend",
-      assetId: asset.id,
-      key: asset.key,
-      version: asset.version
-    }]);
+    expect(backend.input?.steps?.[0]?.params).not.toHaveProperty("interactionAssetId");
+    expect(backend.input?.sourceSnapshot).not.toHaveProperty("interactionAssets");
   });
 
-  it("keeps waitForPage as one report step instead of creating a verification step pair", async () => {
+  it("keeps waitForPage as one non-asset report step", async () => {
     const backend = new CapturingBackend();
     const runner = runnerWith(backend);
 
     await runner.start({
       ...previewBinding,
       flowId: "flow-1",
-      flow: document([{ id: "wait-home", waitForPage: "classin.home", timeoutMs: 5000 }]),
+      flow: document([{ id: "wait-home", waitForPage: { screenRef: "classin.home" }, timeoutMs: 5000 }]),
       deviceSerial: "device-1",
       recordVideo: false
     });
@@ -544,8 +661,8 @@ describe("ScriptFlowRunner", () => {
     expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
       id: "wait-home",
       type: "wait",
-      expectations: [expect.objectContaining({ type: "state_is", params: expect.objectContaining({ pageId: "classin.home", timeoutMs: 5000 }) })]
     }));
+    expect(backend.input?.steps?.[0]).not.toHaveProperty("expectations");
   });
 
   it("executes assertText as one blocking OCR result assertion", async () => {
@@ -584,29 +701,19 @@ describe("ScriptFlowRunner", () => {
     }));
   });
 
-  it("keeps reachPage as one runtime navigation step with target-page verification", async () => {
+  it("rejects reachPage instead of compiling it into profile navigation", async () => {
     const backend = new CapturingBackend();
     const runner = runnerWith(backend);
 
-    await runner.start({
+    await expect(runner.start({
       ...previewBinding,
       flowId: "flow-reach-home",
-      flow: document([{ id: "reach-home", name: "到达主页", reachPage: { page: "classin.home", policy: "safe" } }]),
+      flow: document([{ id: "reach-home", name: "到达主页", reachPage: { screenRef: "classin.home", policy: "safe" } }]),
       deviceSerial: "device-1",
       recordVideo: false
-    });
+    })).rejects.toThrow(/reachPage is no longer supported/);
 
-    expect(backend.input?.steps).toHaveLength(1);
-    expect(backend.input?.steps?.[0]).toEqual(expect.objectContaining({
-      id: "reach-home",
-      type: "reach_page",
-      title: "到达主页",
-      params: expect.objectContaining({ pageId: "classin.home", policy: "safe" }),
-      expectations: [expect.objectContaining({
-        type: "state_is",
-        params: expect.objectContaining({ pageId: "classin.home" })
-      })]
-    }));
+    expect(backend.input).toBeUndefined();
   });
 
   it("does not compile entry metadata into a hidden preparation step", async () => {
@@ -614,12 +721,11 @@ describe("ScriptFlowRunner", () => {
     const runner = new ScriptFlowRunner({
       backend,
       driver: { getDeviceInfo: async () => device("android") },
-      targetResolver: new ScriptTargetResolver(),
-      pageCatalog: new NavigationCatalog()
+      targetResolver: new ScriptTargetResolver()
     });
     const flow: ScriptFlowDocument = {
-      ...document([{ id: "verify-home", assertPage: "classin.home" }]),
-      entry: { page: "classin.home", session: "authenticated", role: "teacher" }
+      ...document([{ id: "verify-home", assertPage: { screenRef: "classin.home" } }]),
+      entry: { screenRef: "classin.home", session: "authenticated", role: "teacher" }
     };
 
     await runner.start({
@@ -637,14 +743,13 @@ describe("ScriptFlowRunner", () => {
     ]));
   });
 
-  it("compiles a frozen multi-action navigation segment without reading use case source dependencies", async () => {
+  it("ignores deprecated navigation segments for explicit actions", async () => {
     const backend = new CapturingBackend();
     const catalog = new NavigationCatalog();
     const runner = new ScriptFlowRunner({
       backend,
       driver: { getDeviceInfo: async () => device("android") },
-      targetResolver: new ScriptTargetResolver(),
-      pageCatalog: catalog
+      targetResolver: new ScriptTargetResolver()
     });
     await runner.start({
       ...previewBinding,
@@ -662,41 +767,23 @@ describe("ScriptFlowRunner", () => {
         steps: [
           {
             id: "open-menu",
-            onPage: "classin.detail",
+            before: { screenRef: "classin.detail" },
             tap: { target: { text: "更多" }, search: { mode: "visibleOnly" } }
           },
           {
             id: "open-home-tab",
             tap: { target: { text: "主页", area: "bottomBar" }, search: { mode: "visibleOnly" } },
-            expectPage: "classin.home"
+            after: { screenRef: "classin.home" }
           }
         ]
       }],
       flowId: "flow-reach-home",
-      flow: document([{ id: "reach-home", reachPage: { page: "classin.home", policy: "safe" } }]),
+      flow: document([{ id: "open-home", tap: { target: { text: "主页" } } }]),
       deviceSerial: "device-1",
       recordVideo: false
     });
 
-    expect(backend.input?.steps?.[0]?.params.navigationEdges).toEqual([
-      expect.objectContaining({
-        fromPageId: "page-detail",
-        toPageId: "page-home",
-        flowId: "flow-detail-home",
-        segmentId: "navigation:flow-detail-home:3:1",
-        stepIds: ["open-menu", "open-home-tab"],
-        actions: [
-          expect.objectContaining({
-            type: "tap_on_text",
-            params: expect.objectContaining({ text: "更多", scriptVersion: 3 })
-          }),
-          expect.objectContaining({
-            type: "tap_on_text",
-            params: expect.objectContaining({ text: "主页", scriptVersion: 3 })
-          })
-        ]
-      })
-    ]);
+    expect(backend.input?.steps?.[0]?.params).not.toHaveProperty("navigationEdges");
   });
 
   it("uses typed run parameters without blocking on risk metadata", async () => {

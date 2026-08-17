@@ -22,11 +22,11 @@ parameters:
     required: true
 steps:
   - id: open-add-friend
-    onPage: classin.home
+    before: { screenRef: classin.home }
     tap:
       target:
         text: 添加好友
-    expectPage: classin.friend.add
+    after: { screenRef: classin.friend.add }
 tags: [friend]
 `;
 
@@ -274,9 +274,10 @@ steps:
     expect(context.runner.inputs).toEqual([]);
   });
 
-  it("keeps navigation-only flows out of the case center", async () => {
+  it("stores navigation paths as reusable case-center flows", async () => {
     const context = await apiContext(servers);
     const response = await post(context.baseUrl, "/api/script-flows", {
+      status: "draft",
       sourceYaml: `
 version: 1
 kind: case
@@ -286,14 +287,14 @@ app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: reach-friend
     role: navigation
-    reachPage: { page: classin.friend.add, policy: safe }
+    before: { screenRef: classin.home }
+    tap: { target: { text: 添加好友 } }
+    after: { screenRef: classin.friend.add }
 `
     });
 
-    expect(response).toEqual({
-      status: 409,
-      body: { error: "导航流程由系统内部复用，不保存到用例中心" }
-    });
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({ flow: { parsed: { purpose: "navigation" } } });
   });
 
   it("rejects preview and execution when the client version is stale", async () => {
@@ -414,7 +415,7 @@ steps:
     ]);
   });
 
-  it("freezes the derived navigation index without copying active use case sources into dependencies", async () => {
+  it("rejects reachPage drafts instead of freezing a navigation index", async () => {
     const context = await apiContext(servers);
     context.storage.markSourceVerified(navigationSource("从详情到主页"));
     const route = ((await post(context.baseUrl, "/api/script-flows", {
@@ -427,17 +428,10 @@ steps:
       parameters: {}
     });
 
-    expect(preview.status).toBe(200);
-    expect(preview.body).toEqual(expect.objectContaining({
-      plan: expect.objectContaining({
-        steps: [expect.objectContaining({ action: "reachPage", input: { pageId: "classin.home", policy: "safe" } })]
-      }),
-      dependencies: [],
-      navigationIndex: expect.objectContaining({
-        segmentCount: 1,
-        digest: expect.stringMatching(/^[a-f0-9]{64}$/)
-      })
-    }));
+    expect(preview).toEqual({
+      status: 400,
+      body: { error: "测试计划无法通过校验，请调整测试描述后重试。" }
+    });
     expect(route.status).toBe("active");
   });
 
@@ -460,12 +454,11 @@ steps:
         steps: [
           expect.objectContaining({ id: "verify-home", phase: "verification", action: "assertPage" })
         ]
-      }),
-      navigationIndex: expect.objectContaining({ segmentCount: 1 })
+      })
     }));
   });
 
-  it("freezes active session entry pages as runtime recovery roots", async () => {
+  it("does not pass navigation roots when running entry metadata assertions", async () => {
     const context = await apiContext(servers);
     const rootSource = navigationRootSource();
     context.storage.markSourceVerified(rootSource);
@@ -475,27 +468,25 @@ steps:
     });
 
     const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
-      sourceYaml: reachHomeSource(),
+      sourceYaml: entryHomeSource(),
       parameters: {}
     });
 
     expect(preview.status).toBe(200);
-    expect(preview.body).toEqual(expect.objectContaining({
-      navigationIndex: expect.objectContaining({ rootCount: 1 })
-    }));
+    expect(preview.body).not.toHaveProperty("navigationIndex");
 
     const started = await post(context.baseUrl, "/api/script-flow-drafts/trial-runs", {
-      sourceYaml: reachHomeSource(),
+      sourceYaml: entryHomeSource(),
       planDigest: (preview.body as { planDigest: string }).planDigest,
       deviceSerial: "device-1",
       parameters: {}
     });
 
     expect(started.status).toBe(202);
-    expect(context.runner.inputs[0]?.navigationRootPages).toEqual(["classin.home"]);
+    expect(context.runner.inputs[0]).not.toHaveProperty("navigationRootPages");
   });
 
-  it("freezes a unique interaction asset into the preview and invalidates the digest when its version changes", async () => {
+  it("does not bind interaction assets into preview or digest calculation", async () => {
     const context = await apiContext(servers);
     context.storage.setInteractionAssets([interactionAsset(2)]);
 
@@ -505,14 +496,7 @@ steps:
     });
 
     expect(preview.status).toBe(200);
-    expect(preview.body).toEqual(expect.objectContaining({
-      interactionAssets: [{
-        stepId: "open-add-friend",
-        assetId: "asset-add-friend",
-        key: "classin.home.tap.text.添加好友",
-        version: 2
-      }]
-    }));
+    expect(preview.body).not.toHaveProperty("interactionAssets");
     const firstDigest = (preview.body as { planDigest: string }).planDigest;
 
     context.storage.setInteractionAssets([interactionAsset(3)]);
@@ -522,10 +506,11 @@ steps:
     });
 
     expect(changed.status).toBe(200);
-    expect((changed.body as { planDigest: string }).planDigest).not.toBe(firstDigest);
+    expect(changed.body).not.toHaveProperty("interactionAssets");
+    expect((changed.body as { planDigest: string }).planDigest).toBe(firstDigest);
   });
 
-  it("blocks preview when multiple interaction assets match the same semantic step", async () => {
+  it("does not block preview when multiple learned interaction assets match a script step", async () => {
     const context = await apiContext(servers);
     const first = interactionAsset(2);
     context.storage.setInteractionAssets([
@@ -538,17 +523,8 @@ steps:
       parameters: { friendName: "张三" }
     });
 
-    expect(preview).toEqual({
-      status: 400,
-      body: {
-        error: "当前操作匹配到多个目标，请补充位置、附近文字或更明确的操作描述。",
-        failure: {
-          kind: "target_ambiguous",
-          message: "当前操作匹配到多个目标，请补充位置、附近文字或更明确的操作描述。",
-          nextAction: "supplement_process"
-        }
-      }
-    });
+    expect(preview.status).toBe(200);
+    expect(preview.body).not.toHaveProperty("interactionAssets");
   });
 
   it("rejects saving an AI revision over a newer use case version", async () => {
@@ -725,6 +701,46 @@ steps:
       body: { error: "ScriptFlow must pass a trial run before normal execution" }
     });
     expect(context.runner.inputs).toEqual([]);
+  });
+
+  it("carries the parent-child verification digest into trial run snapshots", async () => {
+    const context = await apiContext(servers);
+    const child = ((await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: childSource("已验证子流程")
+    })).body as { flow: ScriptFlow }).flow;
+    const parentYaml = parentSource(child.id);
+    context.storage.markSourceVerified(child.sourceYaml);
+    context.storage.markSourceVerified(parentYaml);
+    const parent = ((await post(context.baseUrl, "/api/script-flows", {
+      sourceYaml: parentYaml,
+      status: "draft"
+    })).body as { flow: ScriptFlow }).flow;
+
+    const preview = await post(context.baseUrl, `/api/script-flows/${parent.id}/preview`, {
+      expectedVersion: parent.version,
+      parameters: {}
+    });
+
+    expect(preview.body).toEqual(expect.objectContaining({
+      verification: expect.objectContaining({
+        status: "needs_trial",
+        planDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        reasons: expect.arrayContaining(["父用例与当前全部子用例版本的组合尚未通过试运行"])
+      })
+    }));
+    const verificationDigest = (preview.body as { verification: { planDigest: string } }).verification.planDigest;
+
+    const trialRun = await post(context.baseUrl, `/api/script-flows/${parent.id}/trial-runs`, {
+      expectedVersion: parent.version,
+      planDigest: (preview.body as { planDigest: string }).planDigest,
+      deviceSerial: "device-1",
+      parameters: {}
+    });
+
+    expect(trialRun.status).toBe(202);
+    expect(context.runner.inputs[0]?.verificationAssessment).toEqual(expect.objectContaining({
+      planDigest: verificationDigest
+    }));
   });
 });
 
@@ -929,7 +945,7 @@ name: 到达主页
 app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: reach-home
-    reachPage: { page: classin.home, policy: safe }
+    reachPage: { screenRef: classin.home, policy: safe }
 `;
 }
 
@@ -939,10 +955,10 @@ version: 1
 kind: case
 name: 校验主页
 app: { id: cn.eeo.classin, platform: android }
-entry: { page: classin.home }
+entry: { screenRef: classin.home }
 steps:
   - id: verify-home
-    assertPage: classin.home
+    assertPage: { screenRef: classin.home }
 `;
 }
 
@@ -953,9 +969,9 @@ name: ${name}
 app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: open-home
-    onPage: classin.detail
+    before: { screenRef: classin.detail }
     tap: { target: { text: 主页 } }
-    expectPage: classin.home
+    after: { screenRef: classin.home }
 `;
 }
 
@@ -965,10 +981,10 @@ version: 1
 kind: case
 name: 教师主页入口
 app: { id: cn.eeo.classin, platform: android }
-entry: { page: classin.home, session: authenticated, role: teacher }
+entry: { screenRef: classin.home, session: authenticated, role: teacher }
 steps:
   - id: verify-home
-    assertPage: classin.home
+    assertPage: { screenRef: classin.home }
 `;
 }
 

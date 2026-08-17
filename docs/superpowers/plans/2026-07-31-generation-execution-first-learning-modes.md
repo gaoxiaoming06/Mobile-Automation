@@ -1,5 +1,7 @@
 # 测试生成执行优先与持续学习分阶段实现方案
 
+> 2026-08-14 更新：生成阶段的资产/历史脚本读取已调整为显式开关策略；学习沉淀与使用沉淀必须解耦。执行器边界也收紧为“只按 ScriptFlow 与当前设备实时状态执行”，不得主动读取 PageAsset、InteractionAsset、NavigationEntry 或历史脚本。详见 `docs/superpowers/plans/2026-08-14-scriptflow-generation-context-policy.md`。本文中早期关于“生成/执行读取现有 active 资产”的表述，以 2026-08-14 新边界为准。
+
 > **对于智能体：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 来逐个任务执行此方案。步骤使用复选框 (`- [ ]`) 语法进行进度追踪。
 
 **目标：** 先把“自然语言描述测试 -> 生成确定性 ScriptFlow -> 在真实设备稳定执行 -> 输出可诊断结果”做成可靠主链路，再通过可控的三态持续学习模式逐步引入页面、交互和导航资产学习。

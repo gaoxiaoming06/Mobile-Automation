@@ -7,6 +7,10 @@ import type {
   DeviceInfo,
   InstalledAppInfo,
   MetricSample,
+  AndroidAppMonitorConfig,
+  AndroidAppMonitorIncident,
+  AndroidProcessLifecycleEvent,
+  AndroidProcessMetricSample,
   SemanticDeviceActionRequest,
   ToolStatus
 } from "@mobile-automation/shared";
@@ -106,6 +110,25 @@ export class LocalDeviceAgentDriver implements AgentLocalDeviceDriver {
 
   async samplePerformance(serial: string, runId: string, stepResultId?: string): Promise<MetricSample> {
     return (await this.driverFor(serial)).samplePerformance(serial, runId, stepResultId);
+  }
+
+  async startAppMonitor(
+    serial: string,
+    runId: string,
+    config: AndroidAppMonitorConfig,
+    callbacks?: {
+      onIncident?: (incident: AndroidAppMonitorIncident) => void | Promise<void>;
+      onSample?: (sample: AndroidProcessMetricSample, kind: "cpu" | "memory") => void | Promise<void>;
+      onLifecycleEvent?: (event: AndroidProcessLifecycleEvent) => void | Promise<void>;
+    }
+  ) {
+    const platform = await this.resolvePlatform(serial);
+    if (platform !== "android") {
+      throw new Error(`${platform} app monitor is not supported by this agent`);
+    }
+    return this.android.startAppMonitor(serial, runId, config, async () => {
+      throw new Error("Agent app monitor text artifacts are not supported");
+    }, callbacks);
   }
 
   private async resolvePlatform(serial: string): Promise<DeviceInfo["platform"]> {

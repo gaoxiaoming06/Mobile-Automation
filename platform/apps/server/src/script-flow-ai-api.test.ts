@@ -26,7 +26,12 @@ describe("ScriptFlow AI API", () => {
       body: JSON.stringify({ prompt: "打开班级详情", appId: "cn.eeo.classin", platform: "android" })
     });
     expect(response.status).toBe(200);
-    expect(generateDraft).toHaveBeenCalledWith({ prompt: "打开班级详情", appId: "classin", platform: "android" });
+    expect(generateDraft).toHaveBeenCalledWith({
+      prompt: "打开班级详情",
+      appId: "classin",
+      platform: "android",
+      generationContext: strictGenerationContext()
+    });
 
     const bypass = await fetch(`${baseUrl}/api/script-flow-drafts/generate`, {
       method: "POST",
@@ -65,8 +70,69 @@ describe("ScriptFlow AI API", () => {
       prompt: "把当前页第一个输入框改成自动化课堂",
       appId: "classin",
       platform: "android",
+      generationContext: { ...strictGenerationContext(), useCurrentScreen: true },
       screenAssist: { mode: "current", deviceSerial: "device-1" }
     });
+  });
+
+  it("normalizes generation context before calling the draft generator", async () => {
+    const generateDraft = vi.fn().mockResolvedValue({ status: "needs_clarification", clarification: "请选择班级", channel: "codex", model: "planner" });
+    const app = express();
+    app.use(express.json());
+    registerScriptFlowAiRoutes(app, { generateDraft, getFlow: () => undefined });
+    const server = createServer(app);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("address unavailable");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const strictResponse = await fetch(`${baseUrl}/api/script-flow-drafts/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "点击消息",
+        appId: "classin",
+        platform: "android",
+        generationContext: {
+          mode: "strict",
+          useAssetsForGeneration: true,
+          useHistoryScriptsForGeneration: true
+        }
+      })
+    });
+
+    expect(strictResponse.status).toBe(200);
+    expect(generateDraft).toHaveBeenLastCalledWith(expect.objectContaining({
+      generationContext: {
+        mode: "strict",
+        useCurrentScreen: false,
+          useCaseKnowledge: false
+      }
+    }));
+
+    const enhancedResponse = await fetch(`${baseUrl}/api/script-flow-drafts/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "从首页进入班级",
+        appId: "classin",
+        platform: "android",
+        generationContext: {
+          mode: "knowledge_enhanced",
+          useCaseKnowledge: true
+        }
+      })
+    });
+
+    expect(enhancedResponse.status).toBe(200);
+    expect(generateDraft).toHaveBeenLastCalledWith(expect.objectContaining({
+      generationContext: {
+        mode: "knowledge_enhanced",
+        useCurrentScreen: false,
+        useCaseKnowledge: true
+      }
+    }));
   });
 
   it("accepts external code context and scriptPlatform from external AI callers", async () => {
@@ -102,6 +168,7 @@ describe("ScriptFlow AI API", () => {
       prompt: "从成长页进入全网搜索",
       appId: "classin",
       platform: "harmony",
+      generationContext: strictGenerationContext(),
       externalContext: {
         source: "classin-code",
         implementationStack: "harmony-native",
@@ -147,6 +214,7 @@ describe("ScriptFlow AI API", () => {
       prompt: "登录后增加主页校验",
       appId: "cn.eeo.classin",
       platform: "android",
+      generationContext: strictGenerationContext(),
       existingFlow
     });
 
@@ -354,3 +422,11 @@ steps:
     expect(generateDraft).not.toHaveBeenCalled();
   });
 });
+
+function strictGenerationContext() {
+  return {
+    mode: "strict",
+    useCurrentScreen: false,
+    useCaseKnowledge: false
+  };
+}

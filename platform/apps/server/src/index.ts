@@ -99,7 +99,7 @@ const ocr = createDefaultOcrService();
 const observationService = new ObservationService(driver, ocr);
 const pageAssetCatalog = new StoragePageAssetCatalog(storage);
 const classInCodeContextProvider = createClassInCodeContextProvider(classInCodeContextOptionsFromEnv(process.env));
-const pageStateService = new DefaultPageStateService(pageAssetCatalog, observationService, readPageAssetBaselineArtifact);
+const pageStateService = new DefaultPageStateService(observationService, readPageAssetBaselineArtifact);
 const deviceExecutionLease = new DeviceExecutionLease();
 const runner = new AutomationRunner(storage, driver, ocr, {
   verifyPageState: pageStateExpectationVerifier(pageStateService),
@@ -109,8 +109,7 @@ const runner = new AutomationRunner(storage, driver, ocr, {
 const scriptFlowRunner = new ScriptFlowRunner({
   backend: runner,
   driver,
-  targetResolver: new ScriptTargetResolver(),
-  pageCatalog: pageAssetCatalog
+  targetResolver: new ScriptTargetResolver()
 });
 const stabilityExplorer = new StabilityExplorer(storage, driver, ocr, deviceExecutionLease);
 const agentScrcpyBroker = new AgentScrcpyBroker(agentRegistry);
@@ -155,15 +154,17 @@ registerAgentDistributionRoutes(app, {
 registerScriptFlowAiRoutes(app, {
   getFlow: (id) => storage.getScriptFlow(id),
   getRun: (id) => storage.getRun(id),
-  generateDraft: async ({ prompt, appId, platform, existingFlow, screenAssist, externalContext }) => {
+  generateDraft: async ({ prompt, appId, platform, existingFlow, screenAssist, externalContext, generationContext }) => {
     const timingContext = createScriptFlowAiTimingContext(prompt);
     return timedScriptFlowAiStage(timingContext, "total", async () => {
       const config = resolveAiModelConfig(process.env, storage.getAiModelSettings());
-      const automaticExternalContext = await timedScriptFlowAiStage(timingContext, "collect_code_context", () => classInCodeContextProvider({
-        prompt,
-        appId,
-        platform
-      }), { appId, platform, callerExternalContext: Boolean(externalContext) });
+      const automaticExternalContext = generationContext.useCaseKnowledge
+        ? await timedScriptFlowAiStage(timingContext, "collect_code_context", () => classInCodeContextProvider({
+            prompt,
+            appId,
+            platform
+          }), { appId, platform, callerExternalContext: Boolean(externalContext) })
+        : undefined;
       const observation = screenAssist
         ? await timedScriptFlowAiStage(timingContext, "collect_observation", () => observationService.collect(screenAssist.deviceSerial, {
             includeScreenshot: true,
@@ -190,12 +191,13 @@ registerScriptFlowAiRoutes(app, {
         existingFlow,
         ...(screenContext ? { screenContext } : {}),
         ...(plannerExternalContext ? { externalContext: plannerExternalContext } : {}),
+        generationContext,
         timingContext,
         pageCatalog: pageAssetCatalog,
-        flows: storage.listScriptFlows({ appId, platform }),
-        navigationEntries: storage.listNavigationEntries({ appId, platform })
+        flows: generationContext.useCaseKnowledge ? storage.listScriptFlows({ appId, platform }) : [],
+        navigationEntries: []
       });
-    }, { screenAssist: Boolean(screenAssist), appId, platform });
+    }, { screenAssist: Boolean(screenAssist), appId, platform, generationMode: generationContext.mode });
   }
 });
 

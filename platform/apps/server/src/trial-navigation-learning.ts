@@ -15,8 +15,8 @@ export function navigationCandidatesFromTrial(run: TestRun): LearnedNavigationCa
     if (result.status !== "passed") return [];
     const step = steps.get(result.stepId);
     if (!step || !("tap" in step)) return [];
-    const fromPage = nonEmptyString(step.onPage) ?? nonEmptyString(result.metadata?.onPage);
-    const toPage = nonEmptyString(step.expectPage) ?? nonEmptyString(result.metadata?.expectPage);
+    const fromPage = nonEmptyString(step.before?.screenRef) ?? nonEmptyString(result.metadata?.beforeScreenRef);
+    const toPage = nonEmptyString(step.after?.screenRef) ?? nonEmptyString(result.metadata?.afterScreenRef);
     if (!fromPage || !toPage || fromPage === toPage || !targetPageWasVerified(result, toPage)) return [];
     if (!record(result.metadata?.semantic)) return [];
 

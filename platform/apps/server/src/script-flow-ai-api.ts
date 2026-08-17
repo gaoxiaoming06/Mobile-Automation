@@ -9,6 +9,10 @@ import {
   type TestRun
 } from "@mobile-automation/shared";
 import type { PageAssetPlatform } from "./page-asset-catalog.js";
+import {
+  normalizeScriptFlowGenerationContext,
+  type ScriptFlowGenerationContextPolicy
+} from "./script-flow-generation-context.js";
 import type { ScriptFlowAiDraft } from "./script-flow-ai-planner.js";
 import { normalizeTargetAppId } from "./target-app-runtime.js";
 
@@ -33,6 +37,7 @@ export type ScriptFlowAiDraftGenerator = (input: {
   existingFlow?: ScriptFlow;
   screenAssist?: ScriptFlowScreenAssistRequest;
   externalContext?: ScriptFlowExternalContextRequest;
+  generationContext: ScriptFlowGenerationContextPolicy;
 }) => Promise<ScriptFlowAiDraft>;
 
 export function registerScriptFlowAiRoutes(
@@ -50,12 +55,14 @@ export function registerScriptFlowAiRoutes(
       const flowId = optionalString(body.flowId);
       const screenAssist = screenAssistValue(body.screenAssist);
       const externalContext = externalContextValue(body.externalContext);
+      const generationContext = generationContextValue(body.generationContext, Boolean(screenAssist));
       const draft = flowId
-        ? await generateRevisionDraft(deps, flowId, body.expectedVersion, prompt, screenAssist, externalContext)
+        ? await generateRevisionDraft(deps, flowId, body.expectedVersion, prompt, screenAssist, externalContext, generationContext)
         : await deps.generateDraft({
             prompt,
             appId: normalizeTargetAppId(requiredString(body.appId, "appId")),
             platform: platformValue(body.scriptPlatform ?? body.platform),
+            generationContext,
             ...(externalContext ? { externalContext } : {}),
             ...(screenAssist ? { screenAssist } : {})
           });
@@ -94,11 +101,13 @@ export function registerScriptFlowAiRoutes(
         failure,
         run
       });
+      const generationContext = generationContextValue(body.generationContext, Boolean(screenAssist));
       const draft = stripRepairSourceFlow(await deps.generateDraft({
         prompt: repairPrompt,
         appId,
         platform,
         existingFlow: temporaryRepairFlow({ sourceYaml, document, appId, platform, runId }),
+        generationContext,
         externalContext: repairExternalContext({ run, failure, callerContext: externalContextValue(body.externalContext) }),
         ...(screenAssist ? { screenAssist } : {})
       }));
@@ -115,7 +124,7 @@ function strictBody(value: unknown): Record<string, unknown> {
     throw new ScriptFlowAiApiError(400, "Request body must be an object");
   }
   const body = value as Record<string, unknown>;
-  const unknown = Object.keys(body).find((key) => !["prompt", "appId", "platform", "scriptPlatform", "flowId", "expectedVersion", "screenAssist", "externalContext"].includes(key));
+  const unknown = Object.keys(body).find((key) => !["prompt", "appId", "platform", "scriptPlatform", "flowId", "expectedVersion", "screenAssist", "externalContext", "generationContext"].includes(key));
   if (unknown) throw new ScriptFlowAiApiError(400, `Unknown request field: ${unknown}`);
   return body;
 }
@@ -134,7 +143,8 @@ function strictRepairBody(value: unknown): Record<string, unknown> {
     "platform",
     "scriptPlatform",
     "screenAssist",
-    "externalContext"
+    "externalContext",
+    "generationContext"
   ];
   const unknown = Object.keys(body).find((key) => !allowed.includes(key));
   if (unknown) throw new ScriptFlowAiApiError(400, `Unknown request field: ${unknown}`);
@@ -147,7 +157,8 @@ async function generateRevisionDraft(
   expectedVersion: unknown,
   prompt: string,
   screenAssist: ScriptFlowScreenAssistRequest | undefined,
-  externalContext: ScriptFlowExternalContextRequest | undefined
+  externalContext: ScriptFlowExternalContextRequest | undefined,
+  generationContext: ScriptFlowGenerationContextPolicy
 ): Promise<ScriptFlowAiDraft> {
   const existingFlow = deps.getFlow(flowId);
   if (!existingFlow) {
@@ -164,6 +175,7 @@ async function generateRevisionDraft(
     appId: existingFlow.appId,
     platform: existingFlow.platform,
     existingFlow,
+    generationContext,
     ...(externalContext ? { externalContext } : {}),
     ...(screenAssist ? { screenAssist } : {})
   });
@@ -220,6 +232,32 @@ function externalContextValue(value: unknown): ScriptFlowExternalContextRequest 
   };
 }
 
+function generationContextValue(value: unknown, hasScreenAssist: boolean): ScriptFlowGenerationContextPolicy {
+  if (value === undefined) {
+    return normalizeScriptFlowGenerationContext(undefined, { hasScreenAssist });
+  }
+  const context = recordValue(value, "generationContext", [
+    "mode",
+    "useCurrentScreen",
+    "useCaseKnowledge",
+    "useAssetsForGeneration",
+    "useHistoryScriptsForGeneration"
+  ]);
+  const mode = optionalString(context.mode) ?? "strict";
+  if (mode !== "strict" && mode !== "knowledge_enhanced" && mode !== "asset_enhanced") {
+    throw new ScriptFlowAiApiError(400, "generationContext.mode must be strict or knowledge_enhanced");
+  }
+  if (context.useCurrentScreen === true && !hasScreenAssist) {
+    throw new ScriptFlowAiApiError(400, "generationContext.useCurrentScreen requires screenAssist");
+  }
+  return normalizeScriptFlowGenerationContext({
+    mode,
+    ...optionalBooleanField(context.useCurrentScreen, "generationContext.useCurrentScreen"),
+    ...optionalBooleanField(context.useCaseKnowledge, "generationContext.useCaseKnowledge"),
+    ...optionalBooleanField(context.useHistoryScriptsForGeneration, "generationContext.useHistoryScriptsForGeneration")
+  }, { hasScreenAssist });
+}
+
 function recordValue(value: unknown, field: string, allowedFields: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ScriptFlowAiApiError(400, `${field} must be an object`);
@@ -265,6 +303,17 @@ function optionalStringArrayField(value: unknown, field: "externalContext.releva
   if (field === "externalContext.relevantFiles") return { relevantFiles: array };
   if (field === "externalContext.candidateSteps") return { candidateSteps: array };
   return { constraints: array };
+}
+
+function optionalBooleanField<K extends "useCurrentScreen" | "useCaseKnowledge" | "useHistoryScriptsForGeneration">(
+  value: unknown,
+  field: `generationContext.${K}`
+): Partial<Record<K, boolean>> {
+  if (value === undefined) return {};
+  if (typeof value !== "boolean") {
+    throw new ScriptFlowAiApiError(400, `${field} must be boolean`);
+  }
+  return { [field.slice("generationContext.".length)]: value } as Partial<Record<K, boolean>>;
 }
 
 function platformValue(value: unknown): PageAssetPlatform {

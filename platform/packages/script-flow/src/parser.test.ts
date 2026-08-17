@@ -18,7 +18,7 @@ parameters:
     default: 30
 steps:
   - id: open-class
-    onPage: classin.teacher.home
+    before: { screenRef: classin.teacher.home }
     tap:
       target:
         text: \${className}
@@ -27,9 +27,9 @@ steps:
         mode: auto
         direction: down
         maxSwipes: 8
-    expectPage: classin.teacher.class.detail
+    after: { screenRef: classin.teacher.class.detail }
   - id: select-duration
-    onPage: classin.teacher.lesson.create
+    before: { screenRef: classin.teacher.lesson.create }
     risk: interaction
     selectText:
       target:
@@ -37,7 +37,7 @@ steps:
         area: content
       value: \${duration}
   - id: verify-form
-    assertPage: classin.teacher.lesson.create
+    assertPage: { screenRef: classin.teacher.lesson.create }
 `;
 
 describe("parseScriptFlow", () => {
@@ -67,7 +67,7 @@ app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: prepare-home
     role: navigation
-    reachPage: { page: classin.home, policy: safe }
+    reachPage: { screenRef: classin.home, policy: safe }
   - id: publish-lesson
     role: business
     risk: publish
@@ -114,24 +114,24 @@ kind: case
 name: 教师登录
 app: { id: cn.eeo.classin, platform: android }
 entry:
-  page: classin.teacher.login
+  screenRef: classin.teacher.login
   session: unauthenticated
 outcome:
-  page: classin.teacher.classes
+  screenRef: classin.teacher.classes
   session: authenticated
   role: teacher
 steps:
   - id: submit-login
-    onPage: classin.teacher.login
-    expectPage: classin.teacher.classes
+    before: { screenRef: classin.teacher.login }
+    after: { screenRef: classin.teacher.classes }
     tap: { target: { text: 登录 } }
 `);
 
     expect(flow).toMatchObject({
       kind: "case",
       testLevel: "business_smoke",
-      entry: { page: "classin.teacher.login", session: "unauthenticated" },
-      outcome: { page: "classin.teacher.classes", session: "authenticated", role: "teacher" }
+      entry: { screenRef: "classin.teacher.login", session: "unauthenticated" },
+      outcome: { screenRef: "classin.teacher.classes", session: "authenticated", role: "teacher" }
     });
   });
 
@@ -404,14 +404,14 @@ app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: reach-home
     reachPage:
-      page: classin.home
+      screenRef: classin.home
       policy: safe
 `);
 
     expect(flow.steps[0]).toEqual({
       id: "reach-home",
       role: "navigation",
-      reachPage: { page: "classin.home", policy: "safe" }
+      reachPage: { screenRef: "classin.home", policy: "safe" }
     });
   });
 
@@ -422,7 +422,7 @@ name: unsafe home
 app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: reach-home
-    reachPage: { page: classin.home, policy: restart }
+    reachPage: { screenRef: classin.home, policy: restart }
 `)).toThrow(/reachPage\.policy.*safe/i);
   });
 
@@ -510,7 +510,7 @@ app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: ambiguous
     tap: { target: { text: 主页 } }
-    assertPage: classin.teacher.home
+    assertPage: { screenRef: classin.teacher.home }
 `)).toThrow(/exactly one action/i);
   });
 
@@ -575,7 +575,7 @@ name: legacy element reference
 app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: open
-    onPage: lesson-create
+    before: { screenRef: lesson-create }
     tap: { target: { ref: details-button } }
 `)).toThrow(/target\.ref.*unknown field/i);
   });
@@ -866,5 +866,43 @@ steps:
   it("ignores legacy app platform fields so scripts stay cross-platform", () => {
     expect(parseScriptFlow(validSource.replace("id: cn.eeo.classin", "id: cn.eeo.classin\n  platform: harmony")).app).toEqual({ id: "cn.eeo.classin" });
     expect(parseScriptFlow(validSource.replace("id: cn.eeo.classin", "id: cn.eeo.classin\n  platform: ios")).app).toEqual({ id: "cn.eeo.classin" });
+  });
+
+  it("uses screen contracts and rejects legacy page contract fields", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: create class
+app: { id: cn.eeo.classin }
+entry: { screenRef: classin.home }
+outcome: { screenRef: classin.class.detail }
+steps:
+  - id: open-create
+    before: { screenRef: classin.home }
+    after: { screenRef: classin.class.detail }
+    tap: { target: { text: 创建课堂 } }
+  - id: return-home
+    reachPage: { screenRef: classin.home, policy: safe }
+`);
+
+    expect(flow.entry).toEqual({ screenRef: "classin.home" });
+    expect(flow.outcome).toEqual({ screenRef: "classin.class.detail" });
+    expect(flow.steps[0]).toMatchObject({
+      before: { screenRef: "classin.home" },
+      after: { screenRef: "classin.class.detail" }
+    });
+    expect(flow.steps[1]).toMatchObject({
+      reachPage: { screenRef: "classin.home", policy: "safe" }
+    });
+
+    expect(() => parseScriptFlow(`
+version: 1
+name: legacy page contract
+app: { id: cn.eeo.classin }
+steps:
+  - id: legacy-step
+    onPage: classin.home
+    expectPage: classin.class.detail
+    tap: { target: { text: 创建课堂 } }
+`)).toThrow(/onPage|expectPage.*unknown field/i);
   });
 });

@@ -41,13 +41,13 @@ describe("derivePageNavigationSegments", () => {
     const flow = navigationFlow([
       {
         id: "open-more-menu",
-        onPage: "classin.home",
+        before: { screenRef: "classin.home" },
         tap: { target: { icon: "add", area: "topBar", position: "trailing" } }
       },
       {
         id: "open-add-friend",
         tap: { target: { text: "添加好友" } },
-        expectPage: "classin.add_friend"
+        after: { screenRef: "classin.add_friend" }
       }
     ]);
 
@@ -71,13 +71,13 @@ describe("derivePageNavigationSegments", () => {
     const flow = navigationFlow([
       {
         id: "open-settings",
-        onPage: "classin.home",
+        before: { screenRef: "classin.home" },
         tap: { target: { text: "设置" } }
       },
       {
         id: "delete-account",
         tap: { target: { text: "注销账号" } },
-        expectPage: "classin.goodbye"
+        after: { screenRef: "classin.goodbye" }
       }
     ]);
 
@@ -95,8 +95,8 @@ describe("derivePageNavigationSegments", () => {
   it("does not infer risk from ordinary target text", () => {
     const flow = navigationFlow([{
       id: "submit-login",
-      onPage: "classin.login",
-      expectPage: "classin.home",
+      before: { screenRef: "classin.login" },
+      after: { screenRef: "classin.home" },
       tap: { target: { text: "登录", area: "content", match: "exact" } }
     }]);
 

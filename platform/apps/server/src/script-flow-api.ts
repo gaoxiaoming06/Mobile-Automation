@@ -14,17 +14,14 @@ import {
   CROSS_PLATFORM_SCRIPT_SCOPE,
   publicExecutionFailure,
   publicExecutionFailureFromRun,
-  type InteractionAsset,
   type PublicExecutionFailureKind,
   type ScriptFlow
 } from "@mobile-automation/shared";
 import type { Storage } from "./storage.js";
-import type { PageNavigationSegmentSnapshot } from "./page-navigation.js";
 import { readAndroidAppMonitorConfig } from "./android-app-monitor-request.js";
 import { DeviceExecutionBusyError } from "./device-execution-lease.js";
 import type {
   ScriptFlowRunner,
-  ScriptInteractionAssetBinding,
   StartScriptFlowRunInput
 } from "./script-flow-runner.js";
 import { selectScriptExecutionSteps } from "./script-flow-runner.js";
@@ -36,8 +33,6 @@ export type ScriptFlowApiStorage = Pick<
   Storage,
   | "createScriptFlow"
   | "listScriptFlows"
-  | "listPageNavigationSegments"
-  | "listInteractionAssets"
   | "findLatestFlowVerification"
   | "getScriptFlow"
   | "updateScriptFlow"
@@ -140,16 +135,15 @@ export function registerScriptFlowRoutes(
       const document = parseScriptFlow(flow.sourceYaml);
       const parameters = readParameters(body.parameters);
       const compiled = compileSnapshot(deps.storage, flow, document, parameters);
-      const verification = verificationAssessment(deps.storage, flow, document, compiled.dependencies);
-      deps.runner.validatePlan(compiled.plan, compiled.interactionAssets);
+      const verification = verificationAssessment(deps.storage, flow, document, compiled.dependencies, compiled.verificationDigest);
+      assertPlanSupported(compiled.plan);
+      deps.runner.validatePlan(compiled.plan);
       res.json({
         flow,
         plan: compiled.plan,
         planDigest: compiled.planDigest,
         verification,
-        dependencies: compiled.dependencies.map(publicDependency),
-        interactionAssets: compiled.interactionAssets.map(publicInteractionAsset),
-        navigationIndex: compiled.navigationIndex
+        dependencies: compiled.dependencies.map(publicDependency)
       });
     } catch (error) {
       sendScriptFlowError(res, error);
@@ -162,16 +156,15 @@ export function registerScriptFlowRoutes(
       const root = temporaryFlow(requiredSourceYaml(body.sourceYaml));
       const document = parseScriptFlow(root.sourceYaml);
       const compiled = compileSnapshot(deps.storage, root, document, readParameters(body.parameters));
-      const verification = verificationAssessment(deps.storage, root, document, compiled.dependencies);
-      deps.runner.validatePlan(compiled.plan, compiled.interactionAssets);
+      const verification = verificationAssessment(deps.storage, root, document, compiled.dependencies, compiled.verificationDigest);
+      assertPlanSupported(compiled.plan);
+      deps.runner.validatePlan(compiled.plan);
       res.json({
         document,
         plan: compiled.plan,
         planDigest: compiled.planDigest,
         verification,
-        dependencies: compiled.dependencies.map(publicDependency),
-        interactionAssets: compiled.interactionAssets.map(publicInteractionAsset),
-        navigationIndex: compiled.navigationIndex
+        dependencies: compiled.dependencies.map(publicDependency)
       });
     } catch (error) {
       sendScriptFlowError(res, error);
@@ -183,7 +176,16 @@ export function registerScriptFlowRoutes(
       const body = strictBody(req.body, ["sourceYaml"]);
       const root = temporaryFlow(requiredSourceYaml(body.sourceYaml));
       const document = parseScriptFlow(root.sourceYaml);
-      res.json({ verification: verificationAssessment(deps.storage, root, document, dependencySnapshots(deps.storage, document)) });
+      const dependencies = dependencySnapshots(deps.storage, document);
+      res.json({
+        verification: verificationAssessment(
+          deps.storage,
+          root,
+          document,
+          dependencies,
+          verificationDigestFor(root, dependencies)
+        )
+      });
     } catch (error) {
       sendScriptFlowError(res, error);
     }
@@ -196,7 +198,13 @@ export function registerScriptFlowRoutes(
       res.json({
         flowId: flow.id,
         version: flow.version,
-        verification: verificationAssessment(deps.storage, flow, document, dependencySnapshots(deps.storage, document))
+        verification: verificationAssessment(
+          deps.storage,
+          flow,
+          document,
+          dependencySnapshots(deps.storage, document),
+          verificationDigestFor(flow, dependencySnapshots(deps.storage, document))
+        )
       });
     } catch (error) {
       sendScriptFlowError(res, error);
@@ -275,6 +283,7 @@ async function startDraftStepExecution(
     const document = parseScriptFlow(root.sourceYaml);
     const parameters = readParameters(body.parameters);
     const compiled = compileSnapshot(deps.storage, root, document, parameters);
+    assertPlanSupported(compiled.plan);
     const startStepId = requiredString(body.startStepId, "startStepId");
     const endStepId = optionalString(body.endStepId);
     const stepSelection = { startStepId, ...(endStepId ? { endStepId } : {}) };
@@ -289,9 +298,6 @@ async function startDraftStepExecution(
       scriptVersion: 1,
       planDigest: compiled.planDigest,
       dependencies: compiled.dependencies,
-      navigationSegments: compiled.navigationSegments,
-      navigationRootPages: compiled.navigationRootPages,
-      interactionAssets: compiled.interactionAssets,
       sourceYaml: root.sourceYaml,
       executionPurpose: "step_trial",
       flow: document,
@@ -325,19 +331,17 @@ async function startDraftExecution(
     const document = parseScriptFlow(root.sourceYaml);
     const parameters = readParameters(body.parameters);
     const compiled = compileSnapshot(deps.storage, root, document, parameters);
+    assertPlanSupported(compiled.plan);
     if (requiredPlanDigest(body.planDigest) !== compiled.planDigest) {
       throw new ScriptFlowApiError(409, "Execution plan changed; preview again");
     }
-    const verification = verificationAssessment(deps.storage, root, document, compiled.dependencies);
+    const verification = verificationAssessment(deps.storage, root, document, compiled.dependencies, compiled.verificationDigest);
     assertExecutionAllowed(verification.status, purpose);
     const run = await deps.runner.start({
       flowId: root.id,
       scriptVersion: 1,
       planDigest: compiled.planDigest,
       dependencies: compiled.dependencies,
-      navigationSegments: compiled.navigationSegments,
-      navigationRootPages: compiled.navigationRootPages,
-      interactionAssets: compiled.interactionAssets,
       sourceYaml: root.sourceYaml,
       sourceHash: verification.sourceHash,
       executionPurpose: purpose,
@@ -370,9 +374,7 @@ function nonSensitiveParameterValues(
 }
 
 function assertCaseCenterEligible(document: ScriptFlowDocument): void {
-  if (document.purpose === "navigation") {
-    throw new ScriptFlowApiError(409, "导航流程由系统内部复用，不保存到用例中心");
-  }
+  void document;
 }
 
 async function startPersistedExecution(
@@ -391,19 +393,17 @@ async function startPersistedExecution(
     const document = parseScriptFlow(flow.sourceYaml);
     const parameters = readParameters(body.parameters);
     const compiled = compileSnapshot(deps.storage, flow, document, parameters);
+    assertPlanSupported(compiled.plan);
     if (requiredPlanDigest(body.planDigest) !== compiled.planDigest) {
       throw new ScriptFlowApiError(409, "Execution plan changed; preview again");
     }
-    const verification = verificationAssessment(deps.storage, flow, document, compiled.dependencies);
+    const verification = verificationAssessment(deps.storage, flow, document, compiled.dependencies, compiled.verificationDigest);
     assertExecutionAllowed(verification.status, purpose);
     const input: StartScriptFlowRunInput = {
       flowId: flow.id,
       scriptVersion: flow.version,
       planDigest: compiled.planDigest,
       dependencies: compiled.dependencies,
-      navigationSegments: compiled.navigationSegments,
-      navigationRootPages: compiled.navigationRootPages,
-      interactionAssets: compiled.interactionAssets,
       sourceYaml: flow.sourceYaml,
       sourceHash: verification.sourceHash,
       executionPurpose: purpose,
@@ -426,7 +426,8 @@ function verificationAssessment(
   storage: ScriptFlowApiStorage,
   flow: ScriptFlow,
   document: ScriptFlowDocument,
-  dependencies: ScriptFlowDependencySnapshot[] = []
+  dependencies: ScriptFlowDependencySnapshot[] = [],
+  planDigest?: string
 ) {
   const sourceHash = sha256(flow.sourceYaml);
   const verified = storage.findLatestFlowVerification({
@@ -438,6 +439,7 @@ function verificationAssessment(
   const assessment = assessScriptFlowVerification({
     document,
     sourceYaml: flow.sourceYaml,
+    ...(planDigest ? { planDigest } : {}),
     verifiedSourceHashes: verified ? [sourceHash] : []
   });
   const unverifiedDependencies = dependencies.filter((dependency) => !storage.findLatestFlowVerification({
@@ -446,7 +448,22 @@ function verificationAssessment(
     platform: flow.platform,
     status: "verified"
   }));
-  if (unverifiedDependencies.length === 0) return assessment;
+  const verifiedRoot = storage.findLatestFlowVerification({
+    sourceHash,
+    appId: flow.appId,
+    platform: flow.platform,
+    status: "verified"
+  });
+  const verifiedCombination = dependencies.length === 0
+    || Boolean(
+      planDigest
+      && verifiedRoot?.coverage
+      && "planDigest" in verifiedRoot.coverage
+      && verifiedRoot.coverage.planDigest === planDigest
+    );
+  if (unverifiedDependencies.length === 0 && verifiedCombination) {
+    return assessment;
+  }
   return {
     ...assessment,
     status: assessment.status === "blocked" ? "blocked" as const : "needs_trial" as const,
@@ -454,7 +471,10 @@ function verificationAssessment(
       ...assessment.reasons,
       ...unverifiedDependencies.map((dependency) =>
         `复用用例 ${dependency.flowId} · v${dependency.version} 尚未通过试运行`
-      )
+      ),
+      ...(!verifiedCombination && dependencies.length > 0
+        ? ["父用例与当前全部子用例版本的组合尚未通过试运行"]
+        : [])
     ])]
   };
 }
@@ -468,6 +488,12 @@ function assertExecutionAllowed(status: "verified" | "needs_trial" | "blocked", 
   }
 }
 
+function assertPlanSupported(plan: ReturnType<typeof compileScriptFlow>): void {
+  if (plan.steps.some((step) => step.action === "reachPage")) {
+    throw new ScriptFlowCompileError("reachPage is no longer supported in ScriptFlow execution; use runFlow or explicit actions");
+  }
+}
+
 function assertActivationAllowed(
   storage: ScriptFlowApiStorage,
   input: { sourceYaml: string; document: ScriptFlowDocument },
@@ -478,11 +504,28 @@ function assertActivationAllowed(
     storage,
     temporaryFlow(input.sourceYaml),
     input.document,
-    dependencySnapshots(storage, input.document)
+    dependencySnapshots(storage, input.document),
+    verificationDigestFor(
+      temporaryFlow(input.sourceYaml),
+      dependencySnapshots(storage, input.document)
+    )
   );
   if (verification.status !== "verified") {
     throw new ScriptFlowApiError(409, "ScriptFlow must pass a trial run before it can be activated");
   }
+}
+
+function verificationDigestFor(
+  root: ScriptFlow,
+  dependencies: ScriptFlowDependencySnapshot[]
+): string {
+  return sha256(canonicalJson({
+    root: { flowId: root.id, version: root.version, sourceHash: sha256(root.sourceYaml) },
+    dependencies: dependencies
+      .slice()
+      .sort((left, right) => left.flowId.localeCompare(right.flowId))
+      .map(publicDependency)
+  }));
 }
 
 function readWriteInput(value: unknown): { sourceYaml: string; document: ScriptFlowDocument; status?: ScriptFlow["status"] } {
@@ -742,127 +785,31 @@ function compileSnapshot(
 ): {
   plan: ReturnType<typeof compileScriptFlow>;
   planDigest: string;
+  verificationDigest: string;
   dependencies: ScriptFlowDependencySnapshot[];
-  navigationSegments: PageNavigationSegmentSnapshot[];
-  navigationRootPages: string[];
-  interactionAssets: ScriptInteractionAssetBinding[];
-  navigationIndex: { segmentCount: number; rootCount: number; digest: string };
   resolveFlow: (id: string) => ScriptFlowDocument | undefined;
 } {
   const documents = new Map<string, ScriptFlowDocument>();
   const dependencies = new Map<string, ScriptFlowDependencySnapshot>();
   collectDependencies(storage, document.steps, documents, dependencies);
-  const navigationSegments = (Boolean(document.entry?.page) || containsReachPage(document.steps))
-    ? storage.listPageNavigationSegments({ appId: root.appId, platform: root.platform }).filter((segment) => segment.flowId !== root.id)
-    : [];
   const orderedDependencies = [...dependencies.values()].sort((left, right) => left.flowId.localeCompare(right.flowId));
-  const orderedNavigationSegments = [...navigationSegments].sort((left, right) => left.id.localeCompare(right.id));
-  const navigationRootPages = listNavigationRootPages(storage, root.appId, root.platform);
-  const navigationIndex = {
-    segmentCount: orderedNavigationSegments.length,
-    rootCount: navigationRootPages.length,
-    digest: sha256(canonicalJson({ segments: orderedNavigationSegments, roots: navigationRootPages }))
-  };
   const resolveFlow = (id: string) => documents.get(id);
   const plan = compileScriptFlow(document, { parameters, resolveFlow });
-  const interactionAssets = freezeInteractionAssets(storage, plan);
   const planDigest = sha256(canonicalJson({
     root: { flowId: root.id, version: root.version, sourceHash: sha256(root.sourceYaml) },
     dependencies: orderedDependencies.map(publicDependency),
-    navigationIndex,
-    interactionAssets,
     plan
+  }));
+  const verificationDigest = sha256(canonicalJson({
+    root: { flowId: root.id, version: root.version, sourceHash: sha256(root.sourceYaml) },
+    dependencies: orderedDependencies.map(publicDependency)
   }));
   return {
     plan,
     planDigest,
+    verificationDigest,
     dependencies: orderedDependencies,
-    navigationSegments: orderedNavigationSegments,
-    navigationRootPages,
-    interactionAssets,
-    navigationIndex,
     resolveFlow
-  };
-}
-
-function listNavigationRootPages(
-  storage: ScriptFlowApiStorage,
-  appId: string,
-  platform: ScriptFlow["platform"]
-): string[] {
-  return [...new Set(storage.listScriptFlows({ appId, platform, status: "active" }).flatMap((flow) => {
-    const entry = recordValue(flow.parsed.entry) ?? {};
-    const page = normalizedString(entry.page);
-    const session = normalizedString(entry.session);
-    return page && session ? [page] : [];
-  }))].sort();
-}
-
-function freezeInteractionAssets(
-  storage: ScriptFlowApiStorage,
-  plan: ScriptExecutionPlan
-): ScriptInteractionAssetBinding[] {
-  const assets = storage.listInteractionAssets({ appId: plan.app.id, platform: CROSS_PLATFORM_SCRIPT_SCOPE })
-    .filter((asset) => asset.status === "active");
-  return plan.steps.flatMap((step) => {
-    if (!isInteractionAction(step.action) || !step.onPage) return [];
-    const target = recordValue(step.input.target);
-    if (!target) return [];
-    const matches = assets.filter((asset) =>
-      asset.owner.kind === "page"
-      && asset.owner.key === step.onPage
-      && asset.supportedActions.includes(step.action as InteractionAsset["supportedActions"][number])
-      && asset.locatorVariants.length > 0
-      && interactionTargetMatches(target, asset)
-    );
-    if (matches.length > 1) {
-      throw new ScriptFlowCompileError(
-        `Multiple interaction assets match step ${step.id}; review the duplicated assets before previewing`
-      );
-    }
-    return matches.length === 1 ? [{ stepId: step.id, asset: matches[0]! }] : [];
-  });
-}
-
-function isInteractionAction(action: string): action is InteractionAsset["supportedActions"][number] {
-  return action === "tap" || action === "inputText" || action === "clearText" || action === "selectText";
-}
-
-function interactionTargetMatches(target: Record<string, unknown>, asset: InteractionAsset): boolean {
-  const text = normalizedString(target.text);
-  if (text) {
-    const textCandidates = [
-      asset.name,
-      ...asset.aliases,
-      asset.semanticContract.text,
-      ...asset.locatorVariants.map((variant) => variant.descriptor.selectedText)
-    ].map(normalizedString).filter((value): value is string => Boolean(value));
-    if (!textCandidates.includes(text)) return false;
-  }
-  for (const key of ["semantic", "icon", "control"] as const) {
-    const expected = normalizedString(target[key]);
-    if (expected && normalizedString(asset.semanticContract[key]) !== expected) return false;
-  }
-  if (!text && !["semantic", "icon", "control"].some((key) => normalizedString(target[key]))) return false;
-  for (const key of ["area", "position", "nearText"] as const) {
-    const expected = normalizedString(target[key]);
-    const actual = normalizedString(asset.semanticContract[key]);
-    if (expected && actual && expected !== actual) return false;
-  }
-  return true;
-}
-
-function publicInteractionAsset(binding: ScriptInteractionAssetBinding): {
-  stepId: string;
-  assetId: string;
-  key: string;
-  version: number;
-} {
-  return {
-    stepId: binding.stepId,
-    assetId: binding.asset.id,
-    key: binding.asset.key,
-    version: binding.asset.version
   };
 }
 
@@ -872,18 +819,6 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function normalizedString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
-
-function containsReachPage(steps: ScriptFlowDocument["steps"]): boolean {
-  return steps.some((step) => {
-    if ("reachPage" in step) return true;
-    if ("repeat" in step) return containsReachPage(step.repeat.steps);
-    if ("when" in step) return containsReachPage(step.when.steps);
-    return false;
-  });
-}
 
 function collectDependencies(
   storage: ScriptFlowApiStorage,

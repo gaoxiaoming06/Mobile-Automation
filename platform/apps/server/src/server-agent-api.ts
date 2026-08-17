@@ -49,6 +49,15 @@ export function registerServerAgentRoutes(app: express.Express, deps: ServerAgen
     }
   });
 
+  app.post("/api/agents/:agentId/app-monitor-incidents", (req, res) => {
+    try {
+      const incident = deps.registry.recordAppMonitorIncident(req.params.agentId, req.body ?? {});
+      res.status(202).json({ accepted: true, incident });
+    } catch (error) {
+      sendAgentApiError(res, error);
+    }
+  });
+
   app.post("/api/local-sessions/pairing-codes", (req, res) => {
     try {
       res.status(201).json({ pairing: deps.registry.createPairingCode(req.body ?? {}) });

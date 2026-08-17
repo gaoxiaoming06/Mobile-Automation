@@ -15,6 +15,7 @@ import {
   type ArtifactRef,
   type DeviceActionResult,
   type DeviceEvent,
+  type ExecutionProfileSnapshot,
   type MetricSample,
   type FlowStartStrategy,
   type RunConfig,
@@ -46,6 +47,7 @@ import { DeviceExecutionLease } from "./device-execution-lease.js";
 import type { PageAssetPlatform } from "./page-asset-catalog.js";
 import type { PageStateService } from "./page-state-service.js";
 import { findPageNavigationPath, readPageNavigationEdges } from "./page-navigation.js";
+import { targetAppIdAliases } from "./target-app-runtime.js";
 
 export type RunnerStorage = Pick<
   Storage,
@@ -101,6 +103,21 @@ type ExpectedProcessDeathWindow = {
 };
 
 type MarkExpectedProcessDeath = (packageName: string) => void;
+
+type ForegroundAppSnapshot = {
+  packageName?: string;
+  bundleId?: string;
+  activityName?: string;
+  abilityName?: string;
+  componentName?: string;
+};
+
+type TargetAppForegroundGuard = {
+  hasSeenTargetApp: () => boolean;
+  markTargetAppSeen: () => void;
+  markRuntimeFailure: (eventType: DeviceEvent["type"]) => void;
+  shouldUseFallback: () => boolean;
+};
 
 type ProcessEventLike = {
   type: string;
@@ -342,7 +359,12 @@ export class AutomationRunner {
     };
   }
 
-  private async execute(runId: string, testCase: RuntimeFlow, config: RunConfig, controller: RunExecutionController): Promise<void> {
+  private async execute(
+    runId: string,
+    testCase: RuntimeFlow & { sourceSnapshot?: TestRun["sourceSnapshot"] },
+    config: RunConfig,
+    controller: RunExecutionController
+  ): Promise<void> {
     const runStartedAt = new Date();
     let failed = false;
     let stopped = false;
@@ -353,6 +375,18 @@ export class AutomationRunner {
     let runtimeFailure = false;
     let runtimeFailureEventType: DeviceEvent["type"] | undefined;
     let activeStepResultId: string | undefined;
+    let targetAppSeenInForeground = false;
+    const targetAppForegroundGuard: TargetAppForegroundGuard = {
+      hasSeenTargetApp: () => targetAppSeenInForeground,
+      markTargetAppSeen: () => {
+        targetAppSeenInForeground = true;
+      },
+      markRuntimeFailure: (eventType) => {
+        runtimeFailure = true;
+        runtimeFailureEventType ??= eventType;
+      },
+      shouldUseFallback: () => !appMonitor?.isStarted()
+    };
     let expectedProcessDeathWindow: ExpectedProcessDeathWindow | undefined;
     const markExpectedProcessDeath: MarkExpectedProcessDeath = (packageName) => {
       expectedProcessDeathWindow = {
@@ -384,31 +418,33 @@ export class AutomationRunner {
         getActiveStepResultId: () => activeStepResultId
       });
       await appMonitor.start();
-      eventWatcher = await this.startEventWatcher(
-        runId,
-        config.deviceSerial,
-        (event) => {
-          const observed = normalizeObservedDeviceEvent(event, {
-            packageName: config.androidAppMonitor?.packageName ?? config.startAppPackageName,
-            expectedProcessDeathWindow
-          });
-          if (!observed) {
-            return undefined;
-          }
-          if (isRuntimeFailureObservedEvent(observed, config.androidAppMonitor?.packageName ?? config.startAppPackageName)) {
-            runtimeFailure = true;
-            runtimeFailureEventType ??= observed.type;
-            if (config.stopOnFailure) {
-              controller.stop();
+      if (!appMonitor.isStarted()) {
+        eventWatcher = await this.startEventWatcher(
+          runId,
+          config.deviceSerial,
+          (event) => {
+            const observed = normalizeObservedDeviceEvent(event, {
+              packageName: config.androidAppMonitor?.packageName ?? config.startAppPackageName,
+              expectedProcessDeathWindow
+            });
+            if (!observed) {
+              return undefined;
             }
-          }
-          return observed;
-        },
-        (eventWrite) => pendingEventWrites.push(eventWrite),
-        () => activeStepResultId,
-        runStartedAt,
-        config.androidAppMonitor?.packageName ?? config.startAppPackageName
-      );
+            if (isRuntimeFailureObservedEvent(observed, config.androidAppMonitor?.packageName ?? config.startAppPackageName)) {
+              runtimeFailure = true;
+              runtimeFailureEventType ??= observed.type;
+              if (config.stopOnFailure) {
+                controller.stop();
+              }
+            }
+            return observed;
+          },
+          (eventWrite) => pendingEventWrites.push(eventWrite),
+          () => activeStepResultId,
+          runStartedAt,
+          config.androidAppMonitor?.packageName ?? config.startAppPackageName
+        );
+      }
 
       if (config.recordVideo && !shouldRecordVideoForDevice(config, device)) {
         this.addDeviceEvent({
@@ -447,6 +483,7 @@ export class AutomationRunner {
       }
       await this.collectMetric(runId, config.deviceSerial);
       const loopSteps = stepsForLoopScope(testCase.steps, config);
+      const executionProfile = testCase.sourceSnapshot?.executionProfile;
       const stateMachine = new RunStateMachine({
         config,
         steps: loopSteps.steps,
@@ -461,7 +498,7 @@ export class AutomationRunner {
         executeStep: ({ iterationIndex, step, signal }) =>
           this.executeStep(runId, iterationIndex, step, config, deviceSize, signal, (stepResultId) => {
             activeStepResultId = stepResultId;
-          }, () => runtimeFailure, () => runtimeFailureEventType, markExpectedProcessDeath)
+          }, () => runtimeFailure, () => runtimeFailureEventType, markExpectedProcessDeath, targetAppForegroundGuard, executionProfile)
       });
       const result = await stateMachine.run();
       failed = result.failed || runtimeFailure;
@@ -506,7 +543,9 @@ export class AutomationRunner {
     setActiveStepResultId?: (stepResultId: string | undefined) => void,
     isRuntimeFailure?: () => boolean,
     getRuntimeFailureEventType?: () => DeviceEvent["type"] | undefined,
-    markExpectedProcessDeath?: MarkExpectedProcessDeath
+    markExpectedProcessDeath?: MarkExpectedProcessDeath,
+    targetAppForegroundGuard?: TargetAppForegroundGuard,
+    executionProfile?: ExecutionProfileSnapshot
   ): Promise<StepResult> {
     if (step.timing?.delayBeforeMs) {
       await sleepInterruptibly(step.timing.delayBeforeMs, signal);
@@ -547,7 +586,8 @@ export class AutomationRunner {
         result,
         step,
         serial: config.deviceSerial,
-        isRuntimeFailure
+        isRuntimeFailure,
+        executionProfile
       });
       if (preconditionOutcome) {
         result.metadata = {
@@ -578,6 +618,7 @@ export class AutomationRunner {
       if (beforeScreenshot) {
         result.artifacts.push(beforeScreenshot.artifact);
       }
+      await this.noteTargetAppForeground(config, targetAppForegroundGuard);
       if (step.type === "reach_page") {
         const navigation = await this.executeReachPage({
           runId,
@@ -585,7 +626,8 @@ export class AutomationRunner {
           step,
           serial: config.deviceSerial,
           deviceSize,
-          signal
+          signal,
+          executionProfile
         });
         result.metadata = { ...(result.metadata ?? {}), pageNavigation: navigation.metadata };
         result.artifacts.push(...navigation.artifacts);
@@ -679,6 +721,26 @@ export class AutomationRunner {
       result.artifacts.push(screenshot.artifact);
       throwIfStopped(signal);
       const metric = await this.collectMetric(runId, config.deviceSerial, result.id);
+      const targetAppExit = await this.detectTargetAppForegroundExit({
+        runId,
+        stepResultId: result.id,
+        step,
+        config,
+        deviceSize,
+        screenshotArtifactId: screenshot.artifact.id,
+        targetAppForegroundGuard,
+        runtimeFailure: Boolean(isRuntimeFailure?.())
+      });
+      if (targetAppExit) {
+        result.metadata = {
+          ...(result.metadata ?? {}),
+          targetAppRuntime: targetAppExit.metadata
+        };
+        result.status = "failed";
+        result.errorCode = "DEVICE_EVENT_FAILED";
+        result.errorMessage = runtimeFailureMessage("app_exit");
+        return result;
+      }
       result.expectationResults = annotateNonBlockingExpectationResults(
         step,
         await this.expectationEvaluator.evaluate({
@@ -689,7 +751,8 @@ export class AutomationRunner {
           beforeScreenshot,
           afterScreenshot: screenshot,
           metric,
-          runtimeFailure: Boolean(isRuntimeFailure?.())
+          runtimeFailure: Boolean(isRuntimeFailure?.()),
+          executionProfile
         })
       );
       const failedExpectation = result.expectationResults.find((expectation) => shouldFailStepForExpectation(expectationStep, expectation));
@@ -761,6 +824,7 @@ export class AutomationRunner {
     serial: string;
     deviceSize: { width: number; height: number } | undefined;
     signal: AbortSignal;
+    executionProfile?: ExecutionProfileSnapshot;
   }): Promise<{
     passed: boolean;
     message?: string;
@@ -770,14 +834,14 @@ export class AutomationRunner {
     const pageState = this.pageStateService;
     const appId = navigationString(input.step.params.appId);
     const platform = navigationPlatform(input.step.params.platform);
-    const targetPageId = navigationString(input.step.params.targetPageId) || navigationString(input.step.params.pageId);
-    const targetPageName = navigationString(input.step.params.targetPageName) || targetPageId;
+    const targetScreenRef = navigationString(input.step.params.screenRef);
+    const targetScreenName = navigationString(input.step.params.targetScreenName) || targetScreenRef;
     const policy = navigationString(input.step.params.policy) || "safe";
-    const baseMetadata = { targetPageId, targetPageName, policy, route: [] as Record<string, unknown>[] };
-    if (!pageState || !appId || !platform || !targetPageId) {
+    const baseMetadata = { targetScreenRef, targetScreenName, policy, route: [] as Record<string, unknown>[] };
+    if (!pageState || !appId || !platform || !targetScreenRef || !input.executionProfile) {
       return {
         passed: false,
-        message: "页面导航运行环境不完整，无法识别或到达目标页面。",
+        message: "页面导航运行环境不完整，缺少冻结的校验标准，无法识别或到达目标页面。",
         artifacts: [],
         metadata: { ...baseMetadata, status: "unavailable" }
       };
@@ -791,42 +855,48 @@ export class AutomationRunner {
       };
     }
     const navigationEdges = readPageNavigationEdges(input.step.params.navigationEdges);
-    const current = await pageState.identifyCurrentPage({ serial: input.serial, appId, platform });
+    const current = await pageState.identifyCurrentScreen({
+      serial: input.serial,
+      appId,
+      platform,
+      executionProfile: input.executionProfile
+    });
     const initialStatus = current.status;
-    if (current.status === "matched" && current.page?.id === targetPageId) {
+    const currentScreenRef = current.screen?.screenRef;
+    if (current.status === "matched" && currentScreenRef === targetScreenRef) {
       return {
         passed: true,
         artifacts: [],
-        metadata: { ...baseMetadata, status: "already_on_target", currentPageId: current.page.id, initialStatus }
+        metadata: { ...baseMetadata, status: "already_on_target", currentScreenRef, initialStatus }
       };
     }
     if (current.status === "outside_app") {
       return {
         passed: false,
-        message: `当前设备不在目标 App 内，脚本未声明恢复动作，无法到达目标页面“${targetPageName}”。`,
+        message: `当前设备不在目标 App 内，脚本未声明恢复动作，无法到达目标页面“${targetScreenName}”。`,
         artifacts: [],
         metadata: { ...baseMetadata, status: "outside_app", currentStatus: current.status, initialStatus }
       };
     }
-    if (current.status !== "matched" || !current.page) {
+    if (current.status !== "matched" || !currentScreenRef) {
       return {
         passed: false,
-        message: `未能稳定识别当前设备页面，无法规划到目标页面“${targetPageName}”。`,
+        message: `未能稳定识别当前设备页面，无法规划到目标页面“${targetScreenName}”。`,
         artifacts: [],
         metadata: { ...baseMetadata, status: "current_page_unknown", currentStatus: current.status, initialStatus }
       };
     }
-    const path = findPageNavigationPath(navigationEdges, current.page.id, targetPageId);
+    const path = findPageNavigationPath(navigationEdges, currentScreenRef, targetScreenRef);
     if (!path) {
       return {
         passed: false,
-        message: `当前已识别为“${current.page.name}”，但脚本可用的导航索引中没有到目标页面“${targetPageName}”的可靠路径，未执行任何恢复操作。`,
+        message: `当前已识别为“${current.screen?.name ?? currentScreenRef}”，但脚本可用的导航索引中没有到目标页面“${targetScreenName}”的可靠路径，未执行任何恢复操作。`,
         artifacts: [],
         metadata: {
           ...baseMetadata,
           status: "no_reliable_path",
           currentStatus: current.status,
-          currentPageId: current.page.id,
+          currentScreenRef,
           initialStatus
         }
       };
@@ -857,7 +927,7 @@ export class AutomationRunner {
               metadata: {
                 ...baseMetadata,
                 status: "route_action_failed",
-                currentPageId: current.page.id,
+              currentScreenRef,
                 failedSegmentId: edge.segmentId,
                 failedActionId: action.id,
                 route
@@ -870,11 +940,12 @@ export class AutomationRunner {
         }
         if (actionBackend) actionBackends.push(actionBackend);
       }
-      const reached = await pageState.waitForExpectedPage({
+      const reached = await pageState.waitForExpectedScreen({
         serial: input.serial,
         appId,
         platform,
-        pageId: edge.toPageId,
+        screenRef: edge.toPageId,
+        executionProfile: input.executionProfile,
         timeoutMs: edge.actions.at(-1)?.timing?.timeoutMs ?? 15_000
       });
       route.push({
@@ -891,14 +962,14 @@ export class AutomationRunner {
           passed: false,
           message: `导航片段“${edge.flowName}”执行后未到达预期页面。`,
           artifacts,
-          metadata: { ...baseMetadata, status: "route_verification_failed", currentPageId: current.page.id, route }
+          metadata: { ...baseMetadata, status: "route_verification_failed", currentScreenRef, route }
         };
       }
     }
     return {
       passed: true,
       artifacts,
-      metadata: { ...baseMetadata, status: "reached", currentPageId: current.page.id, route, initialStatus }
+      metadata: { ...baseMetadata, status: "reached", currentScreenRef, route, initialStatus }
     };
   }
 
@@ -941,6 +1012,7 @@ export class AutomationRunner {
     step: ActionStep;
     serial: string;
     isRuntimeFailure?: () => boolean;
+    executionProfile?: ExecutionProfileSnapshot;
   }): Promise<PreconditionEvaluationOutcome | undefined> {
     const preconditions = enabledPreconditions(input.step);
     if (!preconditions.length) {
@@ -967,7 +1039,8 @@ export class AutomationRunner {
         stepResultId: input.result.id,
         step: preconditionStep,
         afterScreenshot: screenshot,
-        runtimeFailure: Boolean(input.isRuntimeFailure?.())
+        runtimeFailure: Boolean(input.isRuntimeFailure?.()),
+        executionProfile: input.executionProfile
       })
     );
     const failedResult = results.find((result) => shouldFailStepForExpectation(preconditionStep, result));
@@ -1051,6 +1124,81 @@ export class AutomationRunner {
 
   private addDeviceEvent(event: DeviceEvent): void {
     this.storage.addDeviceEvent(event);
+  }
+
+  private async noteTargetAppForeground(config: RunConfig, guard: TargetAppForegroundGuard | undefined): Promise<void> {
+    if (!guard?.shouldUseFallback() || !config.startAppPackageName || !this.driver.getForegroundApp) {
+      return;
+    }
+    const foreground = await this.readForegroundApp(config.deviceSerial);
+    if (foreground && foregroundMatchesTargetApp(foreground, config.startAppPackageName)) {
+      guard.markTargetAppSeen();
+    }
+  }
+
+  private async detectTargetAppForegroundExit(input: {
+    runId: string;
+    stepResultId: string;
+    step: ActionStep;
+    config: RunConfig;
+    deviceSize: { width: number; height: number } | undefined;
+    screenshotArtifactId?: string;
+    targetAppForegroundGuard?: TargetAppForegroundGuard;
+    runtimeFailure: boolean;
+  }): Promise<{ metadata: Record<string, unknown> } | undefined> {
+    const packageName = input.config.startAppPackageName?.trim();
+    const guard = input.targetAppForegroundGuard;
+    if (!packageName || !guard?.shouldUseFallback() || !this.driver.getForegroundApp || input.runtimeFailure) {
+      return undefined;
+    }
+    if (stepIntentionallyLeavesTargetApp(input.step, packageName, input.deviceSize)) {
+      return undefined;
+    }
+
+    const foreground = await this.readForegroundApp(input.config.deviceSerial);
+    if (!foreground) {
+      return undefined;
+    }
+    if (foregroundMatchesTargetApp(foreground, packageName)) {
+      guard.markTargetAppSeen();
+      return undefined;
+    }
+    if (!guard.hasSeenTargetApp()) {
+      return undefined;
+    }
+
+    const foregroundIdentifier = foregroundAppIdentifier(foreground) ?? "unknown";
+    guard.markRuntimeFailure("app_exit");
+    this.addDeviceEvent({
+      id: createId("event"),
+      runId: input.runId,
+      stepResultId: input.stepResultId,
+      deviceSerial: input.config.deviceSerial,
+      type: "app_exit",
+      severity: "error",
+      occurredAt: nowIso(),
+      summary: "Target app left foreground",
+      detail: `expected=${packageName}; foreground=${foregroundIdentifier}`,
+      artifactIds: input.screenshotArtifactId ? [input.screenshotArtifactId] : []
+    });
+    return {
+      metadata: {
+        status: "app_exit",
+        expectedPackageName: packageName,
+        foregroundPackageName: foreground.packageName,
+        foregroundBundleId: foreground.bundleId,
+        foregroundActivityName: foreground.activityName ?? foreground.abilityName,
+        foregroundComponentName: foreground.componentName
+      }
+    };
+  }
+
+  private async readForegroundApp(serial: string): Promise<ForegroundAppSnapshot | undefined> {
+    try {
+      return await this.driver.getForegroundApp?.(serial);
+    } catch {
+      return undefined;
+    }
   }
 
   private async startEventWatcher(
@@ -1196,6 +1344,32 @@ function observedProcessName(event: Pick<ProcessEventLike, "summary" | "processN
   return event.summary.match(/Process death detected:\s*([^\s]+)/)?.[1];
 }
 
+function foregroundMatchesTargetApp(foreground: ForegroundAppSnapshot, targetAppId: string): boolean {
+  const identifiers = targetAppIdAliases(targetAppId);
+  const actual = foregroundAppIdentifier(foreground);
+  return Boolean(actual && identifiers.includes(actual));
+}
+
+function foregroundAppIdentifier(foreground: ForegroundAppSnapshot): string | undefined {
+  return nonBlank(foreground.packageName) ?? nonBlank(foreground.bundleId);
+}
+
+function stepIntentionallyLeavesTargetApp(
+  step: ActionStep,
+  targetPackageName: string,
+  deviceSize: { width: number; height: number } | undefined
+): boolean {
+  try {
+    const action = stepToAction(step, deviceSize);
+    if (action.type === "home" || action.type === "recent_apps") {
+      return true;
+    }
+    return action.type === "close_app" && processBelongsToPackage(action.packageName, targetPackageName);
+  } catch {
+    return false;
+  }
+}
+
 function shouldCaptureObservedEventScreenshot(event: ObservedDeviceEvent): boolean {
   return event.type === "crash"
     || event.type === "native_crash"
@@ -1213,6 +1387,8 @@ function runtimeFailureMessage(eventType: DeviceEvent["type"] | undefined): stri
       return "Run stopped after Android app ANR event.";
     case "process_death":
       return "Run stopped after Android app process death event.";
+    case "app_exit":
+      return "Run stopped after target app left the foreground.";
     default:
       return "Run stopped after Android app stability failure.";
   }
@@ -1262,10 +1438,10 @@ function navigationPlatform(value: unknown): PageAssetPlatform | undefined {
 }
 
 function stepWithRuntimeExpectedPageExpectation(step: ActionStep): ActionStep {
-  const expectedPage = navigationString(step.params.expectPage);
+  const expectedScreenRef = navigationString(step.params.afterScreenRef);
   const appId = navigationString(step.params.appId);
   const platform = navigationPlatform(step.params.platform);
-  if (!expectedPage || !appId || !platform) {
+  if (!expectedScreenRef || !appId || !platform) {
     return step;
   }
   const expectations = step.expectations ?? [];
@@ -1273,8 +1449,8 @@ function stepWithRuntimeExpectedPageExpectation(step: ActionStep): ActionStep {
     if (!expectation.enabled || expectation.type !== "state_is") {
       return false;
     }
-    const pageId = navigationString(expectation.params.pageId ?? expectation.params.nodeId);
-    return pageId === expectedPage;
+    const screenRef = navigationString(expectation.params.screenRef);
+    return screenRef === expectedScreenRef;
   });
   if (alreadyHasExpectedPage) {
     return step;
@@ -1284,13 +1460,13 @@ function stepWithRuntimeExpectedPageExpectation(step: ActionStep): ActionStep {
     expectations: [
       ...expectations,
       {
-        id: `auto-expect-page-${step.id}`,
+        id: `auto-expect-screen-${step.id}`,
         type: "state_is",
         enabled: true,
         params: {
           appId,
           platform,
-          pageId: expectedPage,
+          screenRef: expectedScreenRef,
           timeoutMs: step.timing?.timeoutMs ?? 15_000,
           blocking: true,
           autoGenerated: true
@@ -1310,8 +1486,8 @@ function scriptStepResultMetadata(params: Record<string, unknown>): Record<strin
     "platform",
     "sourceFlowName",
     "executionPhase",
-    "onPage",
-    "expectPage",
+    "beforeScreenRef",
+    "afterScreenRef",
     "locatorStrategy",
     "interactionAssetId",
     "interactionAssetKey",
@@ -1387,4 +1563,9 @@ function runtimeInterceptorStepToAction(step: ActionStep, deviceSize: { width: n
     return stepToAction({ ...step, type: "tap" }, deviceSize);
   }
   return stepToAction(step, deviceSize);
+}
+
+function nonBlank(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }

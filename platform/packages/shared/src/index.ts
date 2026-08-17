@@ -208,12 +208,71 @@ export type ScriptFlowVerificationStatus = "verified" | "needs_trial" | "blocked
 export type ScriptFlowVerificationAssessment = {
   status: ScriptFlowVerificationStatus;
   sourceHash: string;
+  planDigest?: string;
   reasons: string[];
   unresolvedStepIds: string[];
   unresolvedOutcome: boolean;
 };
 
 export type ScriptFlowExecutionPurpose = "trial" | "step_trial" | "normal";
+
+export type ExecutionProfileEvidenceType =
+  | "activity"
+  | "route"
+  | "fragment"
+  | "resource_id"
+  | "accessibility_id"
+  | "text"
+  | "ocr_text"
+  | "image_region"
+  | "semantic_image_region"
+  | "package"
+  | "bundle_id"
+  | "custom";
+
+export type ExecutionProfileEvidence = {
+  id: string;
+  type: ExecutionProfileEvidenceType;
+  value: string;
+  weight: number;
+  critical?: boolean;
+  threshold?: number;
+  region?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  ignoreRegions?: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>;
+  semanticArea?: "top" | "content" | "bottom" | "unknown";
+  coordinateSpace?: "screen" | "app_viewport" | "region" | "runtime";
+};
+
+export type ExecutionProfileScreen = {
+  screenRef: string;
+  name: string;
+  assetId: string;
+  graphVersionId: string;
+  evidence: ExecutionProfileEvidence[];
+};
+
+export type ExecutionProfileStatus = "draft" | "verified" | "degraded" | "deprecated";
+
+export type ExecutionProfileSnapshot = {
+  id: string;
+  appId: string;
+  platform: Platform;
+  version: number;
+  status: ExecutionProfileStatus;
+  digest: string;
+  createdAt: string;
+  screens: ExecutionProfileScreen[];
+};
 
 export type FlowVerificationStatus = "provisional" | "verified" | "invalidated";
 
@@ -227,13 +286,14 @@ export type FlowVerification = {
   appVersion?: string;
   runId: string;
   status: FlowVerificationStatus;
-  coverage: {
-    totalSteps: number;
-    verifiedSteps: number;
-    interactionAssetIds: string[];
-    pageAssetIds: string[];
-    humanConfirmedOutcome: boolean;
-  };
+    coverage: {
+      totalSteps: number;
+      verifiedSteps: number;
+      interactionAssetIds: string[];
+      pageAssetIds: string[];
+      humanConfirmedOutcome: boolean;
+      planDigest?: string;
+    };
   createdAt: string;
 };
 
@@ -581,6 +641,27 @@ export type AndroidAppMonitorSummary = {
   };
 };
 
+export type AgentAppMonitorIncidentEnvelope = {
+  type: "appMonitorIncident";
+  protocolVersion: typeof AGENT_PROTOCOL_VERSION;
+  agentId: string;
+  deviceKey: string;
+  monitorId: string;
+  runId: string;
+  timestamp: string;
+  incident: AndroidAppMonitorIncident;
+};
+
+export type AgentAppMonitorHeartbeatEnvelope = {
+  type: "appMonitorHeartbeat";
+  protocolVersion: typeof AGENT_PROTOCOL_VERSION;
+  agentId: string;
+  deviceKey: string;
+  monitorId: string;
+  runId: string;
+  timestamp: string;
+};
+
 export type RunConfig = {
   deviceSerial: string;
   runKind?: "case" | "script_flow" | "stability_exploration";
@@ -717,6 +798,7 @@ export type TestRun = {
     executionPurpose?: ScriptFlowExecutionPurpose;
     sourceHash?: string;
     verificationAssessment?: ScriptFlowVerificationAssessment;
+    executionProfile?: ExecutionProfileSnapshot;
     interactionAssets?: Array<{
       stepId: string;
       assetId: string;
@@ -893,6 +975,9 @@ export type AgentCommandName =
   | "clearAppData"
   | "collectLogs"
   | "samplePerformance"
+  | "startAppMonitor"
+  | "stopAppMonitor"
+  | "getAppMonitorSummary"
   | "startScrcpyStream"
   | "startHarmonyStream";
 

@@ -62,6 +62,28 @@ describe("caseStepViews", () => {
     })]);
   });
 
+  it("presents screen contract steps using their logical screen refs", () => {
+    const document: CaseDocumentView = {
+      version: 1,
+      kind: "case",
+      name: "页面合同",
+      app: { id: "cn.eeo.classin" },
+      parameters: {},
+      steps: [
+        { id: "reach-home", reachPage: { screenRef: "classin.home" } },
+        { id: "wait-home", waitForPage: { screenRef: "classin.home" } },
+        { id: "assert-home", assertPage: { screenRef: "classin.home" } }
+      ],
+      tags: []
+    };
+
+    expect(caseStepViews(document).map((step) => [step.name, step.context])).toEqual([
+      ["到达页面“classin.home”", "目标页面：classin.home"],
+      ["等待进入页面“classin.home”", undefined],
+      ["确认已进入页面“classin.home”", undefined]
+    ]);
+  });
+
   it("presents source action targets instead of page keys for form and switch steps", () => {
     const document: CaseDocumentView = {
       version: 1,
@@ -74,7 +96,7 @@ describe("caseStepViews", () => {
       steps: [
         {
           id: "enable-recording",
-          onPage: "classin.lesson.create",
+          before: { screenRef: "classin.lesson.create" },
           tap: {
             target: { control: "switch", area: "content", nearText: "录制ClassIn教室", checked: true },
             search: { mode: "visibleOnly" }
@@ -82,7 +104,7 @@ describe("caseStepViews", () => {
         },
         {
           id: "fill-title",
-          onPage: "classin.lesson.create",
+          before: { screenRef: "classin.lesson.create" },
           inputText: {
             target: { text: "课堂标题", area: "content" },
             value: "${classTitle}",
@@ -91,7 +113,7 @@ describe("caseStepViews", () => {
         },
         {
           id: "clear-title",
-          onPage: "classin.lesson.create",
+          before: { screenRef: "classin.lesson.create" },
           clearText: {
             target: { text: "课堂标题", area: "content" },
             search: { mode: "auto" }
@@ -99,7 +121,7 @@ describe("caseStepViews", () => {
         },
         {
           id: "select-duration",
-          onPage: "classin.lesson.create",
+          before: { screenRef: "classin.lesson.create" },
           selectText: {
             target: { text: "课堂时长", area: "content" },
             value: "11小时20分钟",
@@ -207,22 +229,22 @@ describe("caseStepViews", () => {
         {
           id: "open-home",
           name: "点击目标",
-          onPage: "classin.launch",
-          expectPage: "classin.home",
+          before: { screenRef: "classin.launch" },
+          after: { screenRef: "classin.home" },
           tap: { target: { text: "主页" } }
         },
         {
           id: "open-class",
           name: "点击目标",
-          onPage: "classin.home",
-          expectPage: "classin.teacher.class.detail.visual",
+          before: { screenRef: "classin.home" },
+          after: { screenRef: "classin.teacher.class.detail.visual" },
           tap: { target: { text: "${className}" } }
         },
         {
           id: "open-checkin-activity",
           name: "点击目标",
-          onPage: "classin.teacher.activity.publish.visual",
-          expectPage: "classin.teacher.lesson.create.visual",
+          before: { screenRef: "classin.teacher.activity.publish.visual" },
+          after: { screenRef: "classin.teacher.lesson.create.visual" },
           tap: { target: { text: "${checkinActivityTitle}" } }
         }
       ],
@@ -236,8 +258,8 @@ describe("caseStepViews", () => {
           name: "点击目标",
           action: "tap",
           input: { target: { text: "主页" } },
-          onPage: "classin.launch",
-          expectPage: "classin.home"
+          before: { screenRef: "classin.launch" },
+          after: { screenRef: "classin.home" }
         },
         {
           id: "open-class",
@@ -245,8 +267,8 @@ describe("caseStepViews", () => {
           name: "点击目标",
           action: "tap",
           input: { target: { text: "班级四十二号" } },
-          onPage: "classin.home",
-          expectPage: "classin.teacher.class.detail.visual"
+          before: { screenRef: "classin.home" },
+          after: { screenRef: "classin.teacher.class.detail.visual" }
         },
         {
           id: "open-checkin-activity",
@@ -254,8 +276,8 @@ describe("caseStepViews", () => {
           name: "点击目标",
           action: "tap",
           input: { target: { text: "Jej" } },
-          onPage: "classin.teacher.activity.publish.visual",
-          expectPage: "classin.teacher.lesson.create.visual"
+          before: { screenRef: "classin.teacher.activity.publish.visual" },
+          after: { screenRef: "classin.teacher.lesson.create.visual" }
         }
       ]
     };

@@ -14,8 +14,8 @@ describe("serializeScriptFlow", () => {
       steps: [{
         id: "open-add-friend",
         name: "打开添加好友",
-        onPage: "classin.home",
-        expectPage: "classin.friend.add",
+        before: { screenRef: "classin.home" },
+        after: { screenRef: "classin.friend.add" },
         tap: { target: { text: "添加好友" } }
       }],
       tags: ["ai-generated"]
@@ -24,7 +24,7 @@ describe("serializeScriptFlow", () => {
     expect(parseScriptFlow(source)).toMatchObject({
       name: "打开添加好友",
       app: { id: "classin" },
-      steps: [{ onPage: "classin.home", expectPage: "classin.friend.add" }]
+      steps: [{ before: { screenRef: "classin.home" }, after: { screenRef: "classin.friend.add" } }]
     });
     expect(source).not.toContain("platform");
   });

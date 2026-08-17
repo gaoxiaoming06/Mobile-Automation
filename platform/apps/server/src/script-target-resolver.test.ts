@@ -123,6 +123,53 @@ describe("ScriptTargetResolver", () => {
     });
   });
 
+  it("ignores deprecated interaction asset inputs and keeps the script target authoritative", () => {
+    const resolver = new ScriptTargetResolver();
+    const asset: InteractionAsset = {
+      id: "asset-add-friend",
+      key: "classin.home.tap.add-friend",
+      appId: "cn.eeo.classin",
+      platformScope: "android",
+      owner: { kind: "page", key: "classin.home" },
+      name: "添加好友",
+      aliases: ["添加好友"],
+      supportedActions: ["tap"],
+      semanticContract: { semantic: "进入添加好友页面" },
+      locatorVariants: [{
+        platform: "android",
+        strategy: "ocr_text",
+        descriptor: { selectedText: "添加好友" },
+        confidence: 0.95
+      }],
+      status: "active",
+      version: 2,
+      provenance: { runIds: ["run-trial"], stepIds: ["open-add-friend"], artifactIds: [] },
+      createdAt: "2026-07-30T00:00:00.000Z",
+      updatedAt: "2026-07-30T00:00:00.000Z"
+    };
+
+    expect(resolver.resolve({
+      action: "tap",
+      target: { text: "进入添加好友页面", match: "semantic", area: "content" },
+      before: { screenRef: "classin.home" },
+      appId: "cn.eeo.classin",
+      platform: "android",
+      interactionAsset: asset
+    } as any)).toEqual({
+      type: "tap_on_text",
+      strategy: "semantic_text",
+      params: {
+        text: "进入添加好友页面",
+        mode: "semantic",
+        semanticArea: "content",
+        searchMode: "auto",
+        searchDirection: "down",
+        maxSwipes: 6,
+        resetToTop: true
+      }
+    });
+  });
+
   it("routes visual icon queries to the visual locator instead of OCR text matching", () => {
     const resolver = new ScriptTargetResolver();
 
@@ -576,28 +623,26 @@ describe("ScriptTargetResolver", () => {
     });
   });
 
-  it("uses a frozen interaction asset locator without exposing coordinates", () => {
+  it("ignores legacy frozen interaction asset locators", () => {
     const resolver = new ScriptTargetResolver();
     const result = resolver.resolve({
       action: "tap",
       target: { text: "进入添加好友页面", match: "semantic" },
-      onPage: "classin.home",
+      before: { screenRef: "classin.home" },
       appId: "cn.eeo.classin",
       platform: "android",
       interactionAsset: interactionAsset()
-    });
+    } as any);
 
     expect(result).toEqual({
       type: "tap_on_text",
-      strategy: "interaction_asset:semantic_text",
+      strategy: "semantic_text",
       params: expect.objectContaining({
-        text: "添加好友",
-        interactionAssetId: "asset-1",
-        interactionAssetKey: "classin.home.tap.text.添加好友",
-        interactionAssetVersion: 2,
-        allowRegionFallback: false
+        text: "进入添加好友页面",
+        mode: "semantic"
       })
     });
+    expect(result.params).not.toHaveProperty("interactionAssetId");
     expect(JSON.stringify(result)).not.toMatch(/"(?:coordinate|region|bounds|x|y)"\s*:/i);
   });
 });

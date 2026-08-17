@@ -320,9 +320,9 @@ function actionBody(action: EditableStepAction, appId: string): Record<string, u
   if (action === "swipe") return { swipe: { direction: "up" } };
   if (action === "wait") return { wait: { durationMs: 1000 } };
   if (action === "scrollUntilVisible") return { scrollUntilVisible: { target: { text: "待填写目标" }, direction: "down", maxSwipes: 6 } };
-  if (action === "reachPage") return { reachPage: { page: "待填写页面", policy: "safe" } };
-  if (action === "waitForPage") return { waitForPage: "待填写页面" };
-  if (action === "assertPage") return { assertPage: "待填写页面" };
+  if (action === "reachPage") return { reachPage: { screenRef: "待填写页面", policy: "safe" } };
+  if (action === "waitForPage") return { waitForPage: { screenRef: "待填写页面" } };
+  if (action === "assertPage") return { assertPage: { screenRef: "待填写页面" } };
   return { assertText: { text: "待填写内容", match: "contains" } };
 }
 
@@ -354,6 +354,8 @@ function applyActionPatch(step: CaseSourceStep, patch: DraftStepPatch): void {
   const selectText = recordValue(step.selectText);
   const assertText = recordValue(step.assertText);
   const reachPage = recordValue(step.reachPage);
+  const waitForPage = recordValue(step.waitForPage);
+  const assertPage = recordValue(step.assertPage);
   const swipe = recordValue(step.swipe);
   const wait = recordValue(step.wait);
   const scroll = recordValue(step.scrollUntilVisible);
@@ -368,9 +370,9 @@ function applyActionPatch(step: CaseSourceStep, patch: DraftStepPatch): void {
     }
   }
   if (patch.page !== undefined) {
-    if (reachPage) reachPage.page = patch.page;
-    else if ("waitForPage" in step) step.waitForPage = patch.page;
-    else if ("assertPage" in step) step.assertPage = patch.page;
+    if (reachPage) reachPage.screenRef = patch.page;
+    else if (waitForPage) waitForPage.screenRef = patch.page;
+    else if (assertPage) assertPage.screenRef = patch.page;
   }
   if (patch.direction !== undefined) {
     if (swipe) swipe.direction = patch.direction;

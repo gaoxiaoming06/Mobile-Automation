@@ -240,8 +240,8 @@ describe("trial learning storage", () => {
     ({ storage, tempRoot } = await createStorage());
     const run = createTrialRun(storage, { unresolvedOutcome: false, steps: [{
       id: "open-growth",
-      onPage: "classin.home",
-      expectPage: "classin.growth",
+      before: { screenRef: "classin.home" },
+      after: { screenRef: "classin.growth" },
       risk: "interaction",
       tap: {
         target: { text: "成长", area: "bottomBar" },
@@ -271,8 +271,8 @@ describe("trial learning storage", () => {
         checkedAt: "2026-07-30T00:00:01.000Z"
       }],
       metadata: {
-        onPage: "classin.home",
-        expectPage: "classin.growth",
+        before: { screenRef: "classin.home" },
+        after: { screenRef: "classin.growth" },
         semantic: { type: "ocr_text", action: "tap", selectedLocator: { text: "成长" } }
       }
     });
@@ -315,7 +315,7 @@ describe("trial learning storage", () => {
       afterScreenshotId: "artifact-human-review",
       artifacts: [],
       metadata: {
-        onPage: "classin.home",
+        before: { screenRef: "classin.home" },
         semantic: { type: "ocr_text", action: "tap", selectedLocator: { text: "添加好友" } }
       }
     });
@@ -524,8 +524,8 @@ describe("trial learning storage", () => {
         toPage: "classin.growth",
         flowId: `navigation-entry:${accepted.navigationEntries[0]!.id}`,
         steps: [expect.objectContaining({
-          onPage: "classin.home",
-          expectPage: "classin.growth",
+          before: { screenRef: "classin.home" },
+          after: { screenRef: "classin.growth" },
           tap: {
             target: { text: "成长", area: "bottomBar" },
             search: { mode: "visibleOnly" }
@@ -708,7 +708,7 @@ function createTrialRun(storage: Storage, input: {
     app: { id: appId },
     start: { strategy: "keepCurrent" },
     parameters: {},
-    steps: input.steps ?? [{ id: "open-add-friend", onPage: "classin.home", tap: { target: { text: "添加好友" } } }],
+    steps: input.steps ?? [{ id: "open-add-friend", before: { screenRef: "classin.home" }, tap: { target: { text: "添加好友" } } }],
     tags: []
   };
   const sourceYaml = JSON.stringify(document);
@@ -762,7 +762,7 @@ function addInteractionEvidence(storage: Storage, runId: string, suffix: string)
     afterScreenshotId: artifactId,
     artifacts: [],
     metadata: {
-      onPage: "classin.home",
+      before: { screenRef: "classin.home" },
       semantic: { type: "ocr_text", action: "tap", selectedLocator: { text: "添加好友" } }
     }
   });

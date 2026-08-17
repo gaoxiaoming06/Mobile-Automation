@@ -36,6 +36,10 @@ export class AndroidAppMonitorRunSupport {
 
   constructor(private readonly options: AndroidAppMonitorRunSupportOptions) {}
 
+  isStarted(): boolean {
+    return this.started;
+  }
+
   async start(): Promise<void> {
     const config = this.options.config;
     if (!config?.enabled) {
@@ -113,13 +117,13 @@ export class AndroidAppMonitorRunSupport {
     if (runtimeFailure) {
       this.options.markRuntimeFailure();
     }
+    const evidence = shouldCaptureCrashEvidence(normalizedIncident)
+      ? await this.captureRuntimeFailureEvidence(normalizedIncident)
+      : { artifactIds: [], detail: normalizedIncident.detail };
     const severity = normalizedIncident.type === "cpu_threshold" || normalizedIncident.type === "memory_threshold"
       ? normalizedIncident.severity === "error" ? "error" : "warning"
       : normalizedIncident.severity;
     this.options.addDeviceEvent({
-    const evidence = shouldCaptureCrashEvidence(normalizedIncident)
-      ? await this.captureRuntimeFailureEvidence(normalizedIncident)
-      : { artifactIds: [], detail: normalizedIncident.detail };
       id: createId("event"),
       runId: this.options.runId,
       stepResultId: this.options.getActiveStepResultId?.(),
@@ -138,10 +142,6 @@ export class AndroidAppMonitorRunSupport {
     }
   }
 
-  private normalizeSummary(summary: AndroidAppMonitorSummary): AndroidAppMonitorSummary {
-    if (!this.options.normalizeIncident) {
-      return summary;
-    }
   private async captureRuntimeFailureEvidence(incident: AndroidAppMonitorIncident): Promise<{ artifactIds: string[]; detail?: string }> {
     const artifactIds: string[] = [];
     let detail = incident.detail;
@@ -184,6 +184,10 @@ export class AndroidAppMonitorRunSupport {
     return { artifactIds, detail };
   }
 
+  private normalizeSummary(summary: AndroidAppMonitorSummary): AndroidAppMonitorSummary {
+    if (!this.options.normalizeIncident) {
+      return summary;
+    }
     const incidents = summary.incidents
       .map((incident) => this.normalizeIncident(incident))
       .filter((incident): incident is AndroidAppMonitorIncident => Boolean(incident));
@@ -279,10 +283,6 @@ function isRuntimeFailureIncident(incident: AndroidAppMonitorIncident): boolean 
     || (incident.type === "process_death" && incident.severity === "error");
 }
 
-function formatIncidentDetail(incident: AndroidAppMonitorIncident): string | undefined {
-  const metadata = {
-    processName: incident.processName,
-    pid: incident.pid,
 function shouldCaptureCrashEvidence(incident: AndroidAppMonitorIncident): boolean {
   return isCrashLikeIncident(incident);
 }
@@ -291,18 +291,19 @@ function isCrashLikeIncident(incident: AndroidAppMonitorIncident): boolean {
   return incident.type === "java_crash" || incident.type === "native_crash" || incident.type === "anr";
 }
 
-    metadata: incident.metadata
+function formatIncidentDetail(incident: AndroidAppMonitorIncident): string | undefined {
   if (isCrashLikeIncident(incident) && incident.detail) {
     return incident.detail;
   }
+  const metadata = {
+    processName: incident.processName,
+    pid: incident.pid,
+    metadata: incident.metadata
   };
   const metadataText = JSON.stringify(metadata);
   return incident.detail ? `${incident.detail}\n\n${metadataText}` : metadataText;
 }
 
-function errorToString(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 function extractCrashLog(logcat: string, incident: AndroidAppMonitorIncident): string | undefined {
   if (incident.type !== "java_crash" && incident.type !== "native_crash" && incident.type !== "anr") {
     return undefined;
@@ -314,4 +315,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function errorToString(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
