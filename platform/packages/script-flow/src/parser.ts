@@ -634,8 +634,10 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
   if (result.control === "textField") {
     const hasScopedTarget = Boolean(result.scopeText && result.ordinal);
     const hasRelativeTarget = Boolean(result.anchorText && result.relation);
-    if (result.area !== "content" || hasScopedTarget === hasRelativeTarget) {
-      issues.push({ path, message: "textField control targets require either scopeText with ordinal or anchorText with relation, and area content" });
+    const hasOrdinalTarget = Boolean(result.ordinal && !result.scopeText && !result.anchorText && !result.relation);
+    const targetModeCount = [hasScopedTarget, hasRelativeTarget, hasOrdinalTarget].filter(Boolean).length;
+    if (result.area !== "content" || targetModeCount !== 1) {
+      issues.push({ path, message: "textField control targets require ordinal, scopeText with ordinal, or anchorText with relation, and area content" });
     }
   }
   return result;

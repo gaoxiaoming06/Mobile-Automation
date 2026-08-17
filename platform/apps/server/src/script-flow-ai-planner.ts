@@ -44,10 +44,10 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "icon 和 visual 都是非 OCR 视觉目标；非 OCR 视觉目标必须尽量补全跨平台限定：area、position、vertical、nearText、scopeText 或 ordinal。position 只表达左右：leading/trailing；vertical 表达上下：top/center/bottom。用户明确说顶部、底部、左上角、右上角、左下角、右下角、左侧、右侧或某段文字附近时必须写入对应限定；用户未提供任何限定且标准视觉 role 足够明确时才可省略。内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing, vertical: bottom }；不要把自定义产品图形臆测成标准图标。",
   "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象。visual 必须保留用户原始视觉描述作为 query，并按用户描述补充 kind、area、position、vertical、nearText、scopeText 或 ordinal。执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
   "用户明确说‘点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复、reachPage 或重启。",
-  "control 当前只支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content，并使用 scopeText+ordinal 或 anchorText+relation：scopeText+ordinal 用于某局部区域内第几个输入框；anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text。",
+  "control 当前只支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content。用户明确说第一个输入框、最顶部第一个输入框或第 N 个输入框时，使用 control: textField + ordinal，不要捏造 scopeText；scopeText+ordinal 用于某局部区域内第几个输入框；anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text。",
   "inputText 和 clearText 会自行定位、点击并聚焦输入框；用户说选中/点击某输入框再输入或清空时，生成一个 inputText/clearText 步骤即可，不要额外生成前置 tap 输入框步骤。",
   "消息输入区、键盘工具栏、表情面板或更多/附件面板里的图标按钮当前使用 icon + area: content，并按用户描述补 position、vertical、nearText、scopeText 或 ordinal；例如表情图标用 icon: emoji，语音/麦克风图标用 icon: mic，加号图标用 icon: add，上箭头发送图标用 icon: arrowUp。不要生成 scope、role、selection、iconButton、submitButton 或 collectionItem。",
-  "textField 的 scopeText 或 anchorText 必须是局部表单区域标题、字段组标题、字段标签或控件附近稳定文字，不能使用页面标题、顶栏固定标题、App 名称等全局固定文字。用户只用“某页面标题上方/下方/左侧/右侧/第几个输入框”定位时应返回 needs_clarification，请其补充局部字段名或开启当前屏幕辅助。",
+  "textField 的 scopeText 或 anchorText 必须是局部表单区域标题、字段组标题、字段标签或控件附近稳定文字，不能使用页面标题、顶栏固定标题、App 名称等全局固定文字。用户只用“某页面标题上方/下方/左侧/右侧”定位时应返回 needs_clarification，请其补充局部字段名或开启当前屏幕辅助；用户只说第几个输入框时使用 ordinal-only textField。",
   "执行器能力合同：visual 仅支持 tap；selectText 和 scrollUntilVisible 必须使用 text；inputText 和 clearText 必须使用 text 或 control: textField。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
   "用户明确操作是硬约束：点击、输入、清空、滑动或启动等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。用户明确要求启动时生成唯一一个 role: setup 的 launchApp；没有要求启动时不要添加。",
@@ -497,16 +497,16 @@ export function buildScriptFlowPlannerPrompt(
       : "生成上下文模式：strict。不要使用沉淀资产、历史脚本、页面目录或导航知识；只按照用户当前描述和显式开启的当前屏幕上下文生成。用户没有明确页面前置或页面结果时，不要生成 entry、outcome、before 或 after。",
     "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
     "步骤字段合同：步骤 id 使用稳定英文短横线命名；role 只能使用 setup、navigation、business、assertion、reset、cleanup 或 recovery；动作字段只能从可用动作列表中选择一个；页面字段不是动作字段，不能用 page/action 包装动作。",
-    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号/表情/麦克风/上箭头等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、vertical、nearText、scopeText 或 ordinal；position 只表达左右：leading/trailing；vertical 表达上下：top/center/bottom。用户明确说顶部、底部、左上角、右上角、左下角、右下角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 和 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content，并使用 scopeText+ordinal 或 anchorText+relation；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
+    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号/表情/麦克风/上箭头等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、vertical、nearText、scopeText 或 ordinal；position 只表达左右：leading/trailing；vertical 表达上下：top/center/bottom。用户明确说顶部、底部、左上角、右上角、左下角、右下角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 和 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content，并使用 ordinal、scopeText+ordinal 或 anchorText+relation；用户明确说第一个输入框、最顶部第一个输入框或第 N 个输入框时，使用 control: textField + ordinal，不要捏造 scopeText；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
     "消息输入区、键盘工具栏、表情面板或更多/附件面板里的图标按钮当前使用 icon + area: content，并按用户描述补 position、vertical、nearText、scopeText 或 ordinal；例如表情图标用 icon: emoji，语音/麦克风图标用 icon: mic，加号图标用 icon: add，上箭头发送图标用 icon: arrowUp。不要生成 scope、role、selection、iconButton、submitButton 或 collectionItem。",
-    "textField.scopeText+ordinal 用于某局部区域内第几个输入框；textField.anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置。相对锚点文字必须写入 anchorText，不能降级成 target.text；scopeText 或 anchorText 不能使用页面标题、顶栏固定标题、App 名称等全局固定文字；用户只用“某页面标题上方/下方/左侧/右侧/第几个输入框”定位时返回 needs_clarification，要求补充局部字段名或开启当前屏幕辅助。",
+    "textField.ordinal 用于页面内容中的第几个输入框，特别是用户只说第一个输入框、最顶部第一个输入框或第 N 个输入框时；textField.scopeText+ordinal 用于某局部区域内第几个输入框；textField.anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置。相对锚点文字必须写入 anchorText，不能降级成 target.text；scopeText 或 anchorText 不能使用页面标题、顶栏固定标题、App 名称等全局固定文字；用户只用“某页面标题上方/下方/左侧/右侧”定位时返回 needs_clarification，要求补充局部字段名或开启当前屏幕辅助。",
     "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 默认按完整控件文字匹配，按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和参数化名称不要写 match: contains。使用 screenContext 或读屏证据时，根据当前可见原文选择 match：实际原文与目标完全一致时用 exact/省略 match；screenContext 原文是“确定(1/6)”而用户只说“确定”时，必须生成 target: { text: \"确定\", match: \"contains\" }；类似“完成 2/6”“保存(已选3项)”这类动态数量或状态后缀也用 contains，并尽量补充 area、nearText、scopeText、ordinal 或容器语义。未启用当前屏幕上下文时，根据自然语言语义选择 match：用户明确表达‘包含、带有、关键字、模糊匹配’或明显只给动态状态控件的基础动作词时，才写 match: contains。",
     screenContext
       ? [
           "当前屏幕理解上下文由用户显式开启看屏后生成。它只能帮助理解用户对当前页面的描述，不能覆盖已验证资产。",
           "如果用户说当前页面、当前屏幕、最上面、第一个输入框，可以优先使用 screenContext.controlCandidates 中的受控候选。",
           "screenContext 中 valueKind=dynamicValue 的内容只是当前值，不能写成 target.text、字段名、资产名或默认值。",
-          "使用 textField 候选时，优先生成 target: { control: \"textField\", area: \"content\", scopeText, ordinal }；如果用户明确说某稳定文字上方/下方/左侧/右侧输入框，生成 target: { control: \"textField\", area: \"content\", anchorText, relation }。使用 switch 候选时，根据用户说打开/关闭生成 target: { control: \"switch\", area: \"content\", nearText, checked }。",
+          "使用 textField 候选时，用户说第一个输入框、最顶部第一个输入框或第 N 个输入框，优先生成 target: { control: \"textField\", area: \"content\", ordinal }；如果候选包含可靠局部 scopeText 且用户也说了该区域，生成 target: { control: \"textField\", area: \"content\", scopeText, ordinal }；如果用户明确说某稳定文字上方/下方/左侧/右侧输入框，生成 target: { control: \"textField\", area: \"content\", anchorText, relation }。使用 switch 候选时，根据用户说打开/关闭生成 target: { control: \"switch\", area: \"content\", nearText, checked }。",
           "仍然禁止坐标、bounds、region、resource-id、accessibility-id、candidateId 出现在 ScriptFlow 中。",
           JSON.stringify({ screenContext }, null, 2)
         ].join("\n")
@@ -781,7 +781,7 @@ function buildScriptFlowTargetGroundingReviewPrompt(
     "目标：判断 inputText/clearText 这类可编辑文本动作的 target 是否准确表达了用户真正要操作的输入控件，而不是把用户描述中的参照物、字段组、页面标题、附近文字、相对位置锚点或范围说明误写成可操作目标。",
     "你需要直接理解自然语言里的语义角色，先区分“动作对象”和“定位线索”。不要依赖固定词表，也不要因为脚本结构合法就直接通过。",
     "如果用户是在某个稳定字段标签本身中输入，target.text 可以保留该字段标签；如果用户描述的是某文字附近、上方、下方、左侧、右侧、同一行、某区域内第几个等空间/范围关系，那个文字通常是 anchorText 或 scopeText，真正 target 应该是 control:textField。",
-    "对于相对位置输入框，修复为 target: { control: \"textField\", area: \"content\", anchorText, relation }，relation 只能是 above、below、leftOf、rightOf；对于局部区域内第几个输入框，修复为 target: { control: \"textField\", area: \"content\", scopeText, ordinal }。",
+    "对于页面内容第几个输入框，修复为 target: { control: \"textField\", area: \"content\", ordinal }；对于相对位置输入框，修复为 target: { control: \"textField\", area: \"content\", anchorText, relation }，relation 只能是 above、below、leftOf、rightOf；对于局部区域内第几个输入框，修复为 target: { control: \"textField\", area: \"content\", scopeText, ordinal }。",
     "不要新增坐标、bounds、resourceId、accessibilityId、candidateId 或平台私有 selector；不要改变用户给出的输入值、参数化、步骤顺序或非目标语义。",
     "如果目标和锚点已经区分合理，返回 ok；如果混淆，返回 needs_repair 并给出可操作的 repairInstructions。",
     "只返回唯一 JSON 对象，格式：",
@@ -810,7 +810,7 @@ function buildScriptFlowTargetGroundingRepairPrompt(
   return [
     plannerPrompt,
     "上一稿未通过目标 grounding review。请只根据 review 指令修复 inputText/clearText 的目标定位，重点区分用户描述中的动作对象、字段标签、局部范围和相对锚点。",
-    "修复要求：必要时把误用的 target.text 改成 control:textField + scopeText/ordinal 或 anchorText/relation；保留输入值、参数名、步骤顺序、页面约束和 search 策略；不要引入坐标、resourceId、accessibilityId、candidateId 或平台私有 selector。",
+    "修复要求：必要时把误用的 target.text 改成 control:textField + ordinal、scopeText/ordinal 或 anchorText/relation；保留输入值、参数名、步骤顺序、页面约束和 search 策略；不要引入坐标、resourceId、accessibilityId、candidateId 或平台私有 selector。",
     "review 结果：",
     JSON.stringify(review, null, 2),
     "上一稿 YAML：",
@@ -941,10 +941,13 @@ export function parseScriptFlowAiResponse(
   assertKnownResponseFields(root, ["status", "summary", "assumptions", "parameterValues", "document"]);
   assertNoLegacyGeneratedFields(root.document);
   assertGeneratedClassification(root.document, input.existingDocument?.testLevel ?? (input.prompt ? classifyScriptFlowTestLevel(input.prompt) : undefined));
-  const generatedDocument = normalizeGeneratedTargetPositionAliases(normalizeGeneratedExplicitExecution(
-    normalizeGeneratedWaitDurations(normalizeGeneratedRunFlowReferences(root.document, input.catalog), root.parameterValues),
-    input.appId
-  ));
+  const generatedDocument = normalizeGeneratedParameterDefinitions(
+    normalizeGeneratedTargetPositionAliases(normalizeGeneratedExplicitExecution(
+      normalizeGeneratedWaitDurations(normalizeGeneratedRunFlowReferences(root.document, input.catalog), root.parameterValues),
+      input.appId
+    )),
+    root.parameterValues
+  );
   const validated = validateScriptFlowDocument(generatedDocument);
   validateNoGeneratedReachPage(validated);
   const hydrated = validateScriptFlowDocument(hydrateGeneratedParameters(validated, input.catalog));
@@ -1063,6 +1066,35 @@ function normalizeGeneratedExplicitExecution(value: unknown, appId: string): Rec
 
 function normalizeGeneratedTargetPositionAliases(value: unknown): Record<string, unknown> {
   return normalizeGeneratedTargetPlacementAliasesInValue(recordValue(value)) as Record<string, unknown>;
+}
+
+function normalizeGeneratedParameterDefinitions(value: unknown, generatedValues: unknown): Record<string, unknown> {
+  const document = JSON.parse(JSON.stringify(recordValue(value))) as Record<string, unknown>;
+  const parameters = recordValue(document.parameters);
+  if (!Object.keys(parameters).length) {
+    return document;
+  }
+  const runtimeValues = recordValue(generatedValues);
+  const normalizedParameters: Record<string, unknown> = {};
+  for (const [key, rawDefinition] of Object.entries(parameters)) {
+    if (!rawDefinition || typeof rawDefinition !== "object" || Array.isArray(rawDefinition)) {
+      normalizedParameters[key] = rawDefinition;
+      continue;
+    }
+    const definition = { ...rawDefinition } as Record<string, unknown>;
+    if (!stringValue(definition.type)) {
+      definition.type = inferredGeneratedParameterType(runtimeValues[key]) ?? "string";
+    }
+    normalizedParameters[key] = definition;
+  }
+  return { ...document, parameters: normalizedParameters };
+}
+
+function inferredGeneratedParameterType(value: unknown): "string" | "number" | "boolean" | undefined {
+  if (typeof value === "string" && value.trim()) return "string";
+  if (typeof value === "number" && Number.isFinite(value)) return "number";
+  if (typeof value === "boolean") return "boolean";
+  return undefined;
 }
 
 function normalizeGeneratedTargetPlacementAliasesInValue(value: unknown): unknown {
@@ -1862,19 +1894,20 @@ function normalizeGenericTextFieldTextTarget(
   if (!isTextTarget(target) || !targetText || !looksLikeGenericTextFieldReference(targetText)) return target;
   const candidate = uniqueScreenTextFieldCandidate(input.screenContext);
   if (!candidate) return target;
-  return {
+  const normalizedTarget: ScriptTarget = {
     control: "textField",
     area: "content",
-    scopeText: candidate.scopeText,
     ordinal: candidate.ordinal
   };
+  if (candidate.scopeText) normalizedTarget.scopeText = candidate.scopeText;
+  return normalizedTarget;
 }
 
 function uniqueScreenTextFieldCandidate(
   screenContext: ScreenUnderstandingContext | undefined
-): { scopeText: string; ordinal: number } | undefined {
+): { scopeText?: string; ordinal: number } | undefined {
   const candidates = screenContext?.controlCandidates.flatMap((candidate) => {
-    if (candidate.control !== "textField" || !candidate.scopeText || typeof candidate.ordinal !== "number" || candidate.ordinal <= 0) {
+    if (candidate.control !== "textField" || typeof candidate.ordinal !== "number" || candidate.ordinal <= 0) {
       return [];
     }
     return [{ scopeText: candidate.scopeText, ordinal: candidate.ordinal }];
@@ -2092,10 +2125,17 @@ function screenControlCandidateMatchesTarget(
   return screenContext.controlCandidates.some((candidate) => {
     if (target.control && candidate.control !== target.control) return false;
     if (target.control === "textField") {
-      return Boolean(target.scopeText
-        && candidate.scopeText
-        && compactGroundingText(target.scopeText) === compactGroundingText(candidate.scopeText)
-        && target.ordinal === candidate.ordinal);
+      if (typeof target.ordinal === "number" && target.ordinal > 0 && target.ordinal === candidate.ordinal) {
+        if (!target.scopeText && !target.anchorText) return true;
+        if (
+          target.scopeText
+          && candidate.scopeText
+          && compactGroundingText(target.scopeText) === compactGroundingText(candidate.scopeText)
+        ) return true;
+      }
+      return Boolean(target.anchorText
+        && candidate.nearText
+        && compactGroundingText(target.anchorText) === compactGroundingText(candidate.nearText));
     }
     if (target.control === "switch" || target.control === "checkbox") {
       return Boolean(target.nearText

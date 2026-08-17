@@ -4377,13 +4377,30 @@ export class SemanticStepResolver {
       };
     }
 
-    let actionResult = normalizeActionResult(await this.performAction(input, { type: "tap", x: focus.point.x, y: focus.point.y }));
-    const focusDelayMs = nonNegativeNumberParam(input.step.params.focusDelayMs, 120);
-    if (focusDelayMs > 0) {
-      await this.wait(input, focusDelayMs);
-    }
-    if (input.step.params.clearFirst !== false) {
-      actionResult = normalizeActionResult(await this.performAction(input, { type: "clear_text" })) ?? actionResult;
+    let actionResult: DeviceActionResult | undefined;
+    const semanticInputAction = !clearOnly && this.deps.performSemanticAction && focus.uiCandidate
+      ? {
+          type: "input_text_to_element",
+          locator: locatorFromCandidate(focus.uiCandidate),
+          text,
+          clearFirst: input.step.params.clearFirst !== false,
+          fallbackTap: {
+            x: focus.point.x,
+            y: focus.point.y
+          }
+        } satisfies SemanticDeviceActionRequest
+      : undefined;
+    if (semanticInputAction) {
+      actionResult = normalizeActionResult(await this.performSemanticAction(input, semanticInputAction));
+    } else {
+      actionResult = normalizeActionResult(await this.performAction(input, { type: "tap", x: focus.point.x, y: focus.point.y }));
+      const focusDelayMs = nonNegativeNumberParam(input.step.params.focusDelayMs, 120);
+      if (focusDelayMs > 0) {
+        await this.wait(input, focusDelayMs);
+      }
+      if (input.step.params.clearFirst !== false) {
+        actionResult = normalizeActionResult(await this.performAction(input, { type: "clear_text" })) ?? actionResult;
+      }
     }
     if (clearOnly) {
       return {
@@ -4410,7 +4427,9 @@ export class SemanticStepResolver {
         }
       };
     }
-    actionResult = normalizeActionResult(await this.performAction(input, { type: "input_text", text })) ?? actionResult;
+    if (!semanticInputAction) {
+      actionResult = normalizeActionResult(await this.performAction(input, { type: "input_text", text })) ?? actionResult;
+    }
     const allowUnreadableAfterInput = shouldAllowUnreadableTargetRegionAfterInput(focus, input.step.params);
     const verification = await this.verifyInputText(input, text, {
       attempt: 1,
@@ -4435,7 +4454,7 @@ export class SemanticStepResolver {
       return {
         supported: true,
         resolved: false,
-        action: { type: "input_text", text },
+        action: semanticInputAction ? undefined : { type: "input_text", text },
         actionResult,
         message: `Input text "${text}" was not verified by OCR after typing.`,
         artifacts: verification.artifacts,
@@ -4458,6 +4477,7 @@ export class SemanticStepResolver {
           ...searchMetadata,
           ...pageTaskSemanticMetadata(input.step.params),
           clearFirst: input.step.params.clearFirst !== false,
+          inputAction: semanticInputAction ? "semantic_action" : "split_actions",
           sensitiveInput: isSensitiveInput(input.step.params),
           ...(verification.strategy ? { verificationStrategy: verification.strategy } : {}),
           ...(verification.recovery ? { verificationRecovery: verification.recovery } : {}),
@@ -4472,7 +4492,7 @@ export class SemanticStepResolver {
     return {
       supported: true,
       resolved: true,
-      action: { type: "input_text", text },
+      action: semanticInputAction ? undefined : { type: "input_text", text },
       actionResult,
       message: "Focused runtime structural input target and input text.",
       artifacts: verification.artifacts,
@@ -4492,6 +4512,7 @@ export class SemanticStepResolver {
         ...searchMetadata,
         ...pageTaskSemanticMetadata(input.step.params),
         clearFirst: input.step.params.clearFirst !== false,
+        inputAction: semanticInputAction ? "semantic_action" : "split_actions",
         inputVerified: verification.verified,
         sensitiveInput: isSensitiveInput(input.step.params),
         ...(verification.strategy ? { verificationStrategy: verification.strategy } : {}),
@@ -4797,7 +4818,9 @@ export class SemanticStepResolver {
     const tapPointPercent = readTapPointPercent(input.step.params.tapPointPercent);
     const fallbackPoint = regionPoint(region, input.deviceSize, tapPointPercent);
     const allowRegionFallback = input.step.params.allowRegionFallback === true;
-    if (shouldPreferInputUiCandidate(input.step.params)) {
+    const preferInputUiCandidate = shouldPreferInputUiCandidate(input.step.params);
+    const hasUiHierarchy = Boolean(this.deps.dumpUiHierarchy);
+    if (preferInputUiCandidate) {
       const uiCandidate = await this.resolveInputUiCandidate(input.serial, region, input.deviceSize, input.step.params);
       if (uiCandidate) {
         return {
@@ -4816,7 +4839,7 @@ export class SemanticStepResolver {
       });
       const signature = textSearchLayoutSignature(layout, undefined, input.deviceSize);
       const candidate = findInputFocusCandidate(layout, region, input.deviceSize, input.step.params);
-      if (candidate) {
+      if (candidate && !shouldSkipInputOcrFocusCandidate(input.step.params, candidate, preferInputUiCandidate && hasUiHierarchy)) {
         const point = textCandidateDevicePoint(candidate, layout, input.deviceSize);
         return {
           point,
@@ -4830,7 +4853,7 @@ export class SemanticStepResolver {
           signature
         };
       }
-      const uiCandidate = shouldPreferInputUiCandidate(input.step.params)
+      const uiCandidate = preferInputUiCandidate
         ? undefined
         : await this.resolveInputUiCandidate(input.serial, region, input.deviceSize, input.step.params);
       if (uiCandidate) {
@@ -6556,6 +6579,40 @@ function isScopedTextFieldStructure(params: Record<string, unknown>): boolean {
   return textParam(structuralLocator?.strategy).trim() === "scoped_text_field";
 }
 
+function shouldSkipInputOcrFocusCandidate(
+  params: Record<string, unknown>,
+  candidate: TextLocatorCandidate,
+  uiHierarchyWasAuthoritative: boolean
+): boolean {
+  if (!uiHierarchyWasAuthoritative) {
+    return false;
+  }
+  const structuralLocator = readRecord(params.structuralLocator);
+  const strategy = textParam(structuralLocator?.strategy).trim();
+  if (strategy === "ordinal_text_field") {
+    return true;
+  }
+  if (strategy !== "scoped_text_field") {
+    return false;
+  }
+  return !isStrongOcrTextInputCandidate(candidate, params);
+}
+
+function isStrongOcrTextInputCandidate(
+  candidate: TextLocatorCandidate,
+  params: Record<string, unknown>
+): boolean {
+  const text = normalizeOcrText(candidate.text).trim();
+  if (!text) {
+    return false;
+  }
+  if (isPromptLikeText(text)) {
+    return true;
+  }
+  const targets = inputFocusTextTargets(params).map((target) => normalizeOcrText(target).trim()).filter(Boolean);
+  return targets.some((target) => textMatchesLoosely(text, target));
+}
+
 function findInputIdentityCandidate(
   layout: OcrLayoutResult,
   expected: string,
@@ -7454,7 +7511,7 @@ function inputOrderHint(params: Record<string, unknown>): number | undefined {
 function structuralTextFieldOrderHint(structuralLocator: Record<string, unknown> | undefined): number | undefined {
   const strategy = textParam(structuralLocator?.strategy).trim();
   const ordinal = numberParam(structuralLocator?.ordinal);
-  if (strategy !== "scoped_text_field" || ordinal === undefined || ordinal < 1) {
+  if ((strategy !== "scoped_text_field" && strategy !== "ordinal_text_field") || ordinal === undefined || ordinal < 1) {
     return undefined;
   }
   return Math.max(0, Math.floor(ordinal) - 1);
@@ -7465,6 +7522,7 @@ function shouldPreferInputUiCandidate(params: Record<string, unknown>): boolean 
   const strategy = textParam(structuralLocator?.strategy).trim();
   return textParam(params.locatorKind).trim() === "structural_locator" &&
     (
+      strategy === "ordinal_text_field" ||
       strategy === "scoped_text_field" ||
       strategy === "ocr_or_edittext" ||
       strategy === "ocr_or_edittext_in_region" ||
@@ -7687,6 +7745,7 @@ function isRuntimeInputStructuralLocator(params: Record<string, unknown>): boole
   const structuralLocator = readRecord(params.structuralLocator);
   return locatorKind === "structural_locator" ||
     locator.startsWith("runtime-locator:") ||
+    textParam(structuralLocator?.strategy).trim() === "ordinal_text_field" ||
     textParam(structuralLocator?.strategy).trim() === "ocr_or_edittext" ||
     textParam(structuralLocator?.strategy).trim() === "ocr_or_edittext_in_region" ||
     textParam(structuralLocator?.strategy).trim() === "scoped_text_field";

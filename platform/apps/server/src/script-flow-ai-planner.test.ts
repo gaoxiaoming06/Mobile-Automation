@@ -67,6 +67,7 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("不要补 entry、outcome、before、after、reachPage 或 runFlow");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("表单字段动作默认使用 search: { mode: auto }");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("用户明确说第一个输入框、最顶部第一个输入框或第 N 个输入框时，使用 control: textField + ordinal");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("即使 screenContext 当前首屏没有该字段");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("可执行查找策略");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).not.toContain("不要生成独立 scrollUntilVisible 再 tap 同一目标");
@@ -360,6 +361,7 @@ describe("ScriptFlow AI planner", () => {
     expect(plannerPrompt).toContain("当前屏幕理解上下文");
     expect(plannerPrompt).toContain("\"screenContext\"");
     expect(plannerPrompt).toContain("\"control\": \"textField\"");
+    expect(plannerPrompt).toContain("target: { control: \"textField\", area: \"content\", ordinal }");
     expect(plannerPrompt).toContain("target: { control: \"textField\", area: \"content\", scopeText, ordinal }");
     expect(plannerPrompt).toContain("anchorText+relation");
     expect(plannerPrompt).not.toContain("开始时间上方输入框");
@@ -1628,6 +1630,74 @@ describe("ScriptFlow AI planner", () => {
     expect(result).toMatchObject({
       status: "trial_ready",
       parameterValues: { className: "班级四十二号" }
+    });
+  });
+
+  it("normalizes AI parameter definitions that omit type to string before validation", () => {
+    const catalog = buildScriptFlowPlannerCatalog(pageCatalog(), [], "cn.eeo.classin", "android");
+    const response = readyResponse();
+    response.summary = "新建课堂并填写信息";
+    response.document.purpose = "business";
+    response.document.testLevel = "component";
+    response.document.name = "新建课堂并填写信息";
+    response.document.parameters = {
+      className: { label: "班级名称", required: true },
+      firstFieldValue: { label: "第一个输入框内容", required: true },
+      classDuration: { label: "课堂时长", required: true }
+    } as unknown as ScriptFlowDocument["parameters"];
+    response.document.steps = [
+      {
+        id: "tap-class",
+        role: "business",
+        tap: { target: { text: "${className}", area: "content" }, search: { mode: "auto" } }
+      },
+      {
+        id: "fill-first-field",
+        role: "business",
+        inputText: {
+          target: { control: "textField", area: "content", ordinal: 1 },
+          value: "${firstFieldValue}",
+          search: { mode: "auto" }
+        }
+      },
+      {
+        id: "select-duration",
+        role: "business",
+        selectText: {
+          target: { text: "课堂时长", area: "content" },
+          value: "${classDuration}",
+          confirmText: "确定",
+          search: { mode: "auto" }
+        }
+      }
+    ];
+    response.parameterValues = {
+      className: "班级四十二号",
+      firstFieldValue: "123呢呢呢",
+      classDuration: "11小时15分钟"
+    };
+
+    const result = parseScriptFlowAiResponse(JSON.stringify(response), {
+      appId: "cn.eeo.classin",
+      platform: "android",
+      catalog,
+      prompt: "重启app，然后滑动列表找到班级四十二号并点击，然后点击右下角加号按钮，在点击课堂，进入新建课堂页面，然后修改本页面最顶部的第一个输入框内容为123呢呢呢，再修改课堂时长为11小时15分钟，再打开录制现场开关"
+    });
+
+    expect(result).toMatchObject({
+      status: "ready",
+      document: {
+        parameters: {
+          className: { type: "string" },
+          firstFieldValue: { type: "string" },
+          classDuration: { type: "string" }
+        }
+      },
+      parameterValues: {
+        className: "班级四十二号",
+        firstFieldValue: "123呢呢呢",
+        classDuration: "11小时15分钟"
+      }
     });
   });
 

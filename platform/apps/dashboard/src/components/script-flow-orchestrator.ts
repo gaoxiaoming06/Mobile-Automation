@@ -306,14 +306,14 @@ function actionBody(action: EditableStepAction, appId: string): Record<string, u
   if (action === "tap") return { tap: { target: { text: "待填写目标" }, search: { mode: "auto" } } };
   if (action === "inputText") return {
     inputText: {
-      target: { control: "textField", area: "content", scopeText: "待填写字段", ordinal: 1 },
+      target: { control: "textField", area: "content", ordinal: 1 },
       value: "待填写内容",
       search: { mode: "auto" }
     }
   };
   if (action === "clearText") return {
     clearText: {
-      target: { control: "textField", area: "content", scopeText: "待填写字段", ordinal: 1 },
+      target: { control: "textField", area: "content", ordinal: 1 },
       search: { mode: "auto" }
     }
   };
@@ -544,10 +544,10 @@ function normalizeTargetConstraints(target: Record<string, unknown>): void {
     }
     delete target.anchorText;
     delete target.relation;
-    if (typeof target.scopeText !== "string" || !target.scopeText.trim()) {
-      target.scopeText = typeof target.nearText === "string" && target.nearText.trim()
-        ? target.nearText.trim()
-        : "待填写字段";
+    if (typeof target.scopeText === "string") {
+      const scopeText = target.scopeText.trim();
+      if (scopeText) target.scopeText = scopeText;
+      else delete target.scopeText;
     }
     if (typeof target.ordinal !== "number" || !Number.isInteger(target.ordinal) || target.ordinal < 1) {
       target.ordinal = 1;

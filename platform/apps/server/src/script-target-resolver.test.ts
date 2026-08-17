@@ -531,6 +531,38 @@ describe("ScriptTargetResolver", () => {
     });
   });
 
+  it("resolves an ordinal-only text field control to a runtime structural input locator", () => {
+    const resolver = new ScriptTargetResolver();
+
+    expect(resolver.resolve({
+      action: "inputText",
+      target: { control: "textField", area: "content", ordinal: 1 },
+      value: "自动化课堂",
+      search: { mode: "auto", direction: "down", maxSwipes: 4 },
+      appId: "cn.eeo.classin",
+      platform: "android"
+    })).toEqual({
+      type: "input_text_to_element",
+      strategy: "semantic_control",
+      params: {
+        text: "自动化课堂",
+        clearFirst: true,
+        locatorKind: "structural_locator",
+        structuralLocator: {
+          strategy: "ordinal_text_field",
+          ordinal: 1,
+          role: "text_input"
+        },
+        semanticArea: "content",
+        searchMode: "auto",
+        searchDirection: "down",
+        maxSwipes: 4,
+        resetToTop: true,
+        allowRegionFallback: false
+      }
+    });
+  });
+
   it("passes sensitive input metadata to scoped runtime text fields", () => {
     const resolver = new ScriptTargetResolver();
 

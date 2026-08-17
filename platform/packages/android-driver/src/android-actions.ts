@@ -183,7 +183,7 @@ export class AndroidActionExecutor {
       return adbInputResult();
     }
     if (action.type === "tap") {
-      await this.shell(serial, ["input", "tap", String(action.x), String(action.y)]);
+      await this.tapCoordinates(serial, action);
       return adbInputResult();
     }
     if (action.type === "long_press") {
@@ -291,10 +291,7 @@ export class AndroidActionExecutor {
         x: action.fallbackTap.x,
         y: action.fallbackTap.y
       });
-      if (action.clearFirst !== false) {
-        await this.performAction(serial, { type: "clear_text" });
-      }
-      await this.performAction(serial, { type: "input_text", text: action.text });
+      await this.inputTextToFallbackElement(serial, action.text, action.fallbackTap, action.clearFirst !== false);
       return semanticFallbackResult(action.type, backend);
     }
     if (action.type === "scroll_until_visible") {
@@ -322,8 +319,7 @@ export class AndroidActionExecutor {
   }
 
   private async inputText(serial: string, text: string): Promise<void> {
-    if (await this.hasAdbKeyboard(serial)) {
-      await this.inputTextWithAdbKeyboard(serial, text);
+    if (await this.inputTextWithAdbKeyboard(serial, text)) {
       return;
     }
 
@@ -342,6 +338,35 @@ export class AndroidActionExecutor {
         throw error;
       });
     }
+  }
+
+  private async inputTextToFallbackElement(
+    serial: string,
+    text: string,
+    fallbackTap: { x: number; y: number },
+    clearFirst: boolean
+  ): Promise<void> {
+    if (
+      await this.withAdbKeyboard(serial, async (context) => {
+        if (context.switchedIme) {
+          await this.tapCoordinates(serial, fallbackTap);
+        }
+        if (clearFirst) {
+          await this.shell(serial, ["am", "broadcast", "-a", "ADB_CLEAR_TEXT"], { timeoutMs: 5000 });
+          await this.sleep(150);
+          await this.tapCoordinates(serial, fallbackTap);
+        }
+        await this.shell(serial, ["am", "broadcast", "-a", "ADB_INPUT_TEXT", "--es", "msg", text], { timeoutMs: 5000 });
+        await this.sleep(150);
+      })
+    ) {
+      return;
+    }
+
+    if (clearFirst) {
+      await this.clearTextWithSelectAllDelete(serial);
+    }
+    await this.inputText(serial, text);
   }
 
   private async pasteText(serial: string, text: string): Promise<void> {
@@ -368,24 +393,28 @@ export class AndroidActionExecutor {
     return imeList.split(/\r?\n/).map((line) => line.trim()).includes(adbKeyboardIme);
   }
 
-  private async inputTextWithAdbKeyboard(serial: string, text: string): Promise<void> {
-    const originalIme = (await this.shell(serial, ["settings", "get", "secure", "default_input_method"], { timeoutMs: 5000 }).catch(() => "")).trim();
-    const shouldRestoreIme = originalIme && originalIme !== "null" && originalIme !== adbKeyboardIme;
-    if (shouldRestoreIme) {
-      await this.shell(serial, ["ime", "set", adbKeyboardIme], { timeoutMs: 5000 });
-      await this.sleep(250);
-    }
-    try {
+  private async inputTextWithAdbKeyboard(serial: string, text: string): Promise<boolean> {
+    return this.withAdbKeyboard(serial, async () => {
       await this.shell(serial, ["am", "broadcast", "-a", "ADB_INPUT_TEXT", "--es", "msg", text], { timeoutMs: 5000 });
       await this.sleep(150);
-    } finally {
-      if (shouldRestoreIme) {
-        await this.shell(serial, ["ime", "set", originalIme], { timeoutMs: 5000 }).catch(() => undefined);
-      }
-    }
+    });
   }
 
   private async clearTextWithAdbKeyboard(serial: string): Promise<boolean> {
+    try {
+      return await this.withAdbKeyboard(serial, async () => {
+        await this.shell(serial, ["am", "broadcast", "-a", "ADB_CLEAR_TEXT"], { timeoutMs: 5000 });
+        await this.sleep(150);
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  private async withAdbKeyboard(
+    serial: string,
+    operation: (context: { switchedIme: boolean }) => Promise<void>
+  ): Promise<boolean> {
     if (!(await this.hasAdbKeyboard(serial))) {
       return false;
     }
@@ -396,11 +425,8 @@ export class AndroidActionExecutor {
       await this.sleep(250);
     }
     try {
-      await this.shell(serial, ["am", "broadcast", "-a", "ADB_CLEAR_TEXT"], { timeoutMs: 5000 });
-      await this.sleep(150);
+      await operation({ switchedIme: Boolean(shouldRestoreIme) });
       return true;
-    } catch {
-      return false;
     } finally {
       if (shouldRestoreIme) {
         await this.shell(serial, ["ime", "set", originalIme], { timeoutMs: 5000 }).catch(() => undefined);
@@ -415,6 +441,10 @@ export class AndroidActionExecutor {
     for (let index = 0; index < CLEAR_TEXT_DELETE_KEYEVENT_COUNT; index += 1) {
       await this.shell(serial, ["input", "keyevent", "KEYCODE_DEL"]);
     }
+  }
+
+  private async tapCoordinates(serial: string, point: { x: number; y: number }): Promise<void> {
+    await this.shell(serial, ["input", "tap", String(point.x), String(point.y)]);
   }
 
   private async launchApp(serial: string, packageName: string): Promise<void> {

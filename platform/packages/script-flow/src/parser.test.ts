@@ -700,6 +700,36 @@ steps:
     });
   });
 
+  it("accepts a text field described only by content ordinal", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: fill first field
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: fill-first-field
+    role: business
+    inputText:
+      target:
+        control: textField
+        area: content
+        ordinal: 1
+      value: 自动化课堂
+      search: { mode: auto }
+`);
+
+    expect(flow.steps[0]).toMatchObject({
+      inputText: {
+        target: {
+          control: "textField",
+          area: "content",
+          ordinal: 1
+        },
+        value: "自动化课堂",
+        search: { mode: "auto" }
+      }
+    });
+  });
+
   it("accepts a text field described by a relative text anchor", () => {
     const flow = parseScriptFlow(`
 version: 1

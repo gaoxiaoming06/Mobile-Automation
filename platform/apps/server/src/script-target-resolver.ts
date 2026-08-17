@@ -248,9 +248,21 @@ export class ScriptTargetResolver {
     if (input.target.anchorText && input.target.relation) {
       return this.resolveRelativeTextFieldControl(input);
     }
-    if (!input.target.scopeText || !input.target.ordinal) {
-      throw new ScriptTargetResolutionError("Text field targets require scopeText with ordinal, or anchorText with relation");
+    if (!input.target.ordinal) {
+      throw new ScriptTargetResolutionError("Text field targets require ordinal, scopeText with ordinal, or anchorText with relation");
     }
+    const structuralLocator = input.target.scopeText
+      ? {
+          strategy: "scoped_text_field",
+          scopeText: input.target.scopeText,
+          ordinal: input.target.ordinal,
+          role: "text_input"
+        }
+      : {
+          strategy: "ordinal_text_field",
+          ordinal: input.target.ordinal,
+          role: "text_input"
+        };
     return {
       type: "input_text_to_element",
       strategy: "semantic_control",
@@ -260,12 +272,7 @@ export class ScriptTargetResolver {
         ...inputValueParams(input),
         ...(input.action === "clearText" ? { clearOnly: true } : {}),
         locatorKind: "structural_locator",
-        structuralLocator: {
-          strategy: "scoped_text_field",
-          scopeText: input.target.scopeText,
-          ordinal: input.target.ordinal,
-          role: "text_input"
-        },
+        structuralLocator,
         ...searchParams(input.target, input.search),
         allowRegionFallback: false
       }

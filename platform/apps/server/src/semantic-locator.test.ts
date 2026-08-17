@@ -3906,6 +3906,78 @@ describe("SemanticStepResolver", () => {
     }));
   });
 
+  it("does not stop scrolling when scoped OCR text is not backed by a UI input", async () => {
+    const actions: DeviceActionRequest[] = [];
+    let hierarchyReads = 0;
+    const resolver = new SemanticStepResolver({
+      ocr: new QueueLayoutOcrService([
+        {
+          text: "基本信息 班级四十二号|全员学生 选择课程",
+          engine: "fake-layout",
+          lang: "test",
+          width: 1000,
+          height: 2000,
+          boxes: [
+            { text: "基本信息", confidence: 0.99, x: 90, y: 300, width: 160, height: 52 },
+            { text: "班级四十二号|全员学生", confidence: 0.95, x: 410, y: 455, width: 410, height: 44 },
+            { text: "选择课程", confidence: 0.98, x: 90, y: 640, width: 160, height: 52 }
+          ]
+        }
+      ]),
+      dumpUiHierarchy: async () => {
+        hierarchyReads += 1;
+        if (hierarchyReads === 1) return noInputHierarchy();
+        if (hierarchyReads === 2) return narrowInputHierarchy("");
+        return narrowInputHierarchy("自动化课堂");
+      },
+      performAction: async (_serial, action) => {
+        actions.push(action);
+        return { driverChannel: "mock" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-scoped-ui-guard-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-scoped-ui-guard",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "自动化课堂",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        searchMode: "auto",
+        searchDirection: "down",
+        resetToTop: true,
+        maxSwipes: 1,
+        intervalMs: 0,
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          scopeText: "基本信息",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(actions).toEqual([
+      { type: "swipe", startX: 500, startY: 500, endX: 500, endY: 1500, durationMs: 450 },
+      { type: "tap", x: 500, y: 1040 },
+      { type: "clear_text" },
+      { type: "input_text", text: "自动化课堂" }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      resolved: true,
+      metadata: expect.objectContaining({
+        focusResolvedBy: "ui_edit_text_structural",
+        search: expect.objectContaining({ resetSwipes: 1, scanSwipes: 0 })
+      })
+    }));
+  });
+
   it("resolves input_text_to_element from UI EditText structure when OCR has no field text", async () => {
     const actions: DeviceActionRequest[] = [];
     const resolver = new SemanticStepResolver({
@@ -4019,6 +4091,81 @@ describe("SemanticStepResolver", () => {
       metadata: expect.objectContaining({
         inputVerified: true,
         verificationStrategy: "ui_text_input_value"
+      })
+    }));
+  });
+
+  it("uses semantic input action for runtime structural text fields when available", async () => {
+    const fallbackActions: DeviceActionRequest[] = [];
+    const semanticActions: SemanticDeviceActionRequest[] = [];
+    let hierarchyReads = 0;
+    const resolver = new SemanticStepResolver({
+      ocr: new LayoutOcrService({
+        text: "",
+        engine: "fake-layout",
+        lang: "test",
+        width: 1000,
+        height: 2000,
+        boxes: []
+      }),
+      dumpUiHierarchy: async () => {
+        hierarchyReads += 1;
+        return narrowInputHierarchy(hierarchyReads > 1 ? "hello" : "");
+      },
+      performAction: async (_serial, action) => {
+        fallbackActions.push(action);
+        return { driverChannel: "mock" };
+      },
+      performSemanticAction: async (_serial, action) => {
+        semanticActions.push(action);
+        return { driverChannel: "adb_input" };
+      },
+      captureLocatorScreenshot: async (_runId, _stepResultId, _serial, _stepId, attempt) => screenshot(`artifact-semantic-input-${attempt}`)
+    });
+
+    const outcome = await resolver.resolveIfNeeded({
+      runId: "run-1",
+      stepResultId: "step-result-semantic-input",
+      serial: "device-1",
+      deviceSize: { width: 1000, height: 2000 },
+      step: semanticStep("input_text_to_element", {
+        text: "hello",
+        clearFirst: true,
+        focusDelayMs: 0,
+        inputVerificationDelayMs: 0,
+        inputVerificationKeyboardRecovery: false,
+        locatorKind: "structural_locator",
+        semanticArea: "content",
+        structuralLocator: {
+          strategy: "scoped_text_field",
+          ordinal: 1,
+          role: "text_input"
+        }
+      })
+    });
+
+    expect(fallbackActions).toEqual([]);
+    expect(semanticActions).toEqual([
+      {
+        type: "input_text_to_element",
+        locator: {
+          strategy: "android_uiautomator",
+          resourceId: "com.demo:id/message_input",
+          packageName: "com.demo"
+        },
+        text: "hello",
+        clearFirst: true,
+        fallbackTap: { x: 500, y: 1040 }
+      }
+    ]);
+    expect(outcome).toEqual(expect.objectContaining({
+      supported: true,
+      resolved: true,
+      actionResult: expect.objectContaining({ driverChannel: "adb_input" }),
+      metadata: expect.objectContaining({
+        inputVerified: true,
+        verificationStrategy: "ui_text_input_value",
+        driverChannel: "adb_input"
       })
     }));
   });
@@ -8500,6 +8647,17 @@ function narrowInputHierarchy(value: string): string {
 <hierarchy rotation="0">
   <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1000,2000]">
     <node index="0" text="${value}" resource-id="com.demo:id/message_input" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" long-clickable="true" scrollable="false" bounds="[100,1000][900,1080]" />
+  </node>
+</hierarchy>`;
+}
+
+function noInputHierarchy(): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[0,0][1000,2000]">
+    <node index="0" text="基本信息" resource-id="com.demo:id/basic_title" class="android.widget.TextView" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[90,300][250,352]" />
+    <node index="1" text="班级四十二号|全员学生" resource-id="com.demo:id/class_name" class="android.widget.TextView" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[410,455][820,499]" />
+    <node index="2" text="选择课程" resource-id="com.demo:id/course_label" class="android.widget.TextView" package="com.demo" content-desc="" clickable="false" enabled="true" focusable="false" long-clickable="false" scrollable="false" bounds="[90,640][250,692]" />
   </node>
 </hierarchy>`;
 }

@@ -265,6 +265,29 @@ describe("script-flow orchestrator", () => {
     });
   });
 
+  it("allows a text field locator to use only an ordinal", () => {
+    const draft = updateDraftStep(baseDraft(), "0:tap-target", {
+      action: "inputText",
+      value: "自动化课堂"
+    });
+    const updated = updateDraftStepLocator(draft, "0:tap-target", {
+      targetKind: "control",
+      targetValue: "textField",
+      area: "content",
+      ordinal: "1",
+      searchMode: "auto"
+    });
+
+    expect(updated.document.steps[0]).toMatchObject({
+      inputText: {
+        target: { control: "textField", area: "content", ordinal: 1 },
+        value: "自动化课堂",
+        search: { mode: "auto" }
+      }
+    });
+    expect(JSON.stringify(updated.document.steps[0])).not.toContain("scopeText");
+  });
+
   it("edits text field locators to use a relative text anchor", () => {
     const draft = updateDraftStep(baseDraft(), "0:tap-target", {
       action: "inputText",
@@ -297,7 +320,7 @@ describe("script-flow orchestrator", () => {
 
     expect(updated.document.steps[0]).toMatchObject({
       inputText: {
-        target: { control: "switch", area: "content", nearText: "待填写字段", checked: false }
+        target: { control: "switch", area: "content", nearText: "待填写开关", checked: false }
       }
     });
   });

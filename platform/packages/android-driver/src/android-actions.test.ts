@@ -175,6 +175,42 @@ describe("AndroidActionExecutor", () => {
     expect(calls.filter((args) => args.join(" ") === "input keyevent KEYCODE_DEL")).toHaveLength(41);
   });
 
+  it("keeps ADB Keyboard active while clearing and typing semantic fallback text", async () => {
+    const calls: string[][] = [];
+    const actions = new AndroidActionExecutor({
+      shell: vi.fn(async (_serial, args) => {
+        calls.push(args);
+        if (args.join(" ") === "ime list -s") {
+          return "com.android.adbkeyboard/.AdbIME\ncom.demo/.Ime";
+        }
+        if (args.join(" ") === "settings get secure default_input_method") {
+          return "com.demo/.Ime\n";
+        }
+        return "";
+      }),
+      sleep: async () => undefined
+    });
+
+    await actions.performSemanticAction("device-1", {
+      type: "input_text_to_element",
+      locator: { className: "android.widget.EditText" },
+      text: "按时阿斯蒂芬",
+      fallbackTap: { x: 540, y: 398 }
+    });
+
+    expect(calls).toEqual([
+      ["input", "tap", "540", "398"],
+      ["ime", "list", "-s"],
+      ["settings", "get", "secure", "default_input_method"],
+      ["ime", "set", "com.android.adbkeyboard/.AdbIME"],
+      ["input", "tap", "540", "398"],
+      ["am", "broadcast", "-a", "ADB_CLEAR_TEXT"],
+      ["input", "tap", "540", "398"],
+      ["am", "broadcast", "-a", "ADB_INPUT_TEXT", "--es", "msg", "按时阿斯蒂芬"],
+      ["ime", "set", "com.demo/.Ime"]
+    ]);
+  });
+
   it("inputs text through Android keyevents when requested", async () => {
     const calls: string[][] = [];
     const actions = new AndroidActionExecutor({
