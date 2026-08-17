@@ -362,10 +362,18 @@ function descriptiveTargetLabel(target: Record<string, unknown>, display: StepDi
 function targetPositionLabel(target: Record<string, unknown>): string {
   const area = stringValue(target.area);
   const position = stringValue(target.position);
+  const vertical = stringValue(target.vertical);
   if (area === "topBar" && position === "leading") return "左上角";
   if (area === "topBar" && position === "trailing") return "右上角";
   if (area === "bottomBar" && position === "leading") return "左下角";
   if (area === "bottomBar" && position === "trailing") return "右下角";
+  if (area === "content" && vertical === "bottom" && position === "leading") return "左下角";
+  if (area === "content" && vertical === "bottom" && position === "trailing") return "右下角";
+  if (area === "content" && vertical === "top" && position === "leading") return "左上方";
+  if (area === "content" && vertical === "top" && position === "trailing") return "右上方";
+  if (area === "content" && vertical === "bottom") return "下方";
+  if (area === "content" && vertical === "top") return "上方";
+  if (area === "content" && vertical === "center") return "中部";
   if (area === "topBar") return "顶部";
   if (area === "bottomBar") return "底部";
   return "";

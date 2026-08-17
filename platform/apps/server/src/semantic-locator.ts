@@ -854,10 +854,12 @@ export class SemanticStepResolver {
     const semanticArea = readSemanticArea(params.semanticArea) ?? "unknown";
     const role = topBarIconRole(params).trim().toLowerCase();
     const slot = readTopBarSlot(params.slot) ?? "trailing";
+    const verticalSlot = readSemanticIconVerticalSlot(params.verticalSlot ?? params.vertical);
     const hierarchyResolution = await this.resolveSemanticIconFromUiHierarchy(input, {
       role,
       semanticArea,
-      slot
+      slot,
+      verticalSlot
     });
     if (hierarchyResolution) {
       const actionResult = normalizeActionResult(await this.performAction(input, hierarchyResolution.action));
@@ -874,6 +876,7 @@ export class SemanticStepResolver {
           ...pageTaskSemanticMetadata(params),
           role,
           slot,
+          verticalSlot,
           semanticArea,
           relocatedBy: "ui_hierarchy_icon",
           recordedCandidateUsed: false,
@@ -915,6 +918,7 @@ export class SemanticStepResolver {
       role: string;
       semanticArea: VisualSemanticArea;
       slot: TopBarIconSlot;
+      verticalSlot?: SemanticIconVerticalSlot;
     }
   ): Promise<UiHierarchyIconResolution | undefined> {
     if (!this.deps.dumpUiHierarchy || !options.role || !input.deviceSize) {
@@ -936,6 +940,7 @@ export class SemanticStepResolver {
           role: options.role,
           semanticArea: options.semanticArea,
           slot: options.slot,
+          verticalSlot: options.verticalSlot,
           deviceSize: input.deviceSize!
         });
         return { candidate, ...score };
@@ -944,6 +949,8 @@ export class SemanticStepResolver {
       .sort((left, right) =>
         right.score - left.score ||
         right.semanticEvidence - left.semanticEvidence ||
+        semanticIconVerticalSortValue(right.candidate, options.verticalSlot, input.deviceSize!)
+          - semanticIconVerticalSortValue(left.candidate, options.verticalSlot, input.deviceSize!) ||
         (options.slot === "trailing"
           ? right.candidate.bounds.centerX - left.candidate.bounds.centerX
           : left.candidate.bounds.centerX - right.candidate.bounds.centerX)
@@ -982,6 +989,7 @@ export class SemanticStepResolver {
     const role = topBarIconRole(params).trim().toLowerCase();
     const explicitSlot = readTopBarSlot(params.slot);
     const slot = explicitSlot ?? "trailing";
+    const verticalSlot = readSemanticIconVerticalSlot(params.verticalSlot ?? params.vertical);
     const orderFromRight = Math.max(1, Math.floor(numberParam(params.orderFromRight) ?? 1));
     const anchorText = textParam(params.anchorText ?? params.targetText ?? params.text).trim();
     if (!input.deviceSize) {
@@ -1022,6 +1030,7 @@ export class SemanticStepResolver {
       role,
       semanticArea,
       slot: explicitSlot,
+      verticalSlot,
       orderFromRight,
       anchorPoint,
       deviceSize: input.deviceSize,
@@ -1039,6 +1048,7 @@ export class SemanticStepResolver {
           reason: currentVisual.reason,
           role,
           slot,
+          verticalSlot,
           orderFromRight,
           anchorText,
           anchor,
@@ -1065,6 +1075,7 @@ export class SemanticStepResolver {
         ...pageTaskSemanticMetadata(params),
         role,
         slot,
+        verticalSlot,
         orderFromRight,
         anchorText,
         anchor,
@@ -1092,6 +1103,7 @@ export class SemanticStepResolver {
     const params = input.step.params ?? {};
     const role = topBarIconRole(params).trim().toLowerCase();
     const slot = readTopBarSlot(params.slot) ?? "trailing";
+    const verticalSlot = readSemanticIconVerticalSlot(params.verticalSlot ?? params.vertical);
     if (!input.deviceSize) {
       return semanticIconFailure(role, slot, semanticArea, "missing_device_size", "Semantic icon target requires device size.");
     }
@@ -1106,6 +1118,7 @@ export class SemanticStepResolver {
     const currentVisual = await locateCurrentContentAddIconInScreenshot({
       screenshot: screenshot.png,
       slot,
+      verticalSlot,
       deviceSize: input.deviceSize,
       ocrLayout
     });
@@ -1121,6 +1134,7 @@ export class SemanticStepResolver {
           reason: "current_visual_icon_not_found",
           role,
           slot,
+          verticalSlot,
           semanticArea,
           currentVisual: currentVisual.diagnostic,
           recordedCandidateUsed: false
@@ -1143,6 +1157,7 @@ export class SemanticStepResolver {
         ...pageTaskSemanticMetadata(params),
         role,
         slot,
+        verticalSlot,
         semanticArea,
         relocatedBy: "content_current_visual",
         currentVisual: currentVisual.diagnostic,
@@ -7732,6 +7747,7 @@ type VisualImageRegionCandidate = {
 };
 
 type TopBarIconSlot = "leading" | "trailing";
+type SemanticIconVerticalSlot = "top" | "center" | "bottom";
 
 function isVisualQueryLocator(params: Record<string, unknown>): boolean {
   return textParam(params.locatorKind).trim() === "visual_query_locator";
@@ -7818,12 +7834,17 @@ function readTopBarSlot(value: unknown): TopBarIconSlot | undefined {
   return value === "leading" || value === "trailing" ? value : undefined;
 }
 
+function readSemanticIconVerticalSlot(value: unknown): SemanticIconVerticalSlot | undefined {
+  return value === "top" || value === "center" || value === "bottom" ? value : undefined;
+}
+
 function semanticIconUiCandidateScore(
   candidate: UiElementCandidate,
   input: {
     role: string;
     semanticArea: VisualSemanticArea;
     slot: TopBarIconSlot;
+    verticalSlot?: SemanticIconVerticalSlot;
     deviceSize: { width: number; height: number };
   }
 ): { score: number; semanticEvidence: number; matchReason: UiHierarchyIconResolution["matchReason"] } {
@@ -7832,9 +7853,10 @@ function semanticIconUiCandidateScore(
   const interactivityScore = candidate.clickable ? 2.5 : candidate.longClickable ? 2 : candidate.focusable ? 1 : 0;
   const areaScore = semanticIconAreaScore(candidate, input.semanticArea, input.deviceSize);
   const slotScore = semanticIconSlotScore(candidate, input.slot, input.deviceSize);
+  const verticalSlotScore = semanticIconVerticalSlotScore(candidate, input.verticalSlot, input.deviceSize);
   const sizeScore = semanticIconUiSizeScore(candidate, input.deviceSize);
   return {
-    score: semanticEvidence + enabledScore + interactivityScore + areaScore + slotScore + sizeScore,
+    score: semanticEvidence + enabledScore + interactivityScore + areaScore + slotScore + verticalSlotScore + sizeScore,
     semanticEvidence,
     matchReason: semanticEvidence >= 5 ? "semantic_accessibility" : "semantic_identity"
   };
@@ -7895,6 +7917,34 @@ function semanticIconSlotScore(
     return xPercent >= 55 ? 1.5 : -1;
   }
   return xPercent <= 45 ? 1.5 : -1;
+}
+
+function semanticIconVerticalSlotScore(
+  candidate: UiElementCandidate,
+  verticalSlot: SemanticIconVerticalSlot | undefined,
+  deviceSize: { width: number; height: number }
+): number {
+  if (!verticalSlot) return 0;
+  const yPercent = (candidate.bounds.centerY / deviceSize.height) * 100;
+  if (verticalSlot === "top") {
+    return yPercent <= 35 ? 1.4 : -1;
+  }
+  if (verticalSlot === "bottom") {
+    return yPercent >= 60 ? 1.4 : -1;
+  }
+  return yPercent >= 30 && yPercent <= 70 ? 1.2 : -0.8;
+}
+
+function semanticIconVerticalSortValue(
+  candidate: UiElementCandidate,
+  verticalSlot: SemanticIconVerticalSlot | undefined,
+  deviceSize: { width: number; height: number }
+): number {
+  if (!verticalSlot) return 0;
+  const yPosition = candidate.bounds.centerY / Math.max(1, deviceSize.height);
+  if (verticalSlot === "top") return 1 - yPosition;
+  if (verticalSlot === "bottom") return yPosition;
+  return 1 - Math.min(1, Math.abs(yPosition - 0.5) * 2);
 }
 
 function semanticIconUiSizeScore(candidate: UiElementCandidate, deviceSize: { width: number; height: number }): number {
@@ -8135,6 +8185,7 @@ async function locateCurrentTopBarIconInScreenshot(input: {
 async function locateCurrentContentAddIconInScreenshot(input: {
   screenshot: Buffer;
   slot: TopBarIconSlot;
+  verticalSlot?: SemanticIconVerticalSlot;
   deviceSize: { width: number; height: number };
   ocrLayout?: OcrLayoutResult;
 }): Promise<{
@@ -8148,9 +8199,7 @@ async function locateCurrentContentAddIconInScreenshot(input: {
   if (!sample) {
     return { diagnostic: { reason: "image_sample_unavailable" } };
   }
-  const searchRegion = input.slot === "trailing"
-    ? { x: 55, y: 14, width: 45, height: 75 }
-    : { x: 0, y: 14, width: 45, height: 75 };
+  const searchRegion = contentAddIconSearchRegion(input.slot, input.verticalSlot);
   const pixelSearchRegion = percentRegionToSampleRect(searchRegion, sample);
   if (!pixelSearchRegion) {
     return { diagnostic: { reason: "invalid_search_region", searchRegion } };
@@ -8160,7 +8209,7 @@ async function locateCurrentContentAddIconInScreenshot(input: {
   const candidates = rawComponents
     .map((component) => ({
       ...component,
-      score: contentAddIconScore(component, sample, input.slot)
+      score: contentAddIconScore(component, sample, input.slot, input.verticalSlot)
     }))
     .filter((component) => component.score >= 0.58)
     .sort((left, right) => right.score - left.score || (
@@ -8171,6 +8220,7 @@ async function locateCurrentContentAddIconInScreenshot(input: {
     reason: selected ? "current_visual_icon_selected" : "current_visual_icon_not_found",
     strategy: "floating_add_shape",
     slot: input.slot,
+    verticalSlot: input.verticalSlot,
     searchRegion,
     rawComponentCount: rawComponents.length,
     ocrTextOverlappingComponentCount: ocrOverlap.overlappingCount,
@@ -8198,6 +8248,7 @@ async function locateCurrentVisibleSemanticIconInScreenshot(input: {
   role: string;
   semanticArea: VisualSemanticArea;
   slot?: TopBarIconSlot;
+  verticalSlot?: SemanticIconVerticalSlot;
   orderFromRight: number;
   anchorPoint?: { x: number; y: number };
   deviceSize: { width: number; height: number };
@@ -8249,6 +8300,7 @@ async function locateCurrentVisibleSemanticIconInScreenshot(input: {
     const candidates = phaseCandidates.candidates;
     const selected = selectVisibleSemanticIconCandidate(candidates, {
       slot: input.slot,
+      verticalSlot: input.verticalSlot,
       orderFromRight: input.orderFromRight,
       anchorPoint: input.anchorPoint
     });
@@ -8259,6 +8311,7 @@ async function locateCurrentVisibleSemanticIconInScreenshot(input: {
       role: input.role || undefined,
       normalizedRole: role,
       semanticArea: input.semanticArea,
+      verticalSlot: input.verticalSlot,
       searchRegion: phase.region,
       rawComponentCount: phaseCandidates.rawComponentCount,
       ocrTextExcludedComponentCount: phaseCandidates.excludedCount,
@@ -8308,6 +8361,7 @@ async function locateCurrentVisibleSemanticIconInScreenshot(input: {
       role: input.role || undefined,
       normalizedRole: role,
       semanticArea: input.semanticArea,
+      verticalSlot: input.verticalSlot,
       phases: diagnostics
     }
   };
@@ -8410,6 +8464,7 @@ function selectVisibleSemanticIconCandidate(
   candidates: VisibleSemanticIconCandidate[],
   options: {
     slot?: TopBarIconSlot;
+    verticalSlot?: SemanticIconVerticalSlot;
     orderFromRight: number;
     anchorPoint?: { x: number; y: number };
   }
@@ -8419,6 +8474,18 @@ function selectVisibleSemanticIconCandidate(
   }
   if (candidates.length === 1) {
     return { candidate: candidates[0], reason: "current_visual_icon_selected" };
+  }
+  if (options.verticalSlot) {
+    const ordered = candidates
+      .slice()
+      .sort((left, right) =>
+        visibleSemanticIconPlacementScore(right, options) - visibleSemanticIconPlacementScore(left, options) ||
+        right.score - left.score
+      );
+    return {
+      candidate: ordered[0],
+      reason: "current_visual_icon_selected_by_position"
+    };
   }
   if (options.slot) {
     const ordered = candidates
@@ -8439,6 +8506,27 @@ function selectVisibleSemanticIconCandidate(
     }
   }
   return { reason: "ambiguous_icon_candidates" };
+}
+
+function visibleSemanticIconPlacementScore(
+  candidate: VisibleSemanticIconCandidate,
+  options: { slot?: TopBarIconSlot; verticalSlot?: SemanticIconVerticalSlot }
+): number {
+  const horizontalPosition = (candidate.region.x + candidate.region.width / 2) / 100;
+  const verticalPosition = (candidate.region.y + candidate.region.height / 2) / 100;
+  const horizontalScore = options.slot === "trailing"
+    ? horizontalPosition
+    : options.slot === "leading"
+      ? 1 - horizontalPosition
+      : 0.5;
+  const verticalScore = options.verticalSlot === "top"
+    ? 1 - verticalPosition
+    : options.verticalSlot === "bottom"
+      ? verticalPosition
+      : options.verticalSlot === "center"
+        ? 1 - Math.min(1, Math.abs(verticalPosition - 0.5) * 2)
+        : 0.5;
+  return horizontalScore * 0.45 + verticalScore * 0.55;
 }
 
 function visibleSemanticIconGeometryScore(component: TopBarIconVisualComponent, sample: ImageSample): number {
@@ -8631,7 +8719,25 @@ function findContentAddIconComponents(
   return components;
 }
 
-function contentAddIconScore(component: TopBarIconVisualComponent, sample: ImageSample, slot: TopBarIconSlot): number {
+function contentAddIconSearchRegion(
+  slot: TopBarIconSlot,
+  verticalSlot: SemanticIconVerticalSlot | undefined
+): { x: number; y: number; width: number; height: number } {
+  const horizontal = slot === "trailing"
+    ? { x: 55, width: 45 }
+    : { x: 0, width: 45 };
+  if (verticalSlot === "top") return { ...horizontal, y: 14, height: 43 };
+  if (verticalSlot === "center") return { ...horizontal, y: 25, height: 55 };
+  if (verticalSlot === "bottom") return { ...horizontal, y: 42, height: 55 };
+  return { ...horizontal, y: 14, height: 75 };
+}
+
+function contentAddIconScore(
+  component: TopBarIconVisualComponent,
+  sample: ImageSample,
+  slot: TopBarIconSlot,
+  verticalSlot: SemanticIconVerticalSlot | undefined
+): number {
   const { width, height } = component.bounds;
   const baseSize = Math.min(sample.width, sample.height);
   const sizeRatio = Math.min(width, height) / Math.max(1, baseSize);
@@ -8641,8 +8747,20 @@ function contentAddIconScore(component: TopBarIconVisualComponent, sample: Image
   const densityScore = Math.max(0, Math.min(1, (density - 0.36) / 0.35));
   const horizontalPosition = component.center.x / Math.max(1, sample.width);
   const positionScore = slot === "trailing" ? horizontalPosition : 1 - horizontalPosition;
+  const verticalPosition = component.center.y / Math.max(1, sample.height);
+  const verticalScore = contentAddIconVerticalScore(verticalPosition, verticalSlot);
   const plusScore = centeredLightCrossScore(component, sample);
-  return 0.32 * plusScore + 0.24 * aspectScore + 0.2 * densityScore + 0.14 * sizeScore + 0.1 * positionScore;
+  return 0.29 * plusScore + 0.22 * aspectScore + 0.18 * densityScore + 0.13 * sizeScore + 0.09 * positionScore + 0.09 * verticalScore;
+}
+
+function contentAddIconVerticalScore(
+  verticalPosition: number,
+  verticalSlot: SemanticIconVerticalSlot | undefined
+): number {
+  if (verticalSlot === "top") return 1 - verticalPosition;
+  if (verticalSlot === "bottom") return verticalPosition;
+  if (verticalSlot === "center") return 1 - Math.min(1, Math.abs(verticalPosition - 0.5) * 2);
+  return 0.5;
 }
 
 function centeredLightCrossScore(component: TopBarIconVisualComponent, sample: ImageSample): number {

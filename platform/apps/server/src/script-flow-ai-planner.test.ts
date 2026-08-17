@@ -49,9 +49,9 @@ it("only instructs AI to use supported ScriptFlow target modes", () => {
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("作为结果验证时标记 role: assertion");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("作为每轮复位时标记 role: reset");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("严格按照脚本中的显式命令执行");
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing, vertical: bottom }");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("非 OCR 视觉目标必须尽量补全跨平台限定");
-  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入");
+  expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("用户明确说顶部、底部、左上角、右上角、左下角、右下角、左侧、右侧或某段文字附近时必须写入");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("点击左上角返回按钮");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon: back");
   expect(SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS).toContain("icon: share");
@@ -1282,12 +1282,12 @@ describe("ScriptFlow AI planner", () => {
       expect(result.status).toBe("ready");
       if (result.status !== "ready") return;
       expect(result.document.steps[2]).toMatchObject({
-        tap: { target: { icon: "add", area: "content", position: "trailing" } }
+        tap: { target: { icon: "add", area: "content", position: "trailing", vertical: "bottom" } }
       });
     }
   );
 
-  it("drops generated vertical-only position aliases for icon targets before validation", () => {
+  it("normalizes generated vertical-only position aliases for icon targets before validation", () => {
     const catalog = buildScriptFlowPlannerCatalog(emptyPageCatalog(), [], "classin", "mobile");
     const response = readyResponse() as unknown as {
       status: "ready";
@@ -1318,7 +1318,7 @@ describe("ScriptFlow AI planner", () => {
     expect(result.status).toBe("ready");
     if (result.status !== "ready") return;
     expect(result.document.steps[2]).toMatchObject({
-      tap: { target: { icon: "add", area: "content" } }
+      tap: { target: { icon: "add", area: "content", vertical: "bottom" } }
     });
     expect(result.document.steps[2]).not.toMatchObject({
       tap: { target: { position: expect.any(String) } }
@@ -1927,7 +1927,7 @@ describe("ScriptFlow AI planner", () => {
     });
   });
 
-  it("does not fail when grounding review asks for an unsupported lower-corner position already represented by content trailing", async () => {
+  it("does not silently accept lower-corner icon grounding when vertical placement is still missing", async () => {
     const first = readyResponse();
     first.summary = "点击右下角加号按钮";
     first.document.app = { id: "classin" };
@@ -1940,7 +1940,7 @@ describe("ScriptFlow AI planner", () => {
         id: "tap-add",
         role: "navigation",
         tap: {
-          target: { icon: "add", area: "content" },
+          target: { icon: "add", area: "content", position: "trailing" },
           search: { mode: "visibleOnly" }
         }
       }
@@ -1975,17 +1975,12 @@ describe("ScriptFlow AI planner", () => {
     const responses: unknown[] = [
       first,
       { status: "ok", summary: "无硬编码业务值需要修复。", issues: [] },
-      {
-        status: "needs_repair",
-        summary: "右下角加号按钮缺少右侧位置线索。",
-        issues: [{ stepId: "tap-add", reason: "用户说右下角，但 icon target 缺少 position: trailing。" }],
-        repairInstructions: "为 tap-add 增加 position: trailing。"
-      },
+      verticalOnlyReview,
       repaired,
       verticalOnlyReview
     ];
 
-    const result = await generateScriptFlowDraft({
+    await expect(generateScriptFlowDraft({
       config: { enabled: true, baseURL: "https://ai.example/v1", apiKey: "sk", model: "planner", timeoutMs: 5000 },
       prompt: "重启app，然后滑动列表找到班级四十二号并点击，然后点击右下角加号按钮，在点击课堂，进入新建课堂页面，再点击课堂时长",
       appId: "classin",
@@ -2000,18 +1995,11 @@ describe("ScriptFlow AI planner", () => {
           choices: [{ message: { content: JSON.stringify(content) } }]
         }), { status: 200 });
       }
-    });
+    })).rejects.toThrow(/仍未通过非 OCR 目标 grounding review/);
 
     expect(requests).toHaveLength(5);
-    expect(result).toMatchObject({
-      status: "trial_ready",
-      document: {
-        steps: [
-          { launchApp: { appId: "classin" } },
-          { tap: { target: { icon: "add", area: "content", position: "trailing" } } }
-        ]
-      }
-    });
+    expect(requests[2]).toContain("vertical");
+    expect(requests[3]).toContain("vertical");
   });
 
   it("rejects AI drafts that encode an explicit visual request as a semantic text target", () => {
@@ -2058,7 +2046,7 @@ describe("ScriptFlow AI planner", () => {
     expect(prompt).toContain("不要因为页面名称、页面资产、导航索引或“回到”推断点击、返回、重启或 reachPage");
     expect(prompt).toContain("tap、inputText、clearText 和 selectText 使用同一 search 合同");
     expect(prompt).toContain("非 OCR 视觉目标必须尽量补全跨平台限定");
-    expect(prompt).toContain("用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入");
+    expect(prompt).toContain("用户明确说顶部、底部、左上角、右上角、左下角、右下角、左侧、右侧或某段文字附近时必须写入");
     expect(prompt).toContain('"kind": "case | scenario"');
     expect(prompt).not.toContain('"entry":');
     expect(prompt).not.toContain('"outcome":');

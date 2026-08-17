@@ -49,6 +49,8 @@ export type ScriptTargetArea = "topBar" | "content" | "bottomBar";
 
 export type ScriptTargetPosition = "leading" | "trailing";
 
+export type ScriptTargetVertical = "top" | "center" | "bottom";
+
 export type ScriptTargetControl = "checkbox" | "switch" | "textField";
 
 export type ScriptTargetRelation = "above" | "below" | "leftOf" | "rightOf";
@@ -60,6 +62,7 @@ export type ScriptVisualTarget = {
   query: string;
   area?: ScriptTargetArea;
   position?: ScriptTargetPosition;
+  vertical?: ScriptTargetVertical;
   nearText?: string;
   scopeText?: string;
   ordinal?: number;
@@ -72,6 +75,7 @@ export type ScriptTarget = {
   control?: ScriptTargetControl;
   area?: ScriptTargetArea;
   position?: ScriptTargetPosition;
+  vertical?: ScriptTargetVertical;
   nearText?: string;
   scopeText?: string;
   ordinal?: number;

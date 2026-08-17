@@ -376,7 +376,7 @@ steps:
 `)).toThrow(/target\.semantic.*Unknown field/i);
   });
 
-  it("accepts a standard floating add icon in the page content", () => {
+  it("accepts a standard floating add icon in the lower page content", () => {
     const flow = parseScriptFlow(`
 version: 1
 name: open publish activity
@@ -384,14 +384,47 @@ app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: open-publish-activity
     tap:
-      target: { icon: add, area: content, position: trailing }
+      target: { icon: add, area: content, position: trailing, vertical: bottom }
       search: { mode: visibleOnly }
 `);
 
     expect(flow.steps[0]).toMatchObject({
       tap: {
-        target: { icon: "add", area: "content", position: "trailing" },
+        target: { icon: "add", area: "content", position: "trailing", vertical: "bottom" },
         search: { mode: "visibleOnly" }
+      }
+    });
+  });
+
+  it("accepts a visual icon target with vertical placement hints", () => {
+    const flow = parseScriptFlow(`
+version: 1
+name: open bottom visual button
+app: { id: cn.eeo.classin, platform: android }
+steps:
+  - id: open-visual-button
+    tap:
+      target:
+        visual:
+          kind: icon
+          query: 右下角加号按钮
+          area: content
+          position: trailing
+          vertical: bottom
+      search: { mode: visibleOnly }
+`);
+
+    expect(flow.steps[0]).toMatchObject({
+      tap: {
+        target: {
+          visual: {
+            kind: "icon",
+            query: "右下角加号按钮",
+            area: "content",
+            position: "trailing",
+            vertical: "bottom"
+          }
+        }
       }
     });
   });

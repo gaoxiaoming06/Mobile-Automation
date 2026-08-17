@@ -41,12 +41,12 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确说点击某个入口时，禁止擅自补“点击修改”或其他桥接动作；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification 询问准确字段位置或完整操作路径。",
   "text 目标默认不要猜测 topBar/bottomBar。只有用户明确说顶部、底部、左上角、右上角等位置，或目录中的已验证导航入口/原用例已经给出同一目标位置时，才可增加窄区域约束；否则省略 area，让执行器在当前屏幕查找。",
   "发布、提交、删除、支付等操作按钮可能位于顶部、内容区或底部；用户或已验证知识未提供位置时必须省略 area，禁止根据动作名称猜测区域。",
-  "icon 和 visual 都是非 OCR 视觉目标；非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal。用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定；用户未提供任何限定且标准视觉 role 足够明确时才可省略。内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing }；不要把自定义产品图形臆测成标准图标。",
-  "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象。visual 必须保留用户原始视觉描述作为 query，并按用户描述补充 kind、area、position、nearText、scopeText 或 ordinal。执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
+  "icon 和 visual 都是非 OCR 视觉目标；非 OCR 视觉目标必须尽量补全跨平台限定：area、position、vertical、nearText、scopeText 或 ordinal。position 只表达左右：leading/trailing；vertical 表达上下：top/center/bottom。用户明确说顶部、底部、左上角、右上角、左下角、右下角、左侧、右侧或某段文字附近时必须写入对应限定；用户未提供任何限定且标准视觉 role 足够明确时才可省略。内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing, vertical: bottom }；不要把自定义产品图形臆测成标准图标。",
+  "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象。visual 必须保留用户原始视觉描述作为 query，并按用户描述补充 kind、area、position、vertical、nearText、scopeText 或 ordinal。执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
   "用户明确说‘点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复、reachPage 或重启。",
   "control 当前只支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content，并使用 scopeText+ordinal 或 anchorText+relation：scopeText+ordinal 用于某局部区域内第几个输入框；anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text。",
   "inputText 和 clearText 会自行定位、点击并聚焦输入框；用户说选中/点击某输入框再输入或清空时，生成一个 inputText/clearText 步骤即可，不要额外生成前置 tap 输入框步骤。",
-  "消息输入区、键盘工具栏、表情面板或更多/附件面板里的图标按钮当前使用 icon + area: content，并按用户描述补 position、nearText、scopeText 或 ordinal；例如表情图标用 icon: emoji，语音/麦克风图标用 icon: mic，加号图标用 icon: add，上箭头发送图标用 icon: arrowUp。不要生成 scope、role、selection、iconButton、submitButton 或 collectionItem。",
+  "消息输入区、键盘工具栏、表情面板或更多/附件面板里的图标按钮当前使用 icon + area: content，并按用户描述补 position、vertical、nearText、scopeText 或 ordinal；例如表情图标用 icon: emoji，语音/麦克风图标用 icon: mic，加号图标用 icon: add，上箭头发送图标用 icon: arrowUp。不要生成 scope、role、selection、iconButton、submitButton 或 collectionItem。",
   "textField 的 scopeText 或 anchorText 必须是局部表单区域标题、字段组标题、字段标签或控件附近稳定文字，不能使用页面标题、顶栏固定标题、App 名称等全局固定文字。用户只用“某页面标题上方/下方/左侧/右侧/第几个输入框”定位时应返回 needs_clarification，请其补充局部字段名或开启当前屏幕辅助。",
   "执行器能力合同：visual 仅支持 tap；selectText 和 scrollUntilVisible 必须使用 text；inputText 和 clearText 必须使用 text 或 control: textField。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
@@ -497,8 +497,8 @@ export function buildScriptFlowPlannerPrompt(
       : "生成上下文模式：strict。不要使用沉淀资产、历史脚本、页面目录或导航知识；只按照用户当前描述和显式开启的当前屏幕上下文生成。用户没有明确页面前置或页面结果时，不要生成 entry、outcome、before 或 after。",
     "每个 steps 项必须包含非空 id 和显式 role，并把动作名直接作为字段；每步只能有一个动作字段。不要输出 action 或 page 字段。",
     "步骤字段合同：步骤 id 使用稳定英文短横线命名；role 只能使用 setup、navigation、business、assertion、reset、cleanup 或 recovery；动作字段只能从可用动作列表中选择一个；页面字段不是动作字段，不能用 page/action 包装动作。",
-    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号/表情/麦克风/上箭头等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、nearText、scopeText 或 ordinal；用户明确说顶部、底部、左上角、右上角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 和 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content，并使用 scopeText+ordinal 或 anchorText+relation；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
-    "消息输入区、键盘工具栏、表情面板或更多/附件面板里的图标按钮当前使用 icon + area: content，并按用户描述补 position、nearText、scopeText 或 ordinal；例如表情图标用 icon: emoji，语音/麦克风图标用 icon: mic，加号图标用 icon: add，上箭头发送图标用 icon: arrowUp。不要生成 scope、role、selection、iconButton、submitButton 或 collectionItem。",
+    "target 必须且只能使用 text、icon、visual 或 control。text 是可在屏幕上按字面读取的原文，必须能追溯到用户输入或已知目录；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号/表情/麦克风/上箭头等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual，不能改写成 text。非 OCR 视觉目标必须尽量补全跨平台限定：area、position、vertical、nearText、scopeText 或 ordinal；position 只表达左右：leading/trailing；vertical 表达上下：top/center/bottom。用户明确说顶部、底部、左上角、右上角、左下角、右下角、左侧、右侧或某段文字附近时必须写入对应限定。control 支持 checkbox、switch 和 textField：checkbox 必须带 area: content 和 nearText；switch 必须带 area: content、nearText 和 checked；textField 必须带 area: content，并使用 scopeText+ordinal 或 anchorText+relation；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text；禁止元素资产 ID、坐标、区域和临时视觉模板，也禁止 semantic 目标字段。",
+    "消息输入区、键盘工具栏、表情面板或更多/附件面板里的图标按钮当前使用 icon + area: content，并按用户描述补 position、vertical、nearText、scopeText 或 ordinal；例如表情图标用 icon: emoji，语音/麦克风图标用 icon: mic，加号图标用 icon: add，上箭头发送图标用 icon: arrowUp。不要生成 scope、role、selection、iconButton、submitButton 或 collectionItem。",
     "textField.scopeText+ordinal 用于某局部区域内第几个输入框；textField.anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置。相对锚点文字必须写入 anchorText，不能降级成 target.text；scopeText 或 anchorText 不能使用页面标题、顶栏固定标题、App 名称等全局固定文字；用户只用“某页面标题上方/下方/左侧/右侧/第几个输入框”定位时返回 needs_clarification，要求补充局部字段名或开启当前屏幕辅助。",
     "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 默认按完整控件文字匹配，按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和参数化名称不要写 match: contains。使用 screenContext 或读屏证据时，根据当前可见原文选择 match：实际原文与目标完全一致时用 exact/省略 match；screenContext 原文是“确定(1/6)”而用户只说“确定”时，必须生成 target: { text: \"确定\", match: \"contains\" }；类似“完成 2/6”“保存(已选3项)”这类动态数量或状态后缀也用 contains，并尽量补充 area、nearText、scopeText、ordinal 或容器语义。未启用当前屏幕上下文时，根据自然语言语义选择 match：用户明确表达‘包含、带有、关键字、模糊匹配’或明显只给动态状态控件的基础动作词时，才写 match: contains。",
     screenContext
@@ -699,7 +699,7 @@ async function reviewAndRepairNonOcrGrounding(input: {
     effort: "low"
   }, input.fetchImpl), { channel: input.channel, model: input.model });
   const assessment = parseScriptFlowGroundingReview(review.content);
-  if (assessment.status === "ok" || acceptsCurrentLowerCornerIconContract(assessment, input.parsed.document, input.parseInput.prompt)) {
+  if (assessment.status === "ok") {
     return input.parsed;
   }
 
@@ -718,10 +718,7 @@ async function reviewAndRepairNonOcrGrounding(input: {
     effort: "low"
   }, input.fetchImpl), { channel: input.channel, model: input.model });
   const repairedAssessment = parseScriptFlowGroundingReview(repairedReview.content);
-  if (
-    repairedAssessment.status === "needs_repair"
-    && !acceptsCurrentLowerCornerIconContract(repairedAssessment, repairedParsed.document, input.parseInput.prompt)
-  ) {
+  if (repairedAssessment.status === "needs_repair") {
     throw new Error(`AI 修复后仍未通过非 OCR 目标 grounding review：${repairedAssessment.summary}`);
   }
   return repairedParsed;
@@ -828,7 +825,7 @@ function buildScriptFlowGroundingReviewPrompt(
   return [
     "请对下面 ScriptFlow 草稿做 grounding review。",
     "只审查 icon/visual 这类非 OCR 视觉目标是否充分保留了用户原始描述中的跨平台定位线索，例如位置、顺序、附近文字、所属区域或范围。",
-    "ScriptFlow 当前没有 bottomRight 这类二维角落字段：右下角/左下角的标准悬浮 icon 用 area: content + position: trailing/leading 表达；不要仅因缺少 bottom 或 bottomRight 字段要求修复。",
+    "ScriptFlow 位置合同：position 只表达左右 leading/trailing；vertical 表达上下 top/center/bottom。右下角/左下角的标准悬浮 icon 应表达为 area: content + position: trailing/leading + vertical: bottom。",
     "由你根据自然语言灵活判断用户是否提供了这些线索；不要依赖固定词表，也不要因为脚本合法就直接通过。",
     "如果脚本丢失了重要线索，返回 needs_repair 并给出可操作的 repairInstructions；否则返回 ok。",
     "只返回唯一 JSON 对象，格式：",
@@ -857,8 +854,8 @@ function buildScriptFlowGroundingRepairPrompt(
   return [
     plannerPrompt,
     "上一稿未通过非 OCR 目标 grounding review。请只根据 review 指令修复脚本中缺失的跨平台限定，不要引入坐标、resourceId、accessibilityId 或平台私有 selector。",
-    "修复时必须保持 target 的类别；icon/visual 非 OCR 目标不能改成 text。只能补充或调整 area、position、nearText、scopeText、ordinal、visual.query 等跨平台限定。",
-    "当前不支持 bottomRight 这类二维角落字段；右下角/左下角标准悬浮 icon 应表达为 area: content + position: trailing/leading。",
+    "修复时必须保持 target 的类别；icon/visual 非 OCR 目标不能改成 text。只能补充或调整 area、position、vertical、nearText、scopeText、ordinal、visual.query 等跨平台限定。",
+    "ScriptFlow 位置合同：position 只表达左右 leading/trailing；vertical 表达上下 top/center/bottom。右下角/左下角标准悬浮 icon 应表达为 area: content + position: trailing/leading + vertical: bottom。",
     "review 结果：",
     JSON.stringify(review, null, 2),
     "上一稿 YAML：",
@@ -905,42 +902,6 @@ function parseScriptFlowReviewAssessment(raw: string, label: string): ScriptFlow
 
 function hasNonOcrTapTargets(document: ScriptFlowDocument): boolean {
   return flattenSteps(document.steps).some((step) => "tap" in step && Boolean(step.tap.target.icon || step.tap.target.visual));
-}
-
-function acceptsCurrentLowerCornerIconContract(
-  assessment: ScriptFlowReviewAssessment,
-  document: ScriptFlowDocument,
-  prompt?: string
-): boolean {
-  if (assessment.status !== "needs_repair" || !mentionsLowerCorner(prompt)) return false;
-  if (!groundingAssessmentOnlyAsksForVerticalCorner(assessment)) return false;
-  return flattenSteps(document.steps).some((step) => {
-    if (!("tap" in step)) return false;
-    return iconTargetUsesCurrentLowerCornerContract(step.tap.target);
-  });
-}
-
-function groundingAssessmentOnlyAsksForVerticalCorner(assessment: ScriptFlowReviewAssessment): boolean {
-  const text = [
-    assessment.summary,
-    assessment.repairInstructions,
-    ...assessment.issues.flatMap((issue) => [issue.stepId, issue.reason])
-  ].filter(Boolean).join(" ");
-  return /底部|下方|下角|bottom|lower/i.test(text)
-    && !/附近文字|文字锚点|nearText|scopeText|ordinal|第[一二三四五六七八九十\d]+个|范围|区域/u.test(text);
-}
-
-function iconTargetUsesCurrentLowerCornerContract(target: ScriptTarget): boolean {
-  const visual = target.visual?.kind === "icon" ? target.visual : undefined;
-  const area = visual?.area ?? target.area;
-  const position = visual?.position ?? target.position;
-  return Boolean(target.icon || visual)
-    && area === "content"
-    && (position === "leading" || position === "trailing");
-}
-
-function mentionsLowerCorner(value?: string): boolean {
-  return Boolean(value && /右下|左下|下角|bottom|lower/i.test(value));
 }
 
 function hasEditableTextTargets(document: ScriptFlowDocument): boolean {
@@ -1101,22 +1062,37 @@ function normalizeGeneratedExplicitExecution(value: unknown, appId: string): Rec
 }
 
 function normalizeGeneratedTargetPositionAliases(value: unknown): Record<string, unknown> {
-  return normalizeGeneratedPositionAliasesInValue(recordValue(value)) as Record<string, unknown>;
+  return normalizeGeneratedTargetPlacementAliasesInValue(recordValue(value)) as Record<string, unknown>;
 }
 
-function normalizeGeneratedPositionAliasesInValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => normalizeGeneratedPositionAliasesInValue(item));
+function normalizeGeneratedTargetPlacementAliasesInValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => normalizeGeneratedTargetPlacementAliasesInValue(item));
   if (!value || typeof value !== "object") return value;
   const normalized = Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([key, child]) => [
       key,
-      normalizeGeneratedPositionAliasesInValue(child)
+      normalizeGeneratedTargetPlacementAliasesInValue(child)
     ])
   );
-  const position = generatedTargetPositionAlias(normalized.position);
-  if (position) normalized.position = position;
-  else if (generatedTargetPositionShouldBeDropped(normalized.position)) delete normalized.position;
+  const placement = generatedTargetPlacementAlias(normalized.position);
+  if (placement?.position) normalized.position = placement.position;
+  else if (placement?.vertical) delete normalized.position;
+  if (placement?.vertical && normalized.vertical === undefined) normalized.vertical = placement.vertical;
+  const vertical = generatedTargetVerticalAlias(normalized.vertical);
+  if (vertical) normalized.vertical = vertical;
   return normalized;
+}
+
+function generatedTargetPlacementAlias(value: unknown): { position?: "leading" | "trailing"; vertical?: "top" | "center" | "bottom" } | undefined {
+  const text = stringValue(value);
+  if (!text) return undefined;
+  const position = generatedTargetPositionAlias(text);
+  const vertical = generatedTargetVerticalAlias(text);
+  if (!position && !vertical) return undefined;
+  return {
+    ...(position ? { position } : {}),
+    ...(vertical ? { vertical } : {})
+  };
 }
 
 function generatedTargetPositionAlias(value: unknown): "leading" | "trailing" | undefined {
@@ -1145,15 +1121,21 @@ function generatedTargetPositionAlias(value: unknown): "leading" | "trailing" | 
   return undefined;
 }
 
-function generatedTargetPositionShouldBeDropped(value: unknown): boolean {
+function generatedTargetVerticalAlias(value: unknown): "top" | "center" | "bottom" | undefined {
   const text = stringValue(value);
-  if (!text) return false;
-  if (text === "leading" || text === "trailing") return false;
+  if (!text) return undefined;
+  if (text === "top" || text === "center" || text === "bottom") return text;
   const compact = text.toLowerCase().replace(/[\s_-]+/g, "");
-  return ["top", "bottom", "upper", "lower", "middle", "center", "centre"].includes(compact)
-    || compact.includes("上")
-    || compact.includes("下")
-    || compact.includes("中");
+  if (["top", "upper"].includes(compact) || compact.includes("top") || compact.includes("upper") || compact.includes("上")) {
+    return "top";
+  }
+  if (["bottom", "lower"].includes(compact) || compact.includes("bottom") || compact.includes("lower") || compact.includes("下")) {
+    return "bottom";
+  }
+  if (["middle", "center", "centre"].includes(compact) || compact.includes("middle") || compact.includes("center") || compact.includes("centre") || compact.includes("中")) {
+    return "center";
+  }
+  return undefined;
 }
 
 function stripLegacyRiskFields(steps: unknown[]): void {

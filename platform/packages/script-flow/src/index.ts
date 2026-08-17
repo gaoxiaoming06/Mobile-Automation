@@ -30,6 +30,7 @@ export type {
   ScriptTarget,
   ScriptTargetArea,
   ScriptTargetPosition,
+  ScriptTargetVertical,
   ScriptVisualTarget,
   ScriptVisualTargetKind
 } from "./types.js";

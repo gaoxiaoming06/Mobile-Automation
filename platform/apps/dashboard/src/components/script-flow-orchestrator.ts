@@ -8,6 +8,7 @@ export type StepLocatorPatch = {
   targetValue?: string;
   area?: string;
   position?: string;
+  vertical?: string;
   nearText?: string;
   scopeText?: string;
   ordinal?: string;
@@ -479,6 +480,7 @@ function applyLocatorPatch(
   applyPrimaryTargetPatch(targetAction.target, patch);
   setOptionalString(targetAction.target, "area", patch.area);
   setOptionalString(targetAction.target, "position", patch.position);
+  setOptionalString(targetAction.target, "vertical", patch.vertical);
   setOptionalString(targetAction.target, "nearText", patch.nearText);
   setOptionalString(targetAction.target, "scopeText", patch.scopeText);
   setOptionalNumber(targetAction.target, "ordinal", patch.ordinal);
@@ -505,7 +507,10 @@ function applyLocatorPatch(
 
 function normalizeTargetConstraints(target: Record<string, unknown>): void {
   const primary = primaryTargetValue(target);
-  if (primary.kind !== "icon" && primary.kind !== "visual") delete target.position;
+  if (primary.kind !== "icon" && primary.kind !== "visual") {
+    delete target.position;
+    delete target.vertical;
+  }
   if (primary.kind !== "control" || primary.value !== "switch") delete target.checked;
   if (primary.kind !== "control" || primary.value !== "textField") {
     delete target.anchorText;
@@ -515,6 +520,12 @@ function normalizeTargetConstraints(target: Record<string, unknown>): void {
   if (primary.kind === "icon") {
     if (target.area !== "topBar" && target.area !== "content") target.area = "topBar";
     if (target.position !== "leading" && target.position !== "trailing") target.position = "trailing";
+    if (target.vertical !== "top" && target.vertical !== "center" && target.vertical !== "bottom") delete target.vertical;
+    return;
+  }
+  if (primary.kind === "visual") {
+    if (target.position !== "leading" && target.position !== "trailing") delete target.position;
+    if (target.vertical !== "top" && target.vertical !== "center" && target.vertical !== "bottom") delete target.vertical;
     return;
   }
   if (primary.kind !== "control") return;

@@ -148,6 +148,7 @@ type StepLocatorView = {
   usesSearchPolicy: boolean;
   area?: string;
   position?: string;
+  vertical?: string;
   nearText?: string;
   scopeText?: string;
   ordinal?: string;
@@ -199,6 +200,13 @@ const AREA_OPTIONS: LocatorOption[] = [
   { value: "topBar", label: "顶部栏" },
   { value: "content", label: "页面内容" },
   { value: "bottomBar", label: "底部栏" }
+];
+
+const VERTICAL_OPTIONS: LocatorOption[] = [
+  { value: "", label: "自动判断" },
+  { value: "top", label: "上方" },
+  { value: "center", label: "中部" },
+  { value: "bottom", label: "下方" }
 ];
 
 const SEARCH_MODE_OPTIONS: LocatorOption[] = [
@@ -1776,7 +1784,10 @@ function StepLocatorEditor({
         </select></label>
       </> : null}
       {locator.targetKind === "control" && locator.targetValue === "switch" ? <label>选中状态<select value={locator.checked ?? "false"} onChange={(event) => onChange(stepKey, { checked: event.target.value })}><option value="true">已选中</option><option value="false">未选中</option></select></label> : null}
-      {locator.targetKind === "icon" || locator.targetKind === "visual" ? <label>相对位置<select value={locator.position ?? ""} onChange={(event) => onChange(stepKey, { position: event.target.value })}><option value="">自动</option><option value="leading">前侧</option><option value="trailing">后侧</option></select></label> : null}
+      {locator.targetKind === "icon" || locator.targetKind === "visual" ? <>
+        <label>横向位置<select value={locator.position ?? ""} onChange={(event) => onChange(stepKey, { position: event.target.value })}><option value="">自动</option><option value="leading">前侧</option><option value="trailing">后侧</option></select></label>
+        <label>纵向位置<select value={locator.vertical ?? ""} onChange={(event) => onChange(stepKey, { vertical: event.target.value })}>{VERTICAL_OPTIONS.map((option) => <option key={option.value || "auto"} value={option.value}>{option.label}</option>)}</select></label>
+      </> : null}
       {locator.usesSearchPolicy ? <>
         <label>滚动方向<select value={locator.direction ?? ""} onChange={(event) => onChange(stepKey, { direction: event.target.value })}><option value="">自动</option><option value="down">向下</option><option value="up">向上</option><option value="both">双向</option></select></label>
         <label>最多滑动次数<input type="number" min="1" value={locator.maxSwipes ?? ""} onChange={(event) => onChange(stepKey, { maxSwipes: event.target.value })} /></label>
@@ -1799,6 +1810,8 @@ function locatorTargetSummary(locator: StepLocatorView): string {
 function locatorSearchSummary(locator: StepLocatorView): string {
   const parts = [
     `区域：${optionLabel(AREA_OPTIONS, locator.area)}`,
+    locator.position ? `横向：${locator.position === "leading" ? "前侧" : "后侧"}` : undefined,
+    locator.vertical ? `纵向：${optionLabel(VERTICAL_OPTIONS, locator.vertical)}` : undefined,
     locator.usesSearchPolicy ? `查找：${optionLabel(SEARCH_MODE_OPTIONS, locator.searchMode)}` : undefined
   ].filter(Boolean);
   return parts.join(" · ");
@@ -2172,6 +2185,7 @@ function locatorView(step: CaseSourceStep): StepLocatorView | undefined {
     usesSearchPolicy: targetAction.actionName !== "scrollUntilVisible",
     ...optionalStringField(targetAction.target.area, "area"),
     ...optionalStringField(targetAction.target.position, "position"),
+    ...optionalStringField(targetAction.target.vertical, "vertical"),
     ...optionalStringField(targetAction.target.nearText, "nearText"),
     ...optionalStringField(targetAction.target.scopeText, "scopeText"),
     ...(typeof targetAction.target.ordinal === "number" ? { ordinal: String(targetAction.target.ordinal) } : {}),

@@ -135,6 +135,7 @@ export class ScriptTargetResolver {
         locatorKind: "semantic_icon_locator",
         role,
         ...(input.target.position ? { slot: input.target.position } : {}),
+        ...(input.target.vertical ? { verticalSlot: input.target.vertical } : {}),
         semanticArea: iconSemanticArea,
         ...(input.target.nearText ? { anchorText: input.target.nearText } : {}),
         ...searchParams(input.target, input.search),
@@ -153,6 +154,7 @@ export class ScriptTargetResolver {
     }
     const area = visual.area ?? input.target.area;
     const position = visual.position ?? input.target.position;
+    const vertical = visual.vertical ?? input.target.vertical;
     const nearText = visual.nearText ?? input.target.nearText;
     const scopeText = visual.scopeText ?? input.target.scopeText;
     const ordinal = visual.ordinal ?? input.target.ordinal;
@@ -169,6 +171,7 @@ export class ScriptTargetResolver {
         visualKind: visual.kind,
         visualQuery: visual.query,
         ...(position ? { slot: position } : {}),
+        ...(vertical ? { verticalSlot: vertical } : {}),
         ...(nearText ? { anchorText: nearText } : {}),
         ...(scopeText ? { scopeText } : {}),
         ...(ordinal ? { ordinal } : {}),

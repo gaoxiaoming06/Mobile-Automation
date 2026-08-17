@@ -49,7 +49,7 @@ const actionFields = [
   "repeat",
   "when"
 ] as const;
-const targetFields = new Set(["text", "icon", "visual", "control", "area", "position", "nearText", "scopeText", "ordinal", "anchorText", "relation", "checked", "match"]);
+const targetFields = new Set(["text", "icon", "visual", "control", "area", "position", "vertical", "nearText", "scopeText", "ordinal", "anchorText", "relation", "checked", "match"]);
 const parameterReferencePattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 export function parseScriptFlow(source: string): ScriptFlowDocument {
@@ -589,6 +589,7 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
     ...readTargetControl(target.control, `${path}.control`, issues),
     ...readTargetArea(target.area, `${path}.area`, issues),
     ...readTargetPosition(target.position, `${path}.position`, issues),
+    ...readTargetVertical(target.vertical, `${path}.vertical`, issues),
     ...optionalStringProperty(target.nearText, `${path}.nearText`, "nearText", issues),
     ...optionalStringProperty(target.scopeText, `${path}.scopeText`, "scopeText", issues),
     ...optionalOrdinalProperty(target.ordinal, `${path}.ordinal`, issues),
@@ -605,6 +606,9 @@ function readTarget(value: unknown, path: string, issues: ScriptFlowValidationIs
   }
   if (result.position && !result.icon && result.visual?.kind !== "icon") {
     issues.push({ path: `${path}.position`, message: "Position is only supported for icon targets" });
+  }
+  if (result.vertical && !result.icon && result.visual?.kind !== "icon") {
+    issues.push({ path: `${path}.vertical`, message: "Vertical is only supported for icon targets" });
   }
   if (result.match && !result.text) {
     issues.push({ path: `${path}.match`, message: "Match is only supported for text targets" });
@@ -642,7 +646,7 @@ function readVisualTarget(value: unknown, path: string, issues: ScriptFlowValida
     return {};
   }
   const target = recordAt(value, path, issues);
-  rejectUnknownFields(target, new Set(["kind", "query", "area", "position", "nearText", "scopeText", "ordinal"]), path, issues);
+  rejectUnknownFields(target, new Set(["kind", "query", "area", "position", "vertical", "nearText", "scopeText", "ordinal"]), path, issues);
   const kind = readVisualTargetKind(target.kind, `${path}.kind`, issues);
   const query = requiredString(target.query, `${path}.query`, issues);
   const visual: Partial<ScriptVisualTarget> = {
@@ -650,12 +654,16 @@ function readVisualTarget(value: unknown, path: string, issues: ScriptFlowValida
     ...(query ? { query } : {}),
     ...readTargetArea(target.area, `${path}.area`, issues),
     ...readTargetPosition(target.position, `${path}.position`, issues),
+    ...readTargetVertical(target.vertical, `${path}.vertical`, issues),
     ...optionalStringProperty(target.nearText, `${path}.nearText`, "nearText", issues),
     ...optionalStringProperty(target.scopeText, `${path}.scopeText`, "scopeText", issues),
     ...optionalOrdinalProperty(target.ordinal, `${path}.ordinal`, issues)
   };
   if (visual.position && visual.kind !== "icon") {
     issues.push({ path: `${path}.position`, message: "Position is only supported for visual icon targets" });
+  }
+  if (visual.vertical && visual.kind !== "icon") {
+    issues.push({ path: `${path}.vertical`, message: "Vertical is only supported for visual icon targets" });
   }
   if (!visual.kind || !visual.query) {
     return {};
@@ -711,6 +719,17 @@ function readTargetPosition(value: unknown, path: string, issues: ScriptFlowVali
     return { position: value };
   }
   issues.push({ path, message: "Target position must be leading or trailing" });
+  return {};
+}
+
+function readTargetVertical(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): Pick<ScriptTarget, "vertical"> {
+  if (value === undefined) {
+    return {};
+  }
+  if (value === "top" || value === "center" || value === "bottom") {
+    return { vertical: value };
+  }
+  issues.push({ path, message: "Target vertical must be top, center, or bottom" });
   return {};
 }
 

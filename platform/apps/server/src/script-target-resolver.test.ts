@@ -371,7 +371,7 @@ describe("ScriptTargetResolver", () => {
 
     expect(resolver.resolve({
       action: "tap",
-      target: { icon: "add", area: "content", position: "trailing" },
+      target: { icon: "add", area: "content", position: "trailing", vertical: "bottom" },
       search: { mode: "visibleOnly" },
       appId: "cn.eeo.classin",
       platform: "android"
@@ -382,6 +382,7 @@ describe("ScriptTargetResolver", () => {
         locatorKind: "semantic_icon_locator",
         role: "add",
         slot: "trailing",
+        verticalSlot: "bottom",
         semanticArea: "content",
         searchMode: "visibleOnly",
         allowRegionFallback: false
