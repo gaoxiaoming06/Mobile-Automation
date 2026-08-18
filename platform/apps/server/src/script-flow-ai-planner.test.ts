@@ -623,7 +623,7 @@ describe("ScriptFlow AI planner", () => {
     badResponse.document.entry = { screenRef: "classin.lesson.create", session: "authenticated", role: "teacher" };
     badResponse.document.outcome = { screenRef: "classin.lesson.create", session: "authenticated", role: "teacher" };
     badResponse.document.steps = [
-      { id: "reach-create-lesson", role: "navigation", reachPage: { screenRef: "classin.lesson.create", policy: "safe" } },
+      { id: "reach-create-lesson", role: "navigation", reachPage: { screenRef: "classin.lesson.create", policy: "safe" } } as any,
       {
         id: "enable-record-classin",
         role: "business",
@@ -1158,7 +1158,7 @@ describe("ScriptFlow AI planner", () => {
       id: "reach-home",
       role: "navigation",
       reachPage: { screenRef: "classin.home", policy: "safe" }
-    }];
+    } as any];
 
     expect(() => parseScriptFlowAiResponse(JSON.stringify(response), {
       appId: "cn.eeo.classin",

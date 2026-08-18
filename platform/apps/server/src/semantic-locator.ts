@@ -3355,9 +3355,7 @@ export class SemanticStepResolver {
           latestCandidateCount = hierarchySelection.candidateCount;
           if (hierarchySelection.candidate || hierarchySelection.ambiguous) {
             if (hierarchySelection.candidate) {
-              latestMatchStrategy = hierarchySelection.matchDegraded
-                ? "equals_degraded_to_contains"
-                : hierarchySelection.candidate.matchStrategy;
+              latestMatchStrategy = hierarchySelection.candidate.matchStrategy;
               latestAmbiguous = false;
               latestCandidateCount = hierarchySelection.candidateCount;
               return {
@@ -3523,7 +3521,9 @@ export class SemanticStepResolver {
             semanticArea,
             deviceSize: input.deviceSize
           });
-          if (containsFallback.candidate) {
+          const maxTargetLen = Math.max(...expectedTargets.map(t => normalizeOcrText(t).length));
+          const candidateLen = containsFallback.candidate ? normalizeOcrText(containsFallback.candidate.text).length : 0;
+          if (containsFallback.candidate && candidateLen - maxTargetLen <= 2) {
             latestCandidate = containsFallback.candidate;
             latestAmbiguous = containsFallback.ambiguous;
             latestCandidateCount = containsFallback.candidateCount;
@@ -5248,7 +5248,6 @@ function findUiHierarchyTextSelection(
   canScrollPastAmbiguous: boolean;
   candidateCount: number;
   signature: string;
-  matchDegraded?: boolean;
 } {
   const candidates = parseAndroidUiHierarchy(xml);
   const deviceSize = options.deviceSize ?? hierarchySize(candidates);
@@ -5292,18 +5291,6 @@ function findUiHierarchyTextSelection(
     semanticArea: options.semanticArea,
     deviceSize
   });
-  if (!selection.candidate && !selection.ambiguous && options.mode === "equals") {
-    const containsFallback = selectUiHierarchyTextCandidate(candidates, expectedTargets, {
-      mode: "contains",
-      preferredPoint: options.preferredPoint,
-      semanticArea: options.semanticArea,
-      deviceSize
-    });
-    if (containsFallback.candidate) {
-      const annotated = annotateUiHierarchyTextSelection(containsFallback, "ui_hierarchy_contains");
-      return { ...annotated, canScrollPastAmbiguous: false, matchDegraded: true, signature };
-    }
-  }
   const annotated = annotateUiHierarchyTextSelection(
     selection,
     options.mode === "equals" ? "ui_hierarchy_equals" : "ui_hierarchy_contains"

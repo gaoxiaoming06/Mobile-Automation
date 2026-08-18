@@ -33,7 +33,7 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "页面描述只负责业务上下文，不是动作定位依据。动作目标必须且只能使用 text、icon、visual 或 control：已知屏幕原文用 text；文本语义匹配使用 text + match: semantic；搜索/返回/分享/更多/加号等常见标准视觉符号用 icon；无法确定为标准 icon role、但用户明确说图标、图片、图形、视觉符号或 icon/image 时必须使用 visual；通用表单控件用 control。禁止生成 semantic 目标字段。",
   "页面 key、页面 id、ScriptFlow id 和类似 classin.teacher.xxx 的内部引用不能作为 tap、inputText、clearText、selectText 或 scrollUntilVisible 的动作目标。",
   "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。需要表达‘进入教学方案的入口’这类文本语义目标时，使用 text + match: semantic，不能伪装成屏幕原文。",
-  "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 目标默认按完整控件文字匹配：按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和 ${parameterName} 这类参数化名称不要写 match: contains；用户明确表达‘包含、带有、关键字、模糊匹配’，或受控 screenContext/读屏证据显示实际控件原文包含目标基础词但额外带动态数量、状态、后缀或前缀时，才可写 match: contains，且必须尽量补充 area、nearText、scopeText、ordinal 或容器语义。",
+  "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；当 OCR 识别存在微小差异时执行器可能对 equals 做有限容错，但脚本仍应按精确匹配编写。可点击 text 目标默认按完整控件文字匹配：按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和 ${parameterName} 这类参数化名称不要写 match: contains；用户明确表达’包含、带有、关键字、模糊匹配’，或受控 screenContext/读屏证据显示实际控件原文包含目标基础词但额外带动态数量、状态、后缀或前缀时，才可写 match: contains，且必须尽量补充 area、nearText、scopeText、ordinal 或容器语义。",
   "text、icon、visual 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
   "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、before、after 或 runFlow，也不要把页面目录当成动作前置条件。",
   "表单字段动作默认使用 search: { mode: auto }。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或受控 screenContext 明确给出当前可见候选时，才使用 visibleOnly。",
@@ -539,7 +539,6 @@ type ScriptFlowTargetGroundingReview = ScriptFlowReviewAssessment;
 type ScriptFlowGroundingReview = ScriptFlowReviewAssessment;
 
 type ReviewRepairInput = {
-  parsed: ReadyParsedScriptFlowAiDraft;
   plannerPrompt: string;
   requestConfig: { baseURL: string; apiKey?: string; model: string; timeoutMs: number };
   parseInput: Parameters<typeof parseScriptFlowAiResponse>[1];
@@ -549,7 +548,7 @@ type ReviewRepairInput = {
   timingContext?: ScriptFlowAiTimingContext;
 };
 
-async function assessParameterizationReview(input: ReviewRepairInput): Promise<ScriptFlowReviewAssessment> {
+async function assessParameterizationReview(input: ReviewRepairInput & { parsed: ReadyParsedScriptFlowAiDraft }): Promise<ScriptFlowReviewAssessment> {
   const review = await timedScriptFlowAiStage(input.timingContext, "parameterization_review_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
     userContent: buildScriptFlowParameterizationReviewPrompt(input.parseInput.prompt ?? "", input.parsed),
@@ -558,7 +557,7 @@ async function assessParameterizationReview(input: ReviewRepairInput): Promise<S
   return parseScriptFlowParameterizationReview(review.content);
 }
 
-async function applyParameterizationRepair(input: ReviewRepairInput & { assessment: ScriptFlowReviewAssessment }): Promise<ReadyParsedScriptFlowAiDraft> {
+async function applyParameterizationRepair(input: ReviewRepairInput & { parsed: ReadyParsedScriptFlowAiDraft; assessment: ScriptFlowReviewAssessment }): Promise<ReadyParsedScriptFlowAiDraft> {
   const repaired = await timedScriptFlowAiStage(input.timingContext, "parameterization_repair_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
     userContent: buildScriptFlowParameterizationRepairPrompt(input.plannerPrompt, input.parsed, input.assessment),
@@ -580,7 +579,7 @@ async function applyParameterizationRepair(input: ReviewRepairInput & { assessme
   return repairedParsed;
 }
 
-async function assessTargetGroundingReview(input: ReviewRepairInput): Promise<ScriptFlowReviewAssessment> {
+async function assessTargetGroundingReview(input: ReviewRepairInput & { parsed: ReadyParsedScriptFlowAiDraft }): Promise<ScriptFlowReviewAssessment> {
   const review = await timedScriptFlowAiStage(input.timingContext, "target_grounding_review_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
     userContent: buildScriptFlowTargetGroundingReviewPrompt(input.parseInput.prompt ?? "", input.parsed),
@@ -589,7 +588,7 @@ async function assessTargetGroundingReview(input: ReviewRepairInput): Promise<Sc
   return parseScriptFlowTargetGroundingReview(review.content);
 }
 
-async function applyTargetGroundingRepair(input: ReviewRepairInput & { assessment: ScriptFlowReviewAssessment }): Promise<ReadyParsedScriptFlowAiDraft> {
+async function applyTargetGroundingRepair(input: ReviewRepairInput & { parsed: ReadyParsedScriptFlowAiDraft; assessment: ScriptFlowReviewAssessment }): Promise<ReadyParsedScriptFlowAiDraft> {
   const repaired = await timedScriptFlowAiStage(input.timingContext, "target_grounding_repair_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
     userContent: buildScriptFlowTargetGroundingRepairPrompt(input.plannerPrompt, input.parsed, input.assessment),
@@ -611,7 +610,7 @@ async function applyTargetGroundingRepair(input: ReviewRepairInput & { assessmen
   return repairedParsed;
 }
 
-async function assessNonOcrGroundingReview(input: ReviewRepairInput): Promise<ScriptFlowReviewAssessment> {
+async function assessNonOcrGroundingReview(input: ReviewRepairInput & { parsed: ReadyParsedScriptFlowAiDraft }): Promise<ScriptFlowReviewAssessment> {
   const review = await timedScriptFlowAiStage(input.timingContext, "grounding_review_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
     userContent: buildScriptFlowGroundingReviewPrompt(input.parseInput.prompt ?? "", input.parsed),
@@ -620,7 +619,7 @@ async function assessNonOcrGroundingReview(input: ReviewRepairInput): Promise<Sc
   return parseScriptFlowGroundingReview(review.content);
 }
 
-async function applyNonOcrGroundingRepair(input: ReviewRepairInput & { assessment: ScriptFlowReviewAssessment }): Promise<ReadyParsedScriptFlowAiDraft> {
+async function applyNonOcrGroundingRepair(input: ReviewRepairInput & { parsed: ReadyParsedScriptFlowAiDraft; assessment: ScriptFlowReviewAssessment }): Promise<ReadyParsedScriptFlowAiDraft> {
   const repaired = await timedScriptFlowAiStage(input.timingContext, "grounding_repair_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
     userContent: buildScriptFlowGroundingRepairPrompt(input.plannerPrompt, input.parsed, input.assessment),
