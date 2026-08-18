@@ -415,26 +415,6 @@ steps:
     ]);
   });
 
-  it("rejects reachPage drafts instead of freezing a navigation index", async () => {
-    const context = await apiContext(servers);
-    context.storage.markSourceVerified(navigationSource("从详情到主页"));
-    const route = ((await post(context.baseUrl, "/api/script-flows", {
-      sourceYaml: navigationSource("从详情到主页"),
-      status: "active"
-    })).body as { flow: ScriptFlow }).flow;
-
-    const preview = await post(context.baseUrl, "/api/script-flow-drafts/preview", {
-      sourceYaml: reachHomeSource(),
-      parameters: {}
-    });
-
-    expect(preview).toEqual({
-      status: 400,
-      body: { error: "测试计划无法通过校验，请调整测试描述后重试。" }
-    });
-    expect(route.status).toBe("active");
-  });
-
   it("loads the navigation index without compiling entry metadata into a step", async () => {
     const context = await apiContext(servers);
     context.storage.markSourceVerified(navigationSource("从详情到主页"));

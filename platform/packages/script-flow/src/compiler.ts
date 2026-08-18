@@ -261,15 +261,6 @@ function executableAction(
   if ("scrollUntilVisible" in step) {
     return { action: "scrollUntilVisible", input: interpolateRecord(step.scrollUntilVisible, parameters) };
   }
-  if ("reachPage" in step) {
-    return {
-      action: "reachPage",
-      input: {
-        screenRef: interpolateString(step.reachPage.screenRef, parameters),
-        policy: step.reachPage.policy ?? "safe"
-      }
-    };
-  }
   if ("waitForPage" in step) {
     return {
       action: "waitForPage",

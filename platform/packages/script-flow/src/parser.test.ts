@@ -67,7 +67,7 @@ app: { id: cn.eeo.classin, platform: android }
 steps:
   - id: prepare-home
     role: navigation
-    reachPage: { screenRef: classin.home, policy: safe }
+    waitForPage: { screenRef: classin.home }
   - id: publish-lesson
     role: business
     risk: publish
@@ -427,36 +427,6 @@ steps:
         }
       }
     });
-  });
-
-  it("parses a goal-directed reachPage step without prescribing navigation mechanics", () => {
-    const flow = parseScriptFlow(`
-version: 1
-name: return home
-app: { id: cn.eeo.classin, platform: android }
-steps:
-  - id: reach-home
-    reachPage:
-      screenRef: classin.home
-      policy: safe
-`);
-
-    expect(flow.steps[0]).toEqual({
-      id: "reach-home",
-      role: "navigation",
-      reachPage: { screenRef: "classin.home", policy: "safe" }
-    });
-  });
-
-  it("rejects unsupported reachPage policies instead of silently enabling destructive navigation", () => {
-    expect(() => parseScriptFlow(`
-version: 1
-name: unsafe home
-app: { id: cn.eeo.classin, platform: android }
-steps:
-  - id: reach-home
-    reachPage: { screenRef: classin.home, policy: restart }
-`)).toThrow(/reachPage\.policy.*safe/i);
   });
 
   it("rejects bottom bar icon areas that are not supported by the v1 visual resolver", () => {
@@ -944,7 +914,7 @@ steps:
     after: { screenRef: classin.class.detail }
     tap: { target: { text: 创建课堂 } }
   - id: return-home
-    reachPage: { screenRef: classin.home, policy: safe }
+    waitForPage: { screenRef: classin.home }
 `);
 
     expect(flow.entry).toEqual({ screenRef: "classin.home" });
@@ -954,7 +924,7 @@ steps:
       after: { screenRef: "classin.class.detail" }
     });
     expect(flow.steps[1]).toMatchObject({
-      reachPage: { screenRef: "classin.home", policy: "safe" }
+      waitForPage: { screenRef: "classin.home" }
     });
 
     expect(() => parseScriptFlow(`

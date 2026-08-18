@@ -35,7 +35,7 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "text 必须是用户原文、页面目录名称或现有用例中已有的字面标签，禁止擅自增加‘创建、进入、打开、发布’等词。需要表达‘进入教学方案的入口’这类文本语义目标时，使用 text + match: semantic，不能伪装成屏幕原文。",
   "text 目标必须显式区分 exact/contains 语义：默认或省略 match 等价于 match: exact，运行时语义是 equals；执行器会严格按脚本 match 执行，equals 不会自动退化为 contains。可点击 text 目标默认按完整控件文字匹配：按钮、Tab、菜单项、卡片标题、班级名、昵称、编号和 ${parameterName} 这类参数化名称不要写 match: contains；用户明确表达‘包含、带有、关键字、模糊匹配’，或受控 screenContext/读屏证据显示实际控件原文包含目标基础词但额外带动态数量、状态、后缀或前缀时，才可写 match: contains，且必须尽量补充 area、nearText、scopeText、ordinal 或容器语义。",
   "text、icon、visual 和 control 都不要求先创建元素资产。内容可能在屏幕外时配置 search: { mode: auto }；弹层菜单、顶栏和底栏使用 search: { mode: visibleOnly }。",
-  "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、before、after、reachPage 或 runFlow，也不要把页面目录当成动作前置条件。",
+  "完整当前页控件动作是指用户已经给出字段/控件名以及要执行的状态或输入值，且没有明确要求进入、前往或到达某个页面。此时必须生成基于当前页面的直接动作，不要补 entry、outcome、before、after 或 runFlow，也不要把页面目录当成动作前置条件。",
   "表单字段动作默认使用 search: { mode: auto }。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或受控 screenContext 明确给出当前可见候选时，才使用 visibleOnly。",
   "用户说通过滑动、滚动、查找、找到、定位或搜索某字段/条目/控件时，这是目标动作的运行时查找策略，不是独立 swipe 步骤；即使 screenContext 当前首屏没有该字段，也应生成该字段的直接动作并使用 search: { mode: auto }，不能因此追问。",
   "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确说点击某个入口时，禁止擅自补“点击修改”或其他桥接动作；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification 询问准确字段位置或完整操作路径。",
@@ -43,19 +43,19 @@ export const SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS = [
   "发布、提交、删除、支付等操作按钮可能位于顶部、内容区或底部；用户或已验证知识未提供位置时必须省略 area，禁止根据动作名称猜测区域。",
   "icon 和 visual 都是非 OCR 视觉目标；非 OCR 视觉目标必须尽量补全跨平台限定：area、position、vertical、nearText、scopeText 或 ordinal。position 只表达左右：leading/trailing；vertical 表达上下：top/center/bottom。用户明确说顶部、底部、左上角、右上角、左下角、右下角、左侧、右侧或某段文字附近时必须写入对应限定；用户未提供任何限定且标准视觉 role 足够明确时才可省略。内容区悬浮新增按钮使用 { icon: add, area: content, position: trailing, vertical: bottom }；不要把自定义产品图形臆测成标准图标。",
   "visual 用于无法归入标准 icon role、但用户明确描述为视觉目标的对象。visual 必须保留用户原始视觉描述作为 query，并按用户描述补充 kind、area、position、vertical、nearText、scopeText 或 ordinal。执行器如果缺少视觉 grounding 能力会明确失败，planner 不得改写成 text。",
-  "用户明确说‘点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复、reachPage 或重启。",
+  "用户明确说’点击左上角返回按钮/返回图标’时，必须生成 { icon: back, area: topBar, position: leading } 的 tap；右上角分享按钮生成 { icon: share, area: topBar, position: trailing }。这是视觉点击，不得改写为页面恢复或重启。",
   "control 当前只支持 checkbox、switch 和 textField。checkbox 必须描述 area: content 和 nearText；switch 必须描述 area: content、nearText 和 checked，checked=true 表示打开/开启，checked=false 表示关闭；textField 必须描述 area: content。用户明确说第一个输入框、最顶部第一个输入框或第 N 个输入框时，使用 control: textField + ordinal，不要捏造 scopeText；scopeText+ordinal 用于某局部区域内第几个输入框；anchorText+relation 用于某稳定字段文字上方/下方/左侧/右侧最近的输入框，relation 可用 above、below、leftOf、rightOf，表示目标输入框相对 anchorText 的位置；登录账号或密码这类没有稳定外显字段标签的输入框必须使用 control: textField，不能用占位符 OCR 文本作为 target.text。",
   "inputText 和 clearText 会自行定位、点击并聚焦输入框；用户说选中/点击某输入框再输入或清空时，生成一个 inputText/clearText 步骤即可，不要额外生成前置 tap 输入框步骤。",
   "消息输入区、键盘工具栏、表情面板或更多/附件面板里的图标按钮当前使用 icon + area: content，并按用户描述补 position、vertical、nearText、scopeText 或 ordinal；例如表情图标用 icon: emoji，语音/麦克风图标用 icon: mic，加号图标用 icon: add，上箭头发送图标用 icon: arrowUp。不要生成 scope、role、selection、iconButton、submitButton 或 collectionItem。",
   "textField 的 scopeText 或 anchorText 必须是局部表单区域标题、字段组标题、字段标签或控件附近稳定文字，不能使用页面标题、顶栏固定标题、App 名称等全局固定文字。用户只用“某页面标题上方/下方/左侧/右侧”定位时应返回 needs_clarification，请其补充局部字段名或开启当前屏幕辅助；用户只说第几个输入框时使用 ordinal-only textField。",
   "执行器能力合同：visual 仅支持 tap；selectText 和 scrollUntilVisible 必须使用 text；inputText 和 clearText 必须使用 text 或 control: textField。",
   "一个 tap 只执行一次点击。即使目标标签像流程描述，也不得把一次点击解释成打开菜单后继续选择；用户过程包含几次点击就生成几个步骤。",
-  "用户明确操作是硬约束：点击、输入、清空、滑动或启动等操作必须按用户描述的顺序保留，不能被 reachPage、runFlow、已有资产或更短路径替代。用户明确要求启动时生成唯一一个 role: setup 的 launchApp；没有要求启动时不要添加。",
+  "用户明确操作是硬约束：点击、输入、清空、滑动或启动等操作必须按用户描述的顺序保留，不能被 runFlow、已有资产或更短路径替代。用户明确要求启动时生成唯一一个 role: setup 的 launchApp；没有要求启动时不要添加。",
   "ScriptFlow 的 launchApp 表示保留应用数据，先终止应用进程再重新启动；步骤名称应写为‘重启 App’，不能把它描述成仅切回前台。",
   "用户明确要求某个动作完成后停留、暂停、等待固定时间再继续时，生成独立 wait 步骤，使用 wait.durationMs 表达固定毫秒数。wait 只表示固定延时，不等待页面、文字或控件状态。",
   "用户描述打开选择器、滑动到具体选中值并确认时，必须把这组机械操作规范化为一个 selectText：target 保留字段入口，value 完整保留用户指定值，confirmText 保留确认文字。selectText 自身会点击并打开字段，由执行器动态查找选项；禁止保留前置 tap，也禁止猜测固定滑动次数。",
   "用户只表达进入、打开、前往或回到某页面时，这是业务目标，不是运行时导航命令。优先从用例中心匹配完整业务路径并生成 runFlow；没有匹配的完整路径时返回 needs_clarification，请用户补充从当前状态开始的操作链。不要因为页面名称、页面资产或‘回到’推断点击、返回或重启。",
-  "用例中心中的 active ScriptFlow 是唯一可复用的业务路径知识。目标型请求不要生成 reachPage，也不要读取 navigationEntries、页面目录或导航索引。",
+  "用例中心中的 active ScriptFlow 是唯一可复用的业务路径知识。目标型请求不要读取 navigationEntries、页面目录或导航索引。",
   "只有用户明确描述点击、返回、重启等过程时才生成对应过程；不要依赖页面资产或导航索引猜测未知点击路径。",
   "只有用户明确写出某动作完成后会进入、到达、打开或跳转到哪个页面时，才把该目标页写在该动作的 after.screenRef；不要再紧跟一个独立 assertPage。assertPage 只用于用户明确要求单独验证当前页面的场景。",
   "页面名称或业务页面描述可以直接保留为语义上下文，不要求先录入页面资产。用户提供明确操作或完整操作链时必须先生成可试运行的直接动作；有独有稳定文字时用最终 assertText 验证，没有稳定文字时省略未知页面约束和结果断言，由系统标记为结果待确认，不能因此返回 needs_clarification。",
@@ -138,6 +138,36 @@ const EMPTY_GENERATION_PAGE_CATALOG: PageAssetCatalog = {
   resolvePage: () => undefined,
   findConfusablePages: () => []
 };
+
+function handleKnownParseError(
+  error: unknown,
+  prompt: string,
+  channel: "codex" | "openai-compatible",
+  model: string,
+  includeRepairOnlyErrors = false
+): ScriptFlowAiDraft | undefined {
+  if (error instanceof UnrecordedPageReferenceError) {
+    return { status: "needs_clarification", clarification: missingPageClarification(prompt), channel, model };
+  }
+  if (error instanceof ActionTargetPageReferenceError) {
+    return { status: "needs_clarification", clarification: actionTargetPageReferenceClarification(error.reference), channel, model };
+  }
+  if (error instanceof UnsupportedExecutableTargetError) {
+    return { status: "needs_clarification", clarification: unsupportedExecutableTargetClarification(error.action), channel, model };
+  }
+  if (error instanceof PlaceholderExecutableTargetError) {
+    return { status: "needs_clarification", clarification: placeholderExecutableTargetClarification(error.target), channel, model };
+  }
+  if (error instanceof UnstableTextFieldScopeError) {
+    return { status: "needs_clarification", clarification: unstableTextFieldScopeClarification(error.scopeText), channel, model };
+  }
+  if (includeRepairOnlyErrors) {
+    if (error instanceof UnreachableReachPageError) {
+      return { status: "needs_clarification", clarification: `${error.message} 请补充从已知页面开始的操作过程。`, channel, model };
+    }
+  }
+  return undefined;
+}
 
 export async function generateScriptFlowDraft(input: {
   config: AiModelConfig;
@@ -234,46 +264,8 @@ export async function generateScriptFlowDraft(input: {
   try {
     parsed = parseScriptFlowAiResponse(result.content, parseInput);
   } catch (firstError) {
-    if (firstError instanceof UnrecordedPageReferenceError) {
-      return {
-        status: "needs_clarification",
-        clarification: missingPageClarification(input.prompt),
-        channel,
-        model: input.config.model
-      };
-    }
-    if (firstError instanceof ActionTargetPageReferenceError) {
-      return {
-        status: "needs_clarification",
-        clarification: actionTargetPageReferenceClarification(firstError.reference),
-        channel,
-        model: input.config.model
-      };
-    }
-    if (firstError instanceof UnsupportedExecutableTargetError) {
-      return {
-        status: "needs_clarification",
-        clarification: unsupportedExecutableTargetClarification(firstError.action),
-        channel,
-        model: input.config.model
-      };
-    }
-    if (firstError instanceof PlaceholderExecutableTargetError) {
-      return {
-        status: "needs_clarification",
-        clarification: placeholderExecutableTargetClarification(firstError.target),
-        channel,
-        model: input.config.model
-      };
-    }
-    if (firstError instanceof UnstableTextFieldScopeError) {
-      return {
-        status: "needs_clarification",
-        clarification: unstableTextFieldScopeClarification(firstError.scopeText),
-        channel,
-        model: input.config.model
-      };
-    }
+    const known = handleKnownParseError(firstError, input.prompt, channel, input.config.model);
+    if (known) return known;
     const repaired = await timedScriptFlowAiStage(input.timingContext, "repair_request", () => runAiJsonRequest(requestConfig, {
       developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
       userContent: buildScriptFlowRepairPrompt(plannerPrompt, result.content, firstError),
@@ -282,62 +274,8 @@ export async function generateScriptFlowDraft(input: {
     try {
       parsed = parseScriptFlowAiResponse(repaired.content, parseInput);
     } catch (repairError) {
-      if (repairError instanceof UnrecordedPageReferenceError) {
-        return {
-          status: "needs_clarification",
-          clarification: missingPageClarification(input.prompt),
-          channel,
-          model: input.config.model
-        };
-      }
-      if (repairError instanceof ActionTargetPageReferenceError) {
-        return {
-          status: "needs_clarification",
-          clarification: actionTargetPageReferenceClarification(repairError.reference),
-          channel,
-          model: input.config.model
-        };
-      }
-      if (repairError instanceof UnsupportedExecutableTargetError) {
-        return {
-          status: "needs_clarification",
-          clarification: unsupportedExecutableTargetClarification(repairError.action),
-          channel,
-          model: input.config.model
-        };
-      }
-      if (repairError instanceof PlaceholderExecutableTargetError) {
-        return {
-          status: "needs_clarification",
-          clarification: placeholderExecutableTargetClarification(repairError.target),
-          channel,
-          model: input.config.model
-        };
-      }
-      if (repairError instanceof UnstableTextFieldScopeError) {
-        return {
-          status: "needs_clarification",
-          clarification: unstableTextFieldScopeClarification(repairError.scopeText),
-          channel,
-          model: input.config.model
-        };
-      }
-      if (repairError instanceof GeneratedReachPageError) {
-        return {
-          status: "needs_clarification",
-          clarification: generatedReachPageClarification(input.prompt, repairError.screenRef),
-          channel,
-          model: input.config.model
-        };
-      }
-      if (repairError instanceof UnreachableReachPageError) {
-        return {
-          status: "needs_clarification",
-          clarification: `${repairError.message} 请补充从已知页面开始的操作过程。`,
-          channel,
-          model: input.config.model
-        };
-      }
+      const knownRepair = handleKnownParseError(repairError, input.prompt, channel, input.config.model, true);
+      if (knownRepair) return knownRepair;
       throw new Error(`AI 未能生成有效的 ScriptFlow 草稿：${compactError(repairError)}`);
     }
   }
@@ -358,8 +296,7 @@ export async function generateScriptFlowDraft(input: {
   if (parsed.status === "needs_clarification") {
     return { ...parsed, channel, model: input.config.model };
   }
-  parsed = await reviewAndRepairParameterization({
-    parsed,
+  const reviewRepairInput: ReviewRepairInput = {
     plannerPrompt,
     requestConfig,
     parseInput,
@@ -367,27 +304,25 @@ export async function generateScriptFlowDraft(input: {
     channel,
     model: input.config.model,
     timingContext: input.timingContext
-  });
-  parsed = await reviewAndRepairTargetGrounding({
-    parsed,
-    plannerPrompt,
-    requestConfig,
-    parseInput,
-    fetchImpl: input.fetchImpl ?? fetch,
-    channel,
-    model: input.config.model,
-    timingContext: input.timingContext
-  });
-  parsed = await reviewAndRepairNonOcrGrounding({
-    parsed,
-    plannerPrompt,
-    requestConfig,
-    parseInput,
-    fetchImpl: input.fetchImpl ?? fetch,
-    channel,
-    model: input.config.model,
-    timingContext: input.timingContext
-  });
+  };
+  const [paramAssessment, targetAssessment, groundingAssessment] = await Promise.all([
+    assessParameterizationReview({ parsed, ...reviewRepairInput }),
+    hasEditableTextTargets(parsed.document)
+      ? assessTargetGroundingReview({ parsed, ...reviewRepairInput })
+      : { status: "ok" as const, summary: "", issues: [] as ScriptFlowReviewAssessment["issues"] },
+    hasNonOcrTapTargets(parsed.document)
+      ? assessNonOcrGroundingReview({ parsed, ...reviewRepairInput })
+      : { status: "ok" as const, summary: "", issues: [] as ScriptFlowReviewAssessment["issues"] }
+  ]);
+  if (paramAssessment.status === "needs_repair") {
+    parsed = await applyParameterizationRepair({ parsed, assessment: paramAssessment, ...reviewRepairInput });
+  }
+  if (targetAssessment.status === "needs_repair") {
+    parsed = await applyTargetGroundingRepair({ parsed, assessment: targetAssessment, ...reviewRepairInput });
+  }
+  if (groundingAssessment.status === "needs_repair") {
+    parsed = await applyNonOcrGroundingRepair({ parsed, assessment: groundingAssessment, ...reviewRepairInput });
+  }
   const verification = assessScriptFlowVerification({
     document: parsed.document,
     sourceYaml: parsed.sourceYaml
@@ -520,12 +455,12 @@ export function buildScriptFlowPlannerPrompt(
         ].join("\n")
       : "未提供外部代码上下文。",
     "tap、inputText、clearText 和 selectText 使用同一 search 合同，search.mode 可用 auto、visibleOnly 或 scroll。普通内容目标默认用 auto；瞬时菜单和顶栏/底栏目标用 visibleOnly。执行器负责在允许时逐屏查找，脚本不要展开成机械滑动步骤。",
-    "用户已经给出字段/控件名以及状态或输入值、且没有明确要求页面导航时，这是完整当前页控件动作。必须只生成直接动作，省略 entry、outcome、before、after、reachPage、runFlow、waitForPage 和 assertPage；如果字段标签不确定或开关缺少开启/关闭状态，再返回 needs_clarification。",
+    "用户已经给出字段/控件名以及状态或输入值、且没有明确要求页面导航时，这是完整当前页控件动作。必须只生成直接动作，省略 entry、outcome、before、after、runFlow、waitForPage 和 assertPage；如果字段标签不确定或开关缺少开启/关闭状态，再返回 needs_clarification。",
     "表单字段动作默认使用 search: { mode: auto }，避免当前屏幕滚动位置变化后找错控件。只有用户明确说当前可见、顶部、底部、弹窗/菜单，或使用 screenContext 中明确可见的受控候选时，才使用 visibleOnly。",
     "用户说通过滑动、滚动、查找、找到、定位或搜索某字段/条目/控件时，这是目标动作的运行时查找策略，不是独立 swipe 步骤；即使 screenContext 当前首屏没有该字段，也应生成该字段的直接动作并使用 search: { mode: auto }，不能因此追问。",
     "不要把“修改、设置、输入、打开、关闭、选择”等用户操作动词当成按钮文字。用户没有明确点击某个入口时，不得补充“点击修改”等桥接步骤；只有当前屏幕没有证实目标字段、且用户也没有提供字段文字或可执行查找策略时，才返回 needs_clarification。",
     "用户为选择器给出具体选中值时，把“点击字段、滑动选择该值、点击确定/完成”合并为一个 selectText，value 必须精确保留，confirmText 使用用户说出的确认文字；selectText 自身会打开字段，前面禁止再生成 tap，也禁止生成固定次数 swipe 来猜选项位置。",
-    "只表达目标页面时，优先输出 runFlow 复用用例中心中的完整业务路径；没有完整可复用路径时返回 needs_clarification，请用户补充从当前状态开始的完整操作路径或目标页独有稳定文字。不要因为页面名称、页面资产、导航索引或“回到”推断点击、返回、重启或 reachPage。",
+    "只表达目标页面时，优先输出 runFlow 复用用例中心中的完整业务路径；没有完整可复用路径时返回 needs_clarification，请用户补充从当前状态开始的完整操作路径或目标页独有稳定文字。不要因为页面名称、页面资产、导航索引或”回到”推断点击、返回或重启。",
     "不要输出 risk 字段。用户点击执行即表示授权运行当前可见脚本，系统不根据按钮文案推断业务风险。",
     "直接理解用户的完整意图和操作顺序，不依赖服务端预先拆出的中文动作契约。用户明确描述的过程应逐步保留；只描述目标时只能复用用例中心的完整 runFlow，否则追问完整路径。",
     "明确操作即使缺少当前页面 key、目标页面资产或自动结果判据，也应返回 ready 并生成可试运行动作；省略无法确定的 before、after、outcome 和断言，系统会将结果标记为待确认。只有缺少班级名、账号、输入值等实际执行参数时才能返回 needs_clarification。",
@@ -603,7 +538,7 @@ type ScriptFlowParameterizationReview = ScriptFlowReviewAssessment;
 type ScriptFlowTargetGroundingReview = ScriptFlowReviewAssessment;
 type ScriptFlowGroundingReview = ScriptFlowReviewAssessment;
 
-async function reviewAndRepairParameterization(input: {
+type ReviewRepairInput = {
   parsed: ReadyParsedScriptFlowAiDraft;
   plannerPrompt: string;
   requestConfig: { baseURL: string; apiKey?: string; model: string; timeoutMs: number };
@@ -612,18 +547,21 @@ async function reviewAndRepairParameterization(input: {
   channel: "codex" | "openai-compatible";
   model: string;
   timingContext?: ScriptFlowAiTimingContext;
-}): Promise<ReadyParsedScriptFlowAiDraft> {
+};
+
+async function assessParameterizationReview(input: ReviewRepairInput): Promise<ScriptFlowReviewAssessment> {
   const review = await timedScriptFlowAiStage(input.timingContext, "parameterization_review_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
     userContent: buildScriptFlowParameterizationReviewPrompt(input.parseInput.prompt ?? "", input.parsed),
     effort: "low"
   }, input.fetchImpl), { channel: input.channel, model: input.model });
-  const assessment = parseScriptFlowParameterizationReview(review.content);
-  if (assessment.status === "ok") return input.parsed;
+  return parseScriptFlowParameterizationReview(review.content);
+}
 
+async function applyParameterizationRepair(input: ReviewRepairInput & { assessment: ScriptFlowReviewAssessment }): Promise<ReadyParsedScriptFlowAiDraft> {
   const repaired = await timedScriptFlowAiStage(input.timingContext, "parameterization_repair_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
-    userContent: buildScriptFlowParameterizationRepairPrompt(input.plannerPrompt, input.parsed, assessment),
+    userContent: buildScriptFlowParameterizationRepairPrompt(input.plannerPrompt, input.parsed, input.assessment),
     effort: "low"
   }, input.fetchImpl), { channel: input.channel, model: input.model });
   const repairedParsed = parseScriptFlowAiResponse(repaired.content, input.parseInput);
@@ -642,28 +580,19 @@ async function reviewAndRepairParameterization(input: {
   return repairedParsed;
 }
 
-async function reviewAndRepairTargetGrounding(input: {
-  parsed: ReadyParsedScriptFlowAiDraft;
-  plannerPrompt: string;
-  requestConfig: { baseURL: string; apiKey?: string; model: string; timeoutMs: number };
-  parseInput: Parameters<typeof parseScriptFlowAiResponse>[1];
-  fetchImpl: AiClientFetch;
-  channel: "codex" | "openai-compatible";
-  model: string;
-  timingContext?: ScriptFlowAiTimingContext;
-}): Promise<ReadyParsedScriptFlowAiDraft> {
-  if (!hasEditableTextTargets(input.parsed.document)) return input.parsed;
+async function assessTargetGroundingReview(input: ReviewRepairInput): Promise<ScriptFlowReviewAssessment> {
   const review = await timedScriptFlowAiStage(input.timingContext, "target_grounding_review_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
     userContent: buildScriptFlowTargetGroundingReviewPrompt(input.parseInput.prompt ?? "", input.parsed),
     effort: "low"
   }, input.fetchImpl), { channel: input.channel, model: input.model });
-  const assessment = parseScriptFlowTargetGroundingReview(review.content);
-  if (assessment.status === "ok") return input.parsed;
+  return parseScriptFlowTargetGroundingReview(review.content);
+}
 
+async function applyTargetGroundingRepair(input: ReviewRepairInput & { assessment: ScriptFlowReviewAssessment }): Promise<ReadyParsedScriptFlowAiDraft> {
   const repaired = await timedScriptFlowAiStage(input.timingContext, "target_grounding_repair_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
-    userContent: buildScriptFlowTargetGroundingRepairPrompt(input.plannerPrompt, input.parsed, assessment),
+    userContent: buildScriptFlowTargetGroundingRepairPrompt(input.plannerPrompt, input.parsed, input.assessment),
     effort: "low"
   }, input.fetchImpl), { channel: input.channel, model: input.model });
   const repairedParsed = parseScriptFlowAiResponse(repaired.content, input.parseInput);
@@ -682,30 +611,19 @@ async function reviewAndRepairTargetGrounding(input: {
   return repairedParsed;
 }
 
-async function reviewAndRepairNonOcrGrounding(input: {
-  parsed: ReadyParsedScriptFlowAiDraft;
-  plannerPrompt: string;
-  requestConfig: { baseURL: string; apiKey?: string; model: string; timeoutMs: number };
-  parseInput: Parameters<typeof parseScriptFlowAiResponse>[1];
-  fetchImpl: AiClientFetch;
-  channel: "codex" | "openai-compatible";
-  model: string;
-  timingContext?: ScriptFlowAiTimingContext;
-}): Promise<ReadyParsedScriptFlowAiDraft> {
-  if (!hasNonOcrTapTargets(input.parsed.document)) return input.parsed;
+async function assessNonOcrGroundingReview(input: ReviewRepairInput): Promise<ScriptFlowReviewAssessment> {
   const review = await timedScriptFlowAiStage(input.timingContext, "grounding_review_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
     userContent: buildScriptFlowGroundingReviewPrompt(input.parseInput.prompt ?? "", input.parsed),
     effort: "low"
   }, input.fetchImpl), { channel: input.channel, model: input.model });
-  const assessment = parseScriptFlowGroundingReview(review.content);
-  if (assessment.status === "ok") {
-    return input.parsed;
-  }
+  return parseScriptFlowGroundingReview(review.content);
+}
 
+async function applyNonOcrGroundingRepair(input: ReviewRepairInput & { assessment: ScriptFlowReviewAssessment }): Promise<ReadyParsedScriptFlowAiDraft> {
   const repaired = await timedScriptFlowAiStage(input.timingContext, "grounding_repair_request", () => runAiJsonRequest(input.requestConfig, {
     developerInstructions: SCRIPT_FLOW_AI_DEVELOPER_INSTRUCTIONS,
-    userContent: buildScriptFlowGroundingRepairPrompt(input.plannerPrompt, input.parsed, assessment),
+    userContent: buildScriptFlowGroundingRepairPrompt(input.plannerPrompt, input.parsed, input.assessment),
     effort: "low"
   }, input.fetchImpl), { channel: input.channel, model: input.model });
   const repairedParsed = parseScriptFlowAiResponse(repaired.content, input.parseInput);
@@ -949,7 +867,6 @@ export function parseScriptFlowAiResponse(
     root.parameterValues
   );
   const validated = validateScriptFlowDocument(generatedDocument);
-  validateNoGeneratedReachPage(validated);
   const hydrated = validateScriptFlowDocument(hydrateGeneratedParameters(validated, input.catalog));
   const { document: extractedDocument, parameterValues } = extractEphemeralParameterValues(hydrated, root.parameterValues);
   const pageConstrained = validateScriptFlowDocument(normalizeGeneratedPageConstraints(extractedDocument, input));
@@ -958,7 +875,6 @@ export function parseScriptFlowAiResponse(
   validateGeneratedActionTargetReferences(document, input.catalog);
   validateGeneratedExecutableTargetContracts(document, input.prompt);
   validateGeneratedTextFieldScopes(document, input);
-  validateNoGeneratedReachPage(document);
   validateGeneratedNavigationReachability(document, input.catalog);
   return {
     status: "ready",
@@ -1030,7 +946,7 @@ function withFlattenedScriptFlowDocumentDefaults(
 
 function flattenedDocumentPurpose(steps: unknown[]): ScriptFlowDocument["purpose"] {
   const records = flattenRecords(steps);
-  if (records.length && records.every((step) => stringValue(step.role) === "navigation" || Object.hasOwn(step, "reachPage"))) {
+  if (records.length && records.every((step) => stringValue(step.role) === "navigation")) {
     return "navigation";
   }
   if (records.length && records.every((step) => stringValue(step.role) === "setup" || stringValue(step.role) === "recovery")) {
@@ -1316,7 +1232,6 @@ function flowPageEndpoints(parsed: Record<string, unknown>): { source?: string; 
   const target = stringValue(outcome.screenRef)
     ?? [...steps].reverse().flatMap((step) => [
       screenRefOf(step.after),
-      screenRefOf(step.reachPage),
       screenRefOf(step.assertPage),
       screenRefOf(step.waitForPage)
     ]).find(Boolean);
@@ -1615,7 +1530,7 @@ function waitDurationUnitMultiplier(unit: string): number {
 }
 
 function hasRawActionOtherThanRunFlow(step: Record<string, unknown>): boolean {
-  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "wait", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "repeat", "when"]
+  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "wait", "scrollUntilVisible", "waitForPage", "assertPage", "assertText", "repeat", "when"]
     .some((action) => step[action] !== undefined);
 }
 
@@ -1953,12 +1868,6 @@ function validateGeneratedReferences(
   }
 }
 
-function validateNoGeneratedReachPage(document: ScriptFlowDocument): void {
-  const reachPageStep = flattenSteps(document.steps).find((step) => "reachPage" in step);
-  if (!reachPageStep || !("reachPage" in reachPageStep)) return;
-  throw new GeneratedReachPageError(reachPageStep.reachPage.screenRef);
-}
-
 function validateGeneratedActionTargetReferences(
   document: ScriptFlowDocument,
   catalog: ScriptFlowPlannerCatalog
@@ -2176,13 +2085,6 @@ function unstableTextFieldScopeClarification(scopeText: string): string {
   return `“${scopeText}”像是固定页面标题，不能作为可滚动页面中输入框的稳定限定范围或相对锚点。请补充该输入框附近的局部字段名或区域名，或开启“结合当前屏幕生成”让我读取当前可见控件。`;
 }
 
-function generatedReachPageClarification(prompt: string | undefined, screenRef: string): string {
-  const target = prompt?.trim()
-    ? prompt.replace(/\s+/g, " ").trim().slice(0, 80)
-    : screenRef;
-  return `当前不能用 reachPage 作为运行时导航命令。请补充从当前状态到“${target}”的完整操作过程，或提供目标页独有稳定文字用于 assertText；如果用例中心已有完整业务路径，请改用 runFlow 复用。`;
-}
-
 function validatePageReference(
   reference: string | undefined,
   field: string,
@@ -2236,13 +2138,6 @@ class UnstableTextFieldScopeError extends Error {
   }
 }
 
-class GeneratedReachPageError extends Error {
-  constructor(readonly screenRef: string) {
-    super("reachPage 已退出新脚本生成；请改用用例中心 runFlow，或补充完整操作路径。");
-    this.name = "GeneratedReachPageError";
-  }
-}
-
 function transitionEntries(flow: ScriptFlow) {
   const steps = Array.isArray(flow.parsed.steps) ? flow.parsed.steps : [];
   return flattenRecords(steps).flatMap((step) => {
@@ -2280,7 +2175,7 @@ function flattenRecords(steps: unknown[]): Record<string, unknown>[] {
 }
 
 function actionFromRecord(step: Record<string, unknown>): string {
-  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "wait", "scrollUntilVisible", "reachPage", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"]
+  return ["launchApp", "tap", "inputText", "clearText", "selectText", "swipe", "wait", "scrollUntilVisible", "waitForPage", "assertPage", "assertText", "runFlow", "repeat", "when"]
     .find((action) => action in step) ?? "unknown";
 }
 

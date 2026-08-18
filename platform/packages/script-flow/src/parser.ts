@@ -41,7 +41,6 @@ const actionFields = [
   "swipe",
   "wait",
   "scrollUntilVisible",
-  "reachPage",
   "waitForPage",
   "assertPage",
   "assertText",
@@ -344,8 +343,6 @@ function readStep(
       return { ...base, wait: readWait(step.wait, `${path}.wait`, issues) };
     case "scrollUntilVisible":
       return { ...base, scrollUntilVisible: readScroll(step.scrollUntilVisible, `${path}.scrollUntilVisible`, issues) };
-    case "reachPage":
-      return { ...base, reachPage: readReachPage(step.reachPage, `${path}.reachPage`, issues) };
     case "waitForPage":
       return { ...base, waitForPage: readRequiredScreenContract(step.waitForPage, `${path}.waitForPage`, issues) };
     case "assertPage":
@@ -405,7 +402,7 @@ function inferStepRole(
   if (purpose === "fixture") return "setup";
   if (purpose === "recovery") return "recovery";
   if (action === "launchApp") return "setup";
-  if (action === "reachPage" || (action === "tap" && hasExpectedPage)) return "navigation";
+  if (action === "tap" && hasExpectedPage) return "navigation";
   return "business";
 }
 
@@ -515,20 +512,6 @@ function readScroll(value: unknown, path: string, issues: ScriptFlowValidationIs
     target: readTarget(action.target, `${path}.target`, issues),
     ...(direction === "up" || direction === "down" ? { direction } : {}),
     ...(maxSwipes !== undefined ? { maxSwipes } : {})
-  };
-}
-
-function readReachPage(value: unknown, path: string, issues: ScriptFlowValidationIssue[]): { screenRef: string; policy?: "safe" } {
-  const action = recordAt(value, path, issues);
-  rejectUnknownFields(action, new Set(["screenRef", "policy"]), path, issues);
-  const screenRef = requiredString(action.screenRef, `${path}.screenRef`, issues);
-  const policy = optionalString(action.policy, `${path}.policy`, issues);
-  if (policy && policy !== "safe") {
-    issues.push({ path: `${path}.policy`, message: "reachPage policy must be safe" });
-  }
-  return {
-    screenRef,
-    ...(policy === "safe" ? { policy } : {})
   };
 }
 

@@ -162,29 +162,6 @@ steps:
     });
   });
 
-  it("compiles reachPage as one explicit goal-directed execution step", () => {
-    const flow = parseScriptFlow(`
-version: 1
-name: reach home
-app: { id: cn.eeo.classin, platform: android }
-steps:
-  - id: reach-home
-    name: 到达主页
-    reachPage: { screenRef: classin.home, policy: safe }
-`);
-
-    const plan = compileScriptFlow(flow);
-
-    expect(plan.steps).toEqual([
-      expect.objectContaining({
-        id: "reach-home",
-        action: "reachPage",
-        input: { screenRef: "classin.home", policy: "safe" }
-      })
-    ]);
-    expect(plan).not.toHaveProperty("riskConfirmations");
-  });
-
   it("preserves OCR semantic text match targets in the execution plan", () => {
     const flow = parseScriptFlow(`
 version: 1
@@ -699,7 +676,7 @@ steps:
   - id: wait-home
     waitForPage: { screenRef: classin.home }
   - id: return-home
-    reachPage: { screenRef: classin.home, policy: safe }
+    assertPage: { screenRef: classin.home }
 `);
 
     expect(compileScriptFlow(flow).steps).toEqual(expect.arrayContaining([
@@ -714,7 +691,7 @@ steps:
       }),
       expect.objectContaining({
         id: "return-home",
-        input: { screenRef: "classin.home", policy: "safe" }
+        input: { screenRef: "classin.home" }
       })
     ]));
   });

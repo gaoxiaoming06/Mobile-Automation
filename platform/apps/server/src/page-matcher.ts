@@ -1165,7 +1165,7 @@ async function imageRegionVisualSimilarity(
   return roundSimilarity(best);
 }
 
-async function imageVisualSimilarity(actual: Buffer, baseline: Buffer, ignoreRegions: Rect[] | undefined): Promise<number> {
+export async function imageVisualSimilarity(actual: Buffer, baseline: Buffer, ignoreRegions: Rect[] | undefined): Promise<number> {
   const actualSample = await imageSampleNativeBestEffort(actual);
   const baselineSample = await imageSampleNativeBestEffort(baseline);
   if (!actualSample || !baselineSample) {

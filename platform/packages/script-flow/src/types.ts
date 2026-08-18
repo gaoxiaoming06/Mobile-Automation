@@ -213,7 +213,6 @@ export type ScriptStep =
   | ScriptSwipeStep
   | ScriptWaitStep
   | ScriptScrollUntilVisibleStep
-  | ScriptReachPageStep
   | ScriptWaitForPageStep
   | ScriptAssertPageStep
   | ScriptAssertTextStep
@@ -251,7 +250,6 @@ export type ScriptExecutableAction =
   | "swipe"
   | "wait"
   | "scrollUntilVisible"
-  | "reachPage"
   | "waitForPage"
   | "assertPage"
   | "assertText";

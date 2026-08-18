@@ -488,10 +488,7 @@ function assertExecutionAllowed(status: "verified" | "needs_trial" | "blocked", 
   }
 }
 
-function assertPlanSupported(plan: ReturnType<typeof compileScriptFlow>): void {
-  if (plan.steps.some((step) => step.action === "reachPage")) {
-    throw new ScriptFlowCompileError("reachPage is no longer supported in ScriptFlow execution; use runFlow or explicit actions");
-  }
+function assertPlanSupported(_plan: ReturnType<typeof compileScriptFlow>): void {
 }
 
 function assertActivationAllowed(

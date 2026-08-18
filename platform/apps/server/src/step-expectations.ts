@@ -14,6 +14,7 @@ import {
   type StepExpectationResult
 } from "@mobile-automation/shared";
 import type { OcrLayoutResult, OcrResult, OcrService } from "./ocr.js";
+import { imageVisualSimilarity } from "./page-matcher.js";
 import { parseAndroidUiHierarchy } from "./ui-hierarchy-locator.js";
 
 export type ScreenshotCapture = {
@@ -117,7 +118,7 @@ export class StepExpectationEvaluator {
       }
 
       if (expectation.type === "screen_changed") {
-        let screenResult = this.evaluateScreenChangedExpectation(expectation, input.beforeScreenshot, input.afterScreenshot);
+        let screenResult = await this.evaluateScreenChangedExpectation(expectation, input.beforeScreenshot, input.afterScreenshot);
         if (screenResult.status === "failed" && input.beforeScreenshot && isBlockingExpectation(expectation)) {
           screenResult = await this.waitForScreenChangedExpectation({
             expectation,
@@ -233,7 +234,7 @@ export class StepExpectationEvaluator {
       await sleep(Math.min(intervalMs, Math.max(0, timeoutMs - (Date.now() - started))));
       attempt += 1;
       const screenshot = await this.deps.captureExpectationScreenshot(input.runId, input.stepResultId, input.serial, input.expectation.id, attempt);
-      latest = this.evaluateScreenChangedExpectation(input.expectation, input.beforeScreenshot, screenshot);
+      latest = await this.evaluateScreenChangedExpectation(input.expectation, input.beforeScreenshot, screenshot);
     }
 
     if (latest.status === "passed" && attempt > 1) {
@@ -251,18 +252,28 @@ export class StepExpectationEvaluator {
     return latest;
   }
 
-  private evaluateScreenChangedExpectation(
+  private async evaluateScreenChangedExpectation(
     expectation: StepExpectation,
     beforeScreenshot: ScreenshotCapture | undefined,
     afterScreenshot: ScreenshotCapture | undefined
-  ): StepExpectationResult {
+  ): Promise<StepExpectationResult> {
     const canCompare = Boolean(beforeScreenshot && afterScreenshot);
-    const changed = canCompare && !beforeScreenshot!.png.equals(afterScreenshot!.png);
+    let changed = false;
+    let similarity: number | undefined;
+    if (canCompare) {
+      if (beforeScreenshot!.png.equals(afterScreenshot!.png)) {
+        changed = false;
+        similarity = 1;
+      } else {
+        similarity = await imageVisualSimilarity(beforeScreenshot!.png, afterScreenshot!.png, undefined);
+        changed = similarity < 0.95;
+      }
+    }
     return this.createExpectationResult(expectation, {
       status: canCompare ? (changed ? "passed" : "failed") : "unsupported",
       expected: "The screen image changes after this step.",
       actual: canCompare ? (changed ? "Screen changed." : "Screen did not change.") : "Before/after screenshots are unavailable.",
-      reason: canCompare && !changed ? "Before and after screenshots are byte-identical." : undefined,
+      reason: canCompare && !changed ? `Visual similarity ${similarity?.toFixed(3) ?? "N/A"} exceeds 0.95 threshold.` : undefined,
       evidenceArtifactIds: [beforeScreenshot?.artifact.id, afterScreenshot?.artifact.id].filter((id): id is string => Boolean(id))
     });
   }

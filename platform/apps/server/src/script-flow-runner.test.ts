@@ -701,21 +701,6 @@ describe("ScriptFlowRunner", () => {
     }));
   });
 
-  it("rejects reachPage instead of compiling it into profile navigation", async () => {
-    const backend = new CapturingBackend();
-    const runner = runnerWith(backend);
-
-    await expect(runner.start({
-      ...previewBinding,
-      flowId: "flow-reach-home",
-      flow: document([{ id: "reach-home", name: "到达主页", reachPage: { screenRef: "classin.home", policy: "safe" } }]),
-      deviceSerial: "device-1",
-      recordVideo: false
-    })).rejects.toThrow(/reachPage is no longer supported/);
-
-    expect(backend.input).toBeUndefined();
-  });
-
   it("does not compile entry metadata into a hidden preparation step", async () => {
     const backend = new CapturingBackend();
     const runner = new ScriptFlowRunner({

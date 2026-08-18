@@ -277,11 +277,16 @@ export class ScriptFlowRunner {
         strategy: "fixed_delay"
       };
     }
-    if (step.action === "reachPage") {
-      throw new ScriptFlowCompileError("reachPage is no longer supported in ScriptFlow execution; use runFlow or explicit actions");
-    }
     if (step.action === "waitForPage" || step.action === "assertPage") {
-      return { type: "wait", params: { durationMs: 0 }, strategy: "page_state" };
+      const screenRef = stringInput(step.input, "screenRef");
+      return {
+        type: "wait",
+        params: {
+          durationMs: step.action === "waitForPage" ? 5000 : 0,
+          ...(screenRef ? { afterScreenRef: screenRef } : {})
+        },
+        strategy: "page_state"
+      };
     }
     if (step.action === "assertText") {
       return { type: "wait", params: { durationMs: 0 }, strategy: "ocr_text_assertion" };
@@ -574,9 +579,6 @@ function defaultStepTitle(step: ScriptExecutionPlanStep): string {
   }
   if (step.action === "assertText") {
     return `确认出现 ${stringInput(step.input, "text")}`;
-  }
-  if (step.action === "reachPage") {
-    return `到达页面 ${stringInput(step.input, "screenRef")}`;
   }
   if (step.action === "wait") {
     return `等待 ${formatDurationMs(numberInput(step.input, "durationMs") ?? 1000)}`;
