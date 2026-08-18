@@ -72,12 +72,16 @@ Start here:
 
 For future implementation sessions:
 
-1. [README.md](README.md)
-2. [Product README](docs/product/mobile-automation-platform/README.md)
-3. [ScriptFlow v1 contract](docs/product/mobile-automation-platform/spec/script-flow-v1.md)
-4. [AI development workflow](docs/guides/ai-development-workflow.md)
-5. Relevant ADRs in [docs/adr](docs/adr/)
-6. Relevant local skill in [skills/skills](skills/skills/)
+1. [AGENTS.md](AGENTS.md)
+2. [repo-profile.yml](repo-profile.yml)
+3. [README.md](README.md)
+4. [Product README](docs/product/mobile-automation-platform/README.md)
+5. [ScriptFlow v1 contract](docs/product/mobile-automation-platform/spec/script-flow-v1.md)
+6. [AI development workflow](docs/guides/ai-development-workflow.md)
+7. Relevant ADRs in [docs/adr](docs/adr/)
+8. Relevant local skill in [skills/skills](skills/skills/)
+
+For production deployment or update requests, read [Deployment Guide](docs/guides/deployment.md) before running commands. It is the source of truth for host metadata, port roles, Server updates, Agent updates, rollback, and SSH connection notes.
 
 ## Current Implementation Shape
 

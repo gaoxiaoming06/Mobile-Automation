@@ -1,0 +1,112 @@
+schema_version: 1
+
+repo:
+  id: github.gaoxiaoming06.mobile-automation
+  name: mobile-automation
+  url: git@github.com:gaoxiaoming06/Mobile-Automation.git
+  default_branch: main
+  lifecycle: beta
+  business_line:
+    - common
+  products:
+    - classin
+  domain_tags:
+    - infra
+    - ui
+    - monitor
+    - compat
+  description: Mobile visual automation platform with a central server, React dashboard, Device Agents, ScriptFlow execution, AI-assisted generation, and report artifacts.
+  last_verified_commit: "b23777d"
+  updated_at: "2026-08-18"
+
+tech_stack:
+  platforms:
+    - web
+    - server
+    - cli
+    - other
+  languages:
+    - TypeScript
+    - JavaScript
+    - Python
+  build_system: pnpm
+  frameworks:
+    - React
+    - Vite
+    - Express
+    - SQLite
+    - WebSocket
+    - RapidOCR
+    - ADB
+    - scrcpy
+    - HDC
+    - libimobiledevice
+  test_frameworks:
+    - Vitest
+
+code_map:
+  modules:
+    - name: server
+      path: platform/apps/server
+      responsibility: Central API, storage, AI orchestration, Device Agent relay, ScriptFlow execution, OCR sidecar, dashboard SPA serving, and reports.
+    - name: dashboard
+      path: platform/apps/dashboard
+      responsibility: React workbench for devices, ScriptFlow authoring, AI generation, case center, preview, runs, and reports.
+    - name: device-agent
+      path: platform/apps/device-agent
+      responsibility: Local process that discovers USB devices and executes screenshots, hierarchy dumps, actions, app lifecycle, logs, metrics, and streams.
+    - name: script-flow
+      path: platform/packages/script-flow
+      responsibility: ScriptFlow v1 parser, validator, serializer, and compiler.
+    - name: runner-core
+      path: platform/packages/runner-core
+      responsibility: Shared execution contracts and runner support used by the server and tests.
+    - name: deployment-guide
+      path: docs/guides
+      responsibility: Development, operations, deployment, Agent access, and ScriptFlow tooling guides.
+  entry_points:
+    - symbol: server bootstrap
+      file: platform/apps/server/src/index.ts
+      purpose: Starts the release/development server, registers APIs, storage, OCR, Agent registry, streams, AI routes, ScriptFlow execution, and dashboard serving.
+    - symbol: dashboard app
+      file: platform/apps/dashboard/src/App.tsx
+      purpose: Main React application shell and page routing for the Mobile Automation workbench.
+    - symbol: device agent bootstrap
+      file: platform/apps/device-agent/src/index.ts
+      purpose: Starts the Device Agent runtime and optional local control service.
+    - symbol: ScriptFlow public API
+      file: platform/packages/script-flow/src/index.ts
+      purpose: Public exports for ScriptFlow parsing, validation, compilation, serialization, and types.
+    - symbol: offline release packager
+      file: scripts/package-offline-release.mjs
+      purpose: Builds and archives the compiled server, dashboard, Agent bundle, and OCR setup assets for deployment.
+    - symbol: production deployment runbook
+      file: docs/guides/deployment.md
+      purpose: Source of truth for production host metadata, port roles, release updates, rollback, and Agent update procedures.
+
+dependencies:
+  upstream_repos: []
+  downstream_repos: []
+  external_libs:
+    - Node.js
+    - pnpm
+    - React
+    - Vite
+    - Express
+    - ws
+    - Vitest
+    - esbuild
+    - RapidOCR
+    - ADB
+    - scrcpy
+    - HDC
+    - libimobiledevice
+
+quality_gates:
+  build:
+    - pnpm build
+    - pnpm package:offline
+  test:
+    - pnpm test:unit
+  lint:
+    - pnpm lint

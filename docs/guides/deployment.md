@@ -3,7 +3,7 @@ title: Deployment Guide
 doc_type: guide
 status: draft
 created_at: 2026-06-05
-updated_at: 2026-08-13
+updated_at: 2026-08-18
 ---
 
 # Deployment Guide
@@ -14,6 +14,40 @@ This project has two explicit operating modes:
 - Release mode builds a compiled offline package and deploys that package to the central server.
 
 Device discovery always goes through Device Agents. A healthy server/dashboard with no registered Agent will show `0` devices.
+
+## Port Roles
+
+- `4010`: release server port. It serves APIs, reports, Agent bundles, and the built dashboard SPA.
+- `5173`: Vite development dashboard port. Do not use it as the production service port.
+- `17611`: local Device Agent control port, bound to `127.0.0.1` on the Agent host when using the packaged installer.
+
+Other ports on a shared host can belong to unrelated services. A production deployment should only require `4010` to be reachable by browsers and remote Agent hosts.
+
+## Current Internal Host
+
+This section records non-sensitive connection and deployment metadata for the current internal test host. Do not commit passwords, private keys, pairing codes, or browser session tokens.
+
+| Item | Value |
+| --- | --- |
+| SSH | `root@mobile.eeo-inc.cn` on port `22` |
+| Current host IP | `10.254.34.78` |
+| Production URL | `https://10.254.34.78:4010/` |
+| Health check | `curl -kfsS https://10.254.34.78:4010/api/health` |
+| Source checkout | `/root/automation/mobile-automation` |
+| Active release path | `/opt/mobile-automation-release` |
+| Runtime data path | `/var/lib/mobile-automation` |
+| Server service | `mobile-automation.service` |
+| Local Agent service | `mobile-automation-agent.service`, only when this host owns USB-connected devices |
+| Existing host panel | `10.254.34.78:8899`, unrelated to the Mobile Automation service and not the SSH port |
+
+Optional local SSH config alias:
+
+```sshconfig
+Host mobile-automation-prod
+  HostName mobile.eeo-inc.cn
+  User root
+  Port 22
+```
 
 ## Service Topology
 
@@ -89,6 +123,21 @@ pnpm dev:http:web
 
 Use this when deploying a tested build to a central server. The target server runs compiled artifacts instead of Vite or `tsx watch`. Device Agents are started separately on the machines that have USB devices; the central server does not need to run an Agent unless it is also a device host.
 
+Recommended Linux host layout:
+
+```text
+/root/automation/mobile-automation/   # source checkout used for git pull and package builds
+/opt/mobile-automation-release/       # active release directory used by systemd
+/var/lib/mobile-automation/           # runtime data; never delete during upgrades
+```
+
+For easier rollback, prefer versioned release directories and point `/opt/mobile-automation-release` at the active version:
+
+```text
+/opt/mobile-automation-release-2026081801/
+/opt/mobile-automation-release -> /opt/mobile-automation-release-2026081801
+```
+
 Build the release package from a source checkout:
 
 ```bash
@@ -146,6 +195,70 @@ Recommended runtime data locations:
 
 The runtime data directory contains SQLite DB files, screenshots, videos, logs, HTML reports, and temporary artifacts. Do not place it in the repository for normal use.
 
+## Production Update Runbook
+
+Use this flow after the service is already installed and running under systemd. Server updates and Agent updates are separate steps.
+
+Before starting:
+
+- Make sure no critical run is in progress.
+- Keep `/var/lib/mobile-automation` intact.
+- Replace `origin master` with the deployment branch when the host tracks a different release branch.
+
+Build the new release from the source checkout:
+
+```bash
+cd /root/automation/mobile-automation
+git fetch origin
+git checkout master
+git pull --ff-only origin master
+pnpm install --frozen-lockfile
+pnpm package:offline
+```
+
+Install the release package with a versioned directory:
+
+```bash
+release_id="$(date +%Y%m%d%H%M%S)"
+install_dir="/opt/mobile-automation-release-${release_id}"
+mkdir -p "$install_dir"
+tar -xzf dist/mobile-automation-release.tgz -C "$install_dir" --strip-components=1
+cd "$install_dir"
+node scripts/setup-ocr.mjs
+node scripts/ensure-lan-https-cert.mjs
+
+if [ -e /opt/mobile-automation-release ] && [ ! -L /opt/mobile-automation-release ]; then
+  mv /opt/mobile-automation-release "/opt/mobile-automation-release.backup-${release_id}"
+fi
+ln -sfnT "$install_dir" /opt/mobile-automation-release
+
+systemctl restart mobile-automation
+curl -kfsS https://127.0.0.1:4010/api/health
+```
+
+If the central server host also runs a local Device Agent, update or restart that Agent after the server is healthy:
+
+```bash
+systemctl restart mobile-automation-agent
+curl -kfsS https://127.0.0.1:4010/api/agents
+```
+
+Restarting the Agent is required when the release changes device-side behavior, including locator execution, text input, screenshots, UI hierarchy collection, app lifecycle commands, streaming, Agent protocol fields, or bundled tools such as `scrcpy-server`.
+
+Rollback is a symlink switch plus a service restart:
+
+```bash
+ln -sfnT /opt/mobile-automation-release-<previous-version> /opt/mobile-automation-release
+systemctl restart mobile-automation
+curl -kfsS https://127.0.0.1:4010/api/health
+```
+
+After updating:
+
+- Open the dashboard through the production URL and confirm the UI loads from port `4010`.
+- Confirm Agent devices come back online in **设备管理**.
+- Check `journalctl -u mobile-automation --no-pager -n 100` and, when applicable, `journalctl -u mobile-automation-agent --no-pager -n 100`.
+
 ## Device Agents
 
 For release deployments, device hosts do not need the source repository. Open **系统设置 > 设备接入** in the deployed dashboard and copy the generated Agent command:
@@ -158,6 +271,35 @@ The installer stores files under `~/.mobile-automation-agent`, verifies the down
 Private pairing codes are short-lived bootstrap tokens, currently 5 minutes. If a private Agent starts after the code expires, or the server restarts before the Agent successfully registers, the Agent stays running but registration is rejected; use **重连 Agent** in the settings panel to generate a fresh private code and restart the managed runtime.
 
 When Agent code changes, bump the Agent version and rebuild the release package. After the server is redeployed, new Agent starts download the latest bundle, and already-running managed Agents can detect the newer `/agent/manifest.json` from the settings panel and update manually.
+
+When the central server host is also a USB device host, treat it like any other Agent host. Start a separate Agent process that connects to the local server URL, usually `https://127.0.0.1:4010`. Do not run the Agent inside the central server process.
+
+For a source checkout on the server host, a simple systemd Agent service can use source mode:
+
+```ini
+[Unit]
+Description=Mobile Automation Device Agent
+After=network-online.target mobile-automation.service
+Wants=network-online.target
+Requires=mobile-automation.service
+
+[Service]
+WorkingDirectory=/root/automation/mobile-automation
+Environment=NODE_TLS_REJECT_UNAUTHORIZED=0
+Environment=DEVICE_AGENT_SERVER_URL=https://127.0.0.1:4010
+Environment=DEVICE_AGENT_ID=android-3440
+Environment=DEVICE_AGENT_SHARED=1
+ExecStart=/usr/bin/env pnpm agent
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+If systemd cannot resolve `pnpm`, replace `/usr/bin/env pnpm` with the absolute path returned by `command -v pnpm` on that host.
+
+For hosts without the source checkout, use the dashboard-generated command from **系统设置 > 设备接入**. The packaged Agent downloads the current bundle from `/agent/manifest.json`; after a server redeploy, new starts get the latest bundle and existing managed Agents should be updated from the settings panel or restarted by their process manager.
 
 ## OCR Setup
 
@@ -229,7 +371,7 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-Run Agents as separate managed processes on the device hosts, not inside the central server process. For non-developer hosts, prefer the dashboard-generated installer command. For developer hosts with a source checkout, a PM2 Agent process can still use source mode:
+Run Agents as separate managed processes on the device hosts, not inside the central server process. For the central server host, create a second unit such as `mobile-automation-agent.service` only if that host also owns USB-connected devices. For non-developer hosts, prefer the dashboard-generated installer command. For developer hosts with a source checkout, a PM2 Agent process can still use source mode:
 
 ```bash
 DEVICE_AGENT_SERVER_URL=http://mobile-automation.local \
