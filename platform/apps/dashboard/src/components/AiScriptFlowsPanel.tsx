@@ -1069,7 +1069,7 @@ export function AiScriptFlowsPanel({
                 <textarea
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
-                  placeholder="例如：启动 App，进入班级四十二号，打开新建课堂，填写课堂名称但不要发布"
+                  placeholder="例如：启动 App，进入班级四十二号，点击右下角加号按钮，点击课堂，进入新建课堂页面"
                 />
               </label>
               <label className="screen-assist-toggle">

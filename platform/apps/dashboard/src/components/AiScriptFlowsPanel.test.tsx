@@ -62,6 +62,7 @@ describe("AiScriptFlowsPanel", () => {
     expect(markup).toContain("创建测试");
     expect(markup).toContain("AI 生成");
     expect(markup).toContain("导入 YAML");
+    expect(markup).toContain("例如：启动 App，进入班级四十二号，点击右下角加号按钮，点击课堂，进入新建课堂页面");
     expect(markup).not.toContain("导入 ScriptFlow");
   });
 
